@@ -11,9 +11,13 @@ import {
   type AskUserQuestion,
 } from "../questionnaire/schema.ts";
 import type { PreviewPane } from "./preview-pane.ts";
-import { appendWrapped, borderLine, joinColumns, titleLabel } from "./layout.ts";
+import { RESUME_HINT } from "../boundary/host-ui.ts";
+import { appendHintBar, appendWrapped, borderLine, joinColumns, titleLabel } from "./layout.ts";
+import type { EditorKeyLabels } from "./key-hints.ts";
 import { SELECTION_MARKER } from "./viewport.ts";
 import { clipToWidth, managerNoticeColor, managerNoticeGlyph } from "pi-cosmic-ui/manager";
+import { keyHint, keyHintBar, moveKeyHint } from "pi-cosmic-ui/manager/key-labels";
+import { LIST_CURSOR, selectionMarker } from "pi-cosmic-ui/manager/style";
 
 export interface DialogInputMode {
   readonly kind: "custom" | "text" | "note";
@@ -27,23 +31,35 @@ interface QuestionnaireRenderModel {
   readonly inputError: string | undefined;
   readonly alternateHelp: boolean;
   readonly externalEditorBusy: boolean;
+  readonly keys: EditorKeyLabels;
   readonly editor: Editor;
   readonly preview: PreviewPane;
 }
 
+/** One question needs no tabs, progress, or review: answering it submits the questionnaire. */
+export const isSingleQuestion = (state: QuestionnaireState): boolean =>
+  state.request.questions.length === 1;
+
+// Answered tabs carry the suite's done mark; unanswered ones stay unmarked rather than borrowing
+// the queued glyph, and Review has no mark until it is the current tab.
 function renderTabs(model: QuestionnaireRenderModel, width: number): string[] {
   const parts = Arr.map(model.state.request.questions, (question, index) => {
     const answered = model.state.drafts[index]?.answer !== undefined;
-    const text = ` ${answered ? "●" : "○"} ${titleLabel(question.title)} `;
-    return index === model.state.currentTab
-      ? model.theme.bg("selectedBg", model.theme.fg("text", text))
-      : model.theme.fg(answered ? "success" : "muted", text);
+    const label = titleLabel(question.title);
+    if (index === model.state.currentTab)
+      return model.theme.bg(
+        "selectedBg",
+        model.theme.fg("text", ` ${answered ? "✓ " : ""}${label} `),
+      );
+    return answered
+      ? ` ${model.theme.fg("success", "✓")} ${model.theme.fg("muted", label)} `
+      : model.theme.fg("muted", ` ${label} `);
   });
-  const review = " ✓ Review ";
+  const review = " Review ";
   parts.push(
     model.state.currentTab === model.state.request.questions.length
       ? model.theme.bg("selectedBg", model.theme.fg("text", review))
-      : model.theme.fg(isQuestionnaireComplete(model.state) ? "success" : "dim", review),
+      : model.theme.fg(isQuestionnaireComplete(model.state) ? "accent" : "dim", review),
   );
   const lines: string[] = [];
   appendWrapped(lines, " ", Arr.join(parts, " "), width);
@@ -56,22 +72,35 @@ function renderProgress(model: QuestionnaireRenderModel, width: number): string[
   const answered = Arr.filter(model.state.drafts, (draft) => draft.answer !== undefined).length;
   const text =
     model.state.currentTab === total
-      ? `Review • ${answered} of ${total} answered`
-      : `Question ${model.state.currentTab + 1} of ${total} • ${answered} of ${total} answered`;
+      ? `${answered} of ${total} answered`
+      : `Question ${model.state.currentTab + 1} of ${total} · ${answered} of ${total} answered`;
   appendWrapped(lines, " ", model.theme.fg("dim", text), width);
+  return lines;
+}
+
+function renderHeading(model: QuestionnaireRenderModel, width: number): string[] {
+  if (!isSingleQuestion(model.state))
+    return [...renderTabs(model, width), ...renderProgress(model, width)];
+  const [question] = model.state.request.questions;
+  const lines: string[] = [];
+  if (question)
+    appendWrapped(
+      lines,
+      " ",
+      model.theme.fg("accent", model.theme.bold(titleLabel(question.title))),
+      width,
+    );
   return lines;
 }
 
 type QuestionDraft = QuestionnaireState["drafts"][number];
 
 function focusPrefix(model: QuestionnaireRenderModel, focused: boolean): string {
-  return focused ? SELECTION_MARKER + model.theme.fg("accent", "> ") : "  ";
+  return focused ? SELECTION_MARKER + model.theme.fg("accent", `${LIST_CURSOR} `) : "  ";
 }
 
-function choiceMarker(question: AskUserQuestion, selected: boolean): string {
-  if (question.mode === "multiple") return `[${selected ? "x" : " "}]`;
-  return selected ? "[●]" : "[ ]";
-}
+const choiceMarker = (question: AskUserQuestion, selected: boolean): string =>
+  selectionMarker(question.mode === "multiple" ? "multiple" : "single", selected);
 
 function appendChoices(
   model: QuestionnaireRenderModel,
@@ -101,16 +130,19 @@ function appendCustomRow(
   append: (prefix: string, value: string) => void,
 ): void {
   const focused = draft.cursor === (question.mode === "text" ? 0 : question.choices.length);
-  const custom =
-    draft.answer?.kind === "custom" || draft.answer?.kind === "text"
-      ? ` — ${clipToWidth(stripTerminalControls(draft.answer.text), 48)}`
-      : "";
+  const written = draft.answer?.kind === "custom" || draft.answer?.kind === "text";
+  const custom = written ? ` — ${clipToWidth(stripTerminalControls(draft.answer.text), 48)}` : "";
+  const label =
+    question.mode === "text"
+      ? written
+        ? "Edit answer"
+        : "Write an answer"
+      : written
+        ? "Edit custom answer"
+        : "Write a custom answer";
   append(
     focusPrefix(model, focused),
-    model.theme.fg(
-      focused ? "accent" : "text",
-      `✎ ${question.mode === "text" ? "Edit answer" : "Write a custom answer"}${custom}`,
-    ),
+    model.theme.fg(focused ? "accent" : "text", `✎ ${label}${custom}`),
   );
 }
 
@@ -122,10 +154,11 @@ function appendContinueRow(
 ): void {
   const focused = draft.cursor === choiceCount + 1;
   const selectedCount = draft.answer?.kind === "choices" ? draft.answer.values.length : 0;
+  const action = isSingleQuestion(model.state) ? "Submit" : "Continue";
   const label =
     draft.answer?.kind === "custom"
-      ? "→ Continue (custom answer)"
-      : `→ Continue (${selectedCount} selected)`;
+      ? `${action} (custom answer)`
+      : `${action} (${selectedCount} selected)`;
   const color = !draft.answer ? "dim" : focused ? "accent" : "success";
   append(focusPrefix(model, focused), model.theme.fg(color, label));
 }
@@ -154,8 +187,6 @@ function renderQuestion(
 function renderReview(model: QuestionnaireRenderModel, width: number): string[] {
   const lines: string[] = [];
   const append = (prefix: string, value: string) => appendWrapped(lines, prefix, value, width);
-  append(" ", model.theme.fg("accent", model.theme.bold("Review your answers")));
-  lines.push("");
   Arr.forEach(model.state.request.questions, (question, index) => {
     const draft = model.state.drafts[index];
     const answer = draft?.answer;
@@ -221,14 +252,24 @@ function renderInput(
   );
   if (model.externalEditorBusy) append(" ", model.theme.fg("warning", "External editor is open…"));
   if (model.inputError) append(" ", model.theme.fg("warning", model.inputError));
-  append(
-    " ",
-    model.theme.fg(
-      "dim",
-      `Enter ${note ? "save note" : "use answer"} • Shift+Enter newline • Esc back • configured external-editor key opens editor`,
-    ),
-  );
+  appendHintBar(lines, inputHelp(model, note), width, (text) => model.theme.fg("dim", text));
   return lines;
+}
+
+function inputHelp(model: QuestionnaireRenderModel, note: boolean): string {
+  const { submit, newLine, externalEditor } = model.keys;
+  const commit = note ? "Save Note" : isSingleQuestion(model.state) ? "Submit" : "Save Answer";
+  return keyHintBar(
+    {
+      hints: [
+        keyHint(submit, commit),
+        newLine && keyHint(newLine, "Newline"),
+        externalEditor && keyHint(externalEditor, "Editor"),
+      ],
+      exit: "nested",
+    },
+    false,
+  );
 }
 
 function renderQuestionPane(
@@ -265,17 +306,94 @@ function renderQuestionPane(
   return lines;
 }
 
+type FocusedRow = "choice" | "custom" | "continue" | "text";
+
+function focusedRow(question: AskUserQuestion, draft: QuestionDraft | undefined): FocusedRow {
+  if (question.mode === "text") return "text";
+  const cursor = draft?.cursor ?? 0;
+  if (cursor < question.choices.length) return "choice";
+  return cursor === question.choices.length ? "custom" : "continue";
+}
+
+function enterVerb(
+  model: QuestionnaireRenderModel,
+  question: AskUserQuestion,
+  draft: QuestionDraft | undefined,
+): string | undefined {
+  const single = isSingleQuestion(model.state);
+  const written = draft?.answer?.kind === "custom" || draft?.answer?.kind === "text";
+  const row = focusedRow(question, draft);
+  // Multiple-choice rows toggle; Space is the advertised key and Enter an alias.
+  if (row === "choice") {
+    if (question.mode === "multiple") return undefined;
+    return single ? "Choose & Submit" : "Choose";
+  }
+  if (row === "continue") return single ? "Submit" : "Continue";
+  return written ? "Edit" : "Write";
+}
+
+interface HintSet {
+  readonly hints: string[];
+  readonly more: string[];
+}
+
+function questionHints(model: QuestionnaireRenderModel, question: AskUserQuestion): HintSet {
+  const draft = model.state.drafts[model.state.currentTab];
+  const single = isSingleQuestion(model.state);
+  const toggles = question.mode === "multiple" && focusedRow(question, draft) === "choice";
+  const verb = enterVerb(model, question, draft);
+  const choices = question.mode === "text" ? undefined : question.choices.length;
+  return {
+    hints: [
+      ...(choices === undefined ? [] : [moveKeyHint()]),
+      ...(toggles ? [keyHint("Space", "Toggle")] : []),
+      ...(verb ? [keyHint("Enter", verb)] : []),
+    ],
+    more: [
+      ...(toggles ? [keyHint("Enter", "Toggle")] : []),
+      ...(choices === undefined
+        ? []
+        : [
+            keyHint(
+              `1–${choices}`,
+              question.mode === "multiple" ? "Toggle" : single ? "Choose & Submit" : "Choose",
+            ),
+            keyHint("j/k", "Move"),
+          ]),
+      keyHint("n", "Note"),
+    ],
+  };
+}
+
+function reviewHints(model: QuestionnaireRenderModel): HintSet {
+  const verb =
+    model.state.reviewCursor === 1
+      ? "Cancel"
+      : isQuestionnaireComplete(model.state)
+        ? "Submit"
+        : "Answer Next";
+  return { hints: [moveKeyHint(), keyHint("Enter", verb)], more: [keyHint("j/k", "Move")] };
+}
+
+/** Default hints stay first; `?` appends aliases and secondary keys rather than replacing them. */
 function navigationHelp(model: QuestionnaireRenderModel): string {
-  if (model.alternateHelp)
-    return "PgUp/PgDn scroll • Home/End first/last • j/k or ↑↓ move • h/l or Tab/←→ questions • n note • b hide (resume from footer) • Esc cancel • ? less";
   const question = model.state.request.questions[model.state.currentTab];
-  if (!question)
-    return `↑↓ move • Enter ${isQuestionnaireComplete(model.state) ? "confirm" : "open unanswered"} • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`;
-  if (question.mode === "text")
-    return "Enter edit answer • n note • h/l or Tab/←→ questions • b hide • Esc cancel • ? help";
-  if (question.mode === "multiple")
-    return `1–${question.choices.length} toggle • ↑↓ move • Space toggle • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`;
-  return `1–${question.choices.length} choose • ↑↓ move • Enter activate • h/l or Tab/←→ questions • b hide • Esc cancel • ? help`;
+  const { hints, more } = question ? questionHints(model, question) : reviewHints(model);
+  const tabs = !isSingleQuestion(model.state);
+  return keyHintBar(
+    {
+      hints: [...hints, tabs && keyHint("←→", "Switch")],
+      more: [
+        ...more,
+        tabs && keyHint("Tab/⇧Tab/h/l", "Switch"),
+        keyHint("b", `Hide (${RESUME_HINT})`),
+        keyHint("PgUp/PgDn", "Scroll"),
+        keyHint("Home/End", "Jump"),
+      ],
+      exit: "decision",
+    },
+    model.alternateHelp,
+  );
 }
 
 function renderBody(model: QuestionnaireRenderModel, width: number): string[] {
@@ -293,13 +411,13 @@ function renderBody(model: QuestionnaireRenderModel, width: number): string[] {
 export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: number): string[] {
   const lines = [
     borderLine(width, model.theme),
-    ...renderTabs(model, width),
-    ...renderProgress(model, width),
+    ...renderHeading(model, width),
     "",
     ...renderBody(model, width),
     "",
   ];
-  if (!model.input) appendWrapped(lines, " ", model.theme.fg("dim", navigationHelp(model)), width);
+  if (!model.input)
+    appendHintBar(lines, navigationHelp(model), width, (text) => model.theme.fg("dim", text));
   lines.push(borderLine(width, model.theme));
   return lines;
 }

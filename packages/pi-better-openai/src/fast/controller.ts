@@ -32,7 +32,7 @@ export const inactiveForModelMessage = (ctx: ExtensionContext): string =>
 
 export function settingsSummary(ctx: ExtensionContext, snapshot: FastSnapshot): string {
   if (isFastActive(ctx, snapshot)) return "on";
-  return snapshot.desiredActive ? "requested inactive" : "off";
+  return snapshot.desiredActive ? "on (paused for this model)" : "off";
 }
 
 export const statusSegment = (ctx: ExtensionContext, snapshot: FastSnapshot): string | undefined =>
@@ -51,10 +51,10 @@ export function injectProviderPayload(
 
 export function fastDebugLines(ctx: ExtensionContext, snapshot: FastSnapshot): string[] {
   return [
-    `Fast desired: ${snapshot.desiredActive}`,
-    `Fast active: ${isFastActive(ctx, snapshot)}`,
+    `Fast mode: ${snapshot.desiredActive ? "on" : "off"}`,
+    `Fast active: ${isFastActive(ctx, snapshot) ? "yes" : "no"}`,
     `Current model: ${currentModelKey(ctx)}`,
-    `Supported model: ${supportsFast(ctx)}`,
+    `Supported model: ${supportsFast(ctx) ? "yes" : "no"}`,
     `Configured service_tier: ${FAST_SERVICE_TIER}`,
     `Last injected: ${
       snapshot.lastInjectedModel

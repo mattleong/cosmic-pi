@@ -1,7 +1,9 @@
 import {
   INHERIT,
+  inheritChoice,
   SCOPES,
   sessionValue,
+  settingDisplayValue,
   TASK_SETTING_DESCRIPTORS,
   TASK_SETTINGS_COMMAND,
 } from "./task-settings-options.ts";
@@ -20,11 +22,13 @@ import {
   type SettingsCommandOwner,
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import { OwnedSurfaceOutcome } from "pi-cosmic-ui/boundary/host-surface";
-import type {
-  BackgroundTaskConfig,
-  BackgroundTaskSettingId,
-  BackgroundTaskSettingValue,
+import {
+  DEFAULT_BACKGROUND_TASK_CONFIG,
+  type BackgroundTaskConfig,
+  type BackgroundTaskSettingId,
+  type BackgroundTaskSettingValue,
 } from "../config/schema.ts";
+import { settingInherited } from "pi-cosmic-ui/manager/settings-surface";
 import { BackgroundTaskConfigError, type BackgroundTaskSettingsLocation } from "../config/store.ts";
 import {
   BACKGROUND_TASK_SETTINGS,
@@ -75,8 +79,9 @@ const writeSetting = <Id extends BackgroundTaskSettingId>(
   setting: BackgroundTaskSettingDescriptor<Id>,
   value: string,
 ): Promise<boolean> => {
-  const parsed = value === INHERIT ? undefined : setting.parse(value);
-  if (value !== INHERIT && parsed === undefined) return Promise.resolve(false);
+  const inherit = inheritChoice(value) === INHERIT;
+  const parsed = inherit ? undefined : setting.parse(value);
+  if (!inherit && parsed === undefined) return Promise.resolve(false);
   return write(location, setting.id, parsed).then(() => true);
 };
 
@@ -94,20 +99,30 @@ function createTaskSettingsSubcommand(
   const known = new Map<string, string>();
 
   const pickerItems = (config: BackgroundTaskConfig, files: ReadonlyArray<ScopeFile>) => {
+    const globalOwn = Option.getOrUndefined(
+      Arr.findFirst(files, (file) => file.scope === "global" && "own" in file),
+    );
+    // What `inherit` resolves to in each scope: the default globally, else the global value.
+    const inheritedValue = (scope: TaskSettingsScope, id: BackgroundTaskSettingId) => {
+      const global = globalOwn && "own" in globalOwn ? globalOwn.own[id] : undefined;
+      return settingDisplayValue(
+        scope === "project" && global !== undefined ? global : DEFAULT_BACKGROUND_TASK_CONFIG[id],
+      );
+    };
     const settingRows = (scope: TaskSettingsScope, own: Partial<BackgroundTaskConfig>) =>
       Arr.map(
         Arr.filter(BACKGROUND_TASK_SETTINGS, (setting) => setting.values.length > 0),
         (setting) => {
           const stored = own[setting.id];
-          const currentValue =
-            stored === undefined ? INHERIT : sanitizeTerminalLine(String(stored));
+          const inherited = settingInherited(inheritedValue(scope, setting.id));
+          const currentValue = stored === undefined ? inherited : settingDisplayValue(stored);
           known.set(rowKey(scope, setting.id), currentValue);
-          const values = [...setting.values, INHERIT];
+          const values = [...setting.values, inherited];
           const effective = sessionValue(config, setting.id);
           return {
             id: rowKey(scope, setting.id),
             label: `${scopeLabel(scope)} · ${setting.label}`,
-            description: `${setting.description} This session uses ${effective}; ${INHERIT} uses the ${scope === "project" ? "global value" : "default"}. Applies after /reload.`,
+            description: `${setting.description} This session uses ${effective}. Applies after /reload.`,
             currentValue,
             values: values.includes(currentValue) ? values : [currentValue, ...values],
           };

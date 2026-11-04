@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { describe, expect } from "vitest";
 import { RexBtw, type BtwRequest } from "../src/btw.ts";
-import { GitBranch } from "../src/git.ts";
 import { RexBtwError, RexClient, type RexClientContract, type RexSplitInput } from "../src/rex.ts";
 
 const CALLER = "block:caller";
@@ -45,14 +44,7 @@ const btwLayer = (rex: Layer.Layer<RexClient>) =>
     extensionPath: "/extensions/pi-rex-btw/",
     shell: "/bin/zsh",
     location: { sessionId: "session:s", blockId: CALLER },
-  }).pipe(
-    Layer.provide(
-      Layer.merge(
-        rex,
-        Layer.succeed(GitBranch, () => Effect.succeed("main")),
-      ),
-    ),
-  );
+  }).pipe(Layer.provide(rex));
 
 describe("BTW pane placement", () => {
   it.effect("splits the caller first, then stacks beside the newest BTW pane", () => {

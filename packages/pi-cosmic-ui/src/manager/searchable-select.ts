@@ -23,7 +23,13 @@ import {
   pageSteps,
   type FullScreenSelectionKeybindingId,
 } from "./keymap.ts";
-import { configuredKeyLabels, TEXT_INPUT_KEY_LABELS } from "./key-labels.ts";
+import {
+  configuredKeyLabels,
+  helpKeyHint,
+  keyHint,
+  keyHintBar,
+  TEXT_INPUT_KEY_LABELS,
+} from "./key-labels.ts";
 import { focusedField } from "./style.ts";
 
 export const managerSelectTheme = (theme: Theme): ConstructorParameters<typeof SelectList>[2] => ({
@@ -291,34 +297,36 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   }
 
   private footer(inner: number): string {
-    const { key, movement, navigation: normalNavigation } = this.keys();
+    const { key, movement } = this.keys();
     const confirm = key("tui.select.confirm", "Enter");
     const cancel = key("tui.select.cancel", "Esc");
-    const searchNavigation = movement ?? "↑/↓";
+    const move = keyHint(movement ?? "↑↓", "Move");
+    const select = keyHint(confirm, "Select");
+    if (this.searchMode)
+      return renderResponsiveManagerFooter(inner, [
+        ["Type to filter", move, select, this.searchCancel()],
+        [select, this.searchCancel()],
+      ]);
     const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
-    return this.searchMode
-      ? renderResponsiveManagerFooter(inner, [
-          [
-            `Type to filter · ${searchNavigation} Navigate`,
-            `${confirm} Select · ${this.searchCancel()}`,
-          ],
-          [`${confirm} Select`, this.searchCancel()],
-        ])
-      : this.alternateHelp
-        ? renderResponsiveManagerFooter(inner, [
-            [
-              `${normalNavigation} Navigate · C-u/d Half · ${pages} Page · gg/G Ends`,
-              `/ Filter · l/${confirm} Select · h/q/${cancel} Back · ? Less`,
-            ],
-            [`${normalNavigation} · C-u/d · ${pages} · gg/G`, `? Less · q Back`],
-          ])
-        : renderResponsiveManagerFooter(inner, [
-            [
-              `${normalNavigation} Navigate · ${confirm} Select`,
-              `/ Filter · ? More · ${cancel} Back`,
-            ],
-            [`${confirm} Select`, `? · ${cancel} Back`],
-          ]);
+    const bar = {
+      hints: [move, select, keyHint("/", "Filter")],
+      more: [
+        keyHint("j/k", "Move"),
+        keyHint(`${pages}/C-u/C-d`, "Page"),
+        keyHint("gg/G", "Ends"),
+        keyHint("l", "Select"),
+      ],
+      exit: "nested" as const,
+      exitAliases: ["h", "q"],
+      exitKey: cancel,
+    };
+    return renderResponsiveManagerFooter(inner, [
+      [keyHintBar(bar, this.alternateHelp)],
+      [
+        keyHintBar({ hints: [select], exit: "nested", exitKey: cancel }, false),
+        helpKeyHint(this.alternateHelp),
+      ],
+    ]);
   }
 
   private compactBody(height: number, inner: number, activeNotice: string | undefined): string[] {
@@ -365,14 +373,9 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const subtitleLines = Arr.map(limitedWrap(this.options.subtitle, 1), (line) =>
       theme.fg("dim", line),
     );
+    // The footer carries the search keys; the body shows only the query.
     const searchLines = this.searchMode
-      ? [
-          theme.fg(
-            "dim",
-            `Type to filter · ${this.keys().key("tui.select.confirm", "Enter")} Select · ${this.searchCancel()}`,
-          ),
-          ...Arr.map(this.input.render(Math.max(1, inner)), (line) => focusedField(theme, line)),
-        ]
+      ? Arr.map(this.input.render(Math.max(1, inner)), (line) => focusedField(theme, line))
       : [];
     const header = [
       theme.fg("accent", theme.bold(this.options.title)),

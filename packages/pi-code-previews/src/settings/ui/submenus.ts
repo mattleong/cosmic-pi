@@ -1,21 +1,18 @@
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Rec from "effect/Record";
+import { getSettingsListTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
-  getSelectListTheme,
-  getSettingsListTheme,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
-import { managerSettingsTheme } from "pi-cosmic-ui/manager/settings-surface";
-import { managerSelectTheme } from "pi-cosmic-ui/manager/searchable-select";
+  createSettingsChoiceSubmenu,
+  managerSettingsTheme,
+  settingsListHint,
+} from "pi-cosmic-ui/manager/settings-surface";
 import {
   Container,
-  SelectList,
   SettingsList,
   Spacer,
   Text,
-  type SelectItem,
+  type Component,
   type SettingItem,
 } from "@earendil-works/pi-tui";
 import { bundledThemes } from "shiki/themes";
@@ -75,6 +72,10 @@ export class ToolPreviewSettingsSubmenu extends Container {
     this.addChild(this.settingsList);
   }
 
+  settingsHint(expanded: boolean): string {
+    return settingsListHint(this.settingsList, { level: "nested", expanded });
+  }
+
   handleInput(data: string): void {
     this.settingsList.handleInput(data);
   }
@@ -116,45 +117,18 @@ function createToolToggleItems(
   });
 }
 
-export class ThemeSelectSubmenu extends Container {
-  private readonly selectList: SelectList;
-
-  constructor(currentTheme: string, done: (selectedValue?: string) => void, theme?: Theme) {
-    super();
-
-    const themes: SelectItem[] = Arr.map(
-      Arr.sort(Rec.keys(bundledThemes), Order.String),
-      (name) => ({
-        value: name,
-        label: name,
-      }),
-    );
-
-    this.selectList = new SelectList(
-      themes,
-      12,
-      theme ? managerSelectTheme(theme) : getSelectListTheme(),
-      {
-        minPrimaryColumnWidth: 16,
-        maxPrimaryColumnWidth: 48,
-      },
-    );
-
-    const currentIndex = Arr.findFirstIndex(themes, (item) => item.value === currentTheme);
-    if (Option.isSome(currentIndex)) this.selectList.setSelectedIndex(currentIndex.value);
-
-    this.selectList.onSelect = (item) => done(item.value);
-    this.selectList.onCancel = () => done(undefined);
-
-    this.addChild(new Text("Syntax theme", 0, 0));
-    this.addChild(new Text("Select a Shiki theme for code previews.", 0, 0));
-    this.addChild(new Spacer(1));
-    this.addChild(this.selectList);
-    this.addChild(new Spacer(1));
-    this.addChild(new Text("Enter Select · Esc Back", 0, 0));
-  }
-
-  handleInput(data: string): void {
-    this.selectList.handleInput(data);
-  }
+export function createThemeSelectSubmenu(
+  currentTheme: string,
+  done: (selectedValue?: string) => void,
+  theme: Theme | undefined,
+): Component {
+  return createSettingsChoiceSubmenu({
+    title: "Syntax theme",
+    description: "Shiki theme for code previews.",
+    values: Arr.sort(Rec.keys(bundledThemes), Order.String),
+    current: currentTheme,
+    theme: theme ? managerSettingsTheme(theme) : getSettingsListTheme(),
+    done,
+    maxVisible: 12,
+  });
 }

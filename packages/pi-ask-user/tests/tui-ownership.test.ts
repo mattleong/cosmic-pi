@@ -219,12 +219,12 @@ for (const [editorCleanup, failFinish] of [
           oldComponent.handleInput?.("external");
           expect(editorInterrupted).toBe(false);
           oldComponent.handleInput?.("\u001b");
-          oldComponent.handleInput?.("1");
           if (failFinish)
             h.done.mockImplementationOnce(() => {
               throw new Error("finish failure");
             });
-          expect(() => oldComponent.handleInput?.("\r")).not.toThrow();
+          // Choosing the only question's answer submits it.
+          expect(() => oldComponent.handleInput?.("1")).not.toThrow();
           yield* eventually(() => expect(editorInterrupted).toBe(true));
           yield* eventually(() => expect(bridge.resume()).toBe(false));
           expect(h.customCalls).toBe(1);

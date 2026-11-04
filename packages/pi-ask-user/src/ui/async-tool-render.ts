@@ -35,6 +35,7 @@ import {
   requestFacts,
   isPendingState,
   questionnaireState,
+  requestArguments,
   stateCounts,
   stateWords,
   storedTitlesLabel,
@@ -68,7 +69,7 @@ type AsyncToolResult = Pick<AgentToolResult<unknown>, "content" | "details">;
 export function renderAsyncCall(
   args: QuestionnaireArgs,
   theme: Theme,
-  context: Pick<RenderContext, "expanded" | "state">,
+  context: Pick<RenderContext, "expanded" | "state" | "isPartial">,
   isControl = false,
 ): Component {
   const header = isControl
@@ -97,7 +98,7 @@ function submittedAnswers(
 
 export function renderAsyncContent(
   input: AsyncToolResult,
-  _options: ToolRenderResultOptions,
+  options: ToolRenderResultOptions,
   theme: Theme,
   context: ResultContext = {},
 ): Component {
@@ -112,6 +113,8 @@ export function renderAsyncContent(
       answers: submittedAnswers(rows),
       titles: rowTitles(rows),
       facts: rows ? requestFacts(rows, list) : [],
+      // The call still shows the request until the final result arrives.
+      ...(!options.isPartial && { args: requestArguments(context.args) }),
     },
     theme,
   );

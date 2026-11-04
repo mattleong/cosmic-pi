@@ -3,6 +3,7 @@ import { beforeAll, describe, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import {
   applyPresentationSettings,
   captureRegistrations,
@@ -13,6 +14,7 @@ import {
   withPresentationSettings,
   writeGallerySection,
 } from "pi-code-previews/testing";
+import { listReport, overview } from "../src/command.ts";
 import { frameMessage, INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
 import { renderIntercomMessage } from "../src/message.ts";
 import {
@@ -67,6 +69,40 @@ const listing: SessionListContract = {
   ],
   omitted: 0,
 };
+
+// Real session ids are UUIDv7: sessions started together share a prefix, not a suffix.
+const sameRepository: SessionListContract = {
+  ...contractEnvelope,
+  tool: SESSION_TOOL.list,
+  sessions: [
+    {
+      sessionId: "01a19957-15d8-7047-8e3f-7bccf1353038",
+      cwd: "/Users/example/dev/cosmic-pi",
+      state: "idle",
+      duplicate: false,
+    },
+    {
+      sessionId: "01a19e61-2b7b-74a4-b983-b7dabe523478",
+      cwd: "/Users/example/dev/dotfiles",
+      state: "idle",
+      duplicate: false,
+    },
+    { ...web, state: "busy", duplicate: false },
+    {
+      sessionId: "01a1a535-9b8a-73fd-aa1f-8ea278e57905",
+      cwd: "/Users/example/dev/cosmic-pi",
+      state: "busy",
+      duplicate: false,
+    },
+  ],
+  omitted: 0,
+};
+
+const textFrame = (title: string, text: string): string[] => [
+  `── ${title}`,
+  ...Str.split(text, "\n"),
+  "",
+];
 
 const sent = (disposition: "woken" | "queued" | "held"): SessionSendDetails => ({
   ...contractEnvelope,
@@ -136,6 +172,12 @@ const scenarios = [
     tool: SESSION_TOOL.list,
     args: {},
     result: result(listText(listing), listing),
+  },
+  {
+    title: "listed sessions sharing a repository",
+    tool: SESSION_TOOL.list,
+    args: {},
+    result: result(listText(sameRepository), sameRepository),
   },
   {
     title: "sent to an idle session",
@@ -309,6 +351,12 @@ describe.skipIf(!directory)("presentation gallery", () => {
           restore();
         }
       }
+      lines.push(
+        ...textFrame("/intercom help", overview),
+        ...textFrame("/intercom list · sessions sharing a repository", listReport(sameRepository)),
+        ...textFrame("/intercom list · every state", listReport(listing)),
+        ...textFrame("/intercom list · none", listReport({ ...listing, sessions: [] })),
+      );
       yield* writeGallerySection(directory, "pi-intercom", lines);
     }),
   );

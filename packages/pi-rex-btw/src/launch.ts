@@ -48,8 +48,6 @@ export interface ChildModel {
 }
 
 export interface ChildLaunch {
-  readonly cwd: string;
-  readonly branch: string | undefined;
   /** This package, loaded explicitly so the child understands the parent markers. */
   readonly extensionPath: string;
   readonly shell: string | undefined;
@@ -86,14 +84,11 @@ export const promptProblem = (prompt: string): string | undefined =>
       ? "The prompt is too long to pass to a new pane; save it to a file and mention the file instead"
       : undefined;
 
-export const btwDisplayName = (cwd: string, branch: string | undefined): string => {
-  const directoryName =
-    Arr.lastNonEmpty(Fn.pipe(cwd, Str.replaceAll(/\/+$/gu, ""), Str.split("/"))) || "/";
-  return Arr.join(
-    branch === undefined ? ["[BTW]", directoryName] : ["[BTW]", branch, directoryName],
-    " - ",
-  );
-};
+/**
+ * The side session's name. Pi's terminal title already ends with the directory, and the footer
+ * shows the branch, so the name only marks the pane as a side conversation.
+ */
+export const BTW_SESSION_NAME = "[BTW]";
 
 // Pi reads a message beginning with "@" as a file to attach, even after "--".
 const promptArgument = (prompt: string): string =>
@@ -107,7 +102,7 @@ const piArguments = (launch: ChildLaunch): ReadonlyArray<string> => [
   "-e",
   launch.extensionPath,
   "--name",
-  btwDisplayName(launch.cwd, launch.branch),
+  BTW_SESSION_NAME,
   ...(launch.model === undefined
     ? []
     : ["--provider", launch.model.provider, "--model", launch.model.id]),

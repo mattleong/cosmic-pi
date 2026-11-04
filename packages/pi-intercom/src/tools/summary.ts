@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
-import { clipText, countLabel } from "pi-cosmic-core/display";
+import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import {
@@ -13,18 +13,10 @@ import {
   type SessionRefusal,
   type SessionToolArgs,
   type SessionToolDetails,
-  type SessionView,
   type ToolRefusalCode,
 } from "./contract.ts";
+import { addresseeSubject, SESSION_STATE_LABELS, sessionSubject } from "../identity.ts";
 import { UNCERTAIN_TEXT } from "./text.ts";
-
-const MAX_SUBJECT_CHARS = 60;
-
-/** The short name a heading shows for a session: its name, else its id. */
-export const sessionSubject = (session: Pick<SessionView, "sessionId" | "name">): string => {
-  const name = sanitizeTerminalLine(session.name ?? "");
-  return clipText(name === "" ? sanitizeTerminalLine(session.sessionId) : name, MAX_SUBJECT_CHARS);
-};
 
 const REFUSAL_MESSAGES: Record<ToolRefusalCode, string> = {
   session_not_found: "No live session has this id",
@@ -82,12 +74,9 @@ export const uncertainIssue = (
 /** Delivery worth a word: a woken session reading the message at once is the plain case. */
 export const DISPOSITION_WORDS = { woken: "", queued: "queued", held: "holding" } as const;
 
-const targetSubject = (to: string | undefined): string =>
-  clipText(sanitizeTerminalLine(to ?? ""), MAX_SUBJECT_CHARS);
-
 const pending = (tool: string, to: string | undefined): CompactSummary => {
   if (tool === SESSION_TOOL.list) return { subject: "sessions" };
-  return { subject: targetSubject(to) };
+  return { subject: addresseeSubject(to) };
 };
 
 const listSummary = (
@@ -96,7 +85,7 @@ const listSummary = (
   const total = details.sessions.length + details.omitted;
   const counted = (state: "unavailable" | "unresponsive" | "unreachable") => {
     const count = Arr.filter(details.sessions, (session) => session.state === state).length;
-    return count > 0 ? [`${count} ${state}`] : [];
+    return count > 0 ? [`${count} ${SESSION_STATE_LABELS[state]}`] : [];
   };
   const duplicates = Arr.filter(details.sessions, ({ duplicate }) => duplicate).length;
   return {
@@ -108,7 +97,7 @@ const listSummary = (
 };
 
 const refusedSummary = (details: SessionRefusal): CompactSummary => {
-  const subject = details.session ? sessionSubject(details.session) : targetSubject(details.to);
+  const subject = details.session ? sessionSubject(details.session) : addresseeSubject(details.to);
   const issues = [refusalIssue(details)];
   return { subject, outcome: "error", issues };
 };

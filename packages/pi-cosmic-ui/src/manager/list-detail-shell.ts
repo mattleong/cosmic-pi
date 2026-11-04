@@ -110,7 +110,11 @@ export class ListDetailShell {
     const window = computeDetailWindow({
       lines,
       height,
-      previous: { scroll: this.current.detailScroll, lineCount: this.detailLineCount },
+      previous: {
+        scroll: this.current.detailScroll,
+        lineCount: this.detailLineCount,
+        maxScroll: this.detailMaxScroll,
+      },
       follow,
     });
     this.current.detailScroll = window.scroll;
@@ -151,12 +155,13 @@ export const listDetailFrame = (
   pane: (pane, text) => theme.fg(focusedPane === pane ? "borderAccent" : "borderMuted", text),
 });
 
+/** Pane focus shows through color alone; `›` is reserved for the focused row. */
 export const listDetailHeading = (
   theme: Pick<Theme, "fg" | "bold">,
   text: string,
   focused: boolean,
   tone: Parameters<Theme["fg"]>[0] = "muted",
-): string => theme.fg(focused ? "accent" : tone, `${focused ? "› " : "  "}${theme.bold(text)}`);
+): string => theme.fg(focused ? "accent" : tone, `  ${theme.bold(text)}`);
 
 export interface ListDetailField {
   readonly label: string;

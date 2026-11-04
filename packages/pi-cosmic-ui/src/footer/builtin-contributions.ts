@@ -148,27 +148,29 @@ const gitContributions = (
 ): CosmicFooterTextContribution[] => {
   if (!gitStatus) return [];
   const result: CosmicFooterTextContribution[] = [];
-  const gitText = formatGitStatus(gitStatus);
+  const gitText = formatGitStatus(gitStatus, true);
   if (gitText)
     result.push({
       kind: "text",
       id: "git",
       region: "identity",
       text: gitText,
+      compactText: formatGitStatus(gitStatus),
       tone: gitTone(gitStatus),
       align: "right",
       priority: 80,
       order: 300,
     });
   const lineStats = Arr.flatMap(GIT_LINE_STATS, ([key, sign]) =>
-    gitStatus[key] ? [`${sign}${gitStatus[key]}L`] : [],
+    gitStatus[key] ? [`${sign}${gitStatus[key]}`] : [],
   );
   if (lineStats.length)
     result.push({
       kind: "text",
       id: "git.lines",
       region: "identity",
-      text: Arr.join(lineStats, " "),
+      text: `${Arr.join(lineStats, " ")} lines`,
+      compactText: Arr.join(lineStats, " "),
       align: "right",
       priority: 75,
       order: 310,
@@ -195,7 +197,7 @@ const metric = (
   id: string,
   text: string,
   order: number,
-  align?: "right",
+  options: { readonly align?: "right"; readonly compactText?: string } = {},
 ): CosmicFooterTextContribution => ({
   kind: "text",
   id,
@@ -203,31 +205,37 @@ const metric = (
   text,
   priority: 90,
   order,
-  ...(align && { align }),
+  ...options,
 });
 
+// Input/output arrows follow Pi's footer; cache reads and writes render under a `cache` label.
+// Compact density keeps only cache reads, which dominate cost.
 const TOKEN_METRICS = [
-  ["input", "↑", 200],
-  ["output", "↓", 210],
-  ["cacheRead", "r", 220],
-  ["cacheWrite", "w", 230],
-] as const satisfies ReadonlyArray<readonly [keyof FooterTotals, string, number]>;
+  ["input", "↑", 200, true],
+  ["output", "↓", 210, true],
+  ["cacheRead", "r", 220, true],
+  ["cacheWrite", "w", 230, false],
+] as const satisfies ReadonlyArray<readonly [keyof FooterTotals, string, number, boolean]>;
 
 const metricContributions = (
   totals: FooterTotals,
   subscription: boolean,
 ): CosmicFooterTextContribution[] => [
-  ...Arr.flatMap(TOKEN_METRICS, ([key, prefix, order]) =>
-    totals[key] ? [metric(`metrics.${key}`, `${prefix}${formatTokens(totals[key])}`, order)] : [],
-  ),
+  ...Arr.flatMap(TOKEN_METRICS, ([key, prefix, order, compact]) => {
+    const value = totals[key];
+    if (!value) return [];
+    const tokens = formatTokens(value);
+    return [
+      metric(`metrics.${key}`, `${prefix}${tokens}`, order, {
+        compactText: compact ? `${prefix}${tokens}` : "",
+      }),
+    ];
+  }),
   ...(totals.cost || subscription
     ? [
-        metric(
-          "metrics.cost",
-          `${formatCost(totals.cost)}${subscription ? " (sub)" : ""}`,
-          240,
-          "right",
-        ),
+        metric("metrics.cost", `${formatCost(totals.cost)}${subscription ? " (sub)" : ""}`, 240, {
+          align: "right",
+        }),
       ]
     : []),
 ];

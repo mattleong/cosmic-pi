@@ -31,7 +31,13 @@ import {
   type SessionToolName,
   type SessionView,
 } from "./contract.ts";
-import { sessionSubject, sessionToolDetails } from "./summary.ts";
+import {
+  addresseeSubject,
+  distinctSessionLabels,
+  SESSION_STATE_LABELS,
+  sessionSubject,
+} from "../identity.ts";
+import { sessionToolDetails } from "./summary.ts";
 
 /** What a settled result tells the call heading, which renders before it is known. */
 export interface SessionRenderState {
@@ -48,8 +54,6 @@ interface RenderContext {
 }
 
 const MAX_COLLAPSED_SESSIONS = 6;
-
-const targetLabel = (to: string | undefined): string => sanitizeTerminalLine(to ?? "");
 
 const heading = (tool: SessionToolName, target: string): ToolHeader => {
   if (tool === SESSION_TOOL.list) return { title: "Sessions" };
@@ -80,7 +84,7 @@ export const renderSessionCall =
     const running = context.executionStarted && context.isPartial;
     const header = composeToolComponent((width) => {
       if (!Number.isFinite(width) || width < 1) return [];
-      const target = state.sessionTarget ?? targetLabel(args.to);
+      const target = state.sessionTarget ?? addresseeSubject(args.to);
       const lines = new Text(renderToolHeader(heading(tool, target), theme), 0, 0).render(width);
       return running ? [...lines, toolRunningLine(theme)] : lines;
     });
@@ -98,17 +102,23 @@ const STATE_COLORS = {
   unreachable: "warning",
 } as const satisfies Record<ListedSession["state"], "muted" | "accent" | "warning">;
 
-const listedRow = (session: ListedSession, theme: Theme, expanded: boolean): string =>
+/** A session's label and state; expansion adds its directory and full id. */
+const listedRow = (
+  session: ListedSession,
+  label: string,
+  theme: Theme,
+  expanded: boolean,
+): string =>
   Arr.join(
     [
-      theme.fg("toolOutput", sessionSubject(session)),
-      theme.fg("dim", sanitizeTerminalLine(session.cwd)),
-      theme.fg(STATE_COLORS[session.state], session.state),
+      theme.fg("toolOutput", label),
+      theme.fg(STATE_COLORS[session.state], SESSION_STATE_LABELS[session.state]),
       ...(session.duplicate ? [theme.fg("warning", "duplicate id")] : []),
-      ...(expanded &&
-      session.name !== undefined &&
-      Str.isNonEmpty(sanitizeTerminalLine(session.name))
-        ? [theme.fg("dim", sanitizeTerminalLine(session.sessionId))]
+      ...(expanded
+        ? [
+            theme.fg("dim", sanitizeTerminalLine(session.cwd)),
+            theme.fg("dim", sanitizeTerminalLine(session.sessionId)),
+          ]
         : []),
     ],
     theme.fg("dim", " · "),
@@ -120,12 +130,16 @@ const listBody = (
   expanded: boolean,
 ): Component => {
   if (details.sessions.length === 0) return statusLine("No other live sessions", theme);
+  const labels = distinctSessionLabels(details.sessions);
   const shown = expanded ? details.sessions : details.sessions.slice(0, MAX_COLLAPSED_SESSIONS);
   const hidden = details.sessions.length - shown.length + (expanded ? 0 : details.omitted);
   return composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
-    const rows = Arr.map(shown, (session) =>
-      clipToWidth(listedRow(session, theme, expanded), width),
+    const rows = Arr.map(shown, (session, index) =>
+      clipToWidth(
+        listedRow(session, labels[index] ?? sessionSubject(session), theme, expanded),
+        width,
+      ),
     );
     if (expanded && details.omitted > 0)
       rows.push(clipToWidth(theme.fg("muted", `and ${details.omitted} more`), width));
@@ -150,7 +164,7 @@ const sessionDetails = (
 ): Component =>
   session
     ? detailsLine([`Session ${session.sessionId}`, session.cwd, ...extra], theme)
-    : detailsLine([`Session ${targetLabel(to)}`, ...extra], theme);
+    : detailsLine([`Session ${sanitizeTerminalLine(to ?? "")}`, ...extra], theme);
 
 const DELIVERY_STATUS = {
   woken: "Delivered; it started a turn to read it",

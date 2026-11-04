@@ -53,7 +53,7 @@ Each result reports only the loss within the output it returns, so a result cut 
 
 `/tasks` opens the shared Activity view from `pi-cosmic-ui`; without it, or outside an interactive terminal, `/tasks` shows a notice instead. In the Activity view, `h`/`l` change pane or expand and collapse hierarchy, and `t` toggles technical metadata. Task details include bounded recent logs and technical fields, and explain how a finished task ended: its exit code or signal with the usual meaning, such as `command not found`, any start error, and the redacted output line naming its failure cause. Viewing never waits for process exit. `c` on a finished task clears **all finished task records in this session**. Retained Activity summaries may remain as unavailable history, without actions or fresh-ID authority. No command-entry field or workflow-wide execution action is added.
 
-The footer counts every active task, including tasks still starting or stopping, and clears when no tasks remain active. Failed and timed-out tasks stay available in `/tasks` and the task tool without persistent footer reminders. When `pi-cosmic-ui` renders both extensions, subagent status occupies its own line above background-task status.
+While Activity is available, its widget lists running tasks and the footer line steps aside. Otherwise the footer counts every active task, including tasks still starting or stopping, and clears when no tasks remain active. Failed and timed-out tasks stay available in `/tasks` and the task tool without persistent footer reminders. When `pi-cosmic-ui` renders both extensions, subagent status occupies its own line above background-task status.
 
 ## Transcript cards
 

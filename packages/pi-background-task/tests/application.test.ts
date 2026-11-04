@@ -519,6 +519,33 @@ describe("background-task settings in a session", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.live("the footer line steps aside while Activity lists running tasks", () =>
+    Effect.gen(function* () {
+      const activity = fakeActivityHost("footer-session");
+      const app = yield* harness(() => Promise.resolve(), { events: activity.events });
+      const setStatus = vi.fn<ExtensionUIContext["setStatus"]>();
+      const ctx = extensionContextFixture({
+        cwd: process.cwd(),
+        signal: undefined,
+        isProjectTrusted: () => false,
+        hasUI: true,
+        mode: "rpc",
+        ui: { setStatus },
+        sessionManager: {
+          getSessionId: () => "footer-session",
+          getSessionFile: () => undefined,
+        },
+      });
+      yield* Effect.gen(function* () {
+        yield* Effect.promise(() => app.emit("session_start", ctx));
+        yield* Effect.promise(() => app.execute({ action: "start", command: "sleep 30" }, ctx));
+        expect(activity.get()?.items).toHaveLength(1);
+        expect(Arr.filter(setStatus.mock.calls, ([, text]) => text !== undefined)).toEqual([]);
+        yield* Effect.promise(() => app.execute({ action: "stop_all" }, ctx));
+      }).pipe(Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))));
+    }).pipe(Effect.scoped),
+  );
+
   it.live("an aborted wait ends before the hour maxWaitSeconds allows and leaves the task", () => {
     const call = new AbortController();
     return Effect.gen(function* () {

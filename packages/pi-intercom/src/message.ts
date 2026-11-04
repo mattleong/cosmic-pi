@@ -9,7 +9,7 @@ import { stripTerminalControls } from "pi-cosmic-core/security";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import { INTERCOM_MESSAGE_TYPE } from "./delivery.ts";
 import { detailsLine, textBody } from "./display.ts";
-import { sessionSubject } from "./tools/summary.ts";
+import { sessionSubject } from "./identity.ts";
 import { MAX_MESSAGE_CHARS, SenderSchema } from "./transport/protocol.ts";
 
 const Envelope = Schema.Struct({

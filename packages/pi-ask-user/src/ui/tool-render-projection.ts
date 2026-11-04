@@ -148,6 +148,51 @@ export const titlesByKey = Fn.flow(
     ),
 );
 
+/** What a questionnaire call asked, for its readable expanded request. */
+export const decodeRequestView = decodeUnknownOrUndefined(
+  Schema.Struct({
+    questions: Schema.Array(
+      Schema.Struct({
+        title: Schema.String,
+        prompt: Schema.String,
+        mode: Schema.optional(Schema.Literals(["single", "multiple", "text"])),
+        choices: Schema.optional(
+          Schema.Array(
+            Schema.Struct({
+              label: Schema.String,
+              description: Schema.optional(Schema.String),
+              preview: Schema.optional(Schema.String),
+            }),
+          ).check(Schema.isMaxLength(MAX_CHOICES)),
+        ),
+      }),
+    ).check(Schema.isMaxLength(MAX_QUESTIONS)),
+    independentWork: Schema.optional(Schema.String),
+    blockedWork: Schema.optional(Schema.String),
+  }),
+);
+export type RequestView = NonNullable<ReturnType<typeof decodeRequestView>>;
+
+// Tool arguments are always objects; anything else has no fields to show.
+const ArgumentFields = Schema.Record(Schema.String, Schema.Unknown);
+
+/** A call's arguments, read as an async control, a questionnaire, or plain fields. */
+export interface RequestArguments {
+  readonly fields: typeof ArgumentFields.Type;
+  readonly control: ReturnType<typeof decodeAsyncControl>;
+  readonly request: RequestView | undefined;
+}
+
+export const requestArguments = Fn.flow(
+  decodeUnknownOrUndefined(ArgumentFields),
+  (fields): RequestArguments | undefined =>
+    fields && {
+      fields,
+      control: decodeAsyncControl(fields),
+      request: decodeRequestView(fields),
+    },
+);
+
 export const decodeCompactChoices = decodeUnknownOrUndefined(
   Schema.Struct({
     questions: Schema.Array(

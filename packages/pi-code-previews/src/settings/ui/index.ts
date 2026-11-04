@@ -11,7 +11,7 @@ import type { CodePreviewSettings } from "../../config/schema";
 import { formatOnOff, formatSettingValue } from "../../config/values";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../tools/names";
 import { getEffectiveCodePreviewToolSet } from "../../tools/policy";
-import { ThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
+import { createThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
 import {
   SETTING_ITEM_DEFINITIONS,
   type SettingItemDefinition,
@@ -189,7 +189,7 @@ function createSettingItem(
   current: CodePreviewSettings,
   id: SettingsUiItemId,
   theme?: Theme,
-): SettingItem {
+): SettingsSurfaceItem {
   const definition: SettingItemDefinition = SETTING_ITEM_DEFINITIONS[id];
   const item: SettingItem = {
     id,
@@ -199,6 +199,10 @@ function createSettingItem(
   };
   if (definition.values) item.values = [...definition.values];
   if (id === "shikiTheme")
-    item.submenu = (currentValue, done) => new ThemeSelectSubmenu(currentValue, done, theme);
+    return {
+      ...item,
+      kind: "setting",
+      submenu: (currentValue, done) => createThemeSelectSubmenu(currentValue, done, theme),
+    };
   return item;
 }

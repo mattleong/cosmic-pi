@@ -8,7 +8,7 @@ Session-scoped background tasks for Pi. The agent can start long-running command
 - **Bounded waits** for a task to exit or for any of a few texts to appear in its output, without polling. Each wait is capped by the `maxWaitSeconds` setting and returns the matched line and the task's recent output.
 - **Opt-in exit notices:** a task started with `notify` messages the agent when it finishes, or only when it fails, waking an idle agent instead of leaving it to poll.
 - **Activity view** from `pi-cosmic-ui`: browse tasks, read recent logs, follow output, stop or clear tasks.
-- **Footer status** while tasks are active, such as `2 background tasks running`; the count includes tasks still starting or stopping.
+- **Footer status** while tasks are active and Activity isn't listing them, such as `2 background tasks running`; the count includes tasks still starting or stopping.
 - **Native codemode results:** scripts receive structured task data instead of text.
 - **Process-group cleanup** when the session reloads, switches, forks, navigates the tree, or shuts down, and when Pi exits abruptly. Processes that start their own session or process group, such as daemons, aren't tracked.
 

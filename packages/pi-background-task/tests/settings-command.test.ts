@@ -85,6 +85,12 @@ const pickerHarness = (
     opened,
     open,
     close: () => input("\u001b"),
+    // Enter opens the row's choice list, which starts on the current value; Enter picks another.
+    choose: () => {
+      input("\r");
+      input("k");
+      input("\r");
+    },
     isOpen: () => {
       host.mount();
       return host.editor !== undefined;
@@ -181,6 +187,26 @@ describe("/tasks settings", () => {
     }),
   );
 
+  it.effect("choosing a row's inherited value removes the scope's own value", () =>
+    Effect.gen(function* () {
+      const h = pickerHarness(true, (location) =>
+        Promise.resolve(location.scope === "global" ? { enabled: false } : {}),
+      );
+      yield* macrotask;
+      expect(h.isOpen()).toBe(true);
+      // The global row shows its own `off`; its list offers on, off, then the inherited default.
+      h.input("\r");
+      h.input("j");
+      h.input("\r");
+      yield* macrotask;
+      expect(
+        Arr.map(h.write.mock.calls, ([location, id, value]) => [location.scope, id, value]),
+      ).toEqual([["global", "enabled", undefined]]);
+      h.close();
+      yield* Effect.promise(() => h.opened);
+    }),
+  );
+
   it.effect("opens the readable scopes and keeps a broken file's scope unavailable", () =>
     Effect.gen(function* () {
       const rows = Arr.filter(BACKGROUND_TASK_SETTINGS, (setting) => setting.values.length > 0);
@@ -206,7 +232,7 @@ describe("/tasks settings", () => {
       yield* macrotask;
       expect(h.write).not.toHaveBeenCalled();
       h.input("j");
-      h.input("\r");
+      h.choose();
       yield* macrotask;
       expect(Arr.map(h.write.mock.calls, ([location]) => location.scope)).toEqual(["global"]);
       h.close();
@@ -229,14 +255,14 @@ describe("/tasks settings", () => {
         writeStarted.resolve();
         return pending.promise;
       });
-      h.input("\r");
+      h.choose();
       yield* Effect.promise(() => writeStarted.promise);
       expect(h.write).toHaveBeenCalledTimes(1);
       generation++;
       pending.resolve();
       yield* macrotask;
       expect(h.notify).not.toHaveBeenCalled();
-      h.input("\r");
+      h.choose();
       expect(h.write).toHaveBeenCalledTimes(1);
       expect(h.isOpen()).toBe(false);
       yield* Effect.promise(() => h.opened);
@@ -245,7 +271,7 @@ describe("/tasks settings", () => {
       const reopened = h.open();
       yield* macrotask;
       expect(h.isOpen()).toBe(true);
-      h.input("\r");
+      h.choose();
       yield* macrotask;
       expect(h.write).toHaveBeenCalledTimes(2);
       expect(h.notify).toHaveBeenCalled();

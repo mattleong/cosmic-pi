@@ -311,7 +311,7 @@ export function settingsSubcommand<Config>(
             scope,
           )
         : Promise.resolve();
-    const picker: SettingsSession<Config>["picker"] = (items, maxHeight = 12) => {
+    const picker: SettingsSession<Config>["picker"] = (items, maxHeight = 20) => {
       const latest = new Map<string, object>();
       return openSettingsList(
         ctx,

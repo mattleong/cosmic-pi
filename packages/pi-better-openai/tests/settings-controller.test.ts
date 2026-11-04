@@ -129,8 +129,11 @@ const beginRefreshWrite = Effect.gen(function* () {
   component.handleInput?.(input.down);
   component.handleInput?.(input.down);
   component.handleInput?.(input.enter);
+  // Enter opens the interval's choices; the next one is chosen and applied optimistically.
   component.handleInput?.(input.enter);
-  expect(renderedRow(component, "Usage refresh")).toContain("120000");
+  component.handleInput?.(input.down);
+  component.handleInput?.(input.enter);
+  expect(renderedRow(component, "Usage refresh")).toContain("2m");
   return { h, write, closed, component };
 });
 

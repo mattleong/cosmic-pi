@@ -13,7 +13,9 @@ import { initTheme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { imageResultText } from "../src/image/result-text.ts";
+import { formatUsageDetails, formatUsageStatus, type UsageSnapshot } from "../src/usage/format.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
 import { registerImagePresentation, textPart } from "./image-fixtures.ts";
 
@@ -103,6 +105,32 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
   { title: "image message cancelled", message: message("cancelled") },
 ];
 
+const now = Date.UTC(2026, 10, 3, 22, 30);
+const usage = (fiveHourLeftPercent: number | null): UsageSnapshot => ({
+  capturedAt: now,
+  fiveHourLeftPercent,
+  sevenDayLeftPercent: 90,
+  fiveHourResetInSeconds: fiveHourLeftPercent === null ? null : 2 * 3_600 + 180,
+  sevenDayResetInSeconds: 6 * 86_400 + 3_600,
+});
+const textFrame = (title: string, shown: string | undefined): string[] => [
+  `── ${title}`,
+  ...(shown === undefined ? ["(nothing shown)"] : Str.split(shown, "\n")),
+  "",
+];
+const usageFrames = (): string[] => [
+  ...textFrame("/openai usage · both windows reported", formatUsageDetails(usage(42), now)),
+  ...textFrame("/openai usage · 5-hour window not reported", formatUsageDetails(usage(null), now)),
+  ...textFrame(
+    "usage status without the Cosmic UI footer",
+    formatUsageStatus(usage(42), { showResetTimes: true }, now),
+  ),
+  ...textFrame(
+    "usage status without the Cosmic UI footer · 5-hour window not reported",
+    formatUsageStatus(usage(null), { showResetTimes: false }, now),
+  ),
+];
+
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
@@ -147,6 +175,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
               );
             });
         });
+      lines.push(...usageFrames());
       yield* writeGallerySection(directory, "pi-better-openai", lines);
     }),
   );

@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import type { CompactSummaryProvider } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
@@ -53,6 +54,17 @@ describe("questionnaire compact outcome projection", () => {
       }
     },
   );
+  it("shows a lone written answer's own words, bounded to its first line", () => {
+    const long = {
+      ...submitted.answers[0],
+      text: `Keep the current library\n${Str.repeat(40)("more ")}`,
+    };
+    for (const details of [submitted, { ...submitted, answers: [long] }]) {
+      const [first] = summarize(askUserCompactSummary, details)?.counters ?? [];
+      expect(first).toContain("Keep the current library");
+      expect(first).not.toContain("more");
+    }
+  });
   it("classifies failed questionnaires as errors that say no answer was recorded", () => {
     for (const [details, args] of [
       [row({ status: "failed", outcome: undefined, delivery: "none" }), {}],

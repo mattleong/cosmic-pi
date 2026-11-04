@@ -5,6 +5,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
+import { RESUME_HINT } from "../src/boundary/host-ui.ts";
 import { makeActivityFixture as fixture } from "./support/activity.ts";
 
 it.effect(
@@ -55,4 +56,27 @@ it.effect(
       expect(cancelled).toBe(1);
       f.activity.dispose();
     }),
+);
+
+it.effect("tells Activity how to resume a hidden questionnaire, and only while it is hidden", () =>
+  Effect.gen(function* () {
+    const f = fixture();
+    yield* f.activity.observer.admitted("hidden", request, Effect.void);
+    yield* f.activity.observer.presenting("hidden");
+    const token = f.bridge.activate(() => undefined);
+    const resumable = () => {
+      const [item] = f.items();
+      return {
+        summary: item?.summary,
+        resume: Arr.some(item?.actions ?? [], (action) => action.id === "resume"),
+      };
+    };
+    f.bridge.markOpened(token);
+    expect(resumable()).toEqual({ summary: "open", resume: false });
+    f.bridge.markCollapsed(token);
+    expect(resumable()).toEqual({ summary: RESUME_HINT, resume: true });
+    f.bridge.resume(token);
+    expect(resumable()).toEqual({ summary: "open", resume: false });
+    f.activity.dispose();
+  }),
 );

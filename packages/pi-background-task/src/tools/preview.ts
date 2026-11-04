@@ -3,11 +3,12 @@ import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-wor
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { exitStatusMeaning, expandedSection } from "pi-code-previews";
-import { countLabel } from "pi-cosmic-core/display";
+import { countLabel, formatDuration } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { clipToWidth } from "pi-cosmic-ui/manager";
+import { clipToWidth, managerActivityColor } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { failingExitCode, type BackgroundTaskSnapshot } from "../task/model.ts";
 import { quotedWaitText } from "../ui/compact-summary.ts";
@@ -19,6 +20,7 @@ import {
   type BackgroundTaskToolDetails,
 } from "./command.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
+import { commandLines, labeledRowsComponent, type LabeledRow } from "./request-view.ts";
 
 type PreviewTheme = Pick<Theme, "fg" | "bold">;
 
@@ -43,14 +45,22 @@ interface TaskLineOptions {
   readonly inHeading: boolean;
   /** Collapsed, a failure's exit status is left to the issue that already states it. */
   readonly expanded: boolean;
+  /** A start result, which reports the admission rather than a state that later goes stale. */
+  readonly started?: boolean;
 }
+
+const startedState = (task: BackgroundTaskSnapshot): boolean =>
+  task.state === "starting" || task.state === "running";
 
 function taskPreviewLine(
   task: BackgroundTaskSnapshot,
   theme: PreviewTheme,
-  { inHeading, expanded }: TaskLineOptions,
+  { inHeading, expanded, started = false }: TaskLineOptions,
 ): string {
-  const state = taskStatePresentation(task.state);
+  const state =
+    started && startedState(task)
+      ? { color: managerActivityColor("done"), label: "started" }
+      : taskStatePresentation(task.state);
   const status = expanded ? exitStatus(task) : undefined;
   return Arr.join(
     [
@@ -199,6 +209,7 @@ function collapsedRows(
   const options = { inHeading: true, expanded: false };
   switch (details.action) {
     case "start":
+      return [{ text: taskPreviewLine(details.snapshot, theme, { ...options, started: true }) }];
     case "status":
       return [{ text: taskPreviewLine(details.snapshot, theme, options) }];
     case "stop":
@@ -228,6 +239,20 @@ interface Section {
   /** Labeled sections indent beneath their label, like the arguments above them. */
   readonly label?: string;
   readonly rows: Row[];
+  /** Labeled facts, drawn in a shared label column instead of rows. */
+  readonly facts?: ReadonlyArray<LabeledRow>;
+}
+
+/** What a compact heading doesn't say about one task: its command when named, and its runtime. */
+function taskFacts(task: BackgroundTaskSnapshot): Section[] {
+  const named = task.name !== undefined && Str.trim(task.name) !== "";
+  const facts: LabeledRow[] = [
+    ...(named ? [{ label: "Command", lines: commandLines(task.command) }] : []),
+    ...(task.endedAt === undefined
+      ? []
+      : [{ label: "Ran", lines: [formatDuration(task.endedAt - task.startedAt)] }]),
+  ];
+  return facts.length > 0 ? [{ rows: [], facts }] : [];
 }
 
 /**
@@ -241,24 +266,43 @@ function expandedSections(
   theme: PreviewTheme,
   headingShowsState: boolean,
 ): Section[] {
-  const taskLine = (task: BackgroundTaskSnapshot): Section[] =>
+  const taskLine = (task: BackgroundTaskSnapshot, started = false): Section[] =>
     headingShowsState
-      ? []
-      : [{ rows: [{ text: taskPreviewLine(task, theme, { inHeading: true, expanded: true }) }] }];
+      ? started
+        ? []
+        : taskFacts(task)
+      : [
+          {
+            rows: [
+              { text: taskPreviewLine(task, theme, { inHeading: true, expanded: true, started }) },
+            ],
+          },
+        ];
   switch (details.action) {
     case "start":
+      return taskLine(details.snapshot, true);
     case "status":
       return taskLine(details.snapshot);
     case "stop":
+      return headingShowsState
+        ? taskFacts(details.snapshot)
+        : [{ rows: collapsedRows(details, text, args, theme) }];
     case "clear":
       return headingShowsState ? [] : [{ rows: collapsedRows(details, text, args, theme) }];
     case "wait": {
       const { wait } = details;
       const tail = wait.tail ? outputLines(wait.tail) : [];
-      const found = foundRows(wait, theme);
+      // A compact heading already says what was found; only the line around it is new.
+      const found = headingShowsState
+        ? wait.matchedLine
+          ? [{ text: theme.fg("toolOutput", sanitizeTerminalLine(wait.matchedLine)) }]
+          : []
+        : foundRows(wait, theme);
       return [
         ...taskLine(wait.snapshot),
-        ...(found.length > 0 ? [{ rows: found }] : []),
+        ...(found.length > 0
+          ? [headingShowsState ? { label: "Matched line", rows: found } : { rows: found }]
+          : []),
         ...(tail.length > 0
           ? [
               {
@@ -324,7 +368,15 @@ function factLines(input: BackgroundTaskPreviewInput): ReadonlyArray<string> {
   if (!input.expanded) return [];
   return Option.match(input.failure, {
     onSome: ({ failure }) => failureFactLines(failure),
-    onNone: () => Option.match(input.details, { onSome: resultFactLines, onNone: () => [] }),
+    onNone: () =>
+      Option.match(input.details, {
+        onSome: (details) =>
+          Arr.filter(
+            resultFactLines(details, Predicate.isString(input.args.id) ? input.args.id : undefined),
+            (line) => line !== "",
+          ),
+        onNone: () => [],
+      }),
   });
 }
 
@@ -348,10 +400,19 @@ function rowsComponent(rows: ReadonlyArray<Row>): Component {
 
 function buildPreview(input: BackgroundTaskPreviewInput, theme: Theme): Component {
   const container = new Container();
+  // Beneath a compact heading, unlabeled rows indent with the labeled sections around them.
+  const indentUnlabeled = input.expanded && input.headingShowsState === true;
   for (const section of previewSections(input, theme)) {
-    const rows = rowsComponent(section.rows);
+    const rows =
+      section.facts === undefined
+        ? rowsComponent(section.rows)
+        : labeledRowsComponent(section.facts, theme);
     container.addChild(
-      section.label === undefined ? rows : expandedSection(theme, section.label, rows),
+      section.label !== undefined
+        ? expandedSection(theme, section.label, rows)
+        : indentUnlabeled
+          ? expandedSection(theme, undefined, rows)
+          : rows,
     );
   }
   const facts = factLines(input);

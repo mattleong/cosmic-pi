@@ -13,7 +13,7 @@ describe("grouped activity detail", () => {
       providerId: "provider\u001b[2J",
       revision: "revision\r\ntoken=private-value",
     });
-    const text = groupedDetail({
+    const blocks = groupedDetail({
       selected: Option.getOrUndefined(
         Arr.findFirst(groupedActivityTree([row]), (entry) => entry.type === "member"),
       ),
@@ -21,14 +21,49 @@ describe("grouped activity detail", () => {
       focused: false,
       now: undefined,
       loaded: undefined,
+      loading: false,
       actionPage: 0,
       technical: true,
     });
+    const text = Arr.join(
+      Arr.map(blocks, (block) => block.text),
+      "\n",
+    );
     expect(text).not.toContain("\u001b");
     expect(text).not.toContain("\u0007");
     expect(text).not.toContain("\r");
     expect(text).not.toContain("private-value");
     expect(row.id).toBe("item\u001b]52;c;payload\u0007");
     expect(row.revision).toBe("revision\r\ntoken=private-value");
+  });
+
+  it("shows provider identity only behind the technical disclosure", () => {
+    const row = activityRow("task", "failed", undefined, { kind: "command", title: "Build" });
+    const selected = Option.getOrUndefined(
+      Arr.findFirst(groupedActivityTree([row]), (entry) => entry.type === "member"),
+    );
+    const text = (technical: boolean) =>
+      Arr.join(
+        Arr.map(
+          groupedDetail({
+            selected,
+            theme: plainTheme,
+            focused: true,
+            now: undefined,
+            loaded: {
+              sections: [{ title: "Output", body: "compile error" }],
+              technical: [{ label: "PID", value: "4242" }],
+            },
+            loading: false,
+            actionPage: 0,
+            technical,
+          }),
+          (block) => block.text,
+        ),
+        "\n",
+      );
+    expect(text(false)).toContain("compile error");
+    expect(text(false)).not.toContain("4242");
+    expect(text(true)).toContain("4242");
   });
 });

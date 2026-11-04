@@ -34,6 +34,8 @@ import { argumentsStreaming, pathPreviewLanguage, renderContentPreview } from ".
 import { readResultBody } from "./read-result";
 import type { PreviewRenderers, RendererState, ToolRenderContext } from "./types";
 import { writeBeforeSnapshot, writeDiffPlan } from "./write-result";
+import { editDiffShowsOperations, writeDiffShowsContent } from "./edit-diff-coverage";
+import { withoutReportedShellStatus } from "../../builtin-failure-shell";
 
 export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): PreviewRenderers {
   return {
@@ -62,33 +64,49 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       const content = ownField(input, "content");
       if (tool === "write" && Predicate.isString(content))
         container.addChild(
-          expandedSection(
-            theme,
-            undefined,
-            source(content, path, theme, context.invalidate, { highlight }),
+          unlessCallShownByResult(
+            context.state,
+            expandedSection(
+              theme,
+              undefined,
+              source(content, path, theme, context.invalidate, { highlight }),
+            ),
           ),
         );
+      const requested = new Container();
       for (const { oldText, newText } of operations)
         for (const [label, text] of [
           ["Old text", oldText],
           ["New text", newText],
         ] as const)
-          container.addChild(
+          requested.addChild(
             expandedSection(
               theme,
               label,
               source(text, path, theme, context.invalidate, { highlight }),
             ),
           );
+      if (operations.length) container.addChild(unlessCallShownByResult(context.state, requested));
       return container;
     },
     renderResult(result, _options, theme, context) {
-      if (context.isError)
-        return expandedSection(
-          theme,
-          "Error",
-          new Text(theme.fg("error", escapeControlChars(getTextContent(result.content))), 0, 0),
-        );
+      context.state[CALL_SHOWN_BY_RESULT] = false;
+      if (tool === "edit") context.state[CALL_SHOWN_BY_RESULT] = editDiffShown(result, context);
+      if (context.isError) {
+        const text = getTextContent(result.content);
+        // The issue already states a shell's exit status, as the preview style does.
+        const shown =
+          tool === "bash"
+            ? Str.trimEnd(Arr.join(withoutReportedShellStatus(Str.split(text, "\n")), "\n"))
+            : text;
+        return shown
+          ? expandedSection(
+              theme,
+              tool === "bash" ? "Output" : "Error",
+              new Text(theme.fg("error", escapeControlChars(shown)), 0, 0),
+            )
+          : new Container();
+      }
       const { output, notice } = splitAgentNotice(tool, result);
       const body = builtinResultBody(tool, cwd, result, output, theme, context);
       return withAgentNotes(expandedSection(theme, undefined, body), theme, notice);
@@ -130,7 +148,7 @@ function builtinResultBody(
     const diff = getEditDiff(hostObject(result.details));
     const content = new Container();
     if (diff) content.addChild(renderDiff(diff, path, theme, context.invalidate));
-    if (output) content.addChild(rawResult(output, theme));
+    if (output && !EDIT_SUCCESS.test(output)) content.addChild(rawResult(output, theme));
     return content;
   }
   if (tool === "write") return writeResultBody(result, output, theme, context, input, path);
@@ -168,12 +186,41 @@ function writeResultBody(
   const body = new Container();
   if (plan.kind === "skipped" && plan.measured)
     body.addChild(new Text(theme.fg("muted", escapeControlChars(plan.reason)), 0, 0));
-  if (plan.kind === "diff")
+  if (plan.kind === "diff") {
+    context.state[CALL_SHOWN_BY_RESULT] = writeDiffShowsContent(plan.previous, plan.content);
     body.addChild(
       renderDiff(createSimpleDiff(plan.previous, plan.content), path, theme, context.invalidate),
     );
-  if (output) body.addChild(rawResult(output, theme));
+  }
+  if (output && !WRITE_SUCCESS.test(output)) body.addChild(rawResult(output, theme));
   return body;
+}
+
+// Pi's confirmations restate the success the heading shows; any other result text stays visible.
+const EDIT_SUCCESS = /^Successfully replaced (?:\d+ block\(s\)|text) in [^\n]+\.$/u;
+const WRITE_SUCCESS = /^Successfully wrote (?:\d+ bytes )?to [^\n]+$/u;
+
+// Set by the result slot when its diff shows every line of the call's content.
+const CALL_SHOWN_BY_RESULT = "codePreviewCallShownByResult";
+
+function editDiffShown(
+  result: AgentToolResult<unknown>,
+  context: Pick<ToolRenderContext<RendererState, unknown>, "args" | "isError">,
+): boolean {
+  if (context.isError) return false;
+  const diff = getEditDiff(hostObject(result.details));
+  return (
+    diff !== undefined &&
+    editDiffShowsOperations(diff, getEditPreviewOperations(hostObject(context.args)))
+  );
+}
+
+/** Call content, unless the result's diff already shows every line of it. */
+function unlessCallShownByResult(state: RendererState, content: Component): Component {
+  return {
+    render: (width) => (state[CALL_SHOWN_BY_RESULT] === true ? [] : content.render(width)),
+    invalidate: () => content.invalidate(),
+  };
 }
 
 function headingShowsExactly(value: string): boolean {

@@ -243,6 +243,33 @@ function taskIssues(value: BackgroundTaskSnapshot, outcome: CompactOutcome): Com
   return issues;
 }
 
+// Routine eviction keeps a long task's newest output; a read that misses some warns on its own.
+const discardedOutputIssue = (value: BackgroundTaskSnapshot): CompactIssue[] =>
+  value.droppedLogBytes > 0
+    ? [
+        issue(
+          "info",
+          `${value.id}:output-discarded`,
+          `${formatBytes(value.droppedLogBytes)} of earlier output was discarded`,
+          "The task keeps only its newest output; discarded output can't be recovered.",
+        ),
+      ]
+    : [];
+
+/** A status or notice: the task's own issues, then any output it no longer keeps. */
+function taskReportSummary(value: BackgroundTaskSnapshot): TaskSummary {
+  const task = taskSummary(value);
+  return { ...task, issues: [...task.issues, ...discardedOutputIssue(value)] };
+}
+
+/** A start that admitted its task reads as done, so its row never goes stale as "running". */
+function startSummary(value: BackgroundTaskSnapshot): TaskSummary {
+  const task = taskSummary(value);
+  return value.state === "starting" || value.state === "running"
+    ? { ...task, metadata: ["started"], outcome: "success" }
+    : task;
+}
+
 function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
   const outcome = taskOutcome(value);
   return {
@@ -256,7 +283,7 @@ function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
 
 /** A finished task's notice: its outcome and issues as a status row has them, and its duration. */
 export function taskNoticeSummary(value: BackgroundTaskSnapshot): TaskSummary {
-  const task = taskSummary(value);
+  const task = taskReportSummary(value);
   const ran = value.endedAt === undefined ? [] : [formatDuration(value.endedAt - value.startedAt)];
   return { ...task, metadata: [...(task.metadata ?? []), ...ran] };
 }
@@ -470,7 +497,7 @@ function waitSummary(
 function logsIssues(details: DetailsFor<"logs">): CompactIssue[] {
   const logs = details.logs;
   const issues: CompactIssue[] = [];
-  if (logs.state === "failed") issues.push(issue("error", `${logs.id}:failed`, "Failed"));
+  // A failed task's state is already the row's metadata; its cause belongs to status and wait.
   if (logs.state === "timed_out") issues.push(runtimeTimeoutIssue(logs.id, undefined));
   if (logs.state === "stopping") issues.push(cleanupUnconfirmedIssue(logs.id));
   if (logs.skipped)
@@ -573,8 +600,9 @@ function settledSummary(
 ): CompactSummary | undefined {
   switch (details.action) {
     case "start":
+      return { ...startSummary(details.snapshot), action };
     case "status":
-      return { ...taskSummary(details.snapshot), action };
+      return { ...taskReportSummary(details.snapshot), action };
     case "stop":
       return stopSummary(details, action);
     case "clear":

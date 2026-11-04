@@ -1,15 +1,16 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { countLabel } from "pi-cosmic-core/display";
+import { clipText, countLabel } from "pi-cosmic-core/display";
 import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { registerExtensionCommand } from "pi-cosmic-core/host-command";
-import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { directoryName, distinctSessionLabels, SESSION_STATE_LABELS } from "./identity.ts";
 import type { ListedSession, SessionListContract } from "./tools/contract.ts";
-import { sessionSubject } from "./tools/summary.ts";
 
 export const INTERCOM_COMMAND = "intercom";
+const DESCRIPTION = "Message your other live Pi sessions";
 const UNAVAILABLE = "Intercom isn't running in this session";
 
 export interface IntercomCommandHost {
@@ -20,31 +21,43 @@ export interface IntercomCommandHost {
   readonly setReceiving: (receiving: boolean) => void;
 }
 
-const STATE_LABELS: Record<ListedSession["state"], string> = {
-  idle: "idle",
-  busy: "busy",
-  unavailable: "unavailable",
-  unresponsive: "not answering",
-  unreachable: "unreachable",
-};
-
-const listedLine = (session: ListedSession): string =>
-  Arr.join(
-    [
-      `- ${sessionSubject(session)} in ${sanitizeTerminalLine(session.cwd)}: ${STATE_LABELS[session.state]}`,
-      session.duplicate ? " (shares its id with another session)" : "",
-    ],
-    "",
-  );
-
-const listReport = (result: SessionListContract): string => {
-  const total = result.sessions.length + result.omitted;
-  if (total === 0) return "No other live Pi sessions";
+// Notifications wrap at the terminal edge without a hanging indent, so each line stays short
+// enough for a narrow pane: an indented label and state, and a two-line hint.
+const listedLine = (session: ListedSession, label: string): string => {
+  const directory = directoryName(session.cwd);
+  const named = session.name !== undefined && Str.isNonEmpty(Str.trim(session.name));
   return Arr.join(
     [
-      `${countLabel(total, "other live session")}:`,
-      ...Arr.map(result.sessions, listedLine),
-      ...(result.omitted > 0 ? [`- and ${result.omitted} more`] : []),
+      `  ${label}`,
+      SESSION_STATE_LABELS[session.state],
+      ...(named && directory !== "" ? [`in ${directory}`] : []),
+      ...(session.duplicate ? ["duplicate id"] : []),
+    ],
+    " · ",
+  );
+};
+
+const EXAMPLE_LABEL_CHARS = 20;
+
+const howToMessage = (example: string | undefined): ReadonlyArray<string> => [
+  "To message one, ask your agent, for example:",
+  `  "Ask the ${example === undefined ? "web" : clipText(example, EXAMPLE_LABEL_CHARS)} session to rerun its tests"`,
+];
+
+const reachable = (session: ListedSession): boolean =>
+  session.state === "idle" || session.state === "busy";
+
+export const listReport = (result: SessionListContract): string => {
+  const total = result.sessions.length + result.omitted;
+  if (total === 0) return "No other live Pi sessions";
+  const labels = distinctSessionLabels(result.sessions);
+  const example = Arr.findFirstIndex(result.sessions, reachable);
+  return Arr.join(
+    [
+      countLabel(total, "other live session"),
+      ...Arr.map(result.sessions, (session, index) => listedLine(session, labels[index] ?? "")),
+      ...(result.omitted > 0 ? [`  and ${result.omitted} more`] : []),
+      ...howToMessage(Option.isSome(example) ? labels[example.value] : labels[0]),
     ],
     "\n",
   );
@@ -61,14 +74,26 @@ const RECEIVE_CHOICES = ["on", "off"] as const;
 const notify = (ctx: ExtensionCommandContext, message: string, level: "info" | "warning") =>
   notifyAtHostBoundary(ctx, message, level);
 
+/** The shared command overview, short enough for a narrow pane, plus how to message a session. */
+export const overview = Arr.join(
+  [
+    `/${INTERCOM_COMMAND}: ${DESCRIPTION}`,
+    `  /${INTERCOM_COMMAND} list  List them and their state`,
+    `  /${INTERCOM_COMMAND} receive [on|off]  Allow or block messages`,
+    ...howToMessage(undefined),
+  ],
+  "\n",
+);
+
 export function registerIntercomCommand(pi: ExtensionAPI, host: IntercomCommandHost): void {
   registerExtensionCommand(pi, {
     name: INTERCOM_COMMAND,
-    description: "Reach your other live Pi sessions on this machine",
+    description: DESCRIPTION,
+    bare: { handler: (_args, ctx) => notify(ctx, overview, "info") },
     subcommands: [
       {
         name: "list",
-        description: "List your other live sessions",
+        description: "List your other live sessions and their state",
         handler: (_args, ctx) => {
           if (!host.isActive()) return notify(ctx, UNAVAILABLE, "warning");
           return host.list(ctx.signal).then(

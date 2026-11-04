@@ -2,6 +2,7 @@ import { plainTheme } from "pi-cosmic-core/testing";
 import { ActivityComponent, type ActivityComponentOptions } from "../../src/activity/component.ts";
 import type { ActivityRow } from "../../src/activity/model.ts";
 import { activityKey, type ActivityItem } from "../../src/activity/protocol.ts";
+import { plainActivityDetail } from "../../src/activity/detail.ts";
 import {
   ActivityService,
   type ActivityActionRequest,
@@ -67,7 +68,7 @@ export const mountActivity = (
     },
     requestRender: () => undefined,
     loadDetail: (request, deliver) => {
-      loads.push({ request, deliver });
+      loads.push({ request, deliver: (text) => deliver(plainActivityDetail(text)) });
     },
     cancelDetail: () => {
       cancels++;

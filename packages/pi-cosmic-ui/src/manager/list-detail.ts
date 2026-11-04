@@ -184,7 +184,8 @@ export type DetailWindowPosition = boolean | "top" | undefined;
 export const computeDetailWindow = (options: {
   readonly lines: ReadonlyArray<string>;
   readonly height: number;
-  readonly previous: Pick<DetailWindow, "scroll" | "lineCount">;
+  readonly previous: Pick<DetailWindow, "scroll" | "lineCount"> &
+    Partial<Pick<DetailWindow, "maxScroll">>;
   readonly follow?: DetailWindowPosition;
 }): DetailWindow => {
   const { lines, height, previous } = options;
@@ -204,7 +205,13 @@ export const computeDetailWindow = (options: {
   const anchored = options.follow === false || scroll > 0;
   if (anchored && lines.length > previous.lineCount) scroll += lines.length - previous.lineCount;
   const maxScroll = Math.max(0, lines.length - bodyHeight);
-  scroll = options.follow === "top" ? maxScroll : Math.min(scroll, maxScroll);
+  // A view resting at the top stays there when the pane resizes or help takes rows.
+  const atTop =
+    options.follow !== true &&
+    previous.maxScroll !== undefined &&
+    previous.lineCount > 0 &&
+    previous.scroll >= previous.maxScroll;
+  scroll = options.follow === "top" || atTop ? maxScroll : Math.min(scroll, maxScroll);
   const start = Math.max(0, lines.length - bodyHeight - scroll);
   return {
     visible: lines.slice(start, start + bodyHeight),
@@ -221,7 +228,7 @@ export const computeDetailWindow = (options: {
 
 export const detailWindowPositionLabel = (
   overflow: NonNullable<DetailWindow["overflow"]>,
-): string => ` ${overflow.start}–${overflow.end} of ${overflow.total} · C-u/d half-page `;
+): string => `lines ${overflow.start}–${overflow.end} of ${overflow.total}`;
 
 interface ListDetailPaneGeometry {
   readonly inner: number;

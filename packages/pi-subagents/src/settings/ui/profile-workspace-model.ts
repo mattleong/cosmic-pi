@@ -80,13 +80,23 @@ const profileDefaultEffort = (profile: ProfileId): SubagentEffort | undefined =>
   return "defaultEffort" in definition ? definition.defaultEffort : undefined;
 };
 
+/** The reasoning level a candidate runs with, resolving the profile default. */
+export const candidateEffortLevel = (
+  profile: ProfileId,
+  candidate: ProfileCandidate,
+  parentEffort: SubagentEffort,
+): string =>
+  candidate.effort === "default"
+    ? (profileDefaultEffort(profile) ?? parentEffort)
+    : candidate.effort;
+
 export const candidateEffortLabel = (
   profile: ProfileId,
   candidate: ProfileCandidate,
   parentEffort: SubagentEffort,
 ): string =>
   candidate.effort === "default"
-    ? `${profileDefaultEffort(profile) ?? parentEffort} (profile default)`
+    ? `${candidateEffortLevel(profile, candidate, parentEffort)} (profile default)`
     : candidate.effort;
 
 export const candidateFastModeAvailable = (

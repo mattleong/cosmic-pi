@@ -129,6 +129,11 @@ const PHRASE_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
     "Too long for the model's context",
   ],
   [/too many requests|rate[ _-]?limit(?:ed|s)?\b/iu, "Rate limited"],
+  [
+    /messages?\.\d+\.content (?:is|must not be) empty|content (?:is|must not be) empty|empty (?:prompt|message)\b/iu,
+    "Prompt was empty",
+  ],
+  [/\binvalid_request_error\b/u, "Request rejected by the provider"],
   [/\boverloaded/iu, "Service overloaded"],
   [
     /\bunauthori[sz]ed\b|invalid (?:api[ _-]?key|token)|incorrect api key|authentication (?:failed|error)/iu,

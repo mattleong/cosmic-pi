@@ -37,16 +37,29 @@ export interface ActivityRowVisual {
   readonly history?: boolean;
 }
 
-const treeGuide = (continuations: readonly boolean[], levels: number): string => {
+// The widget uses compact three-column connectors. The manager's four-column connectors carry
+// the fold marker in place of the last stroke, so glyphs sit right after their connector.
+const treeGuide = (
+  continuations: readonly boolean[],
+  levels: number,
+  fold: string | undefined,
+): string => {
   const clipped = continuations.length > levels;
   const shown = levels > 0 ? continuations.slice(-levels) : [];
-  return `${clipped ? "… " : ""}${Arr.join(
+  const wide = fold !== undefined;
+  const last = (continues: boolean) =>
+    wide ? `${continues ? "├─" : "└─"}${fold || "─"} ` : continues ? "├─ " : "└─ ";
+  const through = (continues: boolean) =>
+    wide ? (continues ? "│   " : "    ") : continues ? "│  " : "   ";
+  const root = wide && fold && shown.length === 0 ? `${fold} ` : "";
+  return `${clipped ? "… " : ""}${root}${Arr.join(
     Arr.map(shown, (continues, index) =>
-      index === shown.length - 1 ? (continues ? "├─ " : "└─ ") : continues ? "│  " : "   ",
+      index === shown.length - 1 ? last(continues) : through(continues),
     ),
     "",
   )}`;
 };
+const guideWidth = (fold: string | undefined) => (fold === undefined ? 3 : 4);
 
 const mostDroppable = (parts: readonly ActivityStatusPart[]) => {
   let found: { readonly index: number; readonly part: ActivityStatusPart } | undefined;
@@ -87,7 +100,8 @@ type Paint = (tone: Tone, text: string) => string;
 interface RowMarkers {
   readonly continuations: readonly boolean[];
   readonly awaited: string;
-  readonly fold: string;
+  /** The manager's fold marker, empty for a leaf; undefined in the widget, which never folds. */
+  readonly fold: string | undefined;
   readonly omitted: string;
 }
 
@@ -96,13 +110,13 @@ const rowMarkers = (row: ActivityRowVisual, interactive: boolean): RowMarkers =>
     return {
       continuations: row.continuations.slice(1),
       awaited: row.awaited ? "◎ " : "",
-      fold: "",
+      fold: undefined,
       omitted: "",
     };
   return {
     continuations: row.continuations,
-    awaited: row.awaited ? "◎ " : "  ",
-    fold: row.children ? (row.expanded ? "▾ " : "▸ ") : "  ",
+    awaited: row.awaited ? "◎ " : "",
+    fold: row.children ? (row.expanded ? "▾" : "▸") : "",
     omitted: row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "",
   };
 };
@@ -115,8 +129,7 @@ const minimumLeftWidth = (
   { continuations, awaited, fold, omitted }: RowMarkers,
   suffix: string,
 ): number =>
-  visibleWidth(treeGuide(continuations, Math.min(12, continuations.length))) +
-  visibleWidth(fold) +
+  visibleWidth(treeGuide(continuations, Math.min(12, continuations.length), fold)) +
   visibleWidth(awaited) +
   2 +
   (suffix ? Math.min(PROFILE_RESERVE_WIDTH, visibleWidth(suffix) + 3) : 0) +
@@ -174,11 +187,8 @@ export function renderActivityRow(
   );
   const leftWidth = Math.max(0, width - (rightWidth === undefined ? 0 : rightWidth + 2));
   const guideBudget = Math.max(0, leftWidth - identityWidth - markerWidth - 3);
-  const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - visibleWidth(fold) - 2) / 3)));
-  const guide = paint(
-    "dim",
-    clipToWidth(`${treeGuide(continuations, levels)}${fold}`, guideBudget, ""),
-  );
+  const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - 2) / guideWidth(fold))));
+  const guide = paint("dim", clipToWidth(treeGuide(continuations, levels, fold), guideBudget, ""));
   const glyph = paint(row.color, row.glyph);
   const name = rowName(row, interactive, suffix, paint, focusedStyle);
   const left = clipToWidth(

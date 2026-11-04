@@ -12,8 +12,6 @@ import {
 const PARENT = { id: "019fd4cd-4c88-7564-8b67-3b917b42df51", path: "/sessions/parent.jsonl" };
 
 const launch = (overrides: Partial<ChildLaunch> = {}): ChildLaunch => ({
-  cwd: "/projects/demo",
-  branch: undefined,
   extensionPath: "/extensions/pi-rex-btw/",
   shell: "/bin/zsh",
   prompt: undefined,

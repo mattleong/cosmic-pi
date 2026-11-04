@@ -1,8 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type * as MutableRef from "effect/MutableRef";
+import * as MutableRef from "effect/MutableRef";
 import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
 import type { ResolvedConfig } from "../config/schema.ts";
 import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
+import { formatUsageStatus } from "../usage/format.ts";
 import { visibleStatusLine, type OpenAIProjection } from "../usage/projection.ts";
 
 export function fastModeFooterPrimitive(
@@ -42,4 +43,15 @@ export function openAIUsageFooterPrimitive(
     priority: 60,
     order: 100,
   };
+}
+
+/** The usage words Pi's own status line shows when Cosmic UI's footer is inactive. */
+export function openAIUsageStatusText(
+  ctx: ExtensionContext,
+  cfg: ResolvedConfig,
+  projection: MutableRef.MutableRef<OpenAIProjection>,
+): string | undefined {
+  if (!visibleStatusLine(ctx, cfg, projection)) return undefined;
+  const { snapshot } = MutableRef.get(projection);
+  return snapshot ? formatUsageStatus(snapshot, cfg.usage, snapshot.capturedAt) : undefined;
 }

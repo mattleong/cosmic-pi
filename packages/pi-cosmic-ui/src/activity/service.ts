@@ -4,7 +4,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
-import * as Predicate from "effect/Predicate";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
@@ -17,9 +16,11 @@ import {
   ActivitySnapshotSchema,
   ActivityStartingSchema,
   activityKey,
+  type ActivityDetail,
   type ActivityEnvelope,
   type ActivityItem,
 } from "./protocol.ts";
+import { decodeActivityDetail, plainActivityDetail } from "./detail.ts";
 import { retainActivity, type ActivityRow } from "./model.ts";
 import { detachActivityItem } from "./detach.ts";
 import { ACTIVITY_LIMITS } from "./limits.ts";
@@ -60,7 +61,7 @@ export interface ActivityActionRequest extends ActivityDetailRequest {
 export interface ActivityServiceContract {
   readonly receive: (event: ActivityEnvelope) => Effect.Effect<void, ActivityError>;
   readonly invoke: (request: ActivityActionRequest) => Effect.Effect<void, ActivityError>;
-  readonly detail: (request: ActivityDetailRequest) => Effect.Effect<string, ActivityError>;
+  readonly detail: (request: ActivityDetailRequest) => Effect.Effect<ActivityDetail, ActivityError>;
 }
 interface ActivityViewSnapshot {
   readonly rows: readonly ActivityRow[];
@@ -381,19 +382,20 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
     const detail = Effect.fn("ActivityService.detail")(function* (request: ActivityDetailRequest) {
       const { provider, row } = yield* providerFor(request);
       const getDetail = provider.getDetail;
-      if (!getDetail) return row.detail ?? "";
-      const text = yield* Effect.tryPromise({
+      if (!getDetail) return plainActivityDetail(row.detail ?? "");
+      const content = yield* Effect.tryPromise({
         try: (signal) => {
           checkedRow(request);
           return Promise.resolve<unknown>(getDetail(row.id, request.revision, signal));
         },
         catch: asActivityError,
       });
-      if (!Predicate.isString(text)) return yield* invalid();
       return yield* Effect.try({
         try: () => {
           checkedRow(request);
-          return cleanDetail(text);
+          const decoded = decodeActivityDetail(content);
+          if (!decoded) throw invalid();
+          return decoded;
         },
         catch: asActivityError,
       });

@@ -1,12 +1,15 @@
 import type { ToolRenderers } from "@earendil-works/pi-coding-agent";
 import * as Fn from "effect/Function";
 import * as Arr from "effect/Array";
+import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { expandedSection } from "../../preview/expanded-section";
-import { escapeControlChars } from "../../shared/terminal-text";
+import { escapeControlChars, replaceSgrSequences } from "../../shared/terminal-text";
 import { withCodePreviewRenderers } from "../../tools/cooperative-tools";
 import { getFallbackResultText } from "../../tools/data/results";
 import { plainRows, plainText } from "../../tools/native-safe-content";
@@ -37,6 +40,32 @@ export const webAccessAdapter = {
 
 type Context = ToolRenderContext<RendererState, unknown>;
 
+const visibleWords = (text: string): string =>
+  Fn.pipe(
+    replaceSgrSequences(text, () => ""),
+    Str.replace(/\s+/gu, " "),
+    Str.trim,
+  );
+
+/**
+ * The appended raw evidence, unless the provider's own rendering already shows all of it at this
+ * width; clipped or reworded provider output keeps the evidence.
+ */
+function unlessShownBy(
+  original: Component | undefined,
+  evidence: string,
+  section: Component,
+): Component {
+  const wanted = visibleWords(evidence);
+  return {
+    render(width) {
+      const shown = original ? visibleWords(Arr.join(original.render(width), " ")) : "";
+      return wanted && Fn.pipe(shown, Str.includes(wanted)) ? [] : section.render(width);
+    },
+    invalidate: () => section.invalidate(),
+  };
+}
+
 export function createWebAccessRenderers(
   name: WebAccessTool,
   downstream: ToolRenderers | undefined,
@@ -51,7 +80,7 @@ export function createWebAccessRenderers(
     input: readonly unknown[],
     context: Context,
     build: (lastComponent: Component | undefined) => Component | undefined,
-    extra: () => Component,
+    extra: (original: Component | undefined) => Component,
     fallback: Component,
   ): Component {
     const { state } = context;
@@ -70,7 +99,7 @@ export function createWebAccessRenderers(
       original = build(context.lastComponent && originals.get(context.lastComponent));
       const container = new Container();
       if (original) container.addChild(original);
-      container.addChild(extra());
+      container.addChild(extra(original));
       body = container;
     } catch {
       markFailed();
@@ -114,9 +143,15 @@ export function createWebAccessRenderers(
       [args],
       context,
       (lastComponent) => downstream?.renderCall?.(args, theme, { ...context, lastComponent }),
-      () => {
+      (original) => {
         if (context.expanded)
-          return expandedSection(theme, "Arguments", new Text(escapeControlChars(full), 0, 0));
+          return Predicate.isObject(args) && Rec.isEmptyRecord(args)
+            ? new Container()
+            : unlessShownBy(
+                original,
+                invokeHostCallback(() => JSON.stringify(args) ?? "", ""),
+                expandedSection(theme, "Arguments", new Text(escapeControlChars(full), 0, 0)),
+              );
         return downstream?.renderCall
           ? new Container()
           : new Text(renderToolHeader({ title: label, subtitle: subject }, theme), 0, 0);
@@ -138,9 +173,13 @@ export function createWebAccessRenderers(
       context,
       (lastComponent) =>
         downstream?.renderResult?.(result, options, theme, { ...context, lastComponent }),
-      () =>
+      (original) =>
         options.expanded
-          ? expandedSection(theme, "Raw result", new Text(escapeControlChars(raw), 0, 0))
+          ? unlessShownBy(
+              original,
+              raw,
+              expandedSection(theme, "Raw result", new Text(escapeControlChars(raw), 0, 0)),
+            )
           : downstream?.renderResult
             ? new Container()
             : fallback,

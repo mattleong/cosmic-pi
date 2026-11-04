@@ -48,7 +48,7 @@ const failed = task({
   id: "task-0000000001",
   name: "tests",
   state: "failed",
-  endedAt: 2,
+  endedAt: 42_001,
   exitCode: 1,
   failureCause: "FAIL tests/auth.test.ts > rejects expired tokens",
 });
@@ -57,7 +57,7 @@ const killed = task({
   name: "build",
   command: "pnpm build",
   state: "failed",
-  endedAt: 2,
+  endedAt: 42_001,
   exitCode: 137,
 });
 const running = task({
@@ -89,7 +89,7 @@ const exitUnknown = task({
   name: "lint",
   command: "pnpm lint",
   state: "exited",
-  endedAt: 2,
+  endedAt: 42_001,
   exitCode: null,
 });
 const spawnFailed = task({
@@ -97,7 +97,7 @@ const spawnFailed = task({
   name: "deploy",
   command: "./scripts/deploy.sh",
   state: "failed",
-  endedAt: 2,
+  endedAt: 42_001,
   logCursor: 0,
   error: "Couldn't start the process",
 });
@@ -106,13 +106,13 @@ const finished = task({
   name: "typecheck",
   command: "pnpm typecheck",
   state: "exited",
-  endedAt: 2,
+  endedAt: 42_001,
   exitCode: 0,
 });
 const stoppedServer: BackgroundTaskStatus = {
   ...running,
   state: "stopped",
-  endedAt: 2,
+  endedAt: 42_001,
   exitCode: null,
   signal: "SIGTERM",
 };
@@ -128,7 +128,7 @@ const noisy = task({
 const stoppedWatcher: BackgroundTaskStatus = {
   ...noisy,
   state: "stopped",
-  endedAt: 2,
+  endedAt: 42_001,
   exitCode: null,
   signal: "SIGTERM",
 };
@@ -136,7 +136,7 @@ const unnamed = task({
   id: "task-0000000012",
   command: "node scripts/seed.js --fixtures=large",
   state: "failed",
-  endedAt: 2,
+  endedAt: 42_001,
   exitCode: 127,
 });
 const errorNamed = task({
@@ -144,7 +144,7 @@ const errorNamed = task({
   name: "BuildError",
   command: "pnpm build:errors",
   state: "failed",
-  endedAt: 2,
+  endedAt: 42_001,
   exitCode: 2,
   failureCause: "src/index.ts:4 Cannot find name 'foo'",
 });
@@ -400,7 +400,7 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: {
       wait: () =>
         Effect.succeed(
-          taskWait({ ...running, state: "failed", endedAt: 2, exitCode: 1 }, "completed", {
+          taskWait({ ...running, state: "failed", endedAt: 42_001, exitCode: 1 }, "completed", {
             recent: slice(
               "task-0000000003",
               "failed",

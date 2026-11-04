@@ -84,6 +84,27 @@ export const ActivitySnapshotSchema = Schema.Array(ActivityItemSchema).check(
 export const activityKey = (providerId: string, itemId: string): string =>
   JSON.stringify([providerId, itemId]);
 
+/**
+ * Lazily loaded detail. Sections lead with what the user came for (cause, result, output);
+ * `technical` holds identity and diagnostics shown only behind Activity's Technical toggle.
+ */
+export interface ActivityDetailSection {
+  readonly title?: string | undefined;
+  readonly body: string;
+  /** Agent-authored prose renders as Markdown; everything else, such as logs, stays verbatim. */
+  readonly format?: "plain" | "markdown" | undefined;
+}
+export interface ActivityDetailField {
+  readonly label: string;
+  readonly value: string;
+}
+export interface ActivityDetail {
+  readonly sections: ReadonlyArray<ActivityDetailSection>;
+  readonly technical?: ReadonlyArray<ActivityDetailField> | undefined;
+}
+/** A plain string is one verbatim section. */
+export type ActivityDetailContent = string | ActivityDetail;
+
 export type ActivityEvents = Pick<ExtensionAPI["events"], "on" | "emit">;
 export interface ActivityProviderOptions {
   readonly sessionId: string;
@@ -96,7 +117,11 @@ export interface ActivityProviderOptions {
     revision: string,
     signal: AbortSignal,
   ) => Promise<void>;
-  readonly getDetail?: (itemId: string, revision: string, signal: AbortSignal) => Promise<string>;
+  readonly getDetail?: (
+    itemId: string,
+    revision: string,
+    signal: AbortSignal,
+  ) => Promise<ActivityDetailContent>;
   readonly onAvailability?: (available: boolean) => void;
 }
 export interface ActivityProviderRegistration {
@@ -226,7 +251,7 @@ interface RevisionedActivityProviderOptions {
   readonly providerId: string;
   readonly isCurrent: () => boolean;
   readonly items: () => readonly ActivityItem[];
-  readonly detail: (item: ActivityItem) => string;
+  readonly detail: (item: ActivityItem) => ActivityDetailContent;
   readonly act: (
     item: ActivityItem,
     actionId: string,

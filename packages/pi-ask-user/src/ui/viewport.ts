@@ -65,7 +65,7 @@ export class DialogViewport {
     if (bodyHeight < h)
       visible.push(
         feedback ??
-          `${this.offset + 1}-${this.offset + visible.length}/${lines.length} • PgUp/PgDn scroll • Home/End`,
+          `${this.offset + 1}–${this.offset + visible.length} of ${lines.length} · PgUp/PgDn Scroll · Home/End Jump`,
       );
     return Arr.map(visible, (line) => {
       const clean = Fn.pipe(line, Str.replaceAll(SELECTION_MARKER, ""));

@@ -1,128 +1,196 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import * as Predicate from "effect/Predicate";
 import { countLabel, formatRelativeAge } from "pi-cosmic-core/display";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
-import {
-  detailFieldRows,
-  listDetailHeading,
-  type ListDetailField,
-} from "../manager/list-detail-shell.ts";
+import { joinInline } from "../manager/chrome.ts";
+import { detailFieldRows, type ListDetailField } from "../manager/list-detail-shell.ts";
 import { managerTone } from "../manager/style.ts";
 import { ACTIVITY_ACTION_PAGE_SIZE, activityActionPages } from "./action-keys.ts";
 import { activityStatus } from "./attention.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
 import { workStateLabels, type GroupSummary } from "./group-summary.ts";
-import type { ActivityRow } from "./model.ts";
+import { isFinished, type ActivityRow } from "./model.ts";
+import type { ActivityDetail, ActivityDetailField } from "./protocol.ts";
 import { activityElapsed } from "./row-line.ts";
 
-const optionalField = (label: string, values: readonly string[]): ListDetailField[] =>
-  values.length ? [{ label, value: Arr.join(values, " · ") }] : [];
+/** Detail content before wrapping: verbatim text, or agent-authored Markdown. */
+export type ActivityDetailBlock =
+  | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "markdown"; readonly text: string };
+
+const text = (value: string): ActivityDetailBlock => ({ kind: "text", text: value });
+const spacer = text("");
+
 const technicalIdentity = (value: string): string =>
   sanitizeDiagnosticContent(sanitizeTerminalLine(value));
+
 const sectionFields = (summary: GroupSummary): ListDetailField[] => [
   {
     label: "Sources",
-    value: Arr.join([countLabel(summary.items, "item"), ...workStateLabels(summary)], " · "),
+    value: joinInline([countLabel(summary.items, "item"), ...workStateLabels(summary)]),
   },
-  ...optionalField("Progress", summary.awaited ? [`${summary.awaited} awaited`] : []),
+  ...(summary.awaited ? [{ label: "Progress", value: `${summary.awaited} awaited` }] : []),
 ];
+
+type DetailTheme = Pick<Theme, "fg" | "bold">;
 
 interface GroupedDetailOptions {
   readonly selected: GroupedActivityRow | undefined;
-  readonly theme: Pick<Theme, "fg" | "bold">;
+  readonly theme: DetailTheme;
   readonly focused: boolean;
   readonly now: number | undefined;
-  readonly loaded: string | undefined;
+  /** The provider's lazily loaded detail for this item, when it has arrived. */
+  readonly loaded: ActivityDetail | undefined;
+  /** Whether a lazy load for this item is still outstanding. */
+  readonly loading: boolean;
   readonly actionPage: number;
   readonly technical: boolean;
 }
-export function groupedDetail(options: GroupedDetailOptions): string {
+
+const heading = (theme: DetailTheme, value: string, focused: boolean): string =>
+  focused
+    ? theme.fg("accent", theme.bold(value))
+    : theme.fg(managerTone.identity, theme.bold(value));
+
+export function groupedDetail(options: GroupedDetailOptions): readonly ActivityDetailBlock[] {
   const { selected, theme } = options;
-  if (!selected) return "Select an item";
-  const breadcrumb = Arr.join(selected.breadcrumbs, " › ");
-  if (selected.type === "member")
-    return sourceDetail(options, selected.row, selected.context, breadcrumb);
-  return Arr.join(
-    [
-      listDetailHeading(theme, selected.title, options.focused, managerTone.identity),
-      breadcrumb,
-      ...detailFieldRows(theme, sectionFields(selected.summary)),
-      "Select a source to inspect its details and available actions.",
-    ],
-    "\n",
-  );
+  if (!selected) return [text(theme.fg("dim", "Select an item"))];
+  if (selected.type === "member") return sourceDetail(options, selected);
+  return [
+    text(heading(theme, Arr.join(selected.breadcrumbs, " › "), options.focused)),
+    ...Arr.map(detailFieldRows(theme, sectionFields(selected.summary)), text),
+    spacer,
+    text(theme.fg("dim", "Select an item to see its output and actions.")),
+  ];
 }
+
+const ageLabel = (row: ActivityRow, now: number | undefined): string => {
+  if (now === undefined) return "";
+  if (isFinished(row) && row.endedAt !== undefined)
+    return `ended ${formatRelativeAge(now - row.endedAt)}`;
+  return row.updatedAt === undefined ? "" : `updated ${formatRelativeAge(now - row.updatedAt)}`;
+};
+
+const statusLine = (options: GroupedDetailOptions, row: ActivityRow): string => {
+  const status = activityStatus(row);
+  return joinInline([
+    row.kind === "agent" ? row.profile : undefined,
+    status,
+    activityElapsed(row, options.now),
+    ageLabel(row, options.now),
+  ]);
+};
+
+// A summary that only restates the status adds nothing beside it.
+const distinctSummary = (row: ActivityRow): string | undefined => {
+  const summary = row.summary === undefined ? "" : Str.trim(row.summary);
+  return summary && Str.toLowerCase(summary) !== Str.toLowerCase(activityStatus(row))
+    ? summary
+    : undefined;
+};
+
+const providerSections = (
+  theme: DetailTheme,
+  detail: ActivityDetail,
+): readonly ActivityDetailBlock[] =>
+  Arr.flatMap(detail.sections, (section, index) => [
+    ...(index > 0 ? [spacer] : []),
+    ...(section.title ? [text(theme.fg("muted", theme.bold(section.title)))] : []),
+    section.format === "markdown"
+      ? { kind: "markdown" as const, text: section.body }
+      : text(section.body),
+  ]);
+
+const technicalFields = (
+  row: ActivityRow,
+  context: readonly ActivityRow[],
+  provided: ReadonlyArray<ActivityDetailField>,
+): ListDetailField[] => [
+  ...Arr.map(provided, (field) => ({ label: field.label, value: field.value })),
+  ...(row.route ? [{ label: "Route", value: row.route, tone: managerTone.value }] : []),
+  {
+    label: "Source",
+    value: `${technicalIdentity(row.providerId)} / ${technicalIdentity(row.id)}`,
+    tone: managerTone.identity,
+  },
+  { label: "Revision", value: `${technicalIdentity(row.revision)} · generation ${row.generation}` },
+  ...(context.length
+    ? [
+        {
+          label: "Ownership",
+          value: Arr.join(
+            Arr.map([...context, row], (item) => item.title),
+            " › ",
+          ),
+        },
+      ]
+    : []),
+];
 
 function sourceDetail(
   options: GroupedDetailOptions,
-  row: ActivityRow,
-  context: readonly ActivityRow[],
-  breadcrumb: string,
-): string {
+  entry: Extract<GroupedActivityRow, { readonly type: "member" }>,
+): readonly ActivityDetailBlock[] {
   const { theme } = options;
-  const sourcePath = Arr.join(
-    Arr.map([...context, row], (item) => item.title),
-    " › ",
+  const { row, context } = entry;
+  const loaded = options.loaded ?? (row.detail ? { sections: [{ body: row.detail }] } : undefined);
+  // A provider's lead section often opens with the same cause as the row summary.
+  const summary = Option.getOrUndefined(
+    Option.filter(
+      Option.fromUndefinedOr(distinctSummary(row)),
+      (shown) =>
+        !Arr.some(
+          loaded?.sections ?? [],
+          (section) => Str.trim(Str.split(section.body, "\n")[0] ?? "") === shown,
+        ),
+    ),
   );
-  return Arr.join(
-    [
-      listDetailHeading(theme, sourcePath, options.focused, managerTone.identity),
-      breadcrumb,
-      ...detailFieldRows(theme, [
-        {
-          label: "Status",
-          value: Arr.join(
-            Arr.filter(
-              [
-                // The breadcrumb names the group; only an agent's profile adds anything.
-                row.kind === "agent" ? row.profile : undefined,
-                activityStatus(row),
-                activityElapsed(row, options.now),
-              ],
-              (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
-            ),
-            " · ",
+  const body: ActivityDetailBlock[] = loaded
+    ? [...providerSections(theme, loaded)]
+    : options.loading
+      ? [text(theme.fg("dim", "Loading output…"))]
+      : [];
+  return [
+    text(heading(theme, Arr.join(entry.breadcrumbs, " › "), options.focused)),
+    text(theme.fg("muted", statusLine(options, row))),
+    ...(summary ? [text(summary)] : []),
+    ...(body.length ? [spacer, ...body] : []),
+    ...(row.omittedChildren
+      ? [spacer, text(theme.fg("dim", `${row.omittedChildren}+ earlier finished items hidden`))]
+      : []),
+    ...(options.technical
+      ? [
+          spacer,
+          text(theme.fg("muted", theme.bold("Technical"))),
+          ...Arr.map(
+            detailFieldRows(theme, technicalFields(row, context, loaded?.technical ?? [])),
+            text,
           ),
-        },
-      ]),
-      options.now !== undefined && row.updatedAt !== undefined
-        ? `Updated ${formatRelativeAge(options.now - row.updatedAt)}`
-        : "",
-      row.summary ?? "",
-      ...(options.technical
-        ? detailFieldRows(theme, [
-            {
-              label: "Source",
-              value: `${technicalIdentity(row.providerId)} / ${technicalIdentity(row.id)}`,
-              tone: managerTone.identity,
-            },
-            {
-              label: "Revision",
-              value: `${technicalIdentity(row.revision)} · generation ${row.generation}`,
-            },
-            ...(row.route ? [{ label: "Route", value: row.route, tone: managerTone.value }] : []),
-            ...(context.length ? [{ label: "Ownership", value: sourcePath }] : []),
-          ])
-        : []),
-      options.loaded ?? row.detail ?? "",
-      row.omittedChildren ? `${row.omittedChildren}+ earlier finished items hidden` : "",
-      ...actionLines(row, options.actionPage),
-    ],
-    "\n",
-  );
+        ]
+      : []),
+    ...actionBlocks(theme, row, options.actionPage),
+  ];
 }
 
-function actionLines(row: ActivityRow, page: number): string[] {
+function actionBlocks(
+  theme: DetailTheme,
+  row: ActivityRow,
+  page: number,
+): readonly ActivityDetailBlock[] {
   const actions = row.retained ? [] : (row.actions ?? []);
+  if (!actions.length) return [];
   const pages = activityActionPages(actions);
   return [
+    spacer,
     ...Arr.map(
       actions.slice(page * ACTIVITY_ACTION_PAGE_SIZE, (page + 1) * ACTIVITY_ACTION_PAGE_SIZE),
       // Bracketed keys, so a lone "1" never reads as a count of actions.
-      (action, index) => `[${index + 1}] ${action.label}`,
+      (action, index) => text(`${theme.fg("dim", `[${index + 1}]`)} ${action.label}`),
     ),
-    ...(pages > 1 ? [`[a] More actions · page ${page + 1} of ${pages}`] : []),
+    ...(pages > 1
+      ? [text(theme.fg("dim", `[a] More actions · page ${page + 1} of ${pages}`))]
+      : []),
   ];
 }

@@ -97,6 +97,8 @@ import type { WorkspaceRecord } from "../src/workspace/model.ts";
 import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import { piArgumentRejection } from "pi-cosmic-core/testing/sdk";
 import { view } from "./fixtures/run-view.ts";
+import { workspaceHarness } from "./fixtures/profile-workspace.ts";
+import { profileCandidate } from "./fixtures/profiles.ts";
 import {
   subagentServiceDouble,
   type SubagentServiceDoubleInput,
@@ -2007,6 +2009,19 @@ const widgetLines = (): ReadonlyArray<string> => [
   ...widgetFrames("a question and a paused run", [{ ...authReview, state: "paused" }, dbMigration]),
 ];
 
+/** The profiles editor at a wide, a medium, and a narrow terminal, with long model routes. */
+const profileEditorLines = (): ReadonlyArray<string> => {
+  const { component } = workspaceHarness({}, [
+    profileCandidate("claude-bridge/claude-opus-5-5"),
+    profileCandidate("openai-codex/gpt-6-luna"),
+  ]);
+  return Arr.flatMap([200, 120, 72], (width) => [
+    `── profiles editor · Current Session · ${width} cols`,
+    ...Arr.map(component.render(width), (line) => Str.trimEnd(line)),
+    "",
+  ]);
+};
+
 const BACKGROUNDS = ["border", "on", "off"] as const;
 
 const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
@@ -2109,7 +2124,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
           restore();
         }
       }
-      lines.push(...activityLines(), ...widgetLines());
+      lines.push(...activityLines(), ...widgetLines(), ...profileEditorLines());
       yield* writeGallerySection(directory, "pi-subagents", lines);
     }),
   );

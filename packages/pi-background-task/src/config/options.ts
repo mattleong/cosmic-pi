@@ -66,15 +66,15 @@ const onOff = <Id extends BooleanSettingId>(id: Id, label: string, description: 
   id,
   label,
   description,
-  values: ["true", "false"],
+  values: ["on", "off"],
   openValues: false,
   parse: (value: string): boolean | undefined =>
-    Match.value(value).pipe(
-      Match.when("true", () => true),
-      Match.when("false", () => false),
+    Match.value(Str.toLowerCase(Str.trim(value))).pipe(
+      Match.whenOr("on", "true", () => true),
+      Match.whenOr("off", "false", () => false),
       Match.orElse(() => undefined),
     ),
-  invalid: `${id} must be true or false`,
+  invalid: `${id} must be on or off`,
 });
 
 const WHOLE_NUMBER = /^(?:0|[1-9][0-9]*)$/u;
@@ -168,7 +168,11 @@ const SETTING_DESCRIPTORS = {
     "The longest the agent may wait on a task at once.",
     ["10", "30", "60", "300"],
   ),
-  showFooterStatus: onOff("showFooterStatus", "Footer status", "Show running tasks in the footer."),
+  showFooterStatus: onOff(
+    "showFooterStatus",
+    "Footer status",
+    "Show running tasks in the footer when Activity isn't listing them.",
+  ),
   shellPath: {
     id: "shellPath",
     label: "Shell",

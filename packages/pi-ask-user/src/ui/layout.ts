@@ -25,6 +25,33 @@ export function appendWrapped(lines: string[], prefix: string, value: string, wi
   }
 }
 
+const HINT_SEPARATOR = " · ";
+
+/**
+ * Wraps a hint bar between `Key Verb` pairs, so a key never lands on a different line than its
+ * verb; continuation lines hang under the first hint.
+ */
+export function appendHintBar(
+  lines: string[],
+  hints: string,
+  width: number,
+  style: (text: string) => string,
+): void {
+  const available = Math.max(1, width - 1);
+  const rows: string[] = [];
+  let row = "";
+  for (const hint of Str.split(hints, HINT_SEPARATOR)) {
+    const candidate = row === "" ? hint : `${row}${HINT_SEPARATOR}${hint}`;
+    if (row === "" || visibleWidth(candidate) <= available) row = candidate;
+    else {
+      rows.push(row);
+      row = hint;
+    }
+  }
+  if (row !== "") rows.push(row);
+  for (const entry of rows) appendWrapped(lines, " ", style(entry), width);
+}
+
 export const borderLine = (width: number, theme: Theme): string =>
   theme.fg("accent", Fn.pipe("─", Str.repeat(Math.max(1, width))));
 

@@ -5,11 +5,10 @@ import * as Option from "effect/Option";
 import type { BuiltinCompactTool } from "./builtin-subject";
 import type { CompactIssue } from "./compact-issues";
 import { firstLineMessage } from "pi-cosmic-core/message-text";
+import { errnoMessage } from "./system-diagnostics";
 
+// Pi's own filesystem messages; Node errno messages are worded by `errnoMessage`.
 const filesystemFailures = [
-  ["ENOENT: no such file or directory, ", "File not found"],
-  ["EACCES: permission denied, ", "Permission denied"],
-  ["EPERM: operation not permitted, ", "This operation is not permitted"],
   ["Path not found: ", "Path not found"],
   ["Not a directory: ", "The target is not a folder"],
 ] as const;
@@ -89,17 +88,17 @@ function editFailure(details: string): CompactIssue | undefined {
 
 export function fileFailure(tool: BuiltinCompactTool, details: string, lines: string[]) {
   const first = lines[0] ?? details;
-  const errno = tool === "edit" ? EDIT_ACCESS.exec(first)?.[1] : undefined;
-  const filesystem = Option.getOrUndefined(
-    Arr.findFirst(
-      filesystemFailures,
-      ([prefix]) =>
-        Fn.pipe(first, Str.startsWith(prefix)) ||
-        (errno !== undefined && Fn.pipe(prefix, Str.startsWith(`${errno}: `))),
-    ),
-  );
+  const editErrno = tool === "edit" ? EDIT_ACCESS.exec(first)?.[1] : undefined;
+  const filesystem =
+    errnoMessage(editErrno === undefined ? first : `${editErrno}: `) ??
+    Option.getOrUndefined(
+      Option.map(
+        Arr.findFirst(filesystemFailures, ([prefix]) => Fn.pipe(first, Str.startsWith(prefix))),
+        ([, message]) => message,
+      ),
+    );
   const issue: CompactIssue = filesystem
-    ? { severity: "error", code: "filesystem", message: filesystem[1] }
+    ? { severity: "error", code: "filesystem", message: filesystem }
     : ((tool === "edit" ? editFailure(details) : undefined) ?? {
         severity: "error",
         code: "failure",

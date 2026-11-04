@@ -395,8 +395,9 @@ describe("failures", () => {
     for (const { expanded, text } of awaited) {
       const plain = stripAnsi(text);
       expect(plain).not.toMatch(FAILURE_PROCEDURES);
-      // The run's block shows its failure; its issue names it without repeating it.
-      if (style === "preview" || expanded) expect(occurrences(plain, shown)).toBe(1);
+      // Collapsed, the issue names the cause; expanded, the run's block shows the raw failure once.
+      expect(occurrences(plain, shown)).toBe(expanded ? 1 : 0);
+      if (!expanded) expect(plain).toContain("Rate limited");
     }
   });
 
@@ -455,7 +456,9 @@ describe("failures", () => {
     for (const expanded of [false, true]) {
       const text = renderMessage(message, expanded);
       expect(text).not.toMatch(FAILURE_PROCEDURES);
-      expect(text).toContain("Migrated two tables.");
+      // The short cause leads; the raw failure, with its partial output, is expanded detail.
+      expect(text).toContain("Rate limited");
+      if (expanded) expect(text).toContain("Migrated two tables.");
     }
   });
 

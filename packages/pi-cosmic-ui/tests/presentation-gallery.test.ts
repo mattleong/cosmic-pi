@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core";
 import {
@@ -17,7 +18,9 @@ import { ActivityComponent } from "../src/activity/component.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetHeight } from "../src/activity/widget-projection.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
+import type { ActivityDetail } from "../src/activity/protocol.ts";
 import { activityRow, memberRow } from "./support/activity.ts";
+import { sharedSurfaceGalleryLines } from "./support/gallery-shared-surfaces.ts";
 
 const directory = galleryDirectory(process.env) ?? "";
 const stop = {
@@ -301,6 +304,189 @@ const footerFrames = (rows: readonly ActivityRow[], key: string) => {
   ];
 };
 
+const taskOutput = Arr.join(
+  Arr.map(Arr.range(1, 30), (tick) => `tick ${tick}`),
+  "\n",
+);
+const ticker = activityRow("ticker", "running", undefined, {
+  title: "ticker",
+  kind: "command",
+  startedAt: 30_000,
+  updatedAt: 89_000,
+  summary: "running",
+  actions: [{ id: "stop", label: "Stop", confirmation: 'Stop "ticker" and its process tree?' }],
+});
+const flaky = activityRow("flaky", "failed", undefined, {
+  title: "flaky build",
+  kind: "command",
+  startedAt: 20_000,
+  endedAt: 26_000,
+  summary: "Exited with code 2: missing semicolon",
+  actions: [
+    {
+      id: "clear",
+      label: "Clear all finished",
+      confirmation: "Clear all finished tasks from this session? Running tasks keep running.",
+    },
+  ],
+});
+const checker = activityRow("checker", "done", undefined, {
+  title: "Check tests",
+  profile: "scout",
+  startedAt: 0,
+  endedAt: 33_000,
+  actions: [{ id: "resume", label: "Resume" }],
+});
+const taskDetails = {
+  ticker: {
+    sections: [
+      { title: "Output", body: taskOutput },
+      { title: "Command", body: "for i in $(seq 1 600); do echo tick $i; sleep 1; done" },
+    ],
+    technical: [
+      { label: "ID", value: "task-2d9mk1xp82" },
+      { label: "PID", value: "30502" },
+      { label: "Started", value: "Nov 3, 10:59:31 PM" },
+      { label: "Directory", value: "/private/tmp/ui-review/sandbox" },
+      { label: "Log cursor", value: "30" },
+    ],
+  },
+  flaky: {
+    sections: [
+      { body: "Exited with code 2: missing semicolon" },
+      { title: "Output", body: "compiling\nerror: missing semicolon" },
+      {
+        title: "Command",
+        body: "sleep 6; echo compiling; echo error: missing semicolon >&2; exit 2",
+      },
+    ],
+    technical: [
+      { label: "ID", value: "task-7q1c0aa1zz" },
+      { label: "Exit", value: "code 2 (misuse of shell builtins) · signal none" },
+      { label: "Started", value: "Nov 3, 10:59:20 PM" },
+      { label: "Ended", value: "Nov 3, 10:59:26 PM" },
+    ],
+  },
+  checker: {
+    sections: [
+      {
+        title: "Result",
+        format: "markdown",
+        body: "`src/cart.test.ts` tests three functions: `subtotal`, `applyDiscount`, and `itemCount`.\n\n- Start here: **`src/cart.test.ts`**",
+      },
+      { title: "Task", body: "Read src/cart.test.ts and list the tested functions." },
+      { title: "Recent activity", body: "bash · sleep 25 · done\nread · src/cart.test.ts · done" },
+      { body: "gpt-6-sol (low) · 22k tokens (125 output) · ~$0.02 · 2 tool uses" },
+    ],
+    technical: [
+      { label: "ID", value: "agent-25fzx71b0s" },
+      { label: "Route", value: "openai-codex/gpt-6-sol:low" },
+      { label: "Session", value: "~/.pi/agent/subagents/01a1a537/agent-25fzx71b0s.jsonl" },
+    ],
+  },
+} satisfies Readonly<Record<string, ActivityDetail>>;
+const detailedRows: readonly ActivityRow[] = [checker, ticker, flaky];
+
+const detailedManager = (height: number) =>
+  new ActivityComponent({
+    snapshot: () => detailedRows,
+    theme: plainTheme,
+    height: () => height,
+    now: () => 90_000,
+    close: () => undefined,
+    invoke: () => undefined,
+    requestRender: () => undefined,
+    loadDetail: (request, deliver) => {
+      const row = Option.getOrUndefined(
+        Arr.findFirst(detailedRows, (candidate) => candidate.key === request.key),
+      );
+      const detail =
+        row &&
+        Option.getOrUndefined(
+          Arr.findFirst(Rec.toEntries(taskDetails), ([id]) => id === row.id),
+        )?.[1];
+      if (detail) deliver(detail);
+    },
+  });
+
+const detailFrames = () => {
+  const frames: string[] = [];
+  const capture = (label: string, frame: readonly string[]) =>
+    frames.push(`── Activity details · ${label}`, ...frame, "");
+  const component = detailedManager(26);
+  capture("subagent report preview · 140 cols", component.render(140));
+  component.handleInput("\r");
+  capture("subagent report inspected", component.render(140));
+  component.handleInput("t");
+  capture("subagent report with technical details", component.render(140));
+  component.handleInput("t");
+  component.handleInput("\u001b");
+  select(component, ticker.key, 8);
+  capture("running task preview", component.render(140));
+  component.handleInput("f");
+  capture("running task followed from the list", component.render(140));
+  component.handleInput("f");
+  select(component, flaky.key, 8);
+  capture("failed task preview leads with its cause", component.render(140));
+  component.handleInput("\r");
+  component.handleInput("t");
+  capture("failed task inspected with technical details", component.render(140));
+  capture("failed task inspected · stacked · 80 cols", component.render(80));
+  capture("failed task inspected · narrow · 57 cols", component.render(57));
+  component.handleInput("?");
+  capture("expanded help while inspecting", component.render(140));
+  return frames;
+};
+
+const attentionRows = (phase: "open" | "hidden"): readonly ActivityRow[] => [
+  ticker,
+  activityRow("deploy", "needs-input", undefined, {
+    title: "Deploy",
+    kind: "question",
+    providerId: "pi-ask-user",
+    summary: phase === "open" ? "open" : "/ask-user to resume",
+    actions:
+      phase === "open"
+        ? [{ id: "cancel", label: "Cancel" }]
+        : [
+            { id: "resume", label: "Resume" },
+            { id: "cancel", label: "Cancel" },
+          ],
+  }),
+  activityRow("answered", "done", undefined, {
+    title: "Persistence / Features / Notes",
+    kind: "question",
+    endedAt: 10_000,
+  }),
+];
+
+const attentionWidget = (label: string, rows: readonly ActivityRow[], docked: boolean) => [
+  `── Attention · widget · ${label}`,
+  ...renderActivityWidget(rows, 80, docked ? 3 : 8, {
+    now: 90_000,
+    theme: plainTheme,
+    inputDockVisible: docked,
+  }),
+  "",
+];
+
+const attentionFrames = () => {
+  const widget = attentionWidget;
+  return [
+    ...widget("questionnaire open in its dock", attentionRows("open"), true),
+    ...widget("questionnaire hidden", attentionRows("hidden"), false),
+    `── Attention · manager · answered questionnaire leaves Attention`,
+    ...manager(attentionRows("hidden"), 12).render(120),
+    "",
+    ...widget("finished failure outside the live checklist", [ticker, flaky], false),
+    ...widget(
+      "several recent failures",
+      [ticker, flaky, { ...flaky, key: "x", id: "x", title: "lint" }],
+      false,
+    ),
+  ];
+};
+
 const ignoreTick = () => {};
 
 const workingFrames = () => {
@@ -337,8 +523,9 @@ const workingFrames = () => {
   tick();
   capture("current-call estimate");
   row.callEnd(240);
-  capture("reported completed-call average");
+  capture("between calls, such as while a tool runs, shows no rate");
   row.callStart();
+  capture("next call starts from the measured average");
   row.promptStart();
   capture("waiting while provider measurement continues");
   time = 4_000;
@@ -376,7 +563,9 @@ describe.skipIf(!directory)("presentation gallery", () => {
       }
       for (const [title, rows, key] of footerScenarios)
         lines.push(`── Footer · ${title}`, ...footerFrames(rows, key), "");
+      lines.push(...detailFrames(), ...attentionFrames());
       lines.push(...workingFrames());
+      lines.push(...sharedSurfaceGalleryLines());
       yield* writeGallerySection(
         directory,
         "pi-cosmic-ui",

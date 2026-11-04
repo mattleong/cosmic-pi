@@ -5,11 +5,13 @@ import type {
   CompactSummaryProvider,
 } from "pi-code-previews";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import { countLabel } from "pi-cosmic-core/display";
 import { stripTerminalControls } from "pi-cosmic-core/security";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   callTitles,
   decodeAsyncControl,
@@ -76,12 +78,28 @@ function verifiedLabels(
   return verified ? Arr.map(labels, stripTerminalControls) : undefined;
 }
 
+// A written answer's first line, quoted so it reads as the user's words rather than a listed choice.
+const MAX_WRITTEN_ANSWER_WIDTH = 48;
+
+function writtenAnswer(text: string): string {
+  const first = Option.getOrElse(
+    Arr.findFirst(
+      Arr.map(Str.split(stripTerminalControls(text), /\r?\n/u), Str.trim),
+      Str.isNonEmpty,
+    ),
+    () => "",
+  );
+  const more = Str.trim(stripTerminalControls(text)) !== first;
+  const clipped = clipToWidth(first, MAX_WRITTEN_ANSWER_WIDTH);
+  return `“${more && clipped === first ? `${first}…` : clipped}”`;
+}
+
 function answerCounters(args: QuestionnaireArgs, answers: readonly ReplayedAnswer[]): string[] {
   const count = countLabel(answers.length, "answer");
   const [answer] = answers;
   if (answers.length !== 1 || !answer) return [count];
-  if (answer.kind === "custom") return ["custom answer", count];
-  if (answer.kind === "text") return ["written answer", count];
+  if (answer.kind === "custom" || answer.kind === "text")
+    return [writtenAnswer(answer.text), count];
   const labels = verifiedLabels(args, answer);
   return labels ? [Arr.join(labels, ", "), countLabel(labels.length, "choice")] : [count];
 }

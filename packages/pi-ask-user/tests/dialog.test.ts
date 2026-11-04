@@ -1,28 +1,25 @@
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import {
-  deferredPromise,
-  keybindingsFixture,
-  plainTheme as theme,
-  terminalFixture,
-  tuiFixture,
-} from "pi-cosmic-core/testing";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { submitted } from "./support/questionnaire.ts";
-import { CURSOR_MARKER, type KeyId, matchesKey } from "@earendil-works/pi-tui";
+import {
+  DOWN,
+  ENTER,
+  ESCAPE,
+  EXTERNAL_EDITOR,
+  RIGHT,
+  makeDialog as makeSupportDialog,
+  typeText,
+} from "./support/dialog.ts";
+import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 import { it as effectIt } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Str from "effect/String";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
-import { AskUserDialog } from "../src/ui/dialog.ts";
+import type { AskUserDialog } from "../src/ui/dialog.ts";
 
 beforeAll(() => initTheme("dark", false));
-
-const ENTER = "\r";
-const ESCAPE = "\x1b";
-const DOWN = "\x1b[B";
-const EXTERNAL_EDITOR = "\x07";
 
 const request = (mode: "single" | "multiple" = "single") =>
   ({
@@ -40,53 +37,20 @@ const request = (mode: "single" | "multiple" = "single") =>
     ],
   }) satisfies AskUserRequest;
 
-const KEY_BINDINGS = new Map<string, KeyId>([
-  ["tui.select.up", "up"],
-  ["tui.select.down", "down"],
-  ["tui.select.pageUp", "pageUp"],
-  ["tui.select.pageDown", "pageDown"],
-  ["tui.select.confirm", "enter"],
-  ["tui.select.cancel", "escape"],
-  ["app.editor.external", "ctrl+g"],
-]);
-
-const keybindings = keybindingsFixture({
-  matches(data, id) {
-    const key = KEY_BINDINGS.get(id);
-    return key !== undefined && matchesKey(data, key);
-  },
-});
+const severalQuestions: AskUserRequest = {
+  questions: [
+    ...request().questions,
+    { key: "details", title: "Details", prompt: "Describe it.", mode: "text" },
+  ],
+};
 
 const makeDialog = (
   selectedRequest: AskUserRequest = request(),
-  editExternally: (value: string) => Promise<string | undefined> = () => Promise.resolve(undefined),
-  getHeight: () => number = () => Infinity,
-) => {
-  const done = vi.fn<(outcome: AskUserOutcome) => void>();
-  const collapse = vi.fn();
-  const tui = tuiFixture({
-    requestRender: vi.fn(),
-    terminal: terminalFixture({ rows: 60, columns: 120 }),
-  });
-  const dialog = new AskUserDialog({
-    tui,
-    theme,
-    keybindings,
-    request: selectedRequest,
-    getHeight,
-    done,
-    editExternally,
-    collapse,
-  });
-  return { dialog, done, collapse };
-};
+  editExternally?: (value: string) => Promise<string | undefined>,
+) => makeSupportDialog(selectedRequest, editExternally ? { editExternally } : {});
 
 const rendered = (dialog: AskUserDialog, width: number): string =>
   Arr.join(dialog.render(width), "\n");
-
-const typeText = (dialog: AskUserDialog, value: string): void => {
-  for (const character of value) dialog.handleInput(character);
-};
 
 const openCustomInput = (dialog: AskUserDialog): void => {
   dialog.handleInput(DOWN);
@@ -111,13 +75,12 @@ describe("AskUserDialog", () => {
       questions: [{ key: "pick", title: "Pick", prompt: "Pick one.", mode: "single", choices }],
     });
     dialog.handleInput("6");
-    dialog.handleInput(ENTER);
     expect(done).toHaveBeenCalledWith(
       submitted({ key: "pick", kind: "choices", values: ["v6"], labels: ["Choice 6"] }),
     );
   });
 
-  it("opens text input directly, preserves literal shortcuts and drafts across escape, notes, hide and review", () => {
+  it("opens text input directly, preserves literal shortcuts and drafts across escape, notes and hide", () => {
     const { dialog, done, collapse } = makeDialog(textRequest);
     dialog.focused = true;
     typeText(dialog, "bq1234");
@@ -129,14 +92,9 @@ describe("AskUserDialog", () => {
     dialog.handleInput("n");
     typeText(dialog, "context");
     dialog.handleInput(ENTER);
-    dialog.handleInput(ENTER);
-    dialog.handleInput(ENTER);
     expect(done).not.toHaveBeenCalled();
-    dialog.handleInput("\x1b[D");
     dialog.handleInput(ENTER);
     typeText(dialog, " revised");
-    dialog.handleInput(ENTER);
-    expect(done).not.toHaveBeenCalled();
     dialog.handleInput(ENTER);
     expect(done).toHaveBeenCalledWith(
       submitted({
@@ -146,6 +104,63 @@ describe("AskUserDialog", () => {
         note: "context",
       }),
     );
+  });
+
+  it("submits a lone question as soon as it is answered and ignores tab moves", () => {
+    const { dialog, done } = makeDialog();
+    dialog.handleInput(RIGHT);
+    dialog.handleInput(DOWN);
+    dialog.handleInput(ENTER);
+    expect(done).toHaveBeenCalledOnce();
+    expect(done).toHaveBeenCalledWith(
+      submitted({ key: "approach", kind: "choices", values: ["second"], labels: ["Second"] }),
+    );
+  });
+
+  it("submits a lone multiple-choice question from its submit row", () => {
+    const { dialog, done } = makeDialog(request("multiple"));
+    dialog.handleInput("1");
+    dialog.handleInput("2");
+    expect(done).not.toHaveBeenCalled();
+    dialog.handleInput(DOWN);
+    dialog.handleInput(DOWN);
+    dialog.handleInput(DOWN);
+    dialog.handleInput(ENTER);
+    expect(done).toHaveBeenCalledWith(
+      submitted({
+        key: "approach",
+        kind: "choices",
+        values: ["first", "second"],
+        labels: ["First", "Second"],
+      }),
+    );
+  });
+
+  it("keeps the review step for several questions", () => {
+    const { dialog, done } = makeDialog(severalQuestions);
+    dialog.focused = true;
+    dialog.handleInput("2");
+    typeText(dialog, "Keep it small");
+    dialog.handleInput(ENTER);
+    expect(done).not.toHaveBeenCalled();
+    dialog.handleInput(ENTER);
+    expect(done).toHaveBeenCalledWith({
+      outcome: "submitted",
+      answers: [
+        { key: "approach", kind: "choices", values: ["second"], labels: ["Second"] },
+        { key: "details", kind: "text", text: "Keep it small" },
+      ],
+    });
+  });
+
+  it("expanded help keeps every default hint", () => {
+    const { dialog } = makeDialog(severalQuestions);
+    const hintLine = () => dialog.render(400).at(-2) ?? "";
+    const collapsed = Str.split(Str.trim(hintLine()), " · ");
+    dialog.handleInput("?");
+    const expanded = Str.split(Str.trim(hintLine()), " · ");
+    expect(expanded.length).toBeGreaterThan(collapsed.length);
+    for (const hint of collapsed.slice(0, -1)) expect(expanded).toContain(hint);
   });
 
   effectIt.effect(
@@ -167,7 +182,6 @@ describe("AskUserDialog", () => {
         external.resolve("stale");
 
         yield* Effect.promise(() => external.promise);
-        dialog.handleInput(ENTER);
         dialog.handleInput(ENTER);
 
         expect(done).toHaveBeenCalledWith(

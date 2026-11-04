@@ -36,6 +36,7 @@ import {
   formatDiffPreview,
 } from "./shared/diff-preview";
 import { setResultDiffShown, unlessResultDiffShown } from "./shared/result-diff";
+import { writeDiffShowsContent } from "./shared/edit-diff-coverage";
 import { renderPreviewError } from "./shared/result-prelude";
 import { stateHeading } from "./shared/state-heading";
 import type { PreviewRenderers } from "./shared/types";
@@ -141,7 +142,8 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       if (!expanded && !codePreviewSettings.writeContentPreview) return new Container();
       if (plan.kind === "guarded") return new Text(diffSkippedNote(theme, plan.guard), 0, 0);
       const { previous, content } = plan;
-      setResultDiffShown(state, !expanded);
+      // Expanded rows keep the written content unless the diff shows every line of it.
+      setResultDiffShown(state, !expanded || writeDiffShowsContent(previous, content));
       const settings = codePreviewSettings;
       const render = (active: boolean) =>
         renderWriteDiffPreview(

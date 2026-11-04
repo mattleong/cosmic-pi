@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetSections } from "../src/activity/widget-projection.ts";
 import { activityRow, memberRow } from "./support/activity.ts";
@@ -17,6 +18,14 @@ const expectParentsFirst = (sections: ReturnType<typeof activityWidgetSections>)
     seen.add(entry.id);
   }
 };
+
+const question = (actions: ReadonlyArray<{ id: string; label: string }>) =>
+  activityRow("deploy", "needs-input", undefined, {
+    kind: "question",
+    title: "Deploy",
+    summary: "resume-hint",
+    actions,
+  });
 
 describe("grouped activity widget", () => {
   it("never admits nested work without its owning ancestors", () => {
@@ -37,5 +46,36 @@ describe("grouped activity widget", () => {
       Option.getOrUndefined(Arr.findFirst(full.entries, (entry) => entry.id === loose.key))
         ?.parentId,
     ).toBe(parent.key);
+  });
+
+  it("keeps a recent failure visible after the live checklist drops it", () => {
+    const live = activityRow("live", "running", undefined, { kind: "command" });
+    const failed = activityRow("flaky", "failed", undefined, {
+      kind: "command",
+      title: "flaky build",
+      endedAt: 80_000,
+    });
+    const recent = Arr.join(renderActivityWidget([live, failed], 80, 8, { now: 90_000 }), "\n");
+    expect(recent).toContain("flaky build");
+    const stale = Arr.join(renderActivityWidget([live, failed], 80, 8, { now: 3_600_000 }), "\n");
+    expect(stale).not.toContain("flaky build");
+  });
+
+  it("leaves a questionnaire on screen to its dock and shows how to return to a hidden one", () => {
+    const live = activityRow("live", "running", undefined, { kind: "command" });
+    const open = question([{ id: "cancel", label: "Cancel" }]);
+    const docked = Arr.join(
+      renderActivityWidget([live, open], 80, 8, { inputDockVisible: true }),
+      "\n",
+    );
+    expect(docked).not.toContain("Deploy");
+    expect(Arr.join(renderActivityWidget([live, open], 80, 8), "\n")).toContain("Deploy");
+    const hidden = question([
+      { id: "resume", label: "Resume" },
+      { id: "cancel", label: "Cancel" },
+    ]);
+    const lines = renderActivityWidget([live, hidden], 80, 8, { inputDockVisible: true });
+    expect(Arr.filter(lines, Str.includes("Deploy"))).toHaveLength(1);
+    expect(Arr.join(lines, "\n")).toContain("resume-hint");
   });
 });

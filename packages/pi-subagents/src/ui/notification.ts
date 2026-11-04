@@ -10,7 +10,9 @@ import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth, managerActivityGlyph, managerActivityColor } from "pi-cosmic-ui/manager";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
-import type { CodePreviewMessagePresenter, CompactSummary } from "pi-code-previews";
+import type { CodePreviewMessagePresenter, CompactIssue, CompactSummary } from "pi-code-previews";
+import { quoteText } from "pi-cosmic-core/message-text";
+import { QUOTED_TEXT_LIMIT } from "../tools/compact-run-issues.ts";
 import {
   agentTextBlockLines,
   agentTextLines,
@@ -75,6 +77,30 @@ const peerSummary = (details: PeerDetails): CompactSummary =>
         outcome: "returned",
       };
 
+/**
+ * A failed run's words are a diagnostic: the row names the cause in a short issue and keeps the raw
+ * text, such as a provider error and its stack, as the issue's expanded detail.
+ */
+const failureIssues = (details: CompletedDetails): CompactIssue[] => {
+  const single = (details.runs?.length ?? 0) === 1;
+  return Arr.flatMap(details.runs ?? [], (run): CompactIssue[] => {
+    if (run.outcome !== "failed") return [];
+    const { line, detail } = quoteText(run.text ?? "", {
+      limit: QUOTED_TEXT_LIMIT,
+      failure: true,
+    });
+    const cause = line ?? "Failed";
+    return [
+      {
+        severity: "error",
+        code: `run:${run.id}:failed`,
+        message: single ? cause : `${sanitizeTerminalLine(run.name)}: ${cause}`,
+        ...(detail && { detail }),
+      },
+    ];
+  });
+};
+
 const completedSummary = (details: CompletedDetails): CompactSummary => {
   const finished = details.total - details.failed;
   const outcome = details.failed ? "error" : details.warnings ? "warning" : "success";
@@ -91,7 +117,8 @@ const completedSummary = (details: CompletedDetails): CompactSummary => {
           Arr.filter(Boolean),
           Arr.join(", "),
         );
-  return { subject, outcome };
+  const issues = failureIssues(details);
+  return { subject, outcome, ...(issues.length > 0 && { issues }) };
 };
 
 const stoppedSummary = (details: StoppedDetails): CompactSummary => {
@@ -179,10 +206,13 @@ const noticeBody = (
 ): string[] | undefined => {
   if (details?.kind === "completed" && details.runs !== undefined && details.runs.length > 0) {
     const [only] = details.runs;
+    // A failure's words are its heading issue and that issue's detail.
     const words =
       details.runs.length === 1 && only !== undefined
         ? [
-            ...agentTextLines(only.text, width, theme, { expanded, indent }),
+            ...(only.outcome === "failed"
+              ? []
+              : agentTextLines(only.text, width, theme, { expanded, indent })),
             ...Arr.flatMap(runNotes(only), (note) =>
               indentedLines(theme.fg("muted", sanitizeTerminalLine(note)), width, indent),
             ),
@@ -194,7 +224,7 @@ const noticeBody = (
                 glyph: managerActivityGlyph(kind),
                 tone: managerActivityColor(kind),
                 name: run.name,
-                text: run.text,
+                ...(run.outcome !== "failed" && { text: run.text }),
                 notes: runNotes(run),
               };
             }),

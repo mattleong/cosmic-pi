@@ -1,6 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
-import { needsYou } from "./attention.ts";
+import { activityAttention, needsYou } from "./attention.ts";
 import type { ActivityRow } from "./model.ts";
 import { groupedActivityTree, type GroupedActivityRow } from "./grouped-tree.ts";
 
@@ -9,6 +9,12 @@ export interface WidgetOptions {
   readonly starting?: number;
   readonly now?: number;
   readonly theme?: Pick<Theme, "fg">;
+  /** A questionnaire or other input dock is on screen, so its own waiting rows need no echo. */
+  readonly inputDockVisible?: boolean;
+}
+export interface WidgetAllocation {
+  /** Rows set aside before entries are allocated, such as a Needs-you or failure line. */
+  readonly reserved?: number;
 }
 export interface ActivityWidgetSection {
   readonly heading: GroupedActivityRow;
@@ -28,6 +34,48 @@ const checklist = (rows: readonly ActivityRow[]): readonly GroupedActivityRow[] 
   return tree;
 };
 
+/** A question open on screen offers no way back to it, unlike a hidden one that offers Resume. */
+const onScreenQuestion = (row: ActivityRow): boolean =>
+  row.kind === "question" &&
+  activityAttention(row) === "user" &&
+  !Arr.some(row.actions ?? [], (action) => action.id === "resume");
+
+const offScreen = new WeakMap<readonly ActivityRow[], readonly ActivityRow[]>();
+/** The rows the widget shows; those an input dock already presents are left to it. */
+export const widgetRows = (
+  rows: readonly ActivityRow[],
+  inputDockVisible: boolean | undefined,
+): readonly ActivityRow[] => {
+  if (!inputDockVisible || !Arr.some(rows, onScreenQuestion)) return rows;
+  const cached = offScreen.get(rows);
+  if (cached) return cached;
+  const shown = Arr.filter(rows, (row) => !onScreenQuestion(row));
+  offScreen.set(rows, shown);
+  return shown;
+};
+
+const RECENT_FAILURE_MS = 10 * 60_000;
+
+/**
+ * Failures the live checklist no longer lists because their work has finished. They stay
+ * countable for a while so a failure never silently disappears from view.
+ */
+export const hiddenWidgetFailures = (
+  rows: readonly ActivityRow[],
+  now: number | undefined,
+): readonly ActivityRow[] => {
+  const listed = new Set(
+    Arr.flatMap(checklist(rows), (entry) => (entry.type === "member" ? [entry.row.key] : [])),
+  );
+  return Arr.filter(
+    rows,
+    (row) =>
+      row.status === "failed" &&
+      !listed.has(row.key) &&
+      (now === undefined || now - (row.endedAt ?? row.updatedAt ?? now) <= RECENT_FAILURE_MS),
+  );
+};
+
 export function activityWidgetHeight(rows: readonly ActivityRow[], terminalRows: number): number {
   const failures = Arr.filter(checklist(rows), isFailedEntry).length;
   return Math.max(1, Math.min(Math.floor(terminalRows / 2), Math.max(8, failures + 4)));
@@ -39,7 +87,7 @@ const inSection = (heading: GroupedActivityRow) => (entry: GroupedActivityRow) =
 export function activityWidgetSections(
   rows: readonly ActivityRow[],
   maxRows = 8,
-  options: WidgetOptions = {},
+  options: WidgetOptions & WidgetAllocation = {},
 ): readonly ActivityWidgetSection[] {
   const all = checklist(rows);
   const hiddenDetail = new Set<string>();
@@ -59,7 +107,7 @@ export function activityWidgetSections(
       return { heading, candidates, offered, allocated: 0 };
     },
   );
-  const budget = Math.max(0, maxRows - Number(needsYou(rows).length > 0));
+  const budget = Math.max(0, maxRows - (options.reserved ?? Number(needsYou(rows).length > 0)));
   let used = Arr.filter(slots, (slot) => slot.offered.length > 0).length;
   while (true) {
     let changed = false;

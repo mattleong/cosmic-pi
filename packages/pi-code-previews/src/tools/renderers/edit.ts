@@ -27,6 +27,7 @@ import {
   formatDiffPreview,
 } from "./shared/diff-preview";
 import { setResultDiffShown, unlessResultDiffShown } from "./shared/result-diff";
+import { editDiffShowsOperations } from "./shared/edit-diff-coverage";
 import { renderPreviewError } from "./shared/result-prelude";
 import { stateHeading } from "./shared/state-heading";
 import { countLabel } from "pi-cosmic-core/display";
@@ -140,7 +141,11 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
           ? new Container()
           : renderHiddenPreviewExpandHint(renderContext.state, theme, "diff");
       }
-      setResultDiffShown(renderContext.state, !expanded);
+      // Expanded rows keep the proposal unless the applied diff shows every requested line.
+      setResultDiffShown(
+        renderContext.state,
+        !expanded || editDiffShowsOperations(diff, getEditPreviewOperations(input)),
+      );
       const { invalidate } = renderContext;
       const settings = codePreviewSettings;
       const render = (active: boolean) =>

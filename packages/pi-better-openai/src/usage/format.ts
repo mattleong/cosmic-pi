@@ -8,7 +8,7 @@ import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { clampPercent } from "pi-cosmic-core/display";
+import { clampPercent, formatDuration } from "pi-cosmic-core/display";
 import { JsonHttpClient } from "pi-cosmic-core/platform/json-http";
 import type { CodexCredentials } from "../auth/codex-auth.ts";
 
@@ -83,62 +83,73 @@ export function parseUsageSnapshot(data: CodexUsageResponse, now: number): Usage
   };
 }
 
+/** A reset countdown in the suite's duration form: `42s`, `2h 3m`, `6d 1h`. */
 function formatResetCountdown(seconds: number): string {
   const total = Math.max(0, Math.round(seconds));
-  const days = Math.floor(total / 86_400);
-  const hours = Math.floor((total % 86_400) / 3_600);
-  const minutes = Math.floor((total % 3_600) / 60);
-  const secs = total % 60;
-  if (days > 0) return `${days}d${hours}h`;
-  if (hours > 0) return `${hours}h${minutes}m`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${secs}s`;
+  return total < 60 ? `${total}s` : formatDuration(total * 1000);
 }
 
-function resetMoment(seconds: number | null, now: number) {
+const normalizeSpaces = (text: string): string => Fn.pipe(text, Str.replace(/\s+/gu, " "));
+
+const localDay = (at: DateTime.DateTime): string =>
+  DateTime.formatLocal(at, { locale: "en-US", year: "numeric", month: "numeric", day: "numeric" });
+
+/** A local short time: `10:59 PM` today, `Nov 9, 10:59 PM` on another day. */
+function formatLocalShort(at: DateTime.DateTime, now: number): string {
+  const today = DateTime.make(now);
+  const sameDay = Option.isSome(today) && localDay(today.value) === localDay(at);
+  return normalizeSpaces(
+    DateTime.formatLocal(at, {
+      locale: "en-US",
+      ...(sameDay ? {} : { month: "short", day: "numeric" }),
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+  );
+}
+
+interface ResetMoment {
+  readonly countdown: string;
+  readonly at: string;
+}
+
+function resetMoment(seconds: number | null, now: number): ResetMoment | undefined {
   if (!Predicate.isNumber(seconds) || !Number.isFinite(seconds) || !Number.isFinite(now))
     return undefined;
   const reset = DateTime.make(now + seconds * 1000);
   return Option.isSome(reset)
-    ? { reset: reset.value, countdown: formatResetCountdown(seconds) }
+    ? { countdown: formatResetCountdown(seconds), at: formatLocalShort(reset.value, now) }
     : undefined;
 }
 
-function formatShortReset(label: string, seconds: number | null, now: number): string | null {
-  const at = resetMoment(seconds, now);
-  if (at === undefined) return null;
-  const date = DateTime.formatLocal(at.reset, {
-    locale: "en-US",
-    month: "numeric",
-    day: "numeric",
-  });
-  const time = Fn.pipe(
-    DateTime.formatLocal(at.reset, {
-      locale: "en-US",
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    }),
-    Str.replace(/\s+/gu, ""),
-    Str.replace(/AM$/u, "a"),
-    Str.replace(/PM$/u, "p"),
-  );
-  return `${label} ↺ ${at.countdown} - ${date} • ${time}`;
+/**
+ * The footer's reset segment, `<window> ↺ <countdown> - <local time>`. Cosmic UI parses this
+ * shape, so neither part may contain `-` or `|`.
+ */
+function formatFooterReset(label: string, seconds: number | null, now: number): string | null {
+  const moment = resetMoment(seconds, now);
+  return moment === undefined ? null : `${label} ↺ ${moment.countdown} - ${moment.at}`;
 }
 
 function usedToLeftPercent(value: number | null | undefined): number | null {
   return Predicate.isNumber(value) && Number.isFinite(value) ? clampPercent(100 - value) : null;
 }
 
-function formatTimestamp(value: number): string {
-  return DateTime.formatLocal(DateTime.makeUnsafe(value), {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-}
-
+/** A diagnostic timestamp in the local short form, always with its date: `Nov 3, 10:59 PM`. */
 export function formatTimestampOrNever(value: number | undefined): string {
-  return value === undefined ? "never" : formatTimestamp(value);
+  if (value === undefined) return "never";
+  const at = DateTime.make(value);
+  return Option.isSome(at)
+    ? normalizeSpaces(
+        DateTime.formatLocal(at.value, {
+          locale: "en-US",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        }),
+      )
+    : "unknown";
 }
 
 function formatPercent(value: number | null): string {
@@ -163,35 +174,55 @@ function remainingResetSeconds(
   return Number.isFinite(remaining) ? remaining : null;
 }
 
+interface UsageWindowView {
+  /** The compact label the footer protocol and status line use. */
+  readonly label: "5h" | "7d";
+  /** The spelled-out name `/openai usage` uses. */
+  readonly name: string;
+  readonly leftPercent: number | null;
+  readonly resetInSeconds: number | null;
+}
+
+const usageWindows = (snapshot: UsageSnapshot): ReadonlyArray<UsageWindowView> => [
+  {
+    label: "5h",
+    name: "5-hour",
+    leftPercent: snapshot.fiveHourLeftPercent,
+    resetInSeconds: snapshot.fiveHourResetInSeconds,
+  },
+  {
+    label: "7d",
+    name: "7-day",
+    leftPercent: snapshot.sevenDayLeftPercent,
+    resetInSeconds: snapshot.sevenDayResetInSeconds,
+  },
+];
+
+const reportedWindows = (snapshot: UsageSnapshot): ReadonlyArray<UsageWindowView> =>
+  Arr.filter(
+    usageWindows(snapshot),
+    (window) => window.leftPercent !== null || window.resetInSeconds !== null,
+  );
+
+/**
+ * The footer text Cosmic UI parses: `Usage: 5h: 50% | 7d: 90% | 7d ↺ 6d 1h - Nov 9, 10:59 PM`.
+ * ` | ` separates protocol segments only; people see Cosmic UI's rendering or
+ * {@link formatUsageStatus}.
+ */
 export function formatUsageSnapshot(
   snapshot: UsageSnapshot,
   options: { readonly showResetTimes: boolean },
   now: number,
 ): string {
-  const windows = [
-    {
-      label: "5h",
-      leftPercent: snapshot.fiveHourLeftPercent,
-      resetInSeconds: snapshot.fiveHourResetInSeconds,
-    },
-    {
-      label: "7d",
-      leftPercent: snapshot.sevenDayLeftPercent,
-      resetInSeconds: snapshot.sevenDayResetInSeconds,
-    },
-  ];
   const { capturedAt } = snapshot;
-  const visible = Arr.filter(
-    windows,
-    (window) => window.leftPercent !== null || window.resetInSeconds !== null,
-  );
+  const visible = reportedWindows(snapshot);
   const labels = Arr.map(
     visible,
     (window) => `${window.label}: ${formatPercent(window.leftPercent)}`,
   );
   const resets = options.showResetTimes
     ? Arr.flatMapNullishOr(visible, (window) =>
-        formatShortReset(
+        formatFooterReset(
           window.label,
           remainingResetSeconds(window.resetInSeconds, capturedAt, now),
           now,
@@ -201,14 +232,55 @@ export function formatUsageSnapshot(
   return `Usage: ${labels.length ? Arr.join(labels, " | ") : "--"}${resets.length ? ` | ${Arr.join(resets, " | ")}` : ""}`;
 }
 
+/**
+ * The one-line status Pi shows when Cosmic UI's footer is inactive:
+ * `OpenAI 5h 50% left · 7d 90% left · 7d resets in 6d 1h`.
+ */
+export function formatUsageStatus(
+  snapshot: UsageSnapshot,
+  options: { readonly showResetTimes: boolean },
+  now: number,
+): string | undefined {
+  const visible = Arr.filter(reportedWindows(snapshot), (window) => window.leftPercent !== null);
+  if (visible.length === 0) return undefined;
+  const windows = Arr.map(
+    visible,
+    (window) => `${window.label} ${formatPercent(window.leftPercent)} left`,
+  );
+  const resets = options.showResetTimes
+    ? Arr.flatMapNullishOr(visible, (window) => {
+        const moment = resetMoment(
+          remainingResetSeconds(window.resetInSeconds, snapshot.capturedAt, now),
+          now,
+        );
+        return moment === undefined ? null : `${window.label} resets in ${moment.countdown}`;
+      })
+    : [];
+  return `OpenAI ${Arr.join([...windows, ...resets], " · ")}`;
+}
+
+function windowDetail(window: UsageWindowView, capturedAt: number, now: number): string {
+  if (window.leftPercent === null) return "not reported";
+  const moment = resetMoment(remainingResetSeconds(window.resetInSeconds, capturedAt, now), now);
+  const left = `${formatPercent(window.leftPercent)} left`;
+  return moment === undefined ? left : `${left} · resets in ${moment.countdown}`;
+}
+
+/**
+ * What `/openai usage` shows: when usage was read, then each window and its reset countdown.
+ * Lines stay short so a narrow pane doesn't wrap them; the footer shows the local reset time.
+ */
 export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string {
+  const windows = usageWindows(snapshot);
+  const width = Math.max(...Arr.map(windows, (window) => window.name.length));
   return Arr.join(
     [
-      "OpenAI subscription usage",
-      `  5 hour: ${formatPercent(snapshot.fiveHourLeftPercent)} left`,
-      `  7 day:  ${formatPercent(snapshot.sevenDayLeftPercent)} left`,
-      `  Source: ${USAGE_URL}`,
-      `  Updated: ${formatTimestamp(now)}`,
+      `OpenAI subscription usage · updated ${formatLocalShort(DateTime.makeUnsafe(now), now)}`,
+      ...Arr.map(
+        windows,
+        (window) =>
+          `  ${Fn.pipe(window.name, Str.padEnd(width))}  ${windowDetail(window, snapshot.capturedAt, now)}`,
+      ),
     ],
     "\n",
   );

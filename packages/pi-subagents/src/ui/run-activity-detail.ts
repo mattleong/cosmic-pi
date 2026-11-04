@@ -1,10 +1,14 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { ACTIVITY_LIMITS } from "pi-cosmic-ui/activity";
+import type {
+  ActivityDetail,
+  ActivityDetailField,
+  ActivityDetailSection,
+} from "pi-cosmic-ui/activity";
 import { countLabel, formatCost, formatTokens } from "pi-cosmic-core/display";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
-import type { SubagentRunView } from "../run/model.ts";
+import type { SubagentRunView, SubagentSessionEvent } from "../run/model.ts";
 import { userRunText } from "../run/warnings.ts";
 import {
   cleanupEvidenceText,
@@ -18,107 +22,158 @@ const RECENT_EVENTS = 12;
 const bounded = (text: string, maximumLength: number): string =>
   sanitizeDiagnosticContent(text, { maximumLength });
 
-const section = (title: string, body: string, maximumLength: number): string =>
-  Str.trim(body) ? `${title}:\n${bounded(body, maximumLength)}` : "";
+const section = (
+  title: string | undefined,
+  body: string,
+  maximumLength: number,
+  format?: "markdown",
+): ActivityDetailSection[] =>
+  Str.isNonEmpty(Str.trim(body))
+    ? [
+        {
+          ...(title && { title }),
+          body: bounded(body, maximumLength),
+          ...(format && { format }),
+        },
+      ]
+    : [];
 
-const workspaceOutcome = (run: SubagentRunView): string =>
-  run.workspaceOutcome ? Str.capitalize(workspaceOutcomeLabel(run.workspaceOutcome)) : "";
+const firstLine = (text: string): string => Str.trim(Str.split(Str.trim(text), "\n")[0] ?? "");
 
-const outcome = (run: SubagentRunView): string => {
+// The error's first line says what happened; any trace behind it is technical detail.
+const problems = (run: SubagentRunView): ActivityDetailSection[] => {
   const shown = userRunText(run);
-  return Fn.pipe(
+  const warnings = Arr.dedupe(Arr.filter([shown.warning, shown.systemWarning], isTextFragment));
+  return [
+    ...section("Error", firstLine(shown.error ?? ""), 1_000),
+    ...section(warnings.length > 1 ? "Warnings" : "Warning", Arr.join(warnings, "\n"), 1_000),
+  ];
+};
+
+const toolLine = (event: Extract<SubagentSessionEvent, { readonly type: "tool" }>): string =>
+  Arr.join(
     [
-      workspaceOutcome(run),
-      bounded(
-        Fn.pipe(
-          [
-            shown.error && `Error: ${shown.error}`,
-            shown.warning && `Warning: ${shown.warning}`,
-            shown.systemWarning && `Warning: ${shown.systemWarning}`,
-          ],
-          Arr.filter(isTextFragment),
-          Arr.join("\n"),
+      Arr.join(
+        Arr.filter(
+          [event.toolName, event.target, event.state === "completed" ? "done" : event.state],
+          isTextFragment,
         ),
-        1_000,
+        " · ",
       ),
-      section("Result", run.finalText ?? "", 6_000),
+      ...(event.outputPreview === undefined
+        ? []
+        : Arr.map(Str.split(event.outputPreview, "\n"), (line) => `  ${line}`)),
     ],
-    Arr.filter(isTextFragment),
-    Arr.join("\n\n"),
+    "\n",
+  );
+
+// The final report is shown once, as the Result, so recent activity leaves it out.
+const isFinalReport = (run: SubagentRunView, event: SubagentSessionEvent): boolean =>
+  event.type === "assistant" &&
+  run.finalText !== undefined &&
+  Str.trim(event.text) === Str.trim(run.finalText);
+
+/**
+ * Recent events in order: tool calls and notices stay verbatim, while the agent's own messages
+ * render as Markdown, the way the transcript shows assistant text.
+ */
+const recentActivity = (run: SubagentRunView): ActivityDetailSection[] => {
+  const events = Arr.filter(
+    run.sessionEvents.slice(-RECENT_EVENTS),
+    (event) => !isFinalReport(run, event),
+  );
+  const groups: Array<{ markdown: boolean; lines: string[] }> = [];
+  const push = (markdown: boolean, text: string) => {
+    const last = groups.at(-1);
+    if (last && !markdown && !last.markdown) last.lines.push(text);
+    else groups.push({ markdown, lines: [text] });
+  };
+  for (const event of events) {
+    if (event.type === "tool") push(false, toolLine(event));
+    else if (event.type === "assistant") push(true, Fn.pipe(event.text, Str.slice(-600)));
+    else push(false, Fn.pipe(event.text, Str.slice(-600)));
+  }
+  if (run.progress && run.finalText === undefined) push(false, `Progress: ${run.progress}`);
+  return Arr.flatMap(groups, (group, index) =>
+    section(
+      index === 0 ? "Recent activity" : undefined,
+      Arr.join(group.lines, "\n"),
+      3_000,
+      group.markdown ? "markdown" : undefined,
+    ),
   );
 };
 
-const recentActivity = (run: SubagentRunView): string =>
-  Fn.pipe(
-    [
-      ...Arr.map(run.sessionEvents.slice(-RECENT_EVENTS), (event) =>
-        event.type === "tool"
-          ? Arr.join(
-              [
-                `${event.toolName}: ${event.state}${event.target ? ` · ${event.target}` : ""}`,
-                ...(event.outputPreview === undefined
-                  ? []
-                  : Arr.map(Str.split(event.outputPreview, "\n"), (line) => `  ${line}`)),
-              ],
-              "\n",
-            )
-          : Fn.pipe(event.text, Str.slice(-600)),
-      ),
-      ...(run.progress && run.finalText === undefined ? [`Progress: ${run.progress}`] : []),
-    ],
-    Arr.join("\n"),
-    Str.slice(-3_000),
-  );
+const modelLabel = (run: SubagentRunView): string => {
+  const name = Str.split(run.model, "/").at(-1) ?? run.model;
+  return run.effort ? `${name} (${run.effort})` : name;
+};
 
 const usageLine = (run: SubagentRunView): string =>
-  run.usage.totalTokens === 0 && !run.toolUses
-    ? ""
-    : Fn.pipe(
-        [
-          `Usage: ${formatTokens(run.usage.totalTokens)} tokens (${formatTokens(run.usage.output)} output)`,
-          run.usage.cost === undefined ? "" : `~${formatCost(run.usage.cost)}`,
-          run.toolUses === undefined ? "" : countLabel(run.toolUses, "tool use"),
-          run.usage.contextPercent === undefined
-            ? ""
-            : `context ${Math.round(run.usage.contextPercent)}% full`,
-        ],
-        Arr.filter(Boolean),
-        Arr.join(" · "),
-      );
-
-const technical = (run: SubagentRunView): string =>
   Fn.pipe(
     [
-      `ID: ${run.id} · assignment/report: ${run.reportGeneration} · report: ${run.reportStatus ?? "unknown"}`,
-      `Route: ${run.model}`,
-      `Cwd: ${run.cwd} · PID: ${run.pid ?? "none"}`,
-      `Writes: ${run.writeIntent}`,
-      `Workspace: ${run.writerWorkspaceMode ?? "shared-checkout"} · ${run.workspaceId ?? "none"}`,
-      run.sessionFile ? `Session: ${run.sessionFile}` : "",
+      modelLabel(run),
+      run.usage.totalTokens === 0
+        ? ""
+        : `${formatTokens(run.usage.totalTokens)} tokens (${formatTokens(run.usage.output)} output)`,
+      run.usage.cost === undefined || run.usage.totalTokens === 0
+        ? ""
+        : `~${formatCost(run.usage.cost)}`,
+      run.toolUses === undefined ? "" : countLabel(run.toolUses, "tool use"),
+      run.usage.contextPercent === undefined
+        ? ""
+        : `context ${Math.round(run.usage.contextPercent)}% full`,
     ],
     Arr.filter(Boolean),
-    Arr.join("\n"),
+    Arr.join(" · "),
   );
 
-export const runActivityDetail = (run: SubagentRunView): string =>
-  bounded(
-    Fn.pipe(
-      [
-        bounded(`Model: ${run.model}:${run.effort}`, 1_024),
-        run.question ? `Question for parent: ${bounded(run.question.message, 1_000)}` : "",
-        section(
-          "Cleanup",
-          Arr.join(cleanupRecoveryText(run), "\n") || cleanupEvidenceText(run),
-          3_000,
-        ),
-        outcome(run),
-        section("Task", run.task, 2_000),
-        section("Recent activity", recentActivity(run), 3_000),
-        bounded(usageLine(run), 512),
-        section("Technical", technical(run), 2_000),
-      ],
-      Arr.filter(Boolean),
-      Arr.join("\n\n"),
-    ),
-    ACTIVITY_LIMITS.detail,
+const technical = (run: SubagentRunView): ActivityDetailField[] =>
+  Arr.filter(
+    [
+      { label: "ID", value: run.id },
+      { label: "Assignment", value: `report ${run.reportGeneration}` },
+      { label: "Report", value: run.reportStatus ?? "unknown" },
+      { label: "Route", value: `${run.model}:${run.effort}` },
+      { label: "Directory", value: run.cwd },
+      { label: "PID", value: run.pid === undefined ? "none" : String(run.pid) },
+      { label: "Writes", value: run.writeIntent },
+      {
+        label: "Workspace",
+        value: `${run.writerWorkspaceMode ?? "shared-checkout"}${run.workspaceId ? ` · ${run.workspaceId}` : ""}`,
+      },
+      { label: "Session", value: run.sessionFile ?? "" },
+      {
+        label: "Error detail",
+        value:
+          run.error !== undefined && Str.trim(run.error) !== firstLine(run.error) ? run.error : "",
+      },
+    ],
+    (field) => Str.isNonEmpty(field.value),
   );
+
+/** Leads with what needs the user or what the run produced; identity sits behind Technical. */
+export const runActivityDetail = (run: SubagentRunView): ActivityDetail => ({
+  sections: [
+    ...section("Question for parent", run.question?.message ?? "", 1_000),
+    ...problems(run),
+    ...section(
+      undefined,
+      run.workspaceOutcome ? Str.capitalize(workspaceOutcomeLabel(run.workspaceOutcome)) : "",
+      512,
+    ),
+    ...section("Result", run.finalText ?? "", 6_000, "markdown"),
+    ...section(
+      "Cleanup",
+      Arr.join(cleanupRecoveryText(run), "\n") || cleanupEvidenceText(run),
+      3_000,
+    ),
+    ...section("Task", run.task, 2_000),
+    ...recentActivity(run),
+    ...section(undefined, usageLine(run), 512),
+  ],
+  technical: Arr.map(technical(run), (field) => ({
+    label: field.label,
+    value: bounded(field.value, 1_024),
+  })),
+});

@@ -6,11 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Fn from "effect/Function";
-import {
-  expandedArguments,
-  withCodePreviewShell,
-  type CompactAnimationScheduler,
-} from "pi-code-previews";
+import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { toolRunningLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
@@ -23,6 +19,7 @@ import {
   cancelledLine,
   emptyBody,
   expandedResult,
+  pendingRequest,
   stacked,
   type RenderContext,
 } from "../ui/tool-body.ts";
@@ -30,6 +27,7 @@ import {
   callTitles,
   decodeOutcome,
   fallbackText,
+  requestArguments,
   titlesByKey,
 } from "../ui/tool-render-projection.ts";
 
@@ -94,8 +92,10 @@ export function registerAskUserTool(
     shell(tool, {
       compactSummary: askUserCompactSummary,
       expandedContent: {
-        renderCall: (args, theme) => expandedArguments(theme, args),
-        renderResult: (result, _options, theme, context) => expandedContent(result, theme, context),
+        renderCall: (args, theme, context) =>
+          pendingRequest(theme, requestArguments(args), context),
+        renderResult: (result, options, theme, context) =>
+          expandedContent(result, theme, context, options.isPartial),
       },
       scheduleAnimation,
     }),
@@ -106,6 +106,7 @@ function expandedContent<Details>(
   result: AgentToolResult<Details>,
   theme: Theme,
   context: Pick<RenderContext, "args" | "isError">,
+  partial = false,
 ): Component {
   const details = decodeOutcome(result.details);
   return expandedResult(
@@ -115,6 +116,8 @@ function expandedContent<Details>(
       decoded: details !== undefined,
       answers: details?.outcome === "submitted" ? details.answers : undefined,
       titles: titlesByKey(context.args),
+      // The call still shows the request until the final result arrives.
+      ...(!partial && { args: requestArguments(context.args) }),
     },
     theme,
   );

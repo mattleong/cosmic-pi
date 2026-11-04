@@ -85,7 +85,7 @@ export function openOpenAISettingsMenu(
               title,
               lines,
               done: complete,
-              dismiss: "back-keys",
+              exit: "nested",
             });
           const diagnosticItems = (): SettingItem[] => [
             {
@@ -99,8 +99,8 @@ export function openOpenAISettingsMenu(
             {
               id: "config.paths",
               label: "Config paths",
-              currentValue: cfg.configPath,
-              description: `Selected: ${cfg.configPath}\nProject: ${cfg.projectConfigPath}\nGlobal: ${cfg.globalConfigPath}`,
+              currentValue: cfg.configPath === cfg.projectConfigPath ? "project" : "global",
+              description: "Show which config file Better OpenAI reads and writes.",
               submenu: (_value, complete) =>
                 textPanel(
                   "Config paths",
@@ -153,7 +153,7 @@ export function openOpenAISettingsMenu(
                 "Configure usage refresh details. Footer visibility is in /cosmic-ui settings.",
               submenuTitle: "Usage settings",
               items: () => settingsItemsFromDescriptors(USAGE_SETTING_DESCRIPTORS, cfg),
-              summary: () => `${formatDuration(cfg.usage.refreshIntervalMs)} refresh`,
+              summary: () => `refresh every ${formatDuration(cfg.usage.refreshIntervalMs)}`,
             },
             {
               id: "section.image",
@@ -163,8 +163,8 @@ export function openOpenAISettingsMenu(
               items: () => settingsItemsFromDescriptors(imageDescriptors, cfg),
               summary: () =>
                 cfg.image.enabled
-                  ? `enabled · ${cfg.image.defaultModel} · ${cfg.image.defaultSave}/${cfg.image.outputFormat}`
-                  : "disabled",
+                  ? `on · ${cfg.image.defaultModel} · ${cfg.image.outputFormat} to ${cfg.image.defaultSave}`
+                  : "off",
             },
             {
               id: "section.diagnostics",
@@ -172,7 +172,7 @@ export function openOpenAISettingsMenu(
               description: "Show diagnostics, config paths, and redacted raw config.",
               submenuTitle: "Diagnostics",
               items: diagnosticItems,
-              summary: () => "debug / config",
+              summary: () => "debug info · config",
             },
           ];
           const sections = () =>
@@ -222,11 +222,8 @@ export function openOpenAISettingsMenu(
           }
           return {
             header: {
-              render: () => [
-                theme.fg("accent", theme.bold("Better OpenAI settings")),
-                theme.fg("dim", cfg.configPath),
-                "",
-              ],
+              // The config file is under Diagnostics; a path here truncates at narrow widths.
+              render: () => [theme.fg("accent", theme.bold("Better OpenAI settings")), ""],
               invalidate() {},
             },
             items: sections(),

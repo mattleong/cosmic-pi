@@ -7,9 +7,7 @@ export const createScreenViewport = () => {
   let readTerminal = emptyTerminal;
   const getSize = () => screenViewport(readTerminal());
   const overlayOptions: OverlayOptions = {
-    get anchor() {
-      return getSize().inset ? "center" : "top-left";
-    },
+    anchor: "top-left",
     get width() {
       return getSize().width;
     },

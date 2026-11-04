@@ -201,9 +201,15 @@ describe("delegation mode", () => {
       const fixture = yield* setup({ active: true, ready: true, hidden: [] }, "encouraged");
       yield* settle(() => fixture.host.emit("session_start", fixture.ctx));
       const picker = yield* openGlobalDelegation(fixture);
-      fixture.surface.editor?.handleInput?.("\r");
+      // Each choice opens the row's list, which starts on the current value, and picks another.
+      const choose = (moves: ReadonlyArray<string>) => {
+        for (const key of ["\r", ...moves, "\r"]) fixture.surface.editor?.handleInput?.(key);
+      };
+      choose(["j"]); // orchestration
       yield* step(gate.wait);
-      for (let index = 0; index < 3; index += 1) fixture.surface.editor?.handleInput?.("\r");
+      choose(["j"]); // inherit
+      choose(["k", "k", "k"]); // normal
+      choose(["j"]); // encouraged
       const nesting = yield* fixture.settings("global maxDepth 3").pipe(Effect.forkScoped);
       gate.release();
       yield* Fiber.join(nesting);

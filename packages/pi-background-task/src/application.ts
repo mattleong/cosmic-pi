@@ -95,6 +95,10 @@ export function registerBackgroundTaskApplication(
   let releaseActivity: (() => void) | undefined;
   let openActivity: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
   let currentConfig: BackgroundTaskConfig | undefined;
+  // The Activity widget lists running tasks, so the footer line is only a fallback without it.
+  let activityPresentsTasks = false;
+  const syncFooter = () =>
+    bridge.setFooterEnabled((currentConfig?.showFooterStatus ?? false) && !activityPresentsTasks);
 
   const slot = makePiSessionRuntimeSlot<
     BackgroundTaskSessionActivation,
@@ -149,7 +153,7 @@ export function registerBackgroundTaskApplication(
       }, undefined);
       currentConfig = prepared.config;
       idleHost = ctx;
-      bridge.setFooterEnabled(prepared.config.showFooterStatus);
+      syncFooter();
       bridge.setContext(ctx);
       openActivity = (signal) => {
         // A retired activation explains the failure even when its signal was also aborted.
@@ -174,6 +178,10 @@ export function registerBackgroundTaskApplication(
           isCurrent: () => slot.isCurrent(token),
           stop: stopTask,
           clear: clearTasks,
+          onAvailability: (available) => {
+            activityPresentsTasks = available;
+            syncFooter();
+          },
         });
     },
     onDeactivated: (input) => {

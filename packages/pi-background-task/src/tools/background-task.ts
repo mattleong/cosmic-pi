@@ -11,7 +11,6 @@ import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as Str from "effect/String";
 import {
-  expandedArguments,
   expandedSection,
   getTextContent,
   previewIssuesSlot,
@@ -40,6 +39,7 @@ import {
 } from "./command.ts";
 import { BackgroundTaskContractSchema, encodeBackgroundTaskContract } from "./contract-schema.ts";
 import { renderBackgroundTaskPreview, type BackgroundTaskPreviewInput } from "./preview.ts";
+import { renderBackgroundTaskRequest } from "./request-view.ts";
 import {
   BackgroundTaskParameters,
   prepareBackgroundTaskArguments,
@@ -189,7 +189,7 @@ export function registerBackgroundTaskTool(
       const body = new Container();
       body.addChild(heading);
       body.addChild(previewIssuesSlot(context));
-      body.addChild(expandedArguments(theme, args));
+      body.addChild(renderBackgroundTaskRequest(args, theme));
       return body;
     },
     renderResult(result, { isPartial, expanded }, theme, context) {
@@ -206,7 +206,7 @@ export function registerBackgroundTaskTool(
     shell(tool, {
       compactSummary: backgroundTaskCompactSummary,
       expandedContent: {
-        renderCall: (args, theme) => expandedArguments(theme, args),
+        renderCall: (args, theme) => renderBackgroundTaskRequest(args, theme),
         renderResult(result, _options, theme, context) {
           const input = previewInput(result, context.args, true, context.isError);
           if (Option.isSome(input.details) || Option.isSome(input.failure))

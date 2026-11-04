@@ -35,7 +35,9 @@ export const activityMark = (row: ActivityRow, now = 0): ActivityMark => {
   if (row.status === "needs-input")
     return { glyph: managerNoticeGlyph("attention"), color: managerNoticeColor("attention") };
   if (row.status === "blocked") return { glyph: managerNoticeGlyph("warning"), color: "warning" };
-  if (activityQueued(row)) return { glyph: "○", color: "muted" };
+  // Queued work and questions waiting their turn share the suite's single queued glyph.
+  if (activityQueued(row) || (row.kind === "question" && row.status === "pending"))
+    return { glyph: "○", color: "muted" };
   const kind = row.status === "cancelled" ? "stopped" : row.status;
   return {
     glyph: managerActivityGlyph(kind, spinnerFrameAt(now)),
@@ -67,13 +69,23 @@ const memberReason = (row: ActivityRow, widget: boolean): string | undefined =>
       : Str.trim(row.summary)
     : undefined;
 
-const memberAttention = (row: ActivityRow): string =>
-  activityAttention(row) !== undefined ||
+// A hidden request that offers Resume says how to get back to it, in its producer's words.
+const resumeHint = (row: ActivityRow): string | undefined =>
+  row.status === "needs-input" &&
+  row.summary !== undefined &&
+  Str.isNonEmpty(Str.trim(row.summary)) &&
+  Arr.some(row.actions ?? [], (action) => action.id === "resume")
+    ? Str.trim(row.summary)
+    : undefined;
+
+const memberAttention = (row: ActivityRow, widget: boolean): string =>
+  (widget ? resumeHint(row) : undefined) ??
+  (activityAttention(row) !== undefined ||
   row.status === "failed" ||
   row.status === "paused" ||
   activityQueued(row)
     ? activityStatus(row)
-    : "";
+    : "");
 
 const memberStatus = (
   row: ActivityRow,
@@ -104,7 +116,7 @@ export function groupedMemberLine(
   const interactive = presentation === "manager";
   const descendants = addAttention(entry.summary.attention, activityAttentionCounts(row), -1);
   const warnings = entry.expanded ? "" : Arr.join(activityAttentionLabels(descendants), " · ");
-  const attention = memberAttention(row);
+  const attention = memberAttention(row, !interactive);
   const ended = memberReason(row, !interactive);
   const reason = ended
     ? clipToWidth(ended, Math.min(REASON_WIDTH, Math.floor(width / 3)), "…")

@@ -77,7 +77,7 @@ describe("subagent activity provider", () => {
       expect(item.status).toBe("blocked");
       assert(item.actions !== undefined);
       expect(Arr.map(item.actions, (action) => action.id)).toContain("stop");
-      const detail = subagentActivityDetail(bridge.get(), run.id)!;
+      const detail = JSON.stringify(subagentActivityDetail(bridge.get(), run.id));
       expect(detail).toContain("Cleanup detail sentinel");
       expect(detail).toContain("Accepted work report sentinel");
       const signal = new AbortController().signal;
@@ -213,6 +213,26 @@ describe("subagent activity provider", () => {
     expect(status("paused")?.status).toBe("paused");
   });
 
+  it("shows a report once, as Markdown, and keeps run identity behind the technical disclosure", () => {
+    const report = "Found `itemCount` in **cart.ts**";
+    const run = view({
+      id: "run",
+      state: "completed",
+      finalText: report,
+      cwd: "/private/workspace",
+      sessionEvents: [
+        { type: "tool", toolCallId: "t", toolName: "bash", state: "completed", startedAt: 1 },
+        { type: "assistant", text: report, createdAt: 2 },
+      ],
+    });
+    const detail = subagentActivityDetail({ revision: 1, runs: [run] }, "run");
+    const bodies = Arr.map(detail?.sections ?? [], (section) => section.body);
+    expect(Arr.filter(bodies, Str.includes("itemCount"))).toHaveLength(1);
+    expect(detail?.sections).toContainEqual(expect.objectContaining({ format: "markdown" }));
+    expect(Arr.join(bodies, "\n")).not.toContain("/private/workspace");
+    expect(JSON.stringify(detail?.technical)).toContain("/private/workspace");
+  });
+
   it("keeps terminal transitions discoverable and redacts producer payloads", () => {
     const secret = "sk-abcdefgh12345678";
     const run = view({
@@ -225,8 +245,9 @@ describe("subagent activity provider", () => {
     const projection = { revision: 2, runs: [run] };
     expect(subagentActivityItems(projection)[0]?.status).toBe("done");
     expect(JSON.stringify(subagentActivityItems(projection))).not.toContain(secret);
-    expect(subagentActivityDetail(projection, "run")).not.toContain(secret);
-    expect(subagentActivityDetail(projection, "run")).toContain("[REDACTED]");
+    const detail = JSON.stringify(subagentActivityDetail(projection, "run"));
+    expect(detail).not.toContain(secret);
+    expect(detail).toContain("[REDACTED]");
     expect(
       subagentActivityItems({ revision: 3, runs: [{ ...run, state: "failed" }] })[0]?.status,
     ).toBe("failed");
@@ -264,7 +285,9 @@ describe("subagent activity provider", () => {
       const refused = () =>
         step(() => expect(invoke("run", "stop", revision, signal)).rejects.toThrow());
       yield* step(() =>
-        expect(getDetail("run", revision, signal)).resolves.toContain("Review auth"),
+        getDetail("run", revision, signal).then((detail) =>
+          expect(JSON.stringify(detail)).toContain("Review auth"),
+        ),
       );
       const cancelled = new AbortController();
       const pending = invoke("run", "stop", revision, cancelled.signal);

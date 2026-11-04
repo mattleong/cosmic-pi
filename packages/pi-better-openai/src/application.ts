@@ -74,7 +74,11 @@ import {
   type OpenAIImageMessageRenderer,
 } from "./image/register.ts";
 import { registerSettingsController } from "./settings/controller.ts";
-import { fastModeFooterPrimitive, openAIUsageFooterPrimitive } from "./ui/primitives.ts";
+import {
+  fastModeFooterPrimitive,
+  openAIUsageFooterPrimitive,
+  openAIUsageStatusText,
+} from "./ui/primitives.ts";
 import { OpenAIUsageService, sessionNotStarted } from "./usage/controller.ts";
 import { formatDebug } from "./usage/debug.ts";
 import { usageProjectionRef, resetProjection } from "./usage/projection.ts";
@@ -176,10 +180,13 @@ export function betterOpenAIWithDependencies(
         ? undefined
         : Arr.join(
             Arr.filter(
-              [fast ? statusSegment(ctx, MutableRef.get(fastProjection)) : undefined, usage?.text],
+              [
+                fast ? statusSegment(ctx, MutableRef.get(fastProjection)) : undefined,
+                usage ? openAIUsageStatusText(ctx, cfg, projection) : undefined,
+              ],
               (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
             ),
-            " | ",
+            " · ",
           ) || undefined,
     );
   };
@@ -352,13 +359,13 @@ export function betterOpenAIWithDependencies(
     return Arr.join(
       [
         ...fastDebugLines(ctx, MutableRef.get(fastProjection)),
-        `Footer usage: ${cosmicUi.isVisible("openai.usage") ? "automatic" : "hidden"} (Cosmic UI)`,
-        `OpenAI compaction: ${cfg.compaction.enabled ? "enabled" : "disabled"}${projectionMismatch ? ` (unavailable: ${projectionMismatch})` : ""}`,
+        `Footer usage: ${cosmicUi.isVisible("openai.usage") ? "auto" : "off"} (Cosmic UI)`,
+        `OpenAI compaction: ${cfg.compaction.enabled ? "on" : "off"}${projectionMismatch ? ` (unavailable: ${projectionMismatch})` : ""}`,
         "",
         formatDebug(projection, ctx),
         "",
-        `Image enabled: ${cfg.image.enabled}`,
-        `Image default save: ${cfg.image.defaultSave}`,
+        `Image tool: ${cfg.image.enabled ? "on" : "off"}`,
+        `Image save: ${cfg.image.defaultSave}`,
         `Config: ${cfg.configPath}`,
       ],
       "\n",

@@ -158,17 +158,18 @@ export function groupedActivityTree(
   const { sections, nodes } = buildNodes(rows, parents);
   for (const section of sections)
     completeNode(section, section.section, options.hideHistory === true);
-  const visible = (node: Node) => !options.hideHistory || !node.history;
+  // A settled standalone question has nothing left to attend to; its answer is in the transcript.
+  const settledQuestion = (node: Node) =>
+    node.type === "member" &&
+    node.row.kind === "question" &&
+    node.parentId === activitySectionId("attention") &&
+    isFinished(node.row);
+  const visible = (node: Node) => !settledQuestion(node) && (!options.hideHistory || !node.history);
   const result: GroupedActivityRow[] = [];
   const visit = (node: Node, continuations: readonly boolean[], breadcrumbs: readonly string[]) => {
     if (!visible(node)) return;
     const children = Arr.filter(node.children, visible);
-    if (
-      node.type === "section" &&
-      !children.length &&
-      (options.hideHistory || node.section === "attention")
-    )
-      return;
+    if (node.type === "section" && !children.length) return;
     const expanded =
       children.length > 0 &&
       !options.collapsed?.has(node.id) &&

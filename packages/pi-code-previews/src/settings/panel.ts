@@ -111,7 +111,7 @@ export function createCodePreviewSettingsModel({
   const handleSettingChange = (list: SettingsList, id: string, value: string) => {
     if (!isCurrent()) return;
     if (id === "resetToDefaults" && value !== "reset now") {
-      if (value === "keep current") sync(list);
+      sync(list);
       return;
     }
     const previous = draftSettings;

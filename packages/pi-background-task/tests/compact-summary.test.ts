@@ -182,7 +182,9 @@ describe("background task row outcomes", () => {
 
   it.each([
     ["a running task's status", { action: "status", snapshot }, "status", "returned"],
-    ["a started task", { action: "start", snapshot }, "start", "returned"],
+    // A start reports its admission, which stays true after the task finishes.
+    ["a started task", { action: "start", snapshot }, "start", "success"],
+    ["a start whose task already failed", { action: "start", snapshot: failed }, "start", "error"],
     ["a cleanly exited task", { action: "status", snapshot: exited }, "status", "success"],
     ["a stopped task's status", { action: "status", snapshot: stopped }, "status", "cancelled"],
     [
@@ -241,10 +243,15 @@ describe("background task row outcomes", () => {
       ),
       taskNoticeSummary({ ...evicting, state: "exited", exitCode: 0, endedAt: 2 }),
     ];
+    // Routine eviction is at most expanded-only information, never a warning.
     for (const summary of quiet) {
-      expect(summary?.issues).toEqual([]);
+      expect(Arr.filter(summary?.issues ?? [], (entry) => entry.severity !== "info")).toEqual([]);
       expect(summary?.outcome).not.toBe("warning");
     }
+    expect(
+      find(project({ action: "status", snapshot: evicting }), "task-0000000001:output-discarded")
+        ?.severity,
+    ).toBe("info");
     expect(
       find(project(wait("timeout", evicting, evicted), "wait"), "task-0000000001:log-loss"),
     ).toBeUndefined();

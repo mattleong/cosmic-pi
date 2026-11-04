@@ -16,6 +16,7 @@ import { beforeAll, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
 import { formatAsyncSnapshot } from "../src/questionnaire/format.ts";
@@ -33,6 +34,9 @@ import {
   renderAskUserAsyncMessage,
 } from "../src/tools/ask-user-async.ts";
 import { noExecution } from "./support/questionnaire.ts";
+import { DOWN, ENTER, RIGHT, SPACE, makeDialog, typeText } from "./support/dialog.ts";
+import { stripTerminalControls } from "pi-cosmic-core/security";
+import type { AskUserDialog } from "../src/ui/dialog.ts";
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
 
@@ -233,6 +237,86 @@ const registerAll = (pi: ExtensionAPI) => {
   registerAsyncAskUserMessageRenderer(pi);
 };
 
+const deploy: AskUserQuestion = {
+  key: "deploy",
+  title: "Deploy",
+  prompt: "Deploy the cart service to staging now?",
+  mode: "single",
+  choices: [
+    { value: "yes", label: "Yes", description: "Deploy immediately." },
+    { value: "no", label: "No", description: "Wait for review." },
+  ],
+};
+
+interface DialogScenario {
+  readonly title: string;
+  readonly request: AskUserRequest;
+  /** Keys pressed before the frame is drawn. */
+  readonly keys: ReadonlyArray<string>;
+  readonly widths?: ReadonlyArray<number>;
+}
+
+const dialogScenarios: ReadonlyArray<DialogScenario> = [
+  { title: "one question", request: { questions: [deploy] }, keys: [] },
+  { title: "one question · help expanded", request: { questions: [deploy] }, keys: ["?"] },
+  {
+    title: "one question · custom answer row",
+    request: { questions: [deploy] },
+    keys: [DOWN, DOWN],
+  },
+  { title: "one multiple-choice question", request: { questions: [checks] }, keys: ["1", "3"] },
+  { title: "one text question · writing", request: { questions: [summary] }, keys: ["Faster"] },
+  {
+    title: "several questions",
+    request: { questions: [environment, checks, library, summary] },
+    keys: [],
+    widths: [100, 60, 40],
+  },
+  {
+    title: "several questions · help expanded",
+    request: { questions: [environment, checks, library, summary] },
+    keys: ["?"],
+  },
+  {
+    title: "several questions · first answered, toggling choices",
+    request: { questions: [environment, checks, library, summary] },
+    keys: [ENTER, SPACE, DOWN, DOWN],
+  },
+  {
+    title: "several questions · writing a note",
+    request: { questions: [environment, checks, library, summary] },
+    keys: ["n", "Prefer the canary first"],
+  },
+  {
+    title: "several questions · review with one unanswered",
+    request: { questions: [environment, checks, library] },
+    keys: ["1", "1", RIGHT, RIGHT],
+  },
+  {
+    title: "several questions · review ready to submit",
+    request: { questions: [environment, checks, library] },
+    keys: ["1", "1", RIGHT, "2"],
+  },
+];
+
+const pressKeys = (dialog: AskUserDialog, keys: ReadonlyArray<string>) => {
+  for (const key of keys)
+    if (key.length > 1 && !Str.startsWith("\x1b")(key)) typeText(dialog, key);
+    else dialog.handleInput(key);
+};
+
+const dialogFrames = (): string[] =>
+  Arr.flatMap(dialogScenarios, ({ title, request, keys, widths = [100, 60] }) => {
+    const { dialog } = makeDialog(request);
+    dialog.focused = true;
+    pressKeys(dialog, keys);
+    return Arr.flatMap(widths, (width) => [
+      `── dialog · ${title} · ${width} cols`,
+      ...Arr.map(dialog.render(width), (line) => Str.trimEnd(stripTerminalControls(line))),
+      "",
+    ]);
+  });
+
 const directory = galleryDirectory(process.env) ?? "";
 
 const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
@@ -368,6 +452,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
           restore();
         }
       }
+      lines.push(...dialogFrames());
       yield* writeGallerySection(directory, "pi-ask-user", lines);
     }),
   );

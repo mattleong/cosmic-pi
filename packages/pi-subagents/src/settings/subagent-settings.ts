@@ -18,6 +18,8 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
+import { settingInherited } from "pi-cosmic-ui/manager/settings-surface";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
@@ -30,7 +32,9 @@ import {
 import {
   DELEGATION_MODES,
   isDelegationMode,
+  DEFAULT_DELEGATION_MODE,
   DEFAULT_MAX_ACTIVE_RUNS,
+  DEFAULT_SUBAGENT_NESTING_POLICY,
   WRITER_WORKSPACE_MODES,
   isWriterWorkspaceMode,
   type DelegationMode,
@@ -124,27 +128,64 @@ const SCOPED_SETTING_IDS: ReadonlyArray<typeof DELEGATION | NestingField> = [
   ...NESTING_FIELD_IDS,
 ];
 
+/** `inherit (12)` and other inherited labels mean `inherit` when chosen. */
+const inheritChoice = (value: string): string =>
+  value === INHERIT || (Str.startsWith(`${INHERIT} (`)(value) && Str.endsWith(")")(value))
+    ? INHERIT
+    : value;
+
+// Where `inherit` takes a scope's value from: the session from the files it started with, the
+// project from global settings, and global from the defaults.
+const INHERITED_FROM = {
+  session: "the global and project settings this session started with",
+  project: "global settings",
+  global: "the default",
+} as const satisfies Record<ProfileSettingsScope, string>;
+
+/** The value a scope inherits for one setting when it declares none of its own. */
+const inheritedValue = (
+  inspection: ProfileSettingsInspection,
+  scope: ProfileSettingsScope,
+  id: typeof DELEGATION | NestingField,
+): string => {
+  if (scope === "session") {
+    const base = inspection.session.baseConfig;
+    return id === DELEGATION
+      ? base.delegation
+      : String(base.nesting[id] ?? DEFAULT_SUBAGENT_NESTING_POLICY[id] ?? DEFAULT_MAX_ACTIVE_RUNS);
+  }
+  const global = scope === "project" ? inspection.global.file : undefined;
+  return id === DELEGATION
+    ? (global?.delegation ?? DEFAULT_DELEGATION_MODE)
+    : String(
+        global?.nesting?.[id] ?? DEFAULT_SUBAGENT_NESTING_POLICY[id] ?? DEFAULT_MAX_ACTIVE_RUNS,
+      );
+};
+
 const scopedSettingItem = (
   inspection: ProfileSettingsInspection,
   scope: ProfileSettingsScope,
   id: typeof DELEGATION | NestingField,
 ): SettingItem => {
   const reloadNote = scope === "session" ? "" : " Takes effect after /reload.";
+  const inherited = settingInherited(inheritedValue(inspection, scope, id));
+  const source = `Inherit uses ${INHERITED_FROM[scope]}.`;
   if (id === DELEGATION)
     return {
       id: `${scope}:${DELEGATION}`,
       label: `${SCOPE_LABELS[scope]} · delegation`,
-      description: `${DELEGATION_DESCRIPTION} ${INHERIT} uses the next scope's mode.${reloadNote}`,
-      currentValue: scopeDelegation(inspection, scope) ?? INHERIT,
-      values: [...DELEGATION_MODES, INHERIT],
+      description: `${DELEGATION_DESCRIPTION} ${source}${reloadNote}`,
+      currentValue: scopeDelegation(inspection, scope) ?? inherited,
+      values: [...DELEGATION_MODES, inherited],
     };
-  const currentValue = ownNestingValue(scopeNesting(inspection, scope), id);
+  const own = ownNestingValue(scopeNesting(inspection, scope), id);
+  const currentValue = own === INHERIT ? inherited : own;
   return {
     id: `${scope}:${id}`,
     label: `${SCOPE_LABELS[scope]} · ${NESTING_FIELDS[id].label}`,
-    description: `${NESTING_FIELDS[id].description} ${INHERIT} uses the next scope's limits.${reloadNote}`,
+    description: `${NESTING_FIELDS[id].description} ${source}${reloadNote}`,
     currentValue,
-    values: withCurrent([...NESTING_FIELDS[id].presets, INHERIT], currentValue),
+    values: withCurrent([...NESTING_FIELDS[id].presets, inherited], currentValue),
   };
 };
 
@@ -264,18 +305,23 @@ function subagentSettingsCommand(
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
         const scopes = editableScopes(trusted);
-        const nestingLine = (scope: ProfileSettingsScope) => {
-          const own = scopeNesting(inspection, scope);
-          return own
-            ? `  ${scope}: ${Fn.pipe(
-                NESTING_FIELD_IDS,
-                Arr.map((id) => `${id} = ${ownNestingValue(own, id)}`),
-                Arr.join(", "),
-              )}`
-            : `  ${scope}: ${INHERIT}`;
+        const shown = (scope: ProfileSettingsScope, id: typeof DELEGATION | NestingField) => {
+          const own =
+            id === DELEGATION
+              ? scopeDelegation(inspection, scope)
+              : scopeNesting(inspection, scope)?.[id];
+          return own === undefined
+            ? settingInherited(inheritedValue(inspection, scope, id))
+            : String(own);
         };
+        const nestingLine = (scope: ProfileSettingsScope) =>
+          `  ${scope}: ${Fn.pipe(
+            NESTING_FIELD_IDS,
+            Arr.map((id) => `${id} = ${shown(scope, id)}`),
+            Arr.join(", "),
+          )}`;
         const delegationLine = (scope: ProfileSettingsScope) =>
-          `  ${scope}: ${scopeDelegation(inspection, scope) ?? INHERIT}`;
+          `  ${scope}: ${shown(scope, DELEGATION)}`;
         const effective = inspection.session.effectiveConfig;
         const unresolved = unresolvedSummary(workspace);
         return Arr.join(
@@ -328,9 +374,10 @@ function subagentSettingsCommand(
   const apply = (
     ctx: ExtensionCommandContext,
     id: string,
-    value: string,
+    chosen: string,
     scope: ProfileSettingsScope,
   ): Promise<SettingsResult> => {
+    const value = inheritChoice(chosen);
     if (id === WORKSPACE) return applyWorkspace(value);
     if (id === DELEGATION) return applyDelegation(ctx, value, scope);
     if (!isNestingField(id)) return Promise.resolve(failed(`Unknown setting: ${id}`));

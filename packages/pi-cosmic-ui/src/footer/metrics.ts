@@ -11,6 +11,7 @@ import {
   styledContributionLine,
   tone,
 } from "./contributions.ts";
+import { INLINE_SEPARATOR } from "../manager/chrome.ts";
 
 type MetricPartKind = "input" | "output" | "cache" | "other";
 type MetricPart = { readonly text: string; readonly kind: MetricPartKind };
@@ -26,7 +27,7 @@ function metricCacheGroup(
     const entry = Option.getOrUndefined(Arr.findFirst(entries, (candidate) => candidate.id === id));
     return entry ? [theme.fg("syntaxType", contributionText(entry, compact))] : [];
   });
-  return `${theme.fg("syntaxType", "⇄")} ${Arr.join(values, theme.fg("dim", " / "))}`;
+  return `${theme.fg("dim", "cache")} ${Arr.join(values, " ")}`;
 }
 
 function metricParts(
@@ -61,8 +62,7 @@ function metricSeparator(
   theme: CosmicFooterTheme,
 ): string {
   if (previous.kind === "input" && current.kind === "output") return " ";
-  if (previous.kind === "cache" || current.kind === "cache") return theme.fg("dim", " · ");
-  return theme.fg("dim", " • ");
+  return theme.fg("dim", INLINE_SEPARATOR);
 }
 
 function wrapMetricParts(

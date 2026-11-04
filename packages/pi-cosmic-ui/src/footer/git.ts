@@ -74,13 +74,21 @@ export function applyGitNumstat(status: FooterGitStatus, output: string): Footer
   return { ...status, linesAdded, linesRemoved, linesChanged };
 }
 
-export function formatGitStatus(status: FooterGitStatus): string {
-  const parts: string[] = [];
-  if (status.conflicts) parts.push(`!${status.conflicts}`);
-  if (status.staged) parts.push(`+${status.staged}`);
-  if (status.modified) parts.push(`~${status.modified}`);
-  if (status.untracked) parts.push(`?${status.untracked}`);
-  if (status.ahead) parts.push(`↑${status.ahead}`);
-  if (status.behind) parts.push(`↓${status.behind}`);
-  return Arr.join(parts, " ");
+const GIT_STATUS_PARTS = [
+  ["conflicts", "!", "conflicted"],
+  ["staged", "+", "staged"],
+  ["modified", "~", "modified"],
+  ["untracked", "?", "untracked"],
+  ["ahead", "↑", "ahead"],
+  ["behind", "↓", "behind"],
+] as const satisfies ReadonlyArray<readonly [keyof FooterGitStatus, string, string]>;
+
+/** `~1 ?1` compactly, or `~1 modified ?1 untracked` when labeled. */
+export function formatGitStatus(status: FooterGitStatus, labeled = false): string {
+  return Arr.join(
+    Arr.flatMap(GIT_STATUS_PARTS, ([key, sign, label]) =>
+      status[key] ? [`${sign}${status[key]}${labeled ? ` ${label}` : ""}`] : [],
+    ),
+    " ",
+  );
 }

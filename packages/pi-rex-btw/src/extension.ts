@@ -26,7 +26,6 @@ import {
   rexLocation,
 } from "./launch.ts";
 import { isRegularFile, registerParentReference } from "./parent-reference.ts";
-import { GitBranch } from "./git.ts";
 import { isRexBtwError, RexClient } from "./rex.ts";
 
 const PACKAGE_DIRECTORY = fileURLToPath(new URL("..", import.meta.url));
@@ -68,9 +67,7 @@ export default function rexBtw(pi: ExtensionAPI): void {
     makeRuntime: (input) =>
       makePiManagedRuntime(
         pi,
-        RexBtw.layer(input).pipe(
-          Layer.provide(Layer.merge(RexClient.layer(process.env), GitBranch.layer(process.env))),
-        ),
+        RexBtw.layer(input).pipe(Layer.provide(RexClient.layer(process.env))),
         { agentDirectory: getAgentDir, packageName: "pi-rex-btw" },
       ),
     startup: () => Effect.void,

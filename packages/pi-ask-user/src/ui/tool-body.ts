@@ -19,8 +19,13 @@ import type {
   AskUserAsyncRequest,
   AskUserRequest,
 } from "../questionnaire/schema.ts";
-import { titleLabel } from "./layout.ts";
-import type { ReplayedAnswer } from "./tool-render-projection.ts";
+import { appendWrapped, titleLabel } from "./layout.ts";
+import {
+  requestArguments,
+  type ReplayedAnswer,
+  type RequestArguments,
+  type RequestView,
+} from "./tool-render-projection.ts";
 
 export type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
 export type QuestionnaireArgs = Partial<AskUserRequest | AskUserAsyncRequest | AskUserAsyncControl>;
@@ -152,15 +157,104 @@ const rawResultSection = (theme: Theme, text: string, isError: boolean): Compone
     new Text(theme.fg(isError ? "error" : "toolOutput", text), 0, 0),
   );
 
+const detailsSection = (theme: Theme, facts: readonly string[]): Component =>
+  expandedSection(
+    theme,
+    "Details",
+    new Text(theme.fg("dim", Arr.join(Arr.map(facts, stripTerminalControls), "\n")), 0, 0),
+  );
+
+const MODE_NOTES = {
+  single: undefined,
+  multiple: "any number",
+  text: "written answer",
+} as const;
+
+function requestRows(request: RequestView, theme: Theme, width: number): string[] {
+  const lines: string[] = [];
+  const append = (prefix: string, text: string) => appendWrapped(lines, prefix, text, width);
+  for (const question of request.questions) {
+    const note = MODE_NOTES[question.mode ?? "single"];
+    append(
+      "",
+      `${theme.fg("muted", `${titleLabel(question.title)}:`)} ${theme.fg("text", stripTerminalControls(question.prompt))}${note ? theme.fg("dim", ` · ${note}`) : ""}`,
+    );
+    Arr.forEach(question.choices ?? [], (choice, index) => {
+      const description = choice.description
+        ? ` — ${stripTerminalControls(choice.description)}`
+        : "";
+      append(
+        "  ",
+        `${theme.fg("text", `${index + 1}. ${stripTerminalControls(choice.label)}`)}${theme.fg("muted", description)}`,
+      );
+      if (choice.preview)
+        for (const line of Str.split(stripTerminalControls(choice.preview), /\r?\n/u))
+          append("       ", theme.fg("dim", line));
+    });
+  }
+  if (request.independentWork)
+    append("", theme.fg("muted", `Meanwhile: ${stripTerminalControls(request.independentWork)}`));
+  if (request.blockedWork)
+    append(
+      "",
+      theme.fg("muted", `Blocked until answered: ${stripTerminalControls(request.blockedWork)}`),
+    );
+  return lines;
+}
+
+/**
+ * The questions a call asked, written out readably with every prompt, choice, description, and
+ * preview. Calls whose arguments don't read as a questionnaire keep their raw arguments, and a
+ * control call's arguments are dropped only once its decoded result names the request.
+ */
+export function requestSection(
+  theme: Theme,
+  args: RequestArguments | undefined,
+  identified = false,
+): Component {
+  // Tool arguments are always objects; anything else has no fields to show.
+  if (!args) return emptyBody();
+  const { control, request } = args;
+  if (control)
+    return identified
+      ? emptyBody()
+      : detailsSection(theme, [control.requestId ?? "All retained questionnaires"]);
+  if (!request) return expandedArguments(theme, args.fields);
+  let last: { readonly width: number; readonly rows: string[] } | undefined;
+  return expandedSection(theme, "Questions", {
+    render: (width) => {
+      if (last?.width !== width) last = { width, rows: requestRows(request, theme, width) };
+      return last.rows;
+    },
+    invalidate: () => {
+      last = undefined;
+    },
+  });
+}
+
+/**
+ * Before a result arrives the call shows what it asked; afterward the result leads with the
+ * answers and repeats the request beneath them.
+ */
+export const pendingRequest = (
+  theme: Theme,
+  args: RequestArguments | undefined,
+  context: Pick<RenderContext, "isPartial">,
+): Component => (context.isPartial ? requestSection(theme, args) : emptyBody());
+
 export function callBody(
   header: ToolHeader,
   args: QuestionnaireArgs,
   theme: Theme,
-  context: Pick<RenderContext, "expanded" | "state">,
+  context: Pick<RenderContext, "expanded" | "state" | "isPartial">,
 ): Component {
   const heading = new Text(renderToolHeader(header, theme), 0, 0);
   if (!context.expanded) return heading;
-  return stacked([heading, previewIssuesSlot(context), expandedArguments(theme, args)]);
+  return stacked([
+    heading,
+    previewIssuesSlot(context),
+    pendingRequest(theme, requestArguments(args), context),
+  ]);
 }
 
 export interface ExpandedResultInput {
@@ -172,21 +266,30 @@ export interface ExpandedResultInput {
   readonly titles?: ReadonlyMap<string, string>;
   /** Technical facts, such as request and delivery IDs, for the dim details section. */
   readonly facts?: readonly string[];
+  /** The call's arguments, written out after the answers once the result arrived. */
+  readonly args?: RequestArguments | undefined;
 }
 
-const detailsSection = (theme: Theme, facts: readonly string[]): Component =>
-  expandedSection(
-    theme,
-    "Details",
-    new Text(theme.fg("dim", Arr.join(Arr.map(facts, stripTerminalControls), "\n")), 0, 0),
-  );
-
 export function expandedResult(input: ExpandedResultInput, theme: Theme): Component {
+  const request =
+    input.args === undefined ? [] : [requestSection(theme, input.args, input.decoded)];
   if (!input.decoded)
-    return input.raw ? rawResultSection(theme, input.raw, input.isError) : emptyBody();
+    return stacked([
+      ...(input.raw ? [rawResultSection(theme, input.raw, input.isError)] : []),
+      ...request,
+    ]);
   const facts = input.facts ?? [];
   return stacked([
-    ...(input.answers ? [answersBody(input.answers, input.titles ?? new Map(), theme, false)] : []),
+    ...(input.answers
+      ? [
+          expandedSection(
+            theme,
+            "Answers",
+            answersBody(input.answers, input.titles ?? new Map(), theme, false),
+          ),
+        ]
+      : []),
+    ...request,
     ...(facts.length > 0 ? [detailsSection(theme, facts)] : []),
   ]);
 }

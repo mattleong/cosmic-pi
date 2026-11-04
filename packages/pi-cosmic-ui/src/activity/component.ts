@@ -1,10 +1,8 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import * as Str from "effect/String";
 import { FullScreenResolution } from "../manager/keymap.ts";
 import type {
   FullScreenAction,
@@ -13,7 +11,6 @@ import type {
 } from "../manager/keymap.ts";
 import { listDetailMotionFromAction, type DetailWindowPosition } from "../manager/list-detail.ts";
 import { ListDetailShell } from "../manager/list-detail-shell.ts";
-import { ACTIVITY_LIMITS } from "./limits.ts";
 import {
   ACTIVITY_ACTION_PAGE_SIZE,
   activityActionForKey,
@@ -32,6 +29,7 @@ import {
 } from "./grouped-tree.ts";
 import { renderGroupedActivity } from "./grouped-render.ts";
 import type { ActivitySection } from "./view-protocol.ts";
+import type { ActivityDetail } from "./protocol.ts";
 
 export interface ActivityPresentation {
   readonly shell: ListDetailShell;
@@ -48,7 +46,6 @@ export const freshActivityPresentation = (): ActivityPresentation => ({
 export interface ActivityComponentOptions {
   readonly snapshot: () => readonly ActivityRow[];
   readonly initialSection?: ActivitySection;
-  readonly title?: string;
   readonly starting?: () => number;
   readonly presentation?: ActivityPresentation;
   readonly theme: Pick<Theme, "fg" | "bold"> & Partial<Pick<Theme, "bg">>;
@@ -57,7 +54,10 @@ export interface ActivityComponentOptions {
   readonly close: (action?: ActivityActionRequest) => void;
   readonly invoke?: (action: ActivityActionRequest) => void;
   readonly requestRender: () => void;
-  readonly loadDetail?: (request: ActivityDetailRequest, deliver: (text: string) => void) => void;
+  readonly loadDetail?: (
+    request: ActivityDetailRequest,
+    deliver: (detail: ActivityDetail) => void,
+  ) => void;
   readonly cancelDetail?: () => void;
   readonly matchesKeybinding?: FullScreenKeymapOptions["matchesKeybinding"];
   readonly keybindingLabel?: (id: FullScreenSelectionKeybindingId, fallback: string) => string;
@@ -105,7 +105,9 @@ export class ActivityComponent {
   private selectedIdentity: string | undefined;
   private requested: ActivityDetailRequest | undefined;
   private displayed: { readonly row: ActivityRow; readonly actionPage: number } | undefined;
-  private loaded: { readonly request: ActivityDetailRequest; readonly text: string } | undefined;
+  private loaded:
+    | { readonly request: ActivityDetailRequest; readonly detail: ActivityDetail }
+    | undefined;
   private confirmation: PendingConfirmation | undefined;
   private fullTree: TreeCache | undefined;
   private visibleTree: VisibleCache | undefined;
@@ -115,6 +117,8 @@ export class ActivityComponent {
     this.presentation = options.presentation ?? freshActivityPresentation();
     this.shell = this.presentation.shell;
     if (options.initialSection) this.presentation.focus = undefined;
+    // The first selection previews at once; later selections preview as they change.
+    this.syncDetails(source(this.selected().selected));
   }
   private allEntries() {
     const rows = this.options.snapshot();
@@ -264,7 +268,7 @@ export class ActivityComponent {
       generation: row.generation,
     };
     this.requested = request;
-    this.options.loadDetail?.(request, (text) => {
+    this.options.loadDetail?.(request, (detail) => {
       const current = source(
         Option.getOrUndefined(
           Arr.findFirst(this.allEntries(), (entry) => entry.id === this.shell.state.selectedId),
@@ -279,27 +283,36 @@ export class ActivityComponent {
         current.generation !== request.generation
       )
         return;
-      this.loaded = { request, text: Fn.pipe(text, Str.slice(0, ACTIVITY_LIMITS.detail)) };
+      this.loaded = { request, detail };
       this.preserveDetailPosition = preservePosition;
       if (preservePosition) this.openAtTop = false;
       this.options.requestRender();
     });
   }
+  /**
+   * Keeps the shown detail current: a newly selected source loads at once, and a loaded one
+   * reloads on change while it is only previewed or explicitly followed. Inspected details
+   * otherwise stay put so they can be read; `r` refreshes them.
+   */
+  private syncDetails(row: ActivityRow | undefined): void {
+    if (this.closed || this.confirmation || !row || row.retained) return;
+    const current = this.requested ?? this.loaded?.request;
+    const sameItem = current?.key === row.key && current.generation === row.generation;
+    if (!sameItem) return this.loadDetails(row);
+    const live = this.follow || this.shell.state.pane === "list";
+    if (live && current.revision !== row.revision) this.loadDetails(row);
+  }
+  private settleInput(): void {
+    const { selected } = this.selected();
+    this.flushCancellation();
+    this.syncDetails(source(selected));
+    this.options.requestRender();
+  }
   update(): void {
     if (this.closed) return;
     const { selected } = this.selected();
     this.flushCancellation();
-    const row = source(selected);
-    if (
-      !this.confirmation &&
-      this.follow &&
-      this.shell.state.pane === "detail" &&
-      row &&
-      (this.requested?.key !== row.key ||
-        this.requested.generation !== row.generation ||
-        this.requested.revision !== row.revision)
-    )
-      this.loadDetails(row);
+    this.syncDetails(source(selected));
   }
   handleInput(data: string): void {
     if (this.closed) return;
@@ -315,7 +328,7 @@ export class ActivityComponent {
       selected &&
       this.handleTreeInput(data, entries, selected)
     )
-      return;
+      return this.settleInput();
     const result = this.shell.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding: this.options.matchesKeybinding,
@@ -325,13 +338,11 @@ export class ActivityComponent {
     FullScreenResolution.$match(result, {
       Shortcut: ({ key }) => this.handleShortcut(key, selected, row),
       Action: ({ action }) => {
-        if (action === "confirm" && selected) this.enterSelection(row);
-        else this.handleNavigation(action, entries, selected, row);
+        if (action === "confirm" && selected) this.enterSelection();
+        else this.handleNavigation(action, entries, selected);
       },
     });
-    this.selected();
-    this.flushCancellation();
-    this.options.requestRender();
+    if (!this.closed) this.settleInput();
   }
   private handleConfirmationInput(data: string, confirmation: PendingConfirmation): void {
     const result = this.shell.keymap.resolve(data, {
@@ -364,7 +375,6 @@ export class ActivityComponent {
     if ((back && selected.expanded) || (forward && selected.children && !selected.expanded)) {
       this.setExpanded(selected.id, !back);
       this.shell.resetDetailScroll();
-      this.options.requestRender();
       return true;
     }
     if (
@@ -374,9 +384,6 @@ export class ActivityComponent {
     )
       return false;
     this.selectId(entries, selected.parentId);
-    this.selected();
-    this.flushCancellation();
-    this.options.requestRender();
     return true;
   }
   private setExpanded(id: string, expanded: boolean): void {
@@ -423,8 +430,8 @@ export class ActivityComponent {
   }
   private toggleFollow(row: ActivityRow): void {
     this.follow = !this.follow;
-    if (this.follow && this.shell.state.pane === "detail") this.loadDetails(row);
-    else if (!this.follow) this.cancelDetails();
+    if (this.follow) this.loadDetails(row);
+    else this.cancelDetails();
   }
   private invokeShortcutAction(key: string, row: ActivityRow): void {
     const shown = this.displayed;
@@ -445,20 +452,17 @@ export class ActivityComponent {
       this.confirmation = { request, action, key: numbered ? undefined : key };
     else this.dispatch(request, action);
   }
-  private enterSelection(row: ActivityRow | undefined): void {
+  private enterSelection(): void {
     this.shell.enterPane();
-    if (this.shell.state.pane === "detail" && row) this.loadDetails(row);
   }
   private handleNavigation(
     action: FullScreenAction,
     entries: readonly GroupedActivityRow[],
     selected: GroupedActivityRow | undefined,
-    row: ActivityRow | undefined,
   ): void {
     if (action === "help") this.alternateHelp = !this.alternateHelp;
     const motion = listDetailMotionFromAction(action);
     if (!motion) return;
-    const wasDetail = this.shell.state.pane === "detail";
     const changed = this.shell.applyMotion(motion, {
       rowCount: entries.length,
       hasSelection: selected !== undefined,
@@ -478,7 +482,6 @@ export class ActivityComponent {
       this.follow = false;
       this.cancelDetails();
     }
-    if (!wasDetail && changed.state.pane === "detail" && row) this.loadDetails(row);
   }
   private keepDetailPlace(): void {
     this.openAtTop = false;
@@ -506,6 +509,10 @@ export class ActivityComponent {
         alternateHelp: this.alternateHelp,
         actionPage: this.actionPage,
         loaded: this.loaded,
+        loading:
+          this.options.loadDetail !== undefined &&
+          row !== undefined &&
+          this.requested?.key === row.key,
         confirmation: this.confirmation && {
           text: this.confirmation.action.confirmation ?? "",
           label: this.confirmation.action.label,

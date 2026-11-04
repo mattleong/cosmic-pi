@@ -136,30 +136,30 @@ describe("Cosmic UI settings controller", () => {
     withSettings((h) =>
       Effect.gen(function* () {
         h.input();
-        expect(h.line("Custom footer")).toContain("false");
+        expect(h.line("Custom footer")).toContain("off");
         h.input();
-        expect(h.line("Custom footer")).toContain("true");
+        expect(h.line("Custom footer")).toContain("on");
         yield* h.started(1);
         expect(h.updates).toHaveLength(1);
 
         h.setFooter({ enabled: false });
         yield* Deferred.succeed(h.updates[0]!, undefined);
         yield* h.started(2);
-        expect(h.line("Custom footer")).toContain("true");
+        expect(h.line("Custom footer")).toContain("on");
 
         h.input();
-        expect(h.line("Custom footer")).toContain("false");
+        expect(h.line("Custom footer")).toContain("off");
         expect(h.updates).toHaveLength(2);
         h.setFooter({ enabled: true });
         yield* Deferred.fail(h.updates[1]!, new Error("stale failure"));
         yield* h.started(3);
-        expect(h.line("Custom footer")).toContain("false");
+        expect(h.line("Custom footer")).toContain("off");
         expect(h.notify).not.toHaveBeenCalled();
 
         h.setFooter({ enabled: false });
         yield* Deferred.succeed(h.updates[2]!, undefined);
         yield* macrotask;
-        expect(h.line("Custom footer")).toContain("false");
+        expect(h.line("Custom footer")).toContain("off");
       }),
     ),
   );
@@ -168,7 +168,9 @@ describe("Cosmic UI settings controller", () => {
     withSettings((h) =>
       Effect.gen(function* () {
         h.input();
-        expect(h.line("Custom footer")).toContain("false");
+        expect(h.line("Custom footer")).toContain("off");
+        h.input("j");
+        h.input();
         h.input("j");
         h.input();
         expect(h.line("Footer density")).toContain("comfortable");
@@ -179,12 +181,36 @@ describe("Cosmic UI settings controller", () => {
         const renders = h.host.renders;
         yield* Deferred.fail(h.updates[0]!, new Error("enabled failure"));
         yield* h.started(2);
-        expect(h.line("Custom footer")).toContain("true");
+        expect(h.line("Custom footer")).toContain("on");
         expect(h.notify).toHaveBeenCalledExactlyOnceWith(expect.any(String), "error");
         expect(h.host.renders).toBeGreaterThan(renders);
 
         h.setFooter({ density: "comfortable" });
         yield* Deferred.succeed(h.updates[1]!, undefined);
+        yield* macrotask;
+      }),
+    ),
+  );
+
+  it.effect("browsing a choice list persists nothing until a value is chosen", () =>
+    withSettings((h) =>
+      Effect.gen(function* () {
+        h.input("j");
+        h.input();
+        h.input("j");
+        h.input("j");
+        h.input("\u001b");
+        yield* macrotask;
+        expect(h.updates).toHaveLength(0);
+        expect(h.line("Footer density")).toContain("auto");
+
+        h.input();
+        h.input("j");
+        h.input();
+        yield* h.started(1);
+        expect(h.updates).toHaveLength(1);
+        expect(h.line("Footer density")).toContain("comfortable");
+        yield* Deferred.succeed(h.updates[0]!, undefined);
         yield* macrotask;
       }),
     ),

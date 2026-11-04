@@ -9,7 +9,7 @@ import type {
   CosmicFooterTextContribution,
   CosmicFooterTheme,
 } from "../protocol/protocol.ts";
-import { clipToWidth } from "../manager/chrome.ts";
+import { clipToWidth, INLINE_SEPARATOR } from "../manager/chrome.ts";
 import { webHyperlink } from "./hyperlink.ts";
 
 export function alignSides(left: string, right: string, width: number): string {
@@ -75,7 +75,9 @@ export function tone(
           ? "success"
           : Fn.pipe(value, Str.startsWith("-"))
             ? "error"
-            : "syntaxNumber";
+            : Fn.pipe(value, Str.startsWith("~"))
+              ? "syntaxNumber"
+              : "dim";
         return theme.fg(color, value);
       }),
       theme.fg("dim", " "),
@@ -137,7 +139,7 @@ export function rawContributionLine(
       const text = contributionText(entry, compact);
       return text ? [text] : [];
     }),
-    " • ",
+    INLINE_SEPARATOR,
   );
 }
 
@@ -158,8 +160,28 @@ export function styledContributionLine(
       const styled = tone(theme, entry, text);
       return [entry.id === "pullRequest" ? webHyperlink(styled, pullRequestUrl) : styled];
     }),
-    theme.fg("dim", " • "),
+    theme.fg("dim", INLINE_SEPARATOR),
   );
+}
+
+function fitLine(
+  left: CosmicFooterTextContribution[],
+  right: CosmicFooterTextContribution[],
+  width: number,
+  compact: boolean,
+  rightCompact: boolean,
+) {
+  const fittedRight = fitContributions(right, width, rightCompact);
+  const rightRaw = rawContributionLine(fittedRight, rightCompact);
+  const clippedRight = clipToWidth(rightRaw, width, "");
+  const rightWidth = visibleWidth(clippedRight);
+
+  const reservedGap = left.length > 0 && rightWidth > 0 ? 2 : 0;
+  const leftAvailable = Math.max(0, width - rightWidth - reservedGap);
+  const fittedLeft = fitContributions(left, leftAvailable, compact);
+  const leftRaw = rawContributionLine(fittedLeft, compact);
+  const clippedLeft = clipToWidth(leftRaw, leftAvailable, "…");
+  return { fittedRight, rightRaw, clippedRight, rightCompact, fittedLeft, leftRaw, clippedLeft };
 }
 
 export function renderContributionLine(
@@ -174,17 +196,15 @@ export function renderContributionLine(
   const left = Arr.filter(visible, (entry) => entry.align !== "right");
   const right = Arr.filter(visible, (entry) => entry.align === "right");
 
-  const fittedRight = fitContributions(right, width, compact);
-  const rightRaw = rawContributionLine(fittedRight, compact);
-  const clippedRight = clipToWidth(rightRaw, width, "");
-  const rightWidth = visibleWidth(clippedRight);
-
-  const reservedGap = left.length > 0 && rightWidth > 0 ? 2 : 0;
-  const leftAvailable = Math.max(0, width - rightWidth - reservedGap);
-  const fittedLeft = fitContributions(left, leftAvailable, compact);
-  const leftRaw = rawContributionLine(fittedLeft, compact);
-  const clippedLeft = clipToWidth(leftRaw, leftAvailable, "…");
+  // Right-aligned details shorten to their compact text before left-side identity is dropped.
+  const full = fitLine(left, right, width, compact, compact);
+  const leftCut = full.fittedLeft.length < left.length || full.clippedLeft !== full.leftRaw;
+  const shortened = !compact && leftCut ? fitLine(left, right, width, compact, true) : undefined;
+  const fitted =
+    shortened && shortened.fittedLeft.length >= full.fittedLeft.length ? shortened : full;
+  const { fittedRight, rightRaw, clippedRight, fittedLeft, leftRaw, clippedLeft } = fitted;
   const leftWidth = visibleWidth(clippedLeft);
+  const rightWidth = visibleWidth(clippedRight);
 
   const styledLeft = styledContributionLine(
     fittedLeft,
@@ -196,7 +216,7 @@ export function renderContributionLine(
   );
   const styledRight = styledContributionLine(
     fittedRight,
-    compact,
+    fitted.rightCompact,
     clippedRight,
     rightRaw,
     theme,

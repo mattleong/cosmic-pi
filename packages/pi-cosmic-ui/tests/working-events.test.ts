@@ -110,7 +110,7 @@ const textStart = (): ExtensionEventNamed<"message_update"> => ({
 });
 
 describe("working throughput through registered Pi events", () => {
-  it.effect("starts before the first delta, then replaces the estimate with reported output", () =>
+  it.effect("estimates while streaming, then reports measured output only during later calls", () =>
     Effect.gen(function* () {
       const h = yield* workingHost;
       yield* h.emit("context_with_system");
@@ -121,7 +121,8 @@ describe("working throughput through registered Pi events", () => {
       yield* h.emitEvent(textStart());
       expect(h.rate()).toEqual({ approximate: true, value: 3 });
       yield* h.emitEvent(completion(500));
-      expect(h.rate()).toEqual({ approximate: false, value: 50 });
+      // No tokens flow between calls, so the row shows no rate while tools run.
+      expect(h.rate()).toBeUndefined();
       h.at(50_000);
       yield* h.emitEvent({
         type: "tool_execution_start",
@@ -140,6 +141,8 @@ describe("working throughput through registered Pi events", () => {
           usage: usageWith(90_000),
         }),
       );
+      expect(h.rate()).toBeUndefined();
+      yield* h.emit("context_with_system");
       expect(h.rate()).toEqual({ approximate: false, value: 50 });
     }),
   );

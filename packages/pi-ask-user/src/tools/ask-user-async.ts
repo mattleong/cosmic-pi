@@ -1,10 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import {
-  expandedArguments,
-  withCodePreviewShell,
-  type CompactAnimationScheduler,
-} from "pi-code-previews";
+import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
 import {
   defineTool,
   type ExtensionAPI,
@@ -25,7 +21,8 @@ import type {
 import { formatAsyncSnapshot } from "../questionnaire/format.ts";
 import { asyncAskUserCompactSummary } from "../ui/compact-summary.ts";
 import { ASYNC_MESSAGE_TYPE } from "../boundary/host-delivery.ts";
-import type { QuestionnaireArgs } from "../ui/tool-body.ts";
+import { pendingRequest, type QuestionnaireArgs, type RenderContext } from "../ui/tool-body.ts";
+import { requestArguments } from "../ui/tool-render-projection.ts";
 import {
   renderAsyncCall,
   renderAsyncResult,
@@ -62,7 +59,11 @@ export function registerAsyncAskUserTools(
   const presentation = {
     compactSummary: asyncAskUserCompactSummary,
     expandedContent: {
-      renderCall: (args: QuestionnaireArgs, theme: Theme) => expandedArguments(theme, args),
+      renderCall: (
+        args: QuestionnaireArgs,
+        theme: Theme,
+        context: Pick<RenderContext, "isPartial">,
+      ) => pendingRequest(theme, requestArguments(args), context),
       renderResult: renderAsyncContent,
     },
     scheduleAnimation,

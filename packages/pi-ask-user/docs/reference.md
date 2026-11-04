@@ -147,9 +147,11 @@ In the Cosmic UI Activity view, Resume closes the manager first so the questionn
 
 ## TUI controls
 
-While editing a text answer, letters such as `b` and `q` and digits are literal text; `Shift+Enter` inserts a newline. `Esc` returns to the question view, where `Enter` activates Edit answer. Only a valid saved answer counts toward submission, and answers still require explicit submission on Review.
+While editing a text answer, letters such as `b` and `q` and digits are literal text; `Shift+Enter` inserts a newline. `Esc` returns to the question view, where `Enter` reopens the answer. Only a valid saved answer counts toward submission.
 
-The overlay shows question/answer progress, live text limits, mode-specific controls, and the selected count for multi-select questions. Activating the primary review action jumps to the next unanswered item before submission.
+With several questions, choosing or saving an answer moves to the next question, and answers require explicit submission on Review; the primary review action jumps to the next unanswered item first. A single question has no tabs or Review: choosing a single-choice answer, saving a custom or text answer, or activating Submit beneath a multi-select question submits it.
+
+The overlay shows question/answer progress, live text limits, the selected count for multi-select questions, and a hint bar naming what `Enter` does on the focused row. `?` extends the hint bar with aliases and secondary keys, including `b` to hide. A hidden questionnaire returns through `/ask-user` or Activity → Resume; its Activity row reads `/ask-user to resume`, and without Activity the footer status says the same.
 
 ## RPC behavior
 
@@ -157,4 +159,4 @@ RPC hosts cannot show Pi's custom overlay, so tabs, collapse, external editing, 
 
 ## Transcript cards
 
-All three questionnaire tools use the shared `pi-code-previews` tool shell and follow its `toolCallCollapsedStyle`: `preview` by default, or `compact` after `/reload`. Compact rows summarize questionnaire state without answer text or notes; preview bodies show answers and notes. Both styles retain failures and delivery warnings. Expansion shows the submitted arguments, the full answers and notes, and a dim details section with request and delivery IDs and how the result was delivered; instructions meant for the agent stay in the model-facing result and are never drawn. A result whose details don't decode, such as a thrown error, shows its raw text instead.
+All three questionnaire tools use the shared `pi-code-previews` tool shell and follow its `toolCallCollapsedStyle`: `preview` by default, or `compact` after `/reload`. Compact rows summarize questionnaire state; a lone answer shows its choice labels or the first line of its written text, never notes. Preview bodies show answers and notes. Both styles retain failures and delivery warnings. Expansion leads with the full answers and notes, then the questions as asked (prompts, choices, descriptions, previews, and async work descriptions; arguments that don't read as a questionnaire stay raw), and a dim details section with request and delivery IDs and how the result was delivered; instructions meant for the agent stay in the model-facing result and are never drawn. A result whose details don't decode, such as a thrown error, shows its raw text instead.

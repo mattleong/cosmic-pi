@@ -14,12 +14,17 @@ import {
 import type { FooterPatch } from "../config/store.ts";
 import { settingsSubcommand, withInvocationAuthority } from "../boundary/host-settings-command.ts";
 import { CosmicUiService } from "../protocol/service.ts";
-import { settingsItemsFromDescriptors } from "../manager/settings-surface.ts";
+import {
+  AUTO_SETTING_VALUE,
+  ON_OFF_SETTING_VALUES,
+  settingOnOff,
+  settingsItemsFromDescriptors,
+} from "../manager/settings-surface.ts";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 
-const BooleanSettingSchema = Schema.Literals(["true", "false"]);
-const UsageSettingSchema = Schema.Literals(["automatic", "hidden"]);
+const BooleanSettingSchema = Schema.Literals(ON_OFF_SETTING_VALUES);
+const UsageSettingSchema = Schema.Literals([AUTO_SETTING_VALUE, "off"]);
 const footerLabels = {
   model: "Model",
   effort: "Thinking level",
@@ -49,11 +54,11 @@ const settingDescriptors = [
     description:
       "Disable to use Pi's default footer. Item visibility still applies to provider status.",
     values: BooleanSettingSchema.literals,
-    currentValue: (config: ResolvedCosmicUiConfig) => String(config.footer.enabled),
+    currentValue: (config: ResolvedCosmicUiConfig) => settingOnOff(config.footer.enabled),
     change: (value: string): CosmicUiSettingChange | undefined => {
       const enabled = decodeUnknownOrUndefined(BooleanSettingSchema)(value);
       return (
-        enabled && CosmicUiSettingChange.UpdateFooter({ patch: { enabled: enabled === "true" } })
+        enabled && CosmicUiSettingChange.UpdateFooter({ patch: { enabled: enabled === "on" } })
       );
     },
   },
@@ -76,7 +81,7 @@ const settingDescriptors = [
       id: `visible:${item}`,
       label: footerLabels[item],
       description: usage
-        ? "Automatic on eligible models. Hidden stops automatic requests; the usage command still works."
+        ? "auto shows usage on eligible models. off hides it and stops automatic requests; the usage command still works."
         : "Show this item in the footer.",
       values: schema.literals,
       currentValue: (config: ResolvedCosmicUiConfig) =>
@@ -90,6 +95,10 @@ const settingDescriptors = [
     };
   }),
 ];
+
+/** The `/cosmic-ui settings` rows for a configuration, as the picker shows them. */
+export const cosmicUiSettingsItems = (config: ResolvedCosmicUiConfig) =>
+  settingsItemsFromDescriptors(settingDescriptors, config);
 
 export function registerSettingsCommand(
   pi: ExtensionAPI,
@@ -109,7 +118,7 @@ export function registerSettingsCommand(
       title: "Cosmic UI",
       isCurrent,
       descriptors: settingDescriptors,
-      examples: ["density compact", "visible:git false"],
+      examples: ["density compact", "visible:git off"],
       config: () => options.config(),
       status: () => {
         const config = options.config();
@@ -143,7 +152,7 @@ export function registerSettingsCommand(
       },
       afterApply: options.update,
       open: (_ctx, session) =>
-        session.picker(settingsItemsFromDescriptors(settingDescriptors, options.config()), 14),
+        session.picker(cosmicUiSettingsItems(options.config()), settingDescriptors.length),
     }),
   );
   registerExtensionCommand(pi, {

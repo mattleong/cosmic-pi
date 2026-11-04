@@ -12,7 +12,7 @@ import {
   listDetailHeading,
   listDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
-import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
+import { focusedField, LIST_CURSOR, managerTone } from "pi-cosmic-ui/manager/style";
 import {
   managerLayoutTier,
   managerNoticeColor,
@@ -20,6 +20,7 @@ import {
   clipToWidth,
 } from "pi-cosmic-ui/manager";
 import { managerTable } from "pi-cosmic-ui/manager/table";
+import { exitKeyHint, helpKeyHint, joinKeyHints, keyHint } from "pi-cosmic-ui/manager/key-labels";
 import { PROFILE_IDS, type ProfileId, type ProfileCandidate } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
@@ -32,6 +33,7 @@ import {
 } from "../profile-route-editor.ts";
 import {
   candidateEffortLabel,
+  candidateEffortLevel,
   candidateFastModeApplied,
   profileWorkspaceRows,
   type ProfileWorkspacePane,
@@ -110,12 +112,19 @@ const workspaceCandidateSummary = (
     : clipToWidth(metadata, width);
 };
 
-const profileTableLines = (
+interface ProfileTableRow {
+  readonly profile: ProfileId;
+  readonly selected: boolean;
+  readonly model: string;
+  readonly effort: string;
+  readonly fallbacks: string;
+}
+
+const profileTableRows = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
-  width: number,
-): ReadonlyArray<string> => {
-  const rows = Arr.map(PROFILE_IDS, (profile, index) => {
+): ReadonlyArray<ProfileTableRow> =>
+  Arr.map(PROFILE_IDS, (profile, index) => {
     const selected = index === state.profileIndex;
     const draft = selected
       ? state.draft
@@ -128,8 +137,9 @@ const profileTableLines = (
         first ? managerTone.value : draft.kind === "invalid" ? "error" : "muted",
         first?.model ?? (draft.kind === "invalid" ? "invalid" : "disabled"),
       ),
+      // The list names the reasoning level; the editor pane says when it is the profile default.
       effort: first
-        ? `${theme.fg("muted", candidateEffortLabel(profile, first, state.parentEffort))}${candidateFastModeApplied(first, state.parentModel) ? theme.fg("warning", " ⚡") : ""}`
+        ? `${theme.fg("muted", candidateEffortLevel(profile, first, state.parentEffort))}${candidateFastModeApplied(first, state.parentModel) ? theme.fg("warning", " ⚡") : ""}`
         : "",
       fallbacks:
         draft.candidates.length > 1
@@ -137,15 +147,44 @@ const profileTableLines = (
           : "",
     };
   });
+
+const PROFILE_COLUMN_GAP = 2;
+const PROFILE_CURSOR_WIDTH = 2;
+
+/** The width the profile table needs to show every model and fallback count unclipped. */
+const profileTableNaturalWidth = (rows: ReadonlyArray<ProfileTableRow>): number => {
+  const widest = (cell: (row: ProfileTableRow) => string) =>
+    Math.max(0, ...Arr.map(rows, (row) => visibleWidth(cell(row))));
+  const columns = [
+    widest((row) => `${row.profile} ●`),
+    widest((row) => row.model),
+    widest((row) => row.effort),
+    widest((row) => row.fallbacks),
+  ];
+  const shown = Arr.filter(columns, (width) => width > 0);
+  return (
+    PROFILE_CURSOR_WIDTH +
+    Arr.reduce(shown, 0, (total, width) => total + width) +
+    PROFILE_COLUMN_GAP * Math.max(0, shown.length - 1)
+  );
+};
+
+const profileTableLines = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
+  width: number,
+): ReadonlyArray<string> => {
+  const rows = profileTableRows(state, theme);
   const table = managerTable(
     Arr.map(rows, (row) => [row.profile + " ●", row.model, row.effort, row.fallbacks]),
+    // The model is what the list is for, so it keeps its width before the reasoning label.
     [
       { minWidth: 12, priority: 5 },
-      { minWidth: 8, priority: 3 },
-      { minWidth: 7, priority: 4 },
+      { minWidth: 8, priority: 4 },
+      { minWidth: 7, priority: 3 },
       { minWidth: 11, priority: 1 },
     ],
-    width - 2,
+    width - PROFILE_CURSOR_WIDTH,
   );
   return Arr.map(rows, (row) => {
     const identity =
@@ -153,7 +192,7 @@ const profileTableLines = (
         ? focusedField(theme, row.profile)
         : theme.fg(managerTone.identity, row.profile);
     const marker = state.editedProfiles?.has(row.profile) ? theme.fg("warning", " ●") : "";
-    return `${row.selected ? ">" : " "} ${table.row([
+    return `${row.selected ? LIST_CURSOR : " "} ${table.row([
       identity + marker,
       row.model,
       row.effort,
@@ -162,13 +201,27 @@ const profileTableLines = (
   });
 };
 
+// The editor pane keeps room for its labels and a model route beside the list.
+const MIN_EDITOR_WIDTH = 48;
+const MIN_LIST_WIDTH = 32;
+
+/** Wide layouts give the list what its models need, and the editor everything else. */
+const wideListWidth = (state: ProfileWorkspaceRenderState, theme: Theme, inner: number) => {
+  const natural = profileTableNaturalWidth(profileTableRows(state, theme)) + 2;
+  const most = Math.max(MIN_LIST_WIDTH, inner - 1 - MIN_EDITOR_WIDTH);
+  return Math.max(MIN_LIST_WIDTH, Math.min(natural, most, Math.floor(inner * 0.6)));
+};
+
 const profileLines = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
   height: number,
 ): ReadonlyArray<string> => {
-  const save = clipToWidth(`${state.saveFocused ? ">" : " "} Save these profiles as a set…`, width);
+  const save = clipToWidth(
+    `${state.saveFocused ? LIST_CURSOR : " "} Save these profiles as a set…`,
+    width,
+  );
   const lines = [
     ...profileTableLines(state, theme, width),
     ...(state.target.kind === "session"
@@ -280,7 +333,7 @@ const fieldLine = (
     ? `${Fn.pipe(" ", Str.repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2))}${selected && !row.fixed ? row.value : fieldValue(state, theme, row)}`
     : "";
   const text = clipToWidth(
-    `${selected ? ">" : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
+    `${selected ? LIST_CURSOR : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
     width,
   );
   if (selected && !row.fixed) return focusedField(theme, text);
@@ -367,19 +420,34 @@ const workspaceFooter = (
     keybindingLabel,
     Boolean(state.pendingConfirmation) || state.busy,
   );
-  if (state.pendingConfirmation) return `${keys.confirm} Confirm · ${keys.cancel} Cancel`;
-  if (state.helpOpen) return `↑/↓ Scroll help · ${keys.cancel} Close help`;
-  if (state.busy) return state.cancellableBusy ? `${keys.cancel} Cancel loading` : "Saving…";
-  const back =
-    state.pane === "profiles"
-      ? state.target.kind === "session"
-        ? "Close"
-        : "Saved profiles"
-      : "Profiles";
-  const tab = state.target.kind === "session" ? "Tab Saved profiles" : "Tab Current Session";
+  // Aliases such as C-c belong in the help page, not the default hint.
+  const cancel = Str.split(keys.cancel, "/")[0] ?? keys.cancel;
+  if (state.pendingConfirmation)
+    return joinKeyHints([keyHint(keys.confirm, "Confirm"), exitKeyHint("decision", [], cancel)]);
+  if (state.helpOpen)
+    return joinKeyHints([
+      keyHint("↑↓", "Scroll"),
+      exitKeyHint("nested", [], cancel),
+      helpKeyHint(true),
+    ]);
+  if (state.busy) return state.cancellableBusy ? keyHint(cancel, "Cancel loading") : "Saving…";
+  const top = state.pane === "profiles" && state.target.kind === "session";
+  const exit = exitKeyHint(top ? "top" : "nested", [], cancel);
+  const tab = keyHint(
+    "Tab",
+    state.target.kind === "session" ? "Saved profiles" : "Current Session",
+  );
   return renderResponsiveManagerFooter(width, [
-    [`${keys.confirm} Open`, tab, "m Model · a Manage · ? Help", `${keys.cancel} ${back}`],
-    [tab, "? Help", `${keys.cancel} ${back}`],
+    [
+      keyHint(keys.confirm, "Open"),
+      tab,
+      keyHint("m", "Model"),
+      keyHint("a", "Manage"),
+      exit,
+      helpKeyHint(false),
+    ],
+    [tab, exit, helpKeyHint(false)],
+    [exit, helpKeyHint(false)],
   ]);
 };
 
@@ -447,7 +515,7 @@ export const renderProfileWorkspace = (
       const available = Math.max(0, bodyHeight - notices.length - 1);
       let body: ReadonlyArray<string>;
       if (managerLayoutTier(width) === "wide") {
-        const listWidth = Math.min(64, Math.floor(inner * 0.4));
+        const listWidth = wideListWidth(state, theme, inner);
         const detailWidth = inner - listWidth - 1;
         body = framedWideRows(frame, {
           left: profileLines(state, theme, listWidth, available),

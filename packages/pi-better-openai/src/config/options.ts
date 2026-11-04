@@ -1,10 +1,11 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import * as Str from "effect/String";
+import { formatDuration } from "pi-cosmic-core/display";
 import {
-  BooleanFromJsonSchema,
   decodeSettingUpdate,
-  FiniteNumberFromJsonSchema,
   type SettingsOptionDescriptor,
 } from "pi-cosmic-core/settings-completion";
 import type { ResolvedConfig } from "./schema.ts";
@@ -21,61 +22,102 @@ const NonBlankStringSchema = Schema.String.check(
   }),
 );
 
+export const ON_OFF_VALUES = ["on", "off"] as const;
+export const formatOnOff = (value: boolean): string => (value ? "on" : "off");
+
+/** `on`/`off`, also accepting `true`/`false` and any letter case. */
+export const OnOffSchema = Schema.String.check(
+  Schema.isPattern(/^\s*(?:on|off|true|false)\s*$/iu),
+).pipe(
+  Schema.decodeTo(
+    Schema.Boolean,
+    SchemaTransformation.transform({
+      decode: (value) => /^\s*(?:on|true)\s*$/iu.test(value),
+      encode: formatOnOff,
+    }),
+  ),
+);
+
+const DURATION_UNITS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 } as const;
+const DURATION_PATTERN = /^\s*(?:\d+(?:\.\d+)?\s*(?:ms|s|m|h)?\s*)+$/u;
+const DURATION_PART = /(\d+(?:\.\d+)?)\s*(ms|s|m|h)?/gu;
+
+const durationMilliseconds = (value: string): number =>
+  Arr.reduce(
+    Array.from(Fn.pipe(value, Str.matchAll(DURATION_PART))),
+    0,
+    (total, [, amount = "0", unit]) => {
+      const scale = unit === "s" || unit === "m" || unit === "h" ? DURATION_UNITS[unit] : 1;
+      return total + Number(amount) * scale;
+    },
+  );
+
+/** A duration such as `30s`, `1m 30s`, or a bare number of milliseconds. */
+const DurationMillisecondsSchema = Schema.String.check(Schema.isPattern(DURATION_PATTERN)).pipe(
+  Schema.decodeTo(
+    Schema.Finite,
+    SchemaTransformation.transform({
+      decode: durationMilliseconds,
+      encode: (value) => formatDuration(value),
+    }),
+  ),
+);
+
 export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "persistState",
     label: "Remember fast mode",
-    currentValue: (cfg) => String(cfg.persistState),
-    values: ["true", "false"],
+    currentValue: (cfg) => formatOnOff(cfg.persistState),
+    values: ON_OFF_VALUES,
     description: "Remember fast-mode state across sessions.",
-    decoder: BooleanFromJsonSchema,
+    decoder: OnOffSchema,
   },
 ];
 export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "compaction.enabled",
     label: "OpenAI compaction",
-    currentValue: (cfg) => String(cfg.compaction.enabled),
-    values: ["true", "false"],
+    currentValue: (cfg) => formatOnOff(cfg.compaction.enabled),
+    values: ON_OFF_VALUES,
     description:
       "Use OpenAI native compaction when Pi triggers compaction for OpenAI Responses models.",
-    decoder: BooleanFromJsonSchema,
+    decoder: OnOffSchema,
   },
 ];
 export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "usage.refreshIntervalMs",
     label: "Usage refresh",
-    currentValue: (cfg) => String(cfg.usage.refreshIntervalMs),
-    values: ["15000", "30000", "60000", "120000", "300000", "600000"],
-    description: "Usage refresh interval in milliseconds.",
-    decoder: FiniteNumberFromJsonSchema,
+    currentValue: (cfg) => formatDuration(cfg.usage.refreshIntervalMs),
+    values: ["15s", "30s", "1m", "2m", "5m", "10m"],
+    description: "How often usage refreshes.",
+    decoder: DurationMillisecondsSchema,
   },
   {
     id: "usage.showOnlyOnSubscriptionModels",
     label: "Usage only on OAuth",
-    currentValue: (cfg) => String(cfg.usage.showOnlyOnSubscriptionModels),
-    values: ["true", "false"],
+    currentValue: (cfg) => formatOnOff(cfg.usage.showOnlyOnSubscriptionModels),
+    values: ON_OFF_VALUES,
     description: "Only show usage when the current OpenAI model uses subscription/OAuth auth.",
-    decoder: BooleanFromJsonSchema,
+    decoder: OnOffSchema,
   },
   {
     id: "usage.showResetTimes",
     label: "Usage reset times",
-    currentValue: (cfg) => String(cfg.usage.showResetTimes),
-    values: ["true", "false"],
-    description: "Include compact reset countdowns and local reset times.",
-    decoder: BooleanFromJsonSchema,
+    currentValue: (cfg) => formatOnOff(cfg.usage.showResetTimes),
+    values: ON_OFF_VALUES,
+    description: "Show when each usage window resets.",
+    decoder: OnOffSchema,
   },
 ];
 const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "image.enabled",
     label: "Image tool",
-    currentValue: (cfg) => String(cfg.image.enabled),
-    values: ["true", "false"],
+    currentValue: (cfg) => formatOnOff(cfg.image.enabled),
+    values: ON_OFF_VALUES,
     description: "Allow the openai_image tool to make image requests.",
-    decoder: BooleanFromJsonSchema,
+    decoder: OnOffSchema,
   },
   {
     id: "image.defaultModel",
@@ -103,10 +145,10 @@ const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfi
   {
     id: "image.timeoutMs",
     label: "Image timeout",
-    currentValue: (cfg) => String(cfg.image.timeoutMs),
-    values: ["30000", "60000", "120000", "180000", "300000"],
-    description: "Image request timeout in milliseconds.",
-    decoder: FiniteNumberFromJsonSchema,
+    currentValue: (cfg) => formatDuration(cfg.image.timeoutMs),
+    values: ["30s", "1m", "2m", "3m", "5m"],
+    description: "How long an image request may take.",
+    decoder: DurationMillisecondsSchema,
   },
 ];
 export const imageSettingDescriptors = (

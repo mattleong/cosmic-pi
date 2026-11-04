@@ -2,6 +2,8 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import { countLabel, formatCost } from "pi-cosmic-core/display";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { sanitizeDiagnosticContent, sanitizeDiagnosticError } from "pi-cosmic-core/security";
@@ -36,6 +38,8 @@ import {
   type NativeDiscoveryProjector,
 } from "./native-codemode-discovery";
 import { hostContainer } from "../shared/untrusted-value";
+import { normalizeShellCommandWhitespace } from "./shell-command";
+import { errnoMessage } from "./system-diagnostics";
 
 const nativeModelCalls: ReadonlySet<string> = new Set(["models.classify", "models.generateImages"]);
 const SCRIPT_ERROR = "Script error:\n";
@@ -43,9 +47,38 @@ const SCRIPT_ERROR = "Script error:\n";
 function issue(code: string, text: string): CompactIssue {
   const detail = sanitizeDiagnosticContent(text);
   const message =
-    argumentFailureIssue(text)?.message ?? failureMessage(detail, "The nested call failed");
+    argumentFailureIssue(text)?.message ??
+    errnoMessage(detail) ??
+    failureMessage(detail, "The nested call failed");
   const projected: CompactIssue = { code, severity: "error", message };
   return detail === message ? projected : { ...projected, detail };
+}
+
+// Builtin argument fields that a child heading already shows in full.
+const HEADING_FIELDS = new Map<string, ReadonlySet<string>>([
+  ["bash", new Set(["command"])],
+  ["read", new Set(["path", "file_path", "offset", "limit"])],
+  ["grep", new Set(["pattern", "path"])],
+  ["find", new Set(["pattern", "path"])],
+  ["ls", new Set(["path"])],
+]);
+
+/** Whether the child's heading already states every argument, so a preview would repeat it. */
+function headingShowsArguments(name: string, preview: NativeArgumentPreview | undefined): boolean {
+  const fields = HEADING_FIELDS.get(name);
+  // Only scalar fields are projected, so the text must be exactly those fields.
+  if (
+    !fields ||
+    !preview?.complete ||
+    Fn.pipe(preview.text, Str.includes("[REDACTED]")) ||
+    JSON.stringify(preview.values) !== preview.text
+  )
+    return false;
+  return Arr.every(Rec.toEntries(preview.values), ([key, value]) => {
+    if (!fields.has(key)) return false;
+    if (!Predicate.isString(value)) return Predicate.isNumber(value);
+    return value.length <= 200 && normalizeShellCommandWhitespace(value) === value;
+  });
 }
 
 function childIssues(
@@ -63,7 +96,7 @@ function childIssues(
     });
   if (call.status === "error")
     issues.push(issue("native-child-error", call.error ?? "The nested call failed"));
-  if (call.args)
+  if (call.args && !headingShowsArguments(call.name, preview))
     issues.push({
       code: "native-call-args",
       severity: "info",

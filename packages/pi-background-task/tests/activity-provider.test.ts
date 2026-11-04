@@ -8,7 +8,12 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
 import { exitStatusMeaning } from "pi-code-previews";
-import { ACTIVITY_HOST, ACTIVITY_LIMITS, ActivitySnapshotSchema } from "pi-cosmic-ui/activity";
+import {
+  ACTIVITY_HOST,
+  ACTIVITY_LIMITS,
+  ActivitySnapshotSchema,
+  type ActivityDetail,
+} from "pi-cosmic-ui/activity";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import {
   backgroundTaskActivityDetail,
@@ -18,6 +23,17 @@ import {
 import { taskProjectionBridge } from "../src/boundary/host-ui.ts";
 import type { BackgroundTaskView } from "../src/task/model.ts";
 import { TerminalTextNormalizer } from "../src/task/terminal-text.ts";
+
+const detailText = (detail: ActivityDetail | undefined): string =>
+  detail === undefined
+    ? ""
+    : Arr.join(
+        [
+          ...Arr.flatMap(detail.sections, (section) => [section.title ?? "", section.body]),
+          ...Arr.map(detail.technical ?? [], (field) => `${field.label}: ${field.value}`),
+        ],
+        "\n",
+      );
 
 const task: BackgroundTaskView = {
   id: "task",
@@ -86,7 +102,7 @@ describe("background task activity provider", () => {
       ],
     };
     expect(JSON.stringify(backgroundTaskActivityItems(projection))).not.toContain(secret);
-    const detail = backgroundTaskActivityDetail(projection, "task") ?? "";
+    const detail = detailText(backgroundTaskActivityDetail(projection, "task"));
     expect(detail).not.toContain(secret);
     expect(detail).toContain("server ready\nusing Bearer");
   });
@@ -94,10 +110,12 @@ describe("background task activity provider", () => {
   it("explains how a finished task ended, with its redacted failure cause", () => {
     const secret = "sk-abcdefgh12345678";
     const detail = (ending: Partial<BackgroundTaskView>) =>
-      backgroundTaskActivityDetail(
-        { tasks: [{ ...task, state: "failed", endedAt: 2, ...ending }] },
-        "task",
-      ) ?? "";
+      detailText(
+        backgroundTaskActivityDetail(
+          { tasks: [{ ...task, state: "failed", endedAt: 2, ...ending }] },
+          "task",
+        ),
+      );
     const exited = detail({
       exitCode: 127,
       failureCause: `\u001b]0;evil-title\u0007FAIL auth.test.ts with ${secret}`,
@@ -108,6 +126,31 @@ describe("background task activity provider", () => {
     expect(detail({ exitCode: null, signal: "SIGKILL" })).toContain(
       exitStatusMeaning(undefined, "SIGKILL"),
     );
+  });
+
+  it("leads a failure with its cause and keeps identity behind the technical disclosure", () => {
+    const detail = backgroundTaskActivityDetail(
+      {
+        tasks: [
+          {
+            ...task,
+            state: "failed",
+            endedAt: 2,
+            exitCode: 2,
+            failureCause: "missing semicolon",
+            pid: 4242,
+          },
+        ],
+      },
+      "task",
+    );
+    expect(detail?.sections[0]?.body).toContain("missing semicolon");
+    const visible = Arr.join(
+      Arr.map(detail?.sections ?? [], (section) => section.body),
+      "\n",
+    );
+    expect(visible).not.toContain("4242");
+    expect(JSON.stringify(detail?.technical)).toContain("4242");
   });
 
   it("shows captured output as plain text, without escape remnants, however it is trimmed", () => {
@@ -123,7 +166,7 @@ describe("background task activity provider", () => {
       timestamp: index + 1,
       bytes: 0,
     }));
-    const detail = backgroundTaskActivityDetail({ tasks: [{ ...task, logs }] }, "task") ?? "";
+    const detail = detailText(backgroundTaskActivityDetail({ tasks: [{ ...task, logs }] }, "task"));
     for (const remnant of ["evil-title", "]0;", "8;;", "x.example", "[31m", "[0m", "\u001b"])
       expect(detail).not.toContain(remnant);
     expect(detail).toContain(Fn.pipe("r", Str.repeat(100)));
@@ -161,7 +204,9 @@ describe("background task activity provider", () => {
         const signal = yield* Effect.abortSignal;
         const revision = backgroundTaskActivityItems(bridge.get())[0]!.revision;
         yield* Effect.promise(() =>
-          expect(getDetail("task", revision, signal)).resolves.toContain("private output"),
+          getDetail("task", revision, signal).then((detail) =>
+            expect(JSON.stringify(detail)).toContain("private output"),
+          ),
         );
         const cancellation = yield* Scope.make();
         const cancelled = yield* Effect.abortSignal.pipe(Scope.provide(cancellation));

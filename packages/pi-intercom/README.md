@@ -26,10 +26,12 @@ Codemode scripts can call `session_list` and `session_read`, which return struct
 
 ### Commands
 
-| Command                       | Does                                                                                                     |
-| ----------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `/intercom list`              | Lists your other live sessions                                                                           |
-| `/intercom receive [on\|off]` | Shows or sets whether other sessions can message this one; on by default and again for every new session |
+| Command                       | Does                                                                                                        |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `/intercom list`              | Lists your other live sessions by name, or by directory with a short id when two share one, and their state |
+| `/intercom receive [on\|off]` | Shows or sets whether other sessions can message this one; on by default and again for every new session    |
+
+To message a session, ask your agent, for example "Ask the web session to rerun its tests"; it uses `session_list` and `session_send`.
 
 ### Trust
 

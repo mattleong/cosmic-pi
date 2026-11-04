@@ -59,16 +59,19 @@ export const cardWords = (card: SubagentRunCard): string | undefined => {
 export const cardShowsError = (card: SubagentRunCard): boolean =>
   card.error !== undefined && cardWords(card) === card.error;
 
-/** A run's block: its state when that isn't a plain finish, then its words or progress. */
-const cardBlock = (card: SubagentRunCard): AgentTextBlock => {
-  const words = cardWords(card);
+/**
+ * A run's block: its state when that isn't a plain finish, then its words or progress. Collapsed,
+ * a failure's raw text stays behind the expansion; the row's issue already names its cause.
+ */
+const cardBlock = (card: SubagentRunCard, expanded: boolean): AgentTextBlock => {
+  const words = !expanded && cardShowsError(card) ? undefined : cardWords(card);
   const asking = runAttention(card)?.kind === "question";
   return {
     glyph: runStateSnapshotGlyph(card.state),
     tone: runStateColor(card.state),
     name: card.name,
     ...(card.state !== "completed" && { status: asking ? "asks" : runStateLabel(card.state) }),
-    ...(words !== undefined && { text: words }),
+    ...(words !== undefined && { text: words, verbatim: words === card.error }),
     notes: [
       ...(!isTerminalRunState(card.state) && words === undefined && card.progress
         ? [card.progress]
@@ -83,7 +86,13 @@ export const cardBlockLines = (
   width: number,
   theme: Theme,
   expanded: boolean,
-): string[] => agentTextBlockLines(Arr.map(cards, cardBlock), width, theme, expanded);
+): string[] =>
+  agentTextBlockLines(
+    Arr.map(cards, (card) => cardBlock(card, expanded)),
+    width,
+    theme,
+    expanded,
+  );
 
 /** One Details line per run: ID, route, writer, usage, and timing, then exceptional evidence. */
 export const cardFactLines = (card: SubagentRunCard): ReadonlyArray<string> => {

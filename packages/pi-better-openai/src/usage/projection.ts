@@ -106,7 +106,7 @@ export function isOpenAISubscriptionModel(ctx: ExtensionContext, cfg: ResolvedCo
 }
 
 export const HIDDEN_USAGE_STATUS_TEXT =
-  "Usage hidden: current model is not an OpenAI subscription model.";
+  "Usage is hidden: the current model isn't an OpenAI subscription model";
 
 interface OpenAIUsageDecision {
   readonly eligible: boolean;
@@ -131,8 +131,8 @@ function openAIUsageDecision(
       eligible: false,
       clearUsage: true,
       statusTexts: {
-        hiddenStatusText: "Usage unavailable.",
-        unavailableStatusText: "Usage unavailable.",
+        hiddenStatusText: "Usage unavailable",
+        unavailableStatusText: "Usage unavailable",
       },
     };
   }

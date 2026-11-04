@@ -2,7 +2,13 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { countLabel } from "pi-cosmic-core/display";
-import { managerActivityGlyph, clipToWidth, spinnerFrameAt } from "../manager/chrome.ts";
+import {
+  managerActivityGlyph,
+  managerNoticeColor,
+  managerNoticeGlyph,
+  clipToWidth,
+  spinnerFrameAt,
+} from "../manager/chrome.ts";
 import { compactNotices, needsYou } from "./attention.ts";
 import { activityPath, isFinished, type ActivityRow } from "./model.ts";
 import {
@@ -14,6 +20,8 @@ import {
 } from "./group-summary.ts";
 import {
   activityWidgetSections,
+  hiddenWidgetFailures,
+  widgetRows,
   type ActivityWidgetSection,
   type WidgetOptions,
 } from "./widget-projection.ts";
@@ -126,28 +134,81 @@ const sectionLines = (
   return lines;
 };
 
-export function renderActivityWidget(
+const shownKeys = (sections: readonly ActivityWidgetSection[]): ReadonlySet<string> =>
+  new Set(
+    Arr.flatMap(sections, ({ entries }) =>
+      Arr.flatMap(entries, (entry) => (entry.type === "member" ? [entry.row.key] : [])),
+    ),
+  );
+
+const needsYouLine = (
   rows: readonly ActivityRow[],
+  waiting: readonly ActivityRow[],
+  width: number,
+  options: WidgetOptions,
+): string | undefined => {
+  const first = waiting[0];
+  if (!first) return undefined;
+  const glyph = managerNoticeGlyph("attention");
+  const prefix = `Needs you${waiting.length > 1 ? ` (${waiting.length})` : ""}: `;
+  const label = activityOwnerLabel(rows, first, Math.max(0, width - prefix.length - 2));
+  const text = `${prefix}${label}`;
+  const theme = options.theme;
+  return theme
+    ? `${theme.fg(managerNoticeColor("attention"), glyph)} ${theme.fg("muted", text)}`
+    : `${glyph} ${text}`;
+};
+
+const failureLine = (
+  failures: readonly ActivityRow[],
+  width: number,
+  options: WidgetOptions,
+): string | undefined => {
+  const only = failures.length === 1 ? failures[0] : undefined;
+  if (!failures.length) return undefined;
+  const where = " · /activity";
+  const subject = only
+    ? `${clipToWidth(only.title, Math.max(4, width - where.length - 11), "…")} failed`
+    : `${failures.length} failed`;
+  const glyph = managerActivityGlyph("failed");
+  const theme = options.theme;
+  return theme
+    ? `${theme.fg("error", glyph)} ${theme.fg("muted", `${subject}${where}`)}`
+    : `${glyph} ${subject}${where}`;
+};
+
+export function renderActivityWidget(
+  published: readonly ActivityRow[],
   width: number,
   maxRows = 8,
   options: WidgetOptions = {},
 ): string[] {
   if (width <= 0 || maxRows <= 0) return [];
-  const sections = activityWidgetSections(rows, maxRows, options);
+  const rows = widgetRows(published, options.inputDockVisible);
   const urgent = needsYou(rows);
+  const failures = failureLine(hiddenWidgetFailures(rows, options.now), width, options);
+  const reserved = Number(failures !== undefined);
+  let sections = activityWidgetSections(rows, maxRows, { ...options, reserved });
+  // Waiting rows the checklist already shows need no heading; only the unseen ones do.
+  const unseen = () => {
+    const shown = shownKeys(sections);
+    return Arr.filter(urgent, (row) => !shown.has(row.key));
+  };
+  let waiting = unseen();
+  if (waiting.length) {
+    sections = activityWidgetSections(rows, maxRows, { ...options, reserved: reserved + 1 });
+    waiting = unseen();
+  }
   const style = (text: string) => options.theme?.fg("muted", text) ?? text;
   const lines: string[] = [];
-  const first = urgent[0];
-  if (first)
-    lines.push(
-      style(
-        `Needs you (${urgent.length}): ${activityOwnerLabel(rows, first, Math.max(0, width - 16))}`,
-      ),
-    );
-  if (sections.length > maxRows - lines.length) return [overflowLine(sections, width, style)];
+  const heading = needsYouLine(rows, waiting, width, options);
+  if (heading) lines.push(heading);
+  if (sections.length > maxRows - lines.length - reserved)
+    return [overflowLine(sections, width, style)];
   for (const section of sections) lines.push(...sectionLines(section, width, options, style));
   const starting = options.starting ?? 0;
   if (!lines.length && starting > 0)
     lines.push(style(`Subagents ${activityStartupGlyph(rows, starting, options.now)}`));
+  if (failures) lines.push(failures);
   return Arr.map(lines.slice(0, maxRows), (line) => clipToWidth(line, width, ""));
 }

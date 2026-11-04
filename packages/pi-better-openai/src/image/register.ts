@@ -102,7 +102,7 @@ export function registerOpenAIImage(
   command.add({
     name: "image",
     arguments: "<prompt>",
-    description: "Generate an image with OpenAI Codex image generation",
+    description: "Generate an image with OpenAI",
     handler: (args, ctx) => {
       if (!isCurrent()) return Promise.resolve();
       const prompt = Str.trim(args);

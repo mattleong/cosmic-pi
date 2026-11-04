@@ -151,7 +151,7 @@ export const SETTING_ITEM_DEFINITIONS = {
   },
   resetToDefaults: {
     label: "Restore defaults",
-    description: "Restore appearance and tool defaults. Press Enter twice to confirm.",
-    values: ["keep current", "press Enter to reset", "reset now"],
+    description: "Restore appearance and tool defaults. Choose reset now to confirm.",
+    values: ["keep current", "reset now"],
   },
 } as const satisfies Record<SettingsUiItemId, SettingItemDefinition>;

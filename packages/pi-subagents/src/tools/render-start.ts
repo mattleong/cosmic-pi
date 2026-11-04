@@ -149,7 +149,8 @@ const entryFact = (
     entry.routeStatus === "selected" &&
     entry.candidateIndex !== undefined &&
     entry.candidateIndex > 0
-      ? `candidate ${entry.candidateIndex + 1} after ${countLabel(entry.candidateIndex, "unavailable one")}`
+      ? // The route's earlier candidates were unavailable; the warning issue says why.
+        `fallback ${entry.candidateIndex}`
       : undefined;
   return Fn.pipe([runId, route, fallback], Arr.filter(isTextFragment), Arr.join(" · "));
 };

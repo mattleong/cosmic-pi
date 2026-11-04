@@ -31,12 +31,13 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 
-function registered(style: "compact" | "preview") {
+function registered(style: "compact" | "preview", background?: "border") {
   setCodePreviewSettings({
     ...defaultCodePreviewSettings,
     tools: [...ALL_CODE_PREVIEW_TOOLS],
     toolCallCollapsedStyle: style,
     toolCallTiming: false,
+    ...(background && { toolCallBackground: background }),
   });
   const names = [
     ...ALL_CODE_PREVIEW_TOOLS,
@@ -148,6 +149,8 @@ const scenarios: ReadonlyArray<
     readonly args: object;
     readonly timing?: true;
     readonly narrow?: true;
+    /** Also rendered with framed tool rows to show where the duration sits. */
+    readonly border?: true;
   }
 > = [
   {
@@ -579,6 +582,41 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "codemode",
+    title: "native parallel results show structured output readably",
+    args: {
+      code: "const results = await Promise.all([\n  tools.bash({command: 'ls src'}),\n  tools.bash({command: 'wc -l src/*.ts'}),\n  tools.mcp__docs__lookup({query: 'cart'}),\n]);\nresults.forEach(text);",
+    },
+    timing: true,
+    border: true,
+    durationMs: 2100,
+    result: nativeResult(
+      "completed",
+      [
+        { ...nativeArgumentCall("bash", { command: "ls src" }), durationMs: 13 },
+        { ...nativeArgumentCall("bash", { command: "wc -l src/*.ts" }), durationMs: 2000 },
+        { ...nativeArgumentCall("mcp__docs__lookup", { query: "cart" }), durationMs: 5 },
+      ],
+      '==> text 1/3 <==\n{"output":"cart.test.ts\\ncart.ts\\n","truncated":false,"exit_code":0,"wall_time_seconds":0}\n==> text 2/3 <==\n{"output":"      16 src/cart.test.ts\\n      21 src/cart.ts\\n      37 total\\n","truncated":false,"exit_code":0,"wall_time_seconds":2}\n==> text 3/3 <==\n{"content":[{"type":"text","text":"Cart docs: LineItem, subtotal"}]}',
+    ),
+  },
+  {
+    tool: "codemode",
+    title: "native thrown error after partial output",
+    args: {
+      code: "text(await tools.bash({command: 'echo partial'}));\nthrow new Error('demo failure');",
+    },
+    isError: true,
+    timing: true,
+    border: true,
+    durationMs: 57,
+    result: nativeResult(
+      "failed",
+      [{ ...nativeArgumentCall("bash", { command: "echo partial" }), durationMs: 5 }],
+      '{"output":"partial\\n","truncated":false,"exit_code":0,"wall_time_seconds":0}\nScript error:\nError: demo failure\n    at <anonymous> (codemode.js:2:7)\n\nTool calls made before the failure (they are not undone): bash (ok)',
+    ),
+  },
+  {
+    tool: "codemode",
     title: "native failed script retains abort diagnostic",
     args: { code: "await tools.read({path: 'source.ts'});" },
     isError: true,
@@ -853,6 +891,30 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "bash",
+    title: "bash missing file",
+    args: { command: "cat does-not-exist.txt" },
+    result: text(
+      "cat: does-not-exist.txt: No such file or directory\n\nCommand exited with code 1",
+    ),
+    isError: true,
+    border: true,
+  },
+  {
+    tool: "bash",
+    title: "bash permission denied",
+    args: { command: "./scripts/deploy.sh" },
+    result: text("bash: ./scripts/deploy.sh: Permission denied\n\nCommand exited with code 126"),
+    isError: true,
+  },
+  {
+    tool: "bash",
+    title: "bash unknown command named",
+    args: { command: "pnpx tsx build.ts" },
+    result: text("bash: line 1: pnpx: command not found\n\nCommand exited with code 127"),
+    isError: true,
+  },
+  {
+    tool: "bash",
     title: "bash command not found",
     args: { command: "pnpx tsx build.ts" },
     result: text("Command exited with code 127"),
@@ -979,6 +1041,23 @@ const scenarios: ReadonlyArray<
     result: text("Successfully replaced text in /project/src/a.ts.", {
       diff: " 1 export const a = 1;\n-2 export const b = 2;\n+2 export const b = 20;\n 3 export const c = 3;",
     }),
+    border: true,
+  },
+  {
+    tool: "edit",
+    title: "edit applied with hidden context keeps the requested text",
+    args: {
+      path: "/project/src/a.ts",
+      edits: [
+        {
+          oldText: "export const a = 1;\n// one\n// two\n// three\nexport const b = 2;",
+          newText: "export const a = 10;\n// one\n// two\n// three\nexport const b = 20;",
+        },
+      ],
+    },
+    result: text("Successfully replaced 1 block(s) in /project/src/a.ts.", {
+      diff: "-1 export const a = 1;\n+1 export const a = 10;\n 2 // one\n   ...\n-5 export const b = 2;\n+5 export const b = 20;",
+    }),
   },
   {
     tool: "edit",
@@ -996,17 +1075,24 @@ describe.skipIf(!directory)("presentation gallery", () => {
       const saved = codePreviewSettings;
       const lines: string[] = [];
       try {
-        for (const style of ["compact", "preview"] as const) {
-          const tools = registered(style);
+        for (const [style, background] of [
+          ["compact", undefined],
+          ["preview", undefined],
+          ["compact", "border"],
+        ] as const) {
+          const tools = registered(style, background);
           tools.set("fallback", withCodePreviewRenderers({ name: "fallback" }, {}));
-          for (const scenario of scenarios)
+          const label = background ? `${style} ${background}` : style;
+          for (const scenario of background
+            ? Arr.filter(scenarios, (candidate) => candidate.border === true)
+            : scenarios)
             lines.push(
               ...withPresentationSettings({ toolCallTiming: scenario.timing ?? false }, () =>
                 galleryFrames(
                   tools.get(scenario.tool)!,
                   {
                     ...scenario,
-                    title: `${style} · ${scenario.title}`,
+                    title: `${label} · ${scenario.title}`,
                   },
                   scenario.narrow
                     ? [

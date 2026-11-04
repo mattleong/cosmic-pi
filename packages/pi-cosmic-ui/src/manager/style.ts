@@ -14,3 +14,10 @@ export const focusedField = (
   const styled = theme.bold(theme.fg("accent", text));
   return theme.bg?.("selectedBg", styled) ?? styled;
 };
+
+/** Focused-row cursor for every list, picker, and tree. */
+export const LIST_CURSOR = "›";
+
+/** `[x]`/`[ ]` for multi-select and `(•)`/`( )` for single-select rows. */
+export const selectionMarker = (mode: "multiple" | "single", selected: boolean): string =>
+  mode === "multiple" ? (selected ? "[x]" : "[ ]") : selected ? "(•)" : "( )";

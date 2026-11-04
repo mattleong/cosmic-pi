@@ -3,6 +3,7 @@ import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { firstLineMessage } from "pi-cosmic-core/message-text";
+import { shellDiagnosticCause } from "./system-diagnostics";
 
 const CAUSE_WORD = /\b(?:error|errors|fail|failed|failure|failures|fatal|panic|panicked)\b/iu;
 const CAUSE_CLASS = /[a-z](?:Error|Exception)\b/u;
@@ -34,9 +35,12 @@ export function outputFailureLine(output: readonly string[]): string | undefined
   for (const raw of output) {
     const line = Str.trim(raw);
     if (!line || WRAPPER.test(line) || NO_CAUSE.test(line)) continue;
-    if (!CAUSE_WORD.test(line) && !CAUSE_CLASS.test(line)) continue;
+    const diagnostic = shellDiagnosticCause(line);
+    if (!diagnostic && !CAUSE_WORD.test(line) && !CAUSE_CLASS.test(line)) continue;
     const cause = firstLineMessage(
-      shortenCause(sanitizeDiagnosticContent(line)),
+      diagnostic === undefined
+        ? shortenCause(sanitizeDiagnosticContent(line))
+        : sanitizeDiagnosticContent(diagnostic),
       "",
       OUTPUT_FAILURE_LINE_LIMIT,
     );

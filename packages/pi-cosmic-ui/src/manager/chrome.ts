@@ -18,6 +18,31 @@ export const spinnerFrameAt = (now: number): number => Math.floor(now / SPINNER_
 export const startingSpinnerFrame = (frame: number): string =>
   frameAt(STARTING_SPINNER_FRAMES, frame, "◌");
 
+/** The suite separator between inline facts and key-hint pairs; never `•`, `|`, or `│`. */
+export const INLINE_SEPARATOR = " · ";
+
+/** Joins inline facts with the suite separator, skipping empty or disabled parts. */
+export const joinInline = (parts: ReadonlyArray<string | false | null | undefined>): string =>
+  Arr.join(
+    Arr.filter(parts, (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part)),
+    INLINE_SEPARATOR,
+  );
+
+/**
+ * Suite-wide status glyphs; each has exactly one meaning. Running work uses the spinner from
+ * `managerActivityGlyph` instead of a static glyph.
+ */
+export const SUITE_STATUS_GLYPHS = {
+  succeeded: "✓",
+  failed: "✗",
+  warning: "⚠",
+  stopped: "⊘",
+  uncertain: "≈",
+  paused: "‖",
+  queued: "○",
+  waiting: "?",
+} as const;
+
 export type ManagerLayoutTier = "narrow" | "stacked" | "wide";
 
 export const managerLayoutTier = (width: number): ManagerLayoutTier =>
@@ -119,7 +144,7 @@ export const renderResponsiveManagerFooter = (
           groups,
           (group): group is string => Predicate.isString(group) && Str.isNonEmpty(group),
         ),
-        " │ ",
+        INLINE_SEPARATOR,
       )} `,
   );
   return (

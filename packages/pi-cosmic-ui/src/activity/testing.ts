@@ -11,11 +11,13 @@ import {
   ACTIVITY_HOST,
   ActivityEnvelopeSchema,
   activityKey,
+  type ActivityDetailContent,
   type ActivityEnvelope,
   type ActivityEvents,
   type ActivityItem,
 } from "./protocol.ts";
 import { renderActivityWidget } from "./widget.ts";
+import { decodeActivityDetail } from "./detail.ts";
 
 const isActivityEnvelope = Schema.is(ActivityEnvelopeSchema);
 
@@ -55,7 +57,9 @@ interface ActivityGalleryOptions {
   readonly title: string;
   readonly providerId: string;
   readonly items: readonly ActivityItem[];
-  readonly detail?: (itemId: string) => string | undefined;
+  readonly detail?: (itemId: string) => ActivityDetailContent | undefined;
+  /** Also renders each opened item with its Technical section shown. */
+  readonly technical?: boolean;
   readonly open?: readonly string[];
   readonly widths?: readonly number[];
   readonly maxRows?: readonly number[];
@@ -97,8 +101,9 @@ export function activityGalleryFrames(options: ActivityGalleryOptions): string[]
       requestRender: () => undefined,
       loadDetail: (request, deliver) => {
         const id = Option.getOrUndefined(Arr.findFirst(rows, (row) => row.key === request.key))?.id;
-        const text = id === undefined ? undefined : options.detail?.(id);
-        if (text !== undefined) deliver(text);
+        const content = id === undefined ? undefined : options.detail?.(id);
+        const detail = content === undefined ? undefined : decodeActivityDetail(content);
+        if (detail !== undefined) deliver(detail);
       },
     });
     const key = activityKey(providerId, itemId);
@@ -112,6 +117,14 @@ export function activityGalleryFrames(options: ActivityGalleryOptions): string[]
       ...plain(component.render(width)),
       "",
     );
+    if (found && options.technical) {
+      component.handleInput("t");
+      lines.push(
+        `── activity manager · ${options.title} · ${itemId} · technical`,
+        ...plain(component.render(width)),
+        "",
+      );
+    }
   }
   return lines;
 }

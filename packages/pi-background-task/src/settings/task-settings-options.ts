@@ -1,4 +1,7 @@
 import * as Arr from "effect/Array";
+import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
+import { settingOnOff } from "pi-cosmic-ui/manager/settings-surface";
 import { completeSettingsArguments } from "pi-cosmic-core/settings-completion";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { BACKGROUND_TASK_SETTINGS } from "../config/options.ts";
@@ -10,8 +13,19 @@ export const SCOPES = [
 ] as const;
 
 export const INHERIT = "inherit";
+
+/** A stored or effective value as settings show it: booleans read `on`/`off`. */
+export const settingDisplayValue = (value: BackgroundTaskConfig[BackgroundTaskSettingId]) =>
+  Predicate.isBoolean(value) ? settingOnOff(value) : sanitizeTerminalLine(String(value ?? ""));
+
 export const sessionValue = (config: BackgroundTaskConfig, id: BackgroundTaskSettingId) =>
-  sanitizeTerminalLine(String(config[id] ?? ""));
+  settingDisplayValue(config[id]);
+
+/** `inherit (on)` and other inherited labels mean `inherit` when chosen. */
+export const inheritChoice = (value: string): string =>
+  value === INHERIT || (Str.startsWith(`${INHERIT} (`)(value) && Str.endsWith(")")(value))
+    ? INHERIT
+    : value;
 
 export const TASK_SETTING_DESCRIPTORS = Arr.map(BACKGROUND_TASK_SETTINGS, (setting) => ({
   id: setting.id,

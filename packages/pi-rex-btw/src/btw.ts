@@ -4,7 +4,6 @@ import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
 import { childCommand, splitDirection, type ChildLaunch, type RexLocation } from "./launch.ts";
-import { GitBranch } from "./git.ts";
 import { RexClient } from "./rex.ts";
 
 export interface RexBtwInput {
@@ -14,11 +13,10 @@ export interface RexBtwInput {
   readonly location: RexLocation;
 }
 
-export type BtwRequest = Omit<ChildLaunch, "cwd" | "shell" | "extensionPath" | "branch">;
+export type BtwRequest = Omit<ChildLaunch, "shell" | "extensionPath">;
 
 const makeRexBtw = Effect.fn("RexBtw.make")(function* (input: RexBtwInput) {
   const rex = yield* RexClient;
-  const currentBranch = yield* GitBranch;
   // Only the newest pane is remembered so later panes stack beside it instead of shrinking the
   // caller. Nothing is persisted: closing or forgetting a pane needs no cleanup.
   const lastBlock = yield* Ref.make<string | undefined>(undefined);
@@ -30,8 +28,6 @@ const makeRexBtw = Effect.fn("RexBtw.make")(function* (input: RexBtwInput) {
   ) {
     const anchor = { sessionId: input.location.sessionId, blockId: anchorBlockId };
     const columns = yield* rex.paneColumns(anchor);
-    // Read per command because the user may switch branches during the session.
-    const branch = yield* currentBranch(input.cwd);
     const blockId = yield* rex.split({
       sessionId: anchor.sessionId,
       anchorBlockId,
@@ -39,8 +35,6 @@ const makeRexBtw = Effect.fn("RexBtw.make")(function* (input: RexBtwInput) {
       cwd: input.cwd,
       command: childCommand({
         ...request,
-        cwd: input.cwd,
-        branch,
         shell: input.shell,
         extensionPath: input.extensionPath,
       }),

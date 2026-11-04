@@ -66,4 +66,20 @@ describe("grouped activity projection", () => {
     const history = groupedActivityTree([done, finished]);
     expect(entryOf(history, done)).toMatchObject({ history: true, expanded: false });
   });
+
+  it("drops settled standalone questions and empty sections, keeping owned questions", () => {
+    const answered = activityRow("answered", "done", undefined, { kind: "question" });
+    const waiting = activityRow("waiting", "needs-input", undefined, { kind: "question" });
+    const owner = activityRow("owner", "running");
+    const owned = activityRow("owned", "done", owner.id, { kind: "question" });
+    const tree = groupedActivityTree([answered, waiting, owner, owned], {
+      expandedHistory: new Set([owner.key]),
+    });
+    expect(entryOf(tree, answered)).toBeUndefined();
+    expect(entryOf(tree, waiting)).toBeDefined();
+    expect(entryOf(tree, owned)).toBeDefined();
+    expect(Arr.some(tree, (entry) => entry.id === activitySectionId("tasks"))).toBe(false);
+    const settled = groupedActivityTree([answered]);
+    expect(settled).toEqual([]);
+  });
 });

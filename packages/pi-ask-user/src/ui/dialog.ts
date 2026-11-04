@@ -38,7 +38,8 @@ import {
 import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import { PreviewPane } from "./preview-pane.ts";
 import { DialogViewport } from "./viewport.ts";
-import { type DialogInputMode, renderQuestionnaireView } from "./render.ts";
+import { type DialogInputMode, isSingleQuestion, renderQuestionnaireView } from "./render.ts";
+import { editorKeyLabels } from "./key-hints.ts";
 import { editorTheme } from "./layout.ts";
 
 const DIGIT_SHORTCUTS: readonly KeyId[] = ["1", "2", "3", "4", "5", "6", "7", "8", "9"];
@@ -56,7 +57,7 @@ interface AskUserDialogOptions {
   readonly tui: TUI;
   readonly getHeight?: () => number;
   readonly theme: Theme;
-  readonly keybindings: Pick<KeybindingsManager, "matches">;
+  readonly keybindings: Pick<KeybindingsManager, "matches" | "getKeys">;
   readonly request: AskUserRequest;
   readonly done: (outcome: AskUserOutcome) => void;
   readonly editExternally: (value: string) => Promise<string | undefined>;
@@ -152,7 +153,12 @@ export class AskUserDialog implements Focusable {
     this.refresh();
   }
 
+  /** A lone question submits as soon as it is answered; otherwise move on to the next tab. */
   private advance(): void {
+    if (isSingleQuestion(this.state)) {
+      this.submit();
+      return;
+    }
     this.dispatch({
       type: "set-tab",
       tab: Math.min(this.state.request.questions.length, this.state.currentTab + 1),
@@ -296,6 +302,8 @@ export class AskUserDialog implements Focusable {
     }
     const delta = TAB_MOVES.get(action);
     if (delta) {
+      // A lone question has no other tab and no review step to move to.
+      if (isSingleQuestion(this.state)) return true;
       this.dispatch({ type: "move-tab", delta });
       this.refresh();
       return true;
@@ -331,6 +339,10 @@ export class AskUserDialog implements Focusable {
       this.options.done(cancelQuestionnaire());
       return;
     }
+    this.submit();
+  }
+
+  private submit(): void {
     const unanswered = Arr.findFirstIndex(this.state.drafts, (draft) => draft.answer === undefined);
     if (Option.isSome(unanswered)) {
       this.dispatch({ type: "set-tab", tab: unanswered.value });
@@ -433,6 +445,7 @@ export class AskUserDialog implements Focusable {
         inputError: this.inputError,
         alternateHelp: this.alternateHelp,
         externalEditorBusy: this.externalEditorBusy,
+        keys: editorKeyLabels(this.options.keybindings),
         editor: this.editor,
         preview: this.preview,
       },

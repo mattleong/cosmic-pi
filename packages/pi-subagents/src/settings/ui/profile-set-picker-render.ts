@@ -21,7 +21,7 @@ import {
   listDetailFrame,
   listDetailHeading,
 } from "pi-cosmic-ui/manager/list-detail-shell";
-import { focusedField, managerTone } from "pi-cosmic-ui/manager/style";
+import { focusedField, LIST_CURSOR, managerTone } from "pi-cosmic-ui/manager/style";
 import { profileRouteOptionLabel, SCOPE_LABELS } from "../profile-route-editor.ts";
 import {
   qualifiedProfileSetLabel,
@@ -46,14 +46,16 @@ const footer = (
 ): string => {
   const { key } = configuredKeyLabels(keybindingLabel, PROFILE_SET_SHORTCUTS);
   const confirm = key("tui.select.confirm", "Enter");
-  const cancel = key("tui.select.cancel", "Esc");
+  // Aliases such as C-c belong in expanded help, not the default hint.
+  const cancelKeys = key("tui.select.cancel", "Esc");
+  const cancel = Str.split(cancelKeys, "/")[0] ?? cancelKeys;
   if (state.searching)
     return renderResponsiveManagerFooter(width, [
       [`Type to filter · ${confirm} Edit · ${cancel} Clear`],
     ]);
   return renderResponsiveManagerFooter(width, [
-    [`${confirm} Edit`, "u Use", "a More", "Tab Current Session", `${cancel} Close`],
-    ["Tab Current Session", "a More", `${cancel} Close`],
+    [`${confirm} Edit`, "u Use", "a Actions", "Tab Current Session", `${cancel} Close`],
+    ["Tab Current Session", "a Actions", `${cancel} Close`],
   ]);
 };
 
@@ -94,7 +96,7 @@ const libraryRows = (
         : "";
     logical.push({
       entryIndex: index,
-      text: `${selected ? ">" : " "} ${selected && !state.searching ? focusedField(theme, entry.label) : theme.fg(managerTone.saved, entry.label)}${theme.fg("muted", defaultLabel)}${theme.fg("error", invalid)}${selected ? theme.fg("muted", ` · ${entry.description}`) : ""}`,
+      text: `${selected ? LIST_CURSOR : " "} ${selected && !state.searching ? focusedField(theme, entry.label) : theme.fg(managerTone.saved, entry.label)}${theme.fg("muted", defaultLabel)}${theme.fg("error", invalid)}${selected ? theme.fg("muted", ` · ${entry.description}`) : ""}`,
     });
   }
   const listHeight = Math.max(1, height - header.length);

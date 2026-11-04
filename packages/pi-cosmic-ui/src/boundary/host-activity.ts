@@ -11,6 +11,7 @@ import {
   ACTIVITY_EVENT,
   ACTIVITY_HOST,
   ActivityEnvelopeSchema,
+  type ActivityDetail,
   type ActivityEnvelope,
   type ActivityEvents,
 } from "../activity/protocol.ts";
@@ -27,16 +28,13 @@ import { openOwnedSurface } from "./host-surface.ts";
 import type { ActivitySection } from "../activity/view-protocol.ts";
 import { installActivityView, type ActivityHostRun } from "./host-activity-view.ts";
 import { inputDockVisible } from "./host-input-dock.ts";
+import { plainActivityDetail } from "../activity/detail.ts";
 
 const COMPACT_WIDGET_ROWS = 3;
 
 const isDiscovery = Schema.is(
   Schema.Struct({ version: Schema.Literal(1), sessionId: Schema.String }),
 );
-const MANAGER_TITLES = {
-  subagents: "Subagents",
-  tasks: "Background tasks",
-} satisfies Record<ActivitySection, string>;
 const safe = (run: () => void): void => invokeHostCallback(run, undefined);
 const neutral = () => ({ render: () => [], invalidate() {} });
 interface Binding {
@@ -235,23 +233,25 @@ export function createActivityHost(
             mounted = true;
             acknowledgeInstall();
             return {
-              render: (width) =>
-                isCurrent() && binding.installed
-                  ? renderActivityWidget(
-                      binding.rows,
-                      width,
-                      Math.min(
-                        inputDockVisible() ? COMPACT_WIDGET_ROWS : Number.POSITIVE_INFINITY,
-                        activityWidgetHeight(binding.rows, tui.terminal.rows),
-                      ),
-                      {
-                        starting: binding.starting,
-                        theme,
-                        now: binding.now,
-                        ...(binding.presentation && { collapsed: binding.presentation.collapsed }),
-                      },
-                    )
-                  : [],
+              render: (width) => {
+                if (!isCurrent() || !binding.installed) return [];
+                const docked = inputDockVisible();
+                return renderActivityWidget(
+                  binding.rows,
+                  width,
+                  Math.min(
+                    docked ? COMPACT_WIDGET_ROWS : Number.POSITIVE_INFINITY,
+                    activityWidgetHeight(binding.rows, tui.terminal.rows),
+                  ),
+                  {
+                    starting: binding.starting,
+                    theme,
+                    now: binding.now,
+                    inputDockVisible: docked,
+                    ...(binding.presentation && { collapsed: binding.presentation.collapsed }),
+                  },
+                );
+              },
               invalidate() {},
               dispose() {
                 disposed = true;
@@ -316,7 +316,6 @@ export function createActivityHost(
               const component = new ActivityComponent({
                 snapshot: () => binding.rows,
                 ...(section && { initialSection: section }),
-                title: section ? MANAGER_TITLES[section] : "Activity",
                 starting: () => binding.starting,
                 presentation: (binding.presentation ??= freshActivityPresentation()),
                 theme,
@@ -335,8 +334,8 @@ export function createActivityHost(
                   const controller = new AbortController();
                   detailController = controller;
                   submit(
-                    serviceDetail(binding.service, request, (text) => {
-                      if (!controller.signal.aborted && owned()) deliver(text);
+                    serviceDetail(binding.service, request, (detail) => {
+                      if (!controller.signal.aborted && owned()) deliver(detail);
                     }),
                     controller.signal,
                   );
@@ -383,9 +382,11 @@ const invokeOrWarn = (
 const serviceDetail = (
   service: ActivityServiceContract,
   request: Parameters<ActivityServiceContract["detail"]>[0],
-  deliver: (text: string) => void,
+  deliver: (detail: ActivityDetail) => void,
 ) =>
   service.detail(request).pipe(
-    Effect.orElseSucceed(() => "Details aren't available; the item may have changed"),
-    Effect.flatMap((text) => Effect.sync(() => safe(() => deliver(text)))),
+    Effect.orElseSucceed(() =>
+      plainActivityDetail("Details aren't available; the item may have changed"),
+    ),
+    Effect.flatMap((detail) => Effect.sync(() => safe(() => deliver(detail)))),
   );

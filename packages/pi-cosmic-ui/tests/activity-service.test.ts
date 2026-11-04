@@ -290,7 +290,11 @@ describe("activity service", () => {
         }),
       );
       expect(calls).toBe(0);
-      const detail = yield* service.detail(action(rows()[0]!));
+      const loaded = yield* service.detail(action(rows()[0]!));
+      const detail = Arr.join(
+        Arr.map(loaded.sections, (section) => section.body),
+        "\n",
+      );
       expect(detail.length).toBeLessThanOrEqual(16384);
       expect(detail).not.toContain("private-value");
       expect(calls).toBe(1);
@@ -353,7 +357,7 @@ describe("activity service", () => {
       pending.resolve(undefined);
     }),
   );
-  it.effect("fails typed when a producer callback throws or returns a non-string detail", () =>
+  it.effect("fails typed when a producer callback throws or returns a malformed detail", () =>
     Effect.gen(function* () {
       const { service, rows } = yield* recordingService();
       yield* service.receive(envelope({ ...registration({}), getDetail: () => 42 }));
@@ -370,7 +374,33 @@ describe("activity service", () => {
         reason: "failed",
       });
       yield* service.receive(envelope({ ...registration({}), getDetail: () => "Ready" }));
-      expect(yield* service.detail(action(rows()[0]!))).toBe("Ready");
+      expect(yield* service.detail(action(rows()[0]!))).toEqual({ sections: [{ body: "Ready" }] });
+    }),
+  );
+  it.effect("admits structured details, dropping malformed sections and redacting fields", () =>
+    Effect.gen(function* () {
+      const { service, rows } = yield* recordingService();
+      yield* service.receive(
+        envelope({
+          ...registration({}),
+          getDetail: () =>
+            Promise.resolve({
+              sections: [
+                { title: "Result", body: "Done `here`", format: "markdown" },
+                { body: 7 },
+                { title: "Output", body: "  indented\u001b[31m line\ttab" },
+              ],
+              technical: [{ label: "Session", value: "token=private-value" }, { label: 3 }],
+            }),
+        }),
+      );
+      const detail = yield* service.detail(action(rows()[0]!));
+      expect(detail.sections).toEqual([
+        { title: "Result", body: "Done `here`", format: "markdown" },
+        { title: "Output", body: "  indented line  tab" },
+      ]);
+      expect(detail.technical).toHaveLength(1);
+      expect(detail.technical?.[0]?.value).not.toContain("private-value");
     }),
   );
   it.effect("cannot revive a revoked token and contains rejected producer actions", () =>

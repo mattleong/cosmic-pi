@@ -17,6 +17,12 @@ const beforeLast = (lines: string[]): string[] => {
   return lines.slice(0, end);
 };
 
+/** Lines without an exit or timeout status, which the failure issue states in words. */
+export function withoutReportedShellStatus(lines: string[]): string[] {
+  const last = lines.at(-1) ?? "";
+  return EXITED.test(last) || TIMED_OUT.test(last) ? beforeLast(lines) : lines;
+}
+
 export function withoutShellStatus(lines: string[]): string[] {
   const last = lines.at(-1) ?? "";
   return EXITED.test(last) || last === ABORTED || TIMED_OUT.test(last) ? beforeLast(lines) : lines;

@@ -1,4 +1,5 @@
 import { type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import type { ExtensionCommand } from "pi-cosmic-core";
@@ -8,7 +9,14 @@ import {
   type SettingsCommandOwner,
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import { OwnedSurfaceOutcome } from "pi-cosmic-ui/boundary/host-surface";
-import { SETTINGS_OPTION_DESCRIPTORS } from "../config/options.ts";
+import * as Schema from "effect/Schema";
+import { InvalidSettingError } from "pi-cosmic-core/settings-completion";
+import {
+  formatOnOff,
+  ON_OFF_VALUES,
+  OnOffSchema,
+  SETTINGS_OPTION_DESCRIPTORS,
+} from "../config/options.ts";
 import { safeHostSignal } from "../boundary/host-ui.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
 import type { FastSnapshot } from "../fast/controller.ts";
@@ -46,11 +54,16 @@ export function registerSettingsController(
   const fastEnabledDescriptor = {
     id: "fast.enabled",
     label: "Fast mode",
-    values: ["true", "false"] as const,
+    values: ON_OFF_VALUES,
     description: "Request OpenAI fast mode for any openai or openai-codex model.",
-    currentValue: (_cfg: ResolvedConfig) => String(MutableRef.get(fastProjection).desiredActive),
+    currentValue: (_cfg: ResolvedConfig) =>
+      formatOnOff(MutableRef.get(fastProjection).desiredActive),
   };
-  const descriptors = [fastEnabledDescriptor, ...SETTINGS_OPTION_DESCRIPTORS];
+  // Each decoder judges typed values, so `true`, `1m 30s`, or `45000` work beside the listed ones.
+  const descriptors = Arr.map([fastEnabledDescriptor, ...SETTINGS_OPTION_DESCRIPTORS], (entry) => ({
+    ...entry,
+    openValues: true,
+  }));
 
   const createCommand = (
     isCurrent: () => boolean,
@@ -64,7 +77,7 @@ export function registerSettingsController(
       title: "Better OpenAI",
       isCurrent,
       descriptors,
-      examples: ["fast.enabled true", "usage.refreshIntervalMs 30000"],
+      examples: ["fast.enabled on", "usage.refreshIntervalMs 30s"],
       config,
       status: formatDebugStatus,
       onInvoke: updateContext,
@@ -74,7 +87,12 @@ export function registerSettingsController(
           Effect.gen(function* () {
             if (id !== "fast.enabled")
               return yield* OpenAIConfigService.use((service) => service.updateSetting(id, value));
-            yield* FastModeService.use((service) => service.setDesired(ctx, value === "true"));
+            const desired = yield* Schema.decodeEffect(OnOffSchema)(value).pipe(
+              Effect.mapError(() =>
+                InvalidSettingError.make({ id, message: `${id} must be on or off` }),
+              ),
+            );
+            yield* FastModeService.use((service) => service.setDesired(ctx, desired));
             yield* Effect.sync(() => {
               if (isCurrent()) resetFastRoutingTransport(ctx);
             });

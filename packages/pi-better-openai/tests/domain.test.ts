@@ -5,6 +5,7 @@ import * as Path from "effect/Path";
 import * as Redacted from "effect/Redacted";
 import { makeInMemoryDocuments, provideBuiltLayer } from "pi-cosmic-core/testing";
 import { getCodexCredentials } from "../src/auth/codex-auth.ts";
+import { prepareSettingUpdate } from "../src/config/options.ts";
 import { readConfig, resolveConfig } from "../src/config/store.ts";
 import { serializedSnapshot, testContext } from "./helpers.ts";
 
@@ -14,6 +15,9 @@ const jwt = (accountId: string) => {
   ).toString("base64url");
   return `header.${body}.signature`;
 };
+
+const applySetting = (id: string, value: string) =>
+  prepareSettingUpdate(id, value).pipe(Effect.map((update) => update({})));
 
 describe("OpenAI configuration and credentials", () => {
   it.effect("decodes fields independently and merges project over global", () => {
@@ -44,6 +48,24 @@ describe("OpenAI configuration and credentials", () => {
       expect(parsed?.usage?.refreshIntervalMs).toBeUndefined();
     }).pipe(provideBuiltLayer(Layer.merge(store.layer, Path.layer)));
   });
+
+  it.effect("accepts on/off and readable durations as setting values", () =>
+    Effect.gen(function* () {
+      expect(yield* applySetting("image.enabled", "off")).toEqual({ image: { enabled: false } });
+      expect(yield* applySetting("image.enabled", "True")).toEqual({ image: { enabled: true } });
+      expect(yield* applySetting("usage.refreshIntervalMs", "1m 30s")).toEqual({
+        usage: { refreshIntervalMs: 90_000 },
+      });
+      expect(yield* applySetting("image.timeoutMs", "120000")).toEqual({
+        image: { timeoutMs: 120_000 },
+      });
+      for (const [id, value] of [
+        ["image.enabled", "maybe"],
+        ["usage.refreshIntervalMs", "soon"],
+      ] as const)
+        expect(yield* Effect.flip(applySetting(id, value))).toMatchObject({ id });
+    }),
+  );
 
   it.effect("fails a rejected registry lookup with a fixed, sanitized message", () =>
     Effect.gen(function* () {

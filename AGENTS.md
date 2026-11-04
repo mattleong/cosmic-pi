@@ -42,7 +42,7 @@ Read the package's `ARCHITECTURE.md` and the relevant [shared contracts](docs/ar
 
 ## Tool rendering
 
-Follow [tool presentation](docs/architecture/tool-presentation.md) for registration, replay, compact issues, full expansion, and fallback. Workspace-owned visible tools use `withCodePreviewShell` and declare `pi-code-previews` as a runtime dependency. Renderer-only integrations use `withCodePreviewRenderers`; headless tools and non-tool commands/settings do not need the shell.
+Follow [tool presentation](docs/architecture/tool-presentation.md) for registration, replay, compact issues, full expansion, and fallback. Every visible surface, including settings, panels, managers, and the footer, follows the [suite UI conventions](docs/architecture/ui-conventions.md) for separators, key hints, exit keys, status glyphs, setting values, and time formats. Workspace-owned visible tools use `withCodePreviewShell` and declare `pi-code-previews` as a runtime dependency. Renderer-only integrations use `withCodePreviewRenderers`; headless tools and non-tool commands/settings do not need the shell.
 
 Pi owns native codemode/MCP execution, activation, permissions, connections, and stored results. Presentation must not acquire execution authority. Code Previews uses a stable public renderer resolver with exact source admission; write's real before-write snapshot hook is the sole execution-hook exception. Owned tools retain their normal executable registrations.
 

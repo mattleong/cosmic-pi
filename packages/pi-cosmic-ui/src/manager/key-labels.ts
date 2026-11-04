@@ -1,3 +1,4 @@
+import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
@@ -42,6 +43,10 @@ const formatFullScreenKeyId = (value: string): string => {
   return `${modifiers}${parts.includes("shift") && base.length === 1 ? Str.toUpperCase(label) : label}`;
 };
 
+/** Formats Pi key ids (`ctrl+g`, `escape`) as hint labels (`C-g`, `Esc`) joined by `/`. */
+export const formatKeyIds = (keys: ReadonlyArray<string>): string =>
+  Arr.join(Arr.map(keys, formatFullScreenKeyId), "/");
+
 export interface HostKeybindingSource {
   readonly matches: (data: string, id: FullScreenSelectionKeybindingId) => boolean;
   readonly getKeys?: (id: FullScreenSelectionKeybindingId) => ReadonlyArray<string>;
@@ -51,12 +56,8 @@ export const fullScreenKeybindingOptions = (keybindings: HostKeybindingSource) =
   matchesKeybinding: (data: string, id: FullScreenSelectionKeybindingId) =>
     keybindings.matches(data, id),
   keybindingLabel: (id: FullScreenSelectionKeybindingId, fallback: string) =>
-    Arr.join(
-      Arr.map(
-        Predicate.isFunction(keybindings.getKeys) ? keybindings.getKeys(id) : Arr.empty<string>(),
-        formatFullScreenKeyId,
-      ),
-      "/",
+    formatKeyIds(
+      Predicate.isFunction(keybindings.getKeys) ? keybindings.getKeys(id) : Arr.empty<string>(),
     ) || fallback,
 });
 
@@ -89,6 +90,114 @@ export const TEXT_INPUT_KEY_LABELS: ReadonlySet<string> = new Set([
   "Space",
   "⇧Space",
 ]);
+
+/*
+ * Suite key-hint convention (docs/architecture/ui-conventions.md):
+ * - Hints are `Key Verb` pairs with Title Case verbs joined by ` · `.
+ * - The default bar stays short; `? More` expands to a superset that adds aliases and extra keys
+ *   and toggles to `? Less`. Never replace default hints when expanded.
+ * - `Esc` backs out one level: `Esc Back` when nested, `Esc Close` at the top level, and
+ *   `Esc Cancel` for a pending decision. `q`/`h` aliases appear only in expanded help.
+ * - Settings rows say what Enter does: `Enter Toggle`, `Enter Change`, or `Enter Open`.
+ */
+
+export const KEY_HINT_SEPARATOR = " · ";
+
+export type KeyHintPart = string | false | null | undefined;
+
+const presentHints = (parts: ReadonlyArray<KeyHintPart>): ReadonlyArray<string> =>
+  Arr.filter(parts, (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part));
+
+/** `keyHint("Enter", "Inspect")` → `Enter Inspect`. */
+export const keyHint = (key: string, verb: string): string => `${key} ${verb}`;
+
+/** Joins hint pairs with the suite separator, skipping empty or disabled parts. */
+export const joinKeyHints = (parts: ReadonlyArray<KeyHintPart>): string =>
+  Arr.join(presentHints(parts), KEY_HINT_SEPARATOR);
+
+/** `top` closes the surface, `nested` returns one level, `decision` cancels a pending choice. */
+export type SurfaceExitLevel = "top" | "nested" | "decision";
+
+const EXIT_VERBS = {
+  top: "Close",
+  nested: "Back",
+  decision: "Cancel",
+} satisfies Readonly<Record<SurfaceExitLevel, string>>;
+
+export const exitKeyVerb = (level: SurfaceExitLevel): string => EXIT_VERBS[level];
+
+/** `Esc Close`, `Esc Back`, or `Esc Cancel`; aliases such as `q` belong to expanded help only. */
+export const exitKeyHint = (
+  level: SurfaceExitLevel,
+  aliases: ReadonlyArray<string> = [],
+  key = "Esc",
+): string => keyHint(Arr.join([key, ...aliases], "/"), exitKeyVerb(level));
+
+/** `? More` while collapsed and `? Less` while expanded. */
+export const helpKeyHint = (expanded: boolean, key = "?"): string =>
+  keyHint(key, expanded ? "Less" : "More");
+
+export const moveKeyHint = (key = "↑↓"): string => keyHint(key, "Move");
+
+/** What Enter does on a settings row: booleans toggle, enums open a choice list, groups open. */
+export type SettingAffordance = "toggle" | "change" | "open";
+
+const SETTING_AFFORDANCE_VERBS = {
+  toggle: "Toggle",
+  change: "Change",
+  open: "Open",
+} satisfies Readonly<Record<SettingAffordance, string>>;
+
+export const settingAffordanceHint = (affordance: SettingAffordance, key = "Enter"): string =>
+  keyHint(key, SETTING_AFFORDANCE_VERBS[affordance]);
+
+export interface KeyHintBar {
+  /** Default actions, most important first. They stay visible when help is expanded. */
+  readonly hints: ReadonlyArray<KeyHintPart>;
+  /** Additional keys and aliases shown only while help is expanded. */
+  readonly more?: ReadonlyArray<KeyHintPart> | undefined;
+  /** Exit key for this level; omit when the surface has no exit of its own. */
+  readonly exit?: SurfaceExitLevel | undefined;
+  /** Exit aliases such as `q`; shown only while help is expanded. */
+  readonly exitAliases?: ReadonlyArray<string> | undefined;
+  /** The configured exit key label; defaults to `Esc`. */
+  readonly exitKey?: string | undefined;
+}
+
+/**
+ * Composes a suite hint bar: `hints · exit · ? More`, or, expanded,
+ * `hints · more · exit/aliases · ? Less`. `? More` appears only when expansion adds something.
+ */
+export const keyHintBar = (bar: KeyHintBar, expanded: boolean): string => {
+  const more = presentHints(bar.more ?? []);
+  const aliases = bar.exitAliases ?? [];
+  const expandable = more.length > 0 || (bar.exit !== undefined && aliases.length > 0);
+  return joinKeyHints([
+    ...bar.hints,
+    ...(expanded ? more : []),
+    bar.exit && exitKeyHint(bar.exit, expanded ? aliases : [], bar.exitKey),
+    expandable && helpKeyHint(expanded),
+  ]);
+};
+
+/**
+ * Packs hint pairs into rows no wider than `width`, breaking only between pairs so a key never
+ * separates from its verb. A single pair wider than `width` gets its own row.
+ */
+export const wrapKeyHints = (hint: string, width: number): string[] => {
+  const safeWidth = Math.max(1, Math.floor(width));
+  const rows: string[] = [];
+  let current = "";
+  for (const pair of Str.split(hint, KEY_HINT_SEPARATOR)) {
+    const candidate = current ? `${current}${KEY_HINT_SEPARATOR}${pair}` : pair;
+    if (current && visibleWidth(candidate) > safeWidth) {
+      rows.push(current);
+      current = pair;
+    } else current = candidate;
+  }
+  if (current) rows.push(current);
+  return rows;
+};
 
 export const configuredKeyLabels = (
   keybindingLabel: ((id: FullScreenSelectionKeybindingId, fallback: string) => string) | undefined,

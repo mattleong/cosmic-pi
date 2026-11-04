@@ -16,8 +16,8 @@ export function formatDebug(
   return Arr.join(
     [
       `Current model: ${currentModelKey(ctx)}`,
-      `Current model eligible: ${state.eligible}`,
-      `Requires subscription model: ${cfg?.usage.showOnlyOnSubscriptionModels ?? true}`,
+      `Current model eligible: ${state.eligible ? "yes" : "no"}`,
+      `Usage only on OAuth: ${(cfg?.usage.showOnlyOnSubscriptionModels ?? true) ? "on" : "off"}`,
       `Auth: ${state.authFound ? "found" : "missing"}`,
       `Account ID: ${maskIdentifier(state.accountId) ?? "none"}`,
       `Last fetch: ${formatTimestampOrNever(state.lastFetchAt)}`,

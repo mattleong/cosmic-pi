@@ -97,9 +97,22 @@ describe("builtin failure classification", () => {
     expect(firstShellIssueMessage("Command exited with code 127")).toBe(
       "Exited with code 127: command not found",
     );
-    expect(firstShellIssueMessage("sh: foo: command not found\nCommand exited with code 127")).toBe(
-      "Exited with code 127: command not found",
-    );
+    for (const [diagnostic, subject] of [
+      ["sh: foo: command not found", "foo"],
+      ["zsh: command not found: foo", "foo"],
+      ["cat: /tmp/build/does-not-exist.txt: No such file or directory", "does-not-exist.txt"],
+      ["ls: cannot access 'missing-dir': No such file or directory", "missing-dir"],
+      ["bash: ./deploy.sh: Permission denied", "deploy.sh"],
+      ["python3: can't open file '/x/run.py': [Errno 2] No such file or directory", "run.py"],
+    ] as const) {
+      const message = firstShellIssueMessage(`${diagnostic}\nCommand exited with code 1`) ?? "";
+      expect({ diagnostic, named: Fn.pipe(message, Str.includes(subject)) }).toEqual({
+        diagnostic,
+        named: true,
+      });
+      expect(issueMessageStyleProblems(message)).toEqual([]);
+      expect(message).not.toContain(diagnostic);
+    }
     expect(firstShellIssueMessage("Error: out of heap\nCommand exited with code 137")).toBe(
       "Exited with code 137: out of heap",
     );

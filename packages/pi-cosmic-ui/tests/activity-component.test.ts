@@ -21,6 +21,25 @@ describe("activity presentation", () => {
     expect(text).toContain("latest-log");
     expect(text).not.toContain("obsolete-log");
   });
+  it("previews the selected source from the list and follows its changes without inspecting", () => {
+    let rows: readonly ActivityRow[] = [
+      activityRow("first", "running", undefined, { kind: "command" }),
+      activityRow("second", "running", undefined, { kind: "command" }),
+    ];
+    const { component, loads } = mountActivity(() => rows, { height: 16 });
+    expect(loads.at(-1)?.request.key).toBe(rows[0]!.key);
+    component.handleInput("j");
+    expect(loads.at(-1)?.request.key).toBe(rows[1]!.key);
+    loads.at(-1)!.deliver("second-output");
+    expect(component.shell.state.pane).toBe("list");
+    expect(Arr.join(component.render(120), "\n")).toContain("second-output");
+    component.handleInput("f");
+    const before = loads.length;
+    rows = [rows[0]!, { ...rows[1]!, revision: "2" }];
+    component.update();
+    expect(loads.length).toBe(before + 1);
+    expect(loads.at(-1)?.request.revision).toBe("2");
+  });
   it("keeps selection identity when live rows reorder and dispatches only explicit actions", () => {
     let rows = [
       activityRow("a"),

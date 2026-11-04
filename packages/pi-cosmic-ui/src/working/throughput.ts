@@ -45,8 +45,13 @@ export const createThroughputMeter = () => {
       completedTokens = tokens;
       completedMilliseconds = duration;
     },
+    /**
+     * Reported only while a provider call is streaming; between calls, such as while a tool runs,
+     * no tokens flow and a rate would mislead.
+     */
     rate(at: number): ThroughputRate | undefined {
-      if (current && at - current.startedAt >= 1_000) {
+      if (!current) return undefined;
+      if (at - current.startedAt >= 1_000) {
         const live = rate(current.characters / 4, at - current.startedAt);
         if (live !== undefined) return { kind: "live", tokensPerSecond: live };
       }

@@ -1,5 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
 import { afterEach, expect, it } from "vitest";
 import {
   animationSchedulerProbe,
@@ -63,8 +62,9 @@ it.each(["compact", "preview"] as const)(
       );
     };
     for (const expanded of expandedText(true)) {
-      for (const line of Str.split(JSON.stringify(args, null, 2), "\n"))
-        expect(expanded).toContain(Str.trim(line));
+      // Every argument stays readable in full, with its exact value.
+      for (const value of [args.command, args.cwd, `${args.timeoutSeconds}s`])
+        expect(expanded).toContain(value);
       expect(expanded).not.toContain(text);
       expect(expanded).toContain(snapshot.id);
       expect(expanded).toContain(snapshot.cwd);

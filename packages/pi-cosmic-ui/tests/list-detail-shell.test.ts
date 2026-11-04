@@ -25,4 +25,12 @@ describe("ListDetailShell selection", () => {
     expect(shell.state.selected).toBe(1);
     expect(shell.state.selectedId).toBe("c");
   });
+
+  it("keeps a detail view resting at the top there when its pane shrinks", () => {
+    const shell = new ListDetailShell();
+    const lines = Array.from({ length: 30 }, (_, index) => `line ${index}`);
+    expect(shell.detailWindow(lines, 40, "top").visible[0]).toBe("line 0");
+    expect(shell.detailWindow(lines, 40, false).visible[0]).toBe("line 0");
+    expect(shell.detailWindow(lines, 12, false).visible[0]).toBe("line 0");
+  });
 });

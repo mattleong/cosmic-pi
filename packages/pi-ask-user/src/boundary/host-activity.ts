@@ -8,7 +8,7 @@ import {
 } from "pi-cosmic-ui/activity";
 import type { QuestionnaireActivity } from "../questionnaire/service.ts";
 import { titleLabel } from "../ui/layout.ts";
-import type { AskUserDialogBridge } from "./host-ui.ts";
+import { RESUME_HINT, type AskUserDialogBridge } from "./host-ui.ts";
 
 interface Row {
   readonly item: ActivityItem;
@@ -115,7 +115,8 @@ export function createQuestionnaireActivity(options: {
             status: "needs-input",
             inputTarget: "user",
             blockedReason: undefined,
-            summary: event.phase,
+            // Activity renders a hidden row's summary verbatim as its resume affordance.
+            summary: event.phase === "hidden" ? RESUME_HINT : event.phase,
             actions: event.phase === "hidden" ? [resumeAction, cancelAction] : [cancelAction],
           },
         });

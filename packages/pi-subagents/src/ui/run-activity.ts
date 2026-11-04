@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { ACTIVITY_LIMITS, type ActivityItem } from "pi-cosmic-ui/activity";
+import { ACTIVITY_LIMITS, type ActivityDetail, type ActivityItem } from "pi-cosmic-ui/activity";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { sha256Text } from "pi-cosmic-core/security/sha256";
 import { runCleanupAttention } from "../run/attention.ts";
@@ -184,7 +184,7 @@ export function subagentActivityItems(
 export function subagentActivityDetail(
   projection: SubagentProjection,
   id: string,
-): string | undefined {
+): ActivityDetail | undefined {
   const run = Option.getOrUndefined(
     Arr.findFirst(projectFleetTree(projection.runs, "root").rows, (row) => row.run.id === id),
   )?.run;

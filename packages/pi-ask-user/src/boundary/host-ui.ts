@@ -3,6 +3,9 @@ import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
 
 const STATUS_KEY = "pi-ask-user";
 
+/** How a hidden questionnaire comes back; the dialog, Activity row, and status line share it. */
+export const RESUME_HINT = "/ask-user to resume";
+
 interface DialogActivity {
   readonly id: string;
   readonly token: number;
@@ -25,10 +28,7 @@ export function createAskUserDialogBridge() {
     if (active?.id) listener?.({ id: active.id, token: active.token, phase });
   };
   const status = () =>
-    setStatus(
-      context,
-      !managed && hidden ? "Questionnaire hidden · /ask-user to show it" : undefined,
-    );
+    setStatus(context, !managed && hidden ? `Questionnaire hidden · ${RESUME_HINT}` : undefined);
   return {
     setActivity: (next: ((event: DialogActivity) => void) | undefined) => {
       listener = next;

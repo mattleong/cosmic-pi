@@ -1,6 +1,6 @@
 # Shared tool presentation
 
-This contract applies to workspace-owned visible tools. Code Previews owns shell policy and composition; each tool package owns domain classification and unique content. Rendering must preserve execution, permissions, result content, retained evidence, and native images. Headless tools and command/settings interfaces do not need the tool shell.
+This contract applies to workspace-owned visible tools. The [suite UI conventions](ui-conventions.md) apply to every visible surface, tool rows included. Code Previews owns shell policy and composition; each tool package owns domain classification and unique content. Rendering must preserve execution, permissions, result content, retained evidence, and native images. Headless tools and command/settings interfaces do not need the tool shell.
 
 ## Registration and policy
 

@@ -225,7 +225,7 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
     if (!content) details.addChild(issues);
     if (resultBody) details.addChild(resultBody);
     return this.mode === "border"
-      ? this.borderedDetails(callSection, details, status)
+      ? this.borderedDetails(callSection, details, status, content)
       : this.backgroundDetails(callSection, details, status, content);
   }
 
@@ -256,7 +256,8 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
 
   private expandedHeading(phase: CompactPhase, summary: CompactSummary): Component {
     const { context, theme, timing } = this;
-    const timingEnabled = this.mode !== "border" && codePreviewSettings.toolCallTiming;
+    // The expanded heading keeps the duration where the collapsed row shows it.
+    const timingEnabled = codePreviewSettings.toolCallTiming;
     return composeToolComponent((width) => [
       renderCompactRow(
         {
@@ -279,10 +280,12 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
     callSection: Component,
     details: Component,
     status: CompactStatus,
+    content: boolean,
   ): Component {
     const shell = new BorderedToolCall(this.theme);
     const color = statusBorderColor(status, this.context.isPartial);
-    shell.setContent(callSection, details, borderState(this.context), color, this.timing?.label);
+    const label = content ? undefined : this.timing?.label;
+    shell.setContent(callSection, details, borderState(this.context), color, label);
     return shell;
   }
 
