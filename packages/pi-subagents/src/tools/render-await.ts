@@ -69,7 +69,7 @@ export const formatAwaitCounters = (
   const targets = Arr.filter(cards, (card) => awaitedRunIds.has(card.id));
   const first = settled ? firstFinishedRun(targets, until) : undefined;
   const done = Arr.filter(targets, (run) => run.state === "completed");
-  const usage = aggregateUsage(cards, "compact");
+  const usage = aggregateUsage(cards);
   const descendantCount = cards.length - targets.length;
   return Arr.join(
     [
@@ -101,7 +101,7 @@ export const formatAwaitSummary = (
   contextRuns: ReadonlyArray<AwaitProgressRun> = [],
 ): string => {
   const { awaitedIds, allRuns } = progressRuns(runs, contextRuns);
-  const usage = aggregateUsage(allRuns, "compact");
+  const usage = aggregateUsage(allRuns);
   const finished = Arr.filter(runs, (run) => isTerminalRunState(run.state)).length;
   const first = firstFinishedRun(runs, until);
   const descendantCount = allRuns.length - runs.length;

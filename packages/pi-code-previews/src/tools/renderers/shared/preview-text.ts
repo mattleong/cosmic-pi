@@ -3,7 +3,7 @@ import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
 import {
   hiddenLinesMarker,
   previewFooter,
@@ -16,6 +16,7 @@ import { resolvePreviewLanguage } from "../../../syntax/language";
 import { renderHighlightedText, shouldSkipHighlight } from "../../../syntax/render";
 import { expandPreviewTabs } from "../../../shared/helpers";
 import { escapeLineControlChars } from "../../../shared/terminal-text";
+import { hangingContinuation, WrappedCodeText, type WrappedCodeRow } from "./wrapped-code-text";
 
 export const pathPreviewLanguage = (path: string, content?: string): string | undefined =>
   resolvePreviewLanguage({ path, content });
@@ -63,36 +64,46 @@ export function renderContentPreview(options: {
   skipHighlightLabel: string;
   invalidate?: (() => void) | undefined;
   firstLine?: number | undefined;
-}): Text {
+}): Component {
   const { content, theme, invalidate, firstLine } = options;
   const skipHighlight = shouldSkipHighlight(content);
   const lang = skipHighlight ? undefined : options.lang;
   const preview = selectPreviewTextLines(content, options.limit);
   const width =
     firstLine === undefined ? 0 : String(firstLine + Math.max(0, preview.total - 1)).length;
-  const rendered = renderChunkedPreviewEntries(preview, theme, (chunk) => {
-    const normalizedChunk = Arr.map(chunk, (entry) => expandPreviewTabs(entry.line));
-    const highlighted = renderHighlightedText(
-      Arr.join(normalizedChunk, "\n"),
-      lang,
-      theme,
-      invalidate,
-    );
-    return Arr.map(chunk, (entry, index) => {
-      const line =
-        highlighted[index] ??
-        theme.fg("toolOutput", escapeLineControlChars(normalizedChunk[index] ?? ""));
-      if (firstLine === undefined) return line;
-      const lineNumber = Fn.pipe(String(firstLine + entry.index), Str.padStart(width, " "));
-      return `${theme.fg("dim", `${lineNumber} │ `)}${line}`;
-    });
-  });
-  let text = rendered.lines.length
-    ? Arr.join(rendered.lines, "\n")
-    : theme.fg("muted", options.emptyLabel);
-  if (rendered.hidden > 0) text += showingFooter(theme, rendered.shown, preview.total, "lines");
-  if (skipHighlight) text += previewFooter(theme, options.skipHighlightLabel);
-  return new Text(text, 0, 0);
+  // Numbered rows continue under a blank gutter, so wrapped code stays in its column.
+  const blankGutter = theme.fg("dim", `${Fn.pipe(" ", Str.repeat(width))} │ `);
+  const rendered = renderChunkedPreviewEntries(
+    preview,
+    (chunk): WrappedCodeRow[] => {
+      const normalizedChunk = Arr.map(chunk, (entry) => expandPreviewTabs(entry.line));
+      const highlighted = renderHighlightedText(
+        Arr.join(normalizedChunk, "\n"),
+        lang,
+        theme,
+        invalidate,
+      );
+      return Arr.map(chunk, (entry, index) => {
+        const source = normalizedChunk[index] ?? "";
+        const line = highlighted[index] ?? theme.fg("toolOutput", escapeLineControlChars(source));
+        if (firstLine === undefined)
+          return { text: line, continuation: hangingContinuation(source) };
+        const lineNumber = Fn.pipe(String(firstLine + entry.index), Str.padStart(width, " "));
+        return { text: `${theme.fg("dim", `${lineNumber} │ `)}${line}`, continuation: blankGutter };
+      });
+    },
+    (hidden): WrappedCodeRow => ({ text: hiddenLinesMarker(theme, hidden), continuation: "" }),
+  );
+  let footer = "";
+  if (rendered.hidden > 0) footer += showingFooter(theme, rendered.shown, preview.total, "lines");
+  if (skipHighlight) footer += previewFooter(theme, options.skipHighlightLabel);
+  if (rendered.lines.length === 0)
+    return new Text(theme.fg("muted", options.emptyLabel) + footer, 0, 0);
+  const footerRows = Arr.map(
+    Arr.filter(Str.split(footer, "\n"), Str.isNonEmpty),
+    (text): WrappedCodeRow => ({ text, continuation: "" }),
+  );
+  return new WrappedCodeText([...rendered.lines, ...footerRows]);
 }
 
 export function renderSelectedOutputLines(
@@ -102,20 +113,22 @@ export function renderSelectedOutputLines(
   noun: string,
   renderChunk: (chunk: string[]) => string[],
 ): string {
-  const preview = renderChunkedPreviewEntries(selectPreviewLines(rawLines, limit), theme, (chunk) =>
-    renderChunk(Arr.map(chunk, (entry) => entry.line)),
+  const preview = renderChunkedPreviewEntries(
+    selectPreviewLines(rawLines, limit),
+    (chunk) => renderChunk(Arr.map(chunk, (entry) => entry.line)),
+    (hidden) => hiddenLinesMarker(theme, hidden),
   );
   const text = Arr.join(preview.lines, "\n");
   if (preview.hidden === 0) return text;
   return text + showingFooter(theme, preview.shown, rawLines.length, noun);
 }
 
-function renderChunkedPreviewEntries<T>(
+function renderChunkedPreviewEntries<T, Row>(
   preview: { entries: Array<PreviewLineEntry<T>>; shown: number; hidden: number },
-  theme: Theme,
-  renderChunk: (chunk: Array<{ line: T; index: number }>) => string[],
+  renderChunk: (chunk: Array<{ line: T; index: number }>) => Row[],
+  hiddenMarker: (hidden: number) => Row,
 ) {
-  const lines: string[] = [];
+  const lines: Row[] = [];
   let chunk: Array<{ line: T; index: number }> = [];
 
   function flushChunk(): void {
@@ -127,7 +140,7 @@ function renderChunkedPreviewEntries<T>(
   for (const entry of preview.entries) {
     if (entry.kind === "hidden") {
       flushChunk();
-      lines.push(hiddenLinesMarker(theme, entry.hidden));
+      lines.push(hiddenMarker(entry.hidden));
     } else {
       chunk.push({ line: entry.line, index: entry.index });
     }

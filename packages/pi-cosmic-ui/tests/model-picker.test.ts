@@ -22,10 +22,9 @@ const all: ModelPickerModel[] = [...scoped, { provider: "anthropic", id: "claude
 describe("model picker projection", () => {
   it("uses canonical identities and terminal-safe searchable rows", () => {
     expect(modelSelector(scoped[0]!)).toBe("openai-codex/gpt-5.4");
-    const choices = createModelPickerChoices(
-      [{ provider: "hostile\nprovider", id: "model\x1b[2J" }],
-      undefined,
-    );
+    const choices = createModelPickerChoices([
+      { provider: "hostile\nprovider", id: "model\x1b[2J" },
+    ]);
     expect(choices[0]?.value).not.toContain("\n");
     expect(choices[0]?.value).not.toContain("\x1b");
     expect(choices[0]?.item.label).not.toContain("\n");

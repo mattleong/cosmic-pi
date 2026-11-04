@@ -6,6 +6,7 @@ import {
   SettingsList,
   Spacer,
   Text,
+  visibleWidth,
   wrapTextWithAnsi,
   type Component,
   type SettingItem,
@@ -20,7 +21,7 @@ import * as Str from "effect/String";
 import type { SettingsOptionDescriptor } from "pi-cosmic-core";
 import { focusedField, LIST_CURSOR, managerTone, selectionMarker } from "./style.ts";
 import { FullScreenKeymap, type FullScreenKeymapOptions } from "./keymap.ts";
-import { clipToWidth } from "./chrome.ts";
+import { clipToWidth, INLINE_SEPARATOR } from "./chrome.ts";
 import { keyHint, keyHintBar, moveKeyHint } from "./key-labels.ts";
 import {
   moveSettingsList,
@@ -100,6 +101,17 @@ const nestedTitleLines = (
  */
 const STYLE_RESET = "\u001b[0m";
 
+/** A value listing facts keeps whole facts: `read off · write off · …`, never `edit off ·…`. */
+const clipAtFact = (full: string, room: number): string | undefined => {
+  const facts = Str.split(full, INLINE_SEPARATOR);
+  const ending = `${INLINE_SEPARATOR}…`;
+  const leading = Arr.map(facts.slice(0, -1), (_, index) =>
+    Arr.join(facts.slice(0, index + 1), INLINE_SEPARATOR),
+  );
+  const fits = Arr.takeWhile(leading, (prefix) => visibleWidth(`${prefix}${ending}`) <= room);
+  return Option.getOrUndefined(Option.map(Arr.last(fits), (prefix) => `${prefix}${ending}`));
+};
+
 const withClippedValueMarker = (
   theme: SettingsListTheme,
   items: ReadonlyArray<SettingItem>,
@@ -110,11 +122,14 @@ const withClippedValueMarker = (
     const shown = Fn.pipe(text, Str.endsWith(STYLE_RESET))
       ? Fn.pipe(text, Str.slice(0, -STYLE_RESET.length))
       : text;
+    if (shown.length <= 1 || Arr.some(items, (item) => item.currentValue === shown))
+      return theme.value(text, selected);
+    const full = Arr.findFirst(items, (item) => Fn.pipe(item.currentValue, Str.startsWith(shown)));
+    if (Option.isNone(full)) return theme.value(text, selected);
     const clipped =
-      shown.length > 1 &&
-      !Arr.some(items, (item) => item.currentValue === shown) &&
-      Arr.some(items, (item) => Fn.pipe(item.currentValue, Str.startsWith(shown)));
-    return theme.value(clipped ? `${Fn.pipe(shown, Str.slice(0, -1))}…` : text, selected);
+      clipAtFact(full.value.currentValue, visibleWidth(shown)) ??
+      `${Fn.pipe(shown, Str.slice(0, -1))}…`;
+    return theme.value(clipped, selected);
   },
 });
 

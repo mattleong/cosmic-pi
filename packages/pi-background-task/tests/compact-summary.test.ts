@@ -281,9 +281,11 @@ describe("background task row outcomes", () => {
       { ...failed, id: "task-0000000002", name: "TypeError: lint" },
     ];
     const messages = Arr.map(
-      project({ action: "list", tasks }, "list")?.issues ?? [],
+      project({ action: "stop_all", tasks }, "stop_all")?.issues ?? [],
       (issue) => issue.message,
     );
+    // A listing leaves each task's issues to its expanded Tasks section.
+    expect(project({ action: "list", tasks }, "list")?.issues).toEqual([]);
     expect(messages).toHaveLength(2);
     const [first, second] = messages;
     expect(first && Fn.pipe(first, Str.startsWith("BuildError"))).toBe(true);

@@ -39,6 +39,7 @@ export class FullWidthDiffText implements Component {
         width,
         this.maxRows,
         visibleWidth(continuation) < width ? continuation : "",
+        { breakAtWords: true },
       );
       if (!kind) {
         rows.push(...wrappedRows);

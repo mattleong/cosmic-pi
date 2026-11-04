@@ -240,6 +240,40 @@ const scopedSettingsFrames = (): string[] => {
   return lines;
 };
 
+/** A value listing facts clips at a fact boundary, never after a dangling separator. */
+const factSummarySettingsFrames = (): string[] => {
+  const surface = settingsSurface(
+    withSettingsGroupChildren(
+      [
+        {
+          kind: "group",
+          id: "group:output",
+          label: "Output previews",
+          description: "Which tool outputs show a preview.",
+          currentValue: "read off · write off · edit off · bash off",
+          children: [
+            {
+              id: "read",
+              label: "read",
+              description: "Preview read output.",
+              currentValue: "off",
+              values: ["on", "off"],
+            },
+          ],
+        },
+      ],
+      listTheme,
+      () => undefined,
+    ),
+    "Code Previews settings",
+  );
+  const render = (width: number) => surface.render(width);
+  return [
+    ...frame("Settings · summary of facts", render, 100),
+    ...frame("Settings · summary of facts clipped at a fact", render, 57),
+  ];
+};
+
 const tableFrames = (): string[] => {
   const rows = [
     ["scout", "openai-codex/gpt-6-luna", "low", ""],
@@ -426,6 +460,7 @@ const panelFrames = (): string[] => {
 /**
  * The framed searchable picker: its whole bar fits the border when wide; at 57 columns the
  * border keeps the exit and `? More`, and the other pairs wrap above it, as in search mode.
+ * Value pickers mark the current value `(•)`; the focused row carries `›`.
  */
 const searchableSelectFrames = (): string[] => {
   const choices = Arr.map(["gpt-6-luna", "gpt-6-sol", "claude-opus-5-5"], (name) => {
@@ -444,12 +479,14 @@ const searchableSelectFrames = (): string[] => {
     subtitle: "Models available to this session",
     choices,
     current: "provider/gpt-6-luna",
+    markedValue: "provider/gpt-6-luna",
     getHeight: () => 16,
     requestRender: () => undefined,
     select: () => undefined,
     cancel: () => undefined,
   });
   const lines = [
+    ...frame("searchable picker", (width) => picker.render(width), 180),
     ...frame("searchable picker", (width) => picker.render(width), 100),
     ...frame("searchable picker · narrow", (width) => picker.render(width), 57),
   ];
@@ -458,6 +495,57 @@ const searchableSelectFrames = (): string[] => {
   picker.handleInput("?");
   picker.handleInput("/");
   lines.push(...frame("searchable picker · filtering · narrow", (w) => picker.render(w), 57));
+  return [...lines, ...fieldPickerFrames()];
+};
+
+/** A profile field picker: the current value reads `(•)` while the cursor moves. */
+const fieldPickerFrames = (): string[] => {
+  const efforts = [
+    ["inherit", "Use the parent session's level (high)"],
+    ["off", "No extended reasoning"],
+    ["minimal", "Fastest; least reasoning"],
+    ["low", "Light reasoning"],
+    ["medium", "Balanced"],
+    ["high", "Thorough reasoning"],
+    ["xhigh", "Most thorough; slowest"],
+  ] as const;
+  const choices = Arr.map(efforts, ([value, description]) => ({
+    value,
+    item: { value, label: value, description },
+    searchText: `${value} ${description}`,
+    payload: value,
+  }));
+  const fieldPicker = (height: number) =>
+    new SearchableSelectPage<string>({
+      theme: plainTheme,
+      breadcrumb: "Session · reviewer · Primary · Reasoning",
+      title: "Choose reasoning",
+      subtitle: "Editing Current Session",
+      choices,
+      current: "high",
+      markedValue: "high",
+      getHeight: () => height,
+      requestRender: () => undefined,
+      select: () => undefined,
+      cancel: () => undefined,
+    });
+  const picker = fieldPicker(16);
+  const lines = [
+    ...frame("field picker · Choose reasoning", (width) => picker.render(width), 180),
+    ...frame("field picker · Choose reasoning · narrow", (width) => picker.render(width), 57),
+  ];
+  picker.handleInput(DOWN);
+  lines.push(
+    ...frame(
+      "field picker · cursor moved off the current value · narrow",
+      (w) => picker.render(w),
+      57,
+    ),
+  );
+  picker.handleInput("?");
+  lines.push(...frame("field picker · expanded help", (w) => picker.render(w), 180));
+  const short = fieldPicker(9);
+  lines.push(...frame("field picker · short pane scrolls · narrow", (w) => short.render(w), 57));
   return lines;
 };
 
@@ -470,6 +558,7 @@ export const sharedSurfaceGalleryLines = (): string[] => {
     ...cosmicUiSettingsFrames(),
     ...groupedSettingsFrames(),
     ...scopedSettingsFrames(),
+    ...factSummarySettingsFrames(),
     ...panelFrames(),
     ...tableFrames(),
     ...hintFrames(),

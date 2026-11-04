@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Container, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
@@ -13,10 +13,15 @@ import {
 } from "pi-code-previews";
 import { countLabel, formatDuration } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { clipToWidth, managerActivityColor } from "pi-cosmic-ui/manager";
+import {
+  clipToWidth,
+  managerActivityColor,
+  managerNoticeColor,
+  managerNoticeGlyph,
+} from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { failingExitCode, type BackgroundTaskSnapshot } from "../task/model.ts";
-import { quotedWaitText } from "../ui/compact-summary.ts";
+import { listedTaskIssues, quotedWaitText } from "../ui/compact-summary.ts";
 import { styledTaskOutputLine } from "../ui/output-lines.ts";
 import { failureFactLines, resultFactLines } from "../ui/result-facts.ts";
 import { taskDisplayName, taskStatePresentation } from "../ui/task-state.ts";
@@ -85,6 +90,8 @@ function taskPreviewLine(
 interface Row {
   readonly text: string;
   readonly wrap?: boolean;
+  /** Columns that wrapped continuation rows indent, hanging beneath the row's first line. */
+  readonly hang?: number;
 }
 
 const hiddenMarker = (hidden: number, theme: PreviewTheme): Row => ({
@@ -105,17 +112,43 @@ function boundedLines(lines: ReadonlyArray<string>, label: string, theme: Previe
   ];
 }
 
+/** A listed task's issues beneath its row, marked as the suite marks each severity. */
+function taskIssueRows(task: BackgroundTaskSnapshot, theme: PreviewTheme): Row[] {
+  return Arr.flatMap(listedTaskIssues(task), (entry) => [
+    {
+      text: `  ${theme.fg(managerNoticeColor(entry.severity), managerNoticeGlyph(entry.severity))} ${theme.fg("toolOutput", entry.message)}`,
+      hang: 4,
+    },
+    ...(entry.detail === undefined
+      ? []
+      : Arr.map(Str.split(entry.detail, "\n"), (line) => ({
+          text: `    ${theme.fg("muted", line)}`,
+          hang: 4,
+        }))),
+  ]);
+}
+
+/**
+ * Task rows. An expanded listing puts each task's issues beneath it; they state its exit status,
+ * so the row leaves that out.
+ */
 function taskRows(
   tasks: ReadonlyArray<BackgroundTaskSnapshot>,
   empty: string,
   expanded: boolean,
   theme: PreviewTheme,
+  listing = false,
 ): Row[] {
   if (tasks.length === 0) return [{ text: theme.fg("muted", empty) }];
   const shown = expanded ? tasks : tasks.slice(0, COLLAPSED_TASK_ROWS);
-  const rows: Row[] = Arr.map(shown, (task) => ({
-    text: taskPreviewLine(task, theme, { inHeading: false, expanded }),
-  }));
+  const issues = expanded && listing;
+  const rows: Row[] = Arr.flatMap(shown, (task) => [
+    {
+      text: taskPreviewLine(task, theme, { inHeading: false, expanded: expanded && !issues }),
+      hang: 2,
+    },
+    ...(issues ? taskIssueRows(task, theme) : []),
+  ]);
   if (shown.length < tasks.length)
     rows.push({
       text: renderExpansionAffordance(
@@ -320,7 +353,9 @@ function expandedSections(
       ];
     }
     case "list":
-      return [{ label: "Tasks", rows: taskRows(details.tasks, emptyListLabel(args), true, theme) }];
+      return [
+        { label: "Tasks", rows: taskRows(details.tasks, emptyListLabel(args), true, theme, true) },
+      ];
     case "stop_all":
       return [{ label: "Tasks", rows: taskRows(details.tasks, EMPTY_LISTS.active, true, theme) }];
     case "logs":
@@ -386,6 +421,15 @@ function factLines(input: BackgroundTaskPreviewInput): ReadonlyArray<string> {
   });
 }
 
+/** Wraps within `width`, indenting continuation rows `hang` columns. */
+function hangingRows(text: string, width: number, hang: number): string[] {
+  if (visibleWidth(text) <= width) return [text];
+  const indent = Math.min(hang, Math.max(0, width - 1));
+  return Arr.map(wrapTextWithAnsi(text, Math.max(1, width - indent)), (part, index) =>
+    index === 0 ? part : `${Str.repeat(indent)(" ")}${Str.trimStart(part)}`,
+  );
+}
+
 function rowsComponent(rows: ReadonlyArray<Row>): Component {
   let cached: { readonly width: number; readonly lines: string[] } | undefined;
   return {
@@ -393,7 +437,11 @@ function rowsComponent(rows: ReadonlyArray<Row>): Component {
       if (!Number.isFinite(width) || width < 1) return [];
       if (cached?.width === width) return cached.lines;
       const lines = Arr.flatMap(rows, (row) =>
-        row.wrap ? wrapTextWithAnsi(row.text, width) : [clipToWidth(row.text, width)],
+        row.wrap
+          ? row.hang === undefined
+            ? wrapTextWithAnsi(row.text, width)
+            : hangingRows(row.text, width, row.hang)
+          : [clipToWidth(row.text, width)],
       );
       cached = { width, lines };
       return lines;

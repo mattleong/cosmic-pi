@@ -4,7 +4,12 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { managerLayoutTier, managerNoticeColor, clipToWidth } from "pi-cosmic-ui/manager";
+import {
+  clipToWidth,
+  managerLayoutTier,
+  managerNoticeColor,
+  SUITE_STATUS_GLYPHS,
+} from "pi-cosmic-ui/manager";
 import { managerTable } from "pi-cosmic-ui/manager/table";
 import {
   configuredKeyLabels,
@@ -88,6 +93,9 @@ const messageRows = (state: ProfileSetPickerRenderState, theme: Theme): string[]
 // Rows align with the pane heading's two-column indent, and wrapped text hangs beneath it.
 const PANE_INDENT = "  ";
 
+// The selected set's description hangs beneath its label.
+const DESCRIPTION_INDENT = "    ";
+
 const indentedWrap = (text: string, width: number): ReadonlyArray<string> =>
   Arr.map(
     wrapTextWithAnsi(text, Math.max(1, width - PANE_INDENT.length)),
@@ -120,30 +128,47 @@ const libraryRows = (
       logical.push({ text: PANE_INDENT + theme.fg("muted", SCOPE_LABELS[entry.scope]) });
     }
     const selected = index === state.selectedIndex;
-    const invalid =
-      entry.kind === "set" && entry.invalid
-        ? " · ! fix profiles"
-        : entry.kind === "invalid-default"
-          ? " · ! clear"
-          : "";
-    const defaultLabel =
-      (entry.kind === "set" || entry.kind === "invalid-default") && entry.scopeDefault
-        ? " · default"
-        : "";
+    const flagged = entry.kind === "invalid-default" || (entry.kind === "set" && entry.invalid);
+    // The selected row's description already states the default and the problem, so the
+    // short badges appear only on the other rows.
+    const badges = selected
+      ? ""
+      : `${(entry.kind === "set" || entry.kind === "invalid-default") && entry.scopeDefault ? theme.fg("muted", " · default") : ""}${
+          flagged
+            ? theme.fg(
+                "error",
+                ` · ${SUITE_STATUS_GLYPHS.warning} ${entry.kind === "set" ? "fix profiles" : "clear"}`,
+              )
+            : ""
+        }`;
     logical.push({
       entryIndex: index,
       text: clipToWidth(
-        `${selected ? LIST_CURSOR : " "} ${selected && !state.searching ? focusedField(theme, entry.label) : theme.fg(managerTone.saved, entry.label)}${theme.fg("muted", defaultLabel)}${theme.fg("error", invalid)}${selected ? theme.fg("muted", ` · ${entry.description}`) : ""}`,
+        `${selected ? LIST_CURSOR : " "} ${selected && !state.searching ? focusedField(theme, entry.label) : theme.fg(managerTone.saved, entry.label)}${badges}`,
         width,
       ),
     });
+    if (selected)
+      for (const line of wrapTextWithAnsi(
+        entry.description,
+        Math.max(1, width - DESCRIPTION_INDENT.length),
+      ))
+        logical.push({
+          entryIndex: index,
+          text: DESCRIPTION_INDENT + theme.fg(flagged ? "error" : "muted", line),
+        });
   }
   const listHeight = Math.max(1, height - header.length);
+  const selectedRows = Arr.filter(logical, (row) => row.entryIndex === state.selectedIndex);
   const selectedRow = Option.getOrElse(
     Arr.findFirstIndex(logical, (row) => row.entryIndex === state.selectedIndex),
     () => 0,
   );
-  const start = listWindowStart(logical.length, selectedRow, listHeight);
+  // Center the selected row, then pull the window down so its wrapped description stays visible.
+  const start = Math.max(
+    listWindowStart(logical.length, selectedRow, listHeight),
+    Math.min(selectedRow, selectedRow + selectedRows.length - listHeight),
+  );
   return [...header, ...Arr.map(logical.slice(start, start + listHeight), (row) => row.text)];
 };
 

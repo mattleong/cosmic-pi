@@ -73,15 +73,13 @@ export interface SubagentCommandActions {
 interface SubagentCommandModules {
   readonly profiles: () => Promise<typeof import("./profile-dashboard.ts")>;
   readonly settings: () => Promise<typeof import("./subagent-settings.ts")>;
-  readonly doctor: () => Promise<
-    Pick<typeof import("../application/doctor.ts"), "formatDoctorReport">
-  >;
+  readonly doctor: () => Promise<Pick<typeof import("./doctor-report.ts"), "showDoctorReport">>;
 }
 
 const COMMAND_MODULES: SubagentCommandModules = {
   profiles: () => import("./profile-dashboard.ts"),
   settings: () => import("./subagent-settings.ts"),
-  doctor: () => import("../application/doctor.ts"),
+  doctor: () => import("./doctor-report.ts"),
 };
 
 export function registerSubagentManagerCommand(
@@ -108,7 +106,7 @@ export function registerSubagentManagerCommand(
   };
   registerExtensionCommand(pi, {
     name: "subagents",
-    description: "Open subagents in Activity, or edit profiles and settings",
+    description: "Subagent activity",
     bare: {
       handler: (_args, ctx) =>
         invoke(ctx, (invocation, isCurrent) => {
@@ -145,7 +143,7 @@ export function registerSubagentManagerCommand(
     subcommands: [
       {
         name: "profiles",
-        description: "Edit Current Session profiles and saved sets",
+        description: "Profiles and sets",
         arguments: "[profile]",
         complete: (prefix) => {
           const matches = Fn.pipe(
@@ -154,7 +152,7 @@ export function registerSubagentManagerCommand(
             Arr.map((profile) => ({
               value: profile,
               label: profile,
-              description: `Edit ${profile} in Current Session`,
+              description: `Edit ${profile}`,
             })),
           );
           return matches.length ? matches : null;
@@ -196,23 +194,17 @@ export function registerSubagentManagerCommand(
       },
       {
         name: "doctor",
-        description: "Check subagent setup and route readiness",
+        description: "Check subagent setup",
         handler: (_args, ctx) =>
           invoke(ctx, (invocation, isCurrent) =>
             modules
               .doctor()
-              .then(({ formatDoctorReport }) => {
+              .then(({ showDoctorReport }) => {
                 if (!isCurrent()) return undefined;
                 return actions
                   .runDoctor(invocation)
                   .then((checks) =>
-                    isCurrent()
-                      ? notifyAtHostBoundary(
-                          invocation,
-                          formatDoctorReport(checks),
-                          Arr.some(checks, (item) => item.status !== "ok") ? "warning" : "info",
-                        )
-                      : undefined,
+                    isCurrent() ? showDoctorReport(invocation, checks, isCurrent) : undefined,
                   );
               })
               .catch(() => {

@@ -4,6 +4,7 @@ import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   Markdown,
+  visibleWidth,
   wrapTextWithAnsi,
   type Component,
   type MarkdownTheme,
@@ -195,6 +196,42 @@ export const agentTextBlockLines = (
   });
 };
 
+/**
+ * Plain text wrapped between words. A ` · ` separator stays with the fact before it, so no row
+ * starts with one. A word wider than a row, such as a path, breaks after `/`, `-`, `_`, or `.`,
+ * and mid-word only where a part has none.
+ */
+const wrapFacts = (text: string, width: number): string[] => {
+  if (visibleWidth(text) <= width) return [text];
+  const rows: string[] = [];
+  let row = "";
+  const flush = () => {
+    if (Str.trim(row) !== "") rows.push(Str.trimEnd(row));
+    row = "";
+  };
+  // Appends `part` to the row, starting a new row when it doesn't fit; false when it is too wide.
+  const place = (part: string): boolean => {
+    if (visibleWidth(Str.trimEnd(row + part)) <= width) {
+      row += part;
+      return true;
+    }
+    flush();
+    if (visibleWidth(Str.trimEnd(part)) > width) return false;
+    row = part;
+    return true;
+  };
+  for (const word of Str.split(text, /(?<= )(?=[^ ·])/u))
+    if (!place(word))
+      for (const part of Str.split(word, /(?<=[/\\\-_.])/u))
+        if (!place(part)) {
+          const pieces = wrapTextWithAnsi(part, width);
+          rows.push(...pieces.slice(0, -1));
+          row = pieces.at(-1) ?? "";
+        }
+  flush();
+  return rows.length === 0 ? [""] : rows;
+};
+
 /** A dim expanded-only section of technical facts, one wrapped line each; leading spaces nest a fact. */
 export const detailsSectionLines = (
   lines: ReadonlyArray<string>,
@@ -209,26 +246,26 @@ export const detailsSectionLines = (
     clipToWidth(theme.fg("muted", label), safeWidth),
     ...Arr.flatMap(facts, (line) => {
       const nested = line.length - Str.trimStart(line).length;
-      // Wrapped rows hang beneath their fact's first row.
-      const [first = "", ...rest] = indentedLines(
-        theme.fg("dim", sanitizeTerminalLine(line)),
-        safeWidth,
-        2 + nested,
+      const shift = Math.min(2 + nested, Math.max(0, safeWidth - 1));
+      const [first = "", ...rest] = wrapFacts(
+        sanitizeTerminalLine(line),
+        Math.max(1, safeWidth - shift),
       );
-      if (rest.length === 0) return [first];
+      const firstRow = `${pad(shift)}${theme.fg("dim", first)}`;
+      if (rest.length === 0) return [firstRow];
+      // Wrapped rows hang beneath their fact's first row.
       const hanging = Math.min(4 + nested, Math.max(0, safeWidth - 1));
       return [
-        first,
-        ...indentedLines(
-          theme.fg(
-            "dim",
+        firstRow,
+        ...Arr.map(
+          wrapFacts(
             Arr.join(
               Arr.map(rest, (row) => Str.trim(row)),
               " ",
             ),
+            Math.max(1, safeWidth - hanging),
           ),
-          safeWidth,
-          hanging,
+          (row) => `${pad(hanging)}${theme.fg("dim", row)}`,
         ),
       ];
     }),

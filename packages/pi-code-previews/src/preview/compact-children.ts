@@ -84,7 +84,7 @@ export function renderCompactChildren(
       ? wrapHanging(theme.fg("dim", `… ${omitted} ${calls(omitted)} not listed`), width, "", "", 0)
       : [];
   Arr.forEach(entries, (entry, index) => {
-    const branch = index === entries.length - 1 && omitted === 0 ? "╰─" : "├─";
+    const branch = index === entries.length - 1 && omitted === 0 ? "└─" : "├─";
     const prefix = flat ? "" : theme.fg("dim", `  ${branch} `);
     const issueLabel = flat ? "" : compactIssueLabel(entry.issues ?? [], theme);
     const { row, issueShown } = layoutCompactRow(
@@ -139,7 +139,7 @@ function omissionRows(
   theme: Theme,
   width: number,
 ): string[] {
-  const branch = theme.fg("dim", "  ╰─ ");
+  const branch = theme.fg("dim", "  └─ ");
   const more = theme.fg("dim", `… ${omitted} more ${calls(omitted)}`);
   const failed = hiddenFailed > 0 ? theme.fg("error", `${hiddenFailed} failed`) : "";
   const single = branch + more + (failed ? ` (${failed})` : "");

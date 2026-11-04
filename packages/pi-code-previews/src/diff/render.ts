@@ -58,7 +58,10 @@ type DiffRenderOptions = {
 };
 
 function renderDiff(diff: string, options: DiffRenderOptions): string {
-  const lines = splitLinesLimited(diff, options.limit);
+  // One extra line tells a separator that ends the diff from one the limit cut off.
+  const fetched = splitLinesLimited(diff, options.limit + 1);
+  const truncated = fetched.length > options.limit;
+  const lines = truncated ? fetched.slice(0, options.limit) : fetched;
   const parsedLines = Arr.map(lines, parseDiffLine);
   const lineNumberWidth = options.lineNumbers ? diffLineNumberWidth(parsedLines) : 0;
   const highlighted = options.lang
@@ -67,57 +70,78 @@ function renderDiff(diff: string, options: DiffRenderOptions): string {
   const emphasis = new Map<number, TextRange[]>();
   for (const pair of emphasizedChangedPairs(parsedLines, options.wordEmphasis))
     emphasis.set(pair.removedIndex, pair.ranges.removed).set(pair.addedIndex, pair.ranges.added);
-  return Arr.join(
-    Arr.map(lines, (line, index) => {
-      const parsed = parsedLines[index];
-      return parsed
-        ? renderDiffParsedLine(
-            parsed,
-            highlighted[index],
-            options.theme,
-            lineNumberWidth,
-            emphasis.get(index),
-          )
-        : renderSeparator(
-            line,
-            options.theme,
-            () => hiddenLineCount(parsedLines[index - 1], parsedLines[index + 1]),
-            lineNumberWidth,
-          );
-    }),
-    "\n",
-  );
+  const rows: string[] = [];
+  let shift = 0;
+  Arr.forEach(lines, (line, index) => {
+    const parsed = parsedLines[index];
+    if (parsed) {
+      if (parsed.kind !== " ") shift += parsed.kind === "+" ? 1 : -1;
+      rows.push(
+        renderDiffParsedLine(
+          parsed,
+          highlighted[index],
+          options.theme,
+          lineNumberWidth,
+          emphasis.get(index),
+        ),
+      );
+      return;
+    }
+    const gap = Str.trim(escapeControlChars(line)) === "...";
+    // The file's length isn't in the diff, so a gap that ends it has nothing to count.
+    if (gap && !truncated && index === lines.length - 1) return;
+    const hidden = gap
+      ? hiddenLineCount(
+          index === 0 ? "start" : parsedLines[index - 1],
+          parsedLines[index + 1],
+          shift,
+        )
+      : undefined;
+    rows.push(renderSeparator(line, options.theme, hidden, lineNumberWidth));
+  });
+  return Arr.join(rows, "\n");
 }
 
-const contextLineNumber = (line: ParsedDiffLine | null | undefined): number | undefined =>
-  line?.kind === " " && line.lineNumber !== "" ? Number(Str.trim(line.lineNumber)) : undefined;
+const diffLineNumber = (line: ParsedDiffLine): number | undefined => {
+  if (line.lineNumber === "") return undefined;
+  const value = Number(Str.trim(line.lineNumber));
+  return Number.isInteger(value) ? value : undefined;
+};
 
 /**
- * How many unchanged lines a `...` separator stands for, from the context lines around it: both
- * share one numbering, and a leading separator hides everything before the first shown line.
+ * Context and added lines carry new-file numbers and removed lines old ones; the lines a gap hides
+ * are unchanged, so `shift` (lines added minus removed so far) moves an old number to the new file.
+ */
+function newFileLine(line: ParsedDiffLine, shift: number): number | undefined {
+  const value = diffLineNumber(line);
+  if (value === undefined) return undefined;
+  return line.kind === "-" ? value + shift : value;
+}
+
+/**
+ * How many unchanged lines a `...` separator stands for, from the numbered lines around it. A
+ * leading separator hides everything before the first shown line.
  */
 function hiddenLineCount(
-  before: ParsedDiffLine | null | undefined,
+  before: ParsedDiffLine | null | undefined | "start",
   after: ParsedDiffLine | null | undefined,
+  shift: number,
 ): number | undefined {
-  const next = contextLineNumber(after);
-  if (next === undefined || !Number.isInteger(next)) return undefined;
-  const previous = before === undefined ? 0 : contextLineNumber(before);
-  if (previous === undefined || !Number.isInteger(previous) || next - previous < 2)
-    return undefined;
+  const previous = before === "start" ? 0 : before ? newFileLine(before, shift) : undefined;
+  const next = after ? newFileLine(after, shift) : undefined;
+  if (previous === undefined || next === undefined || next - previous < 2) return undefined;
   return next - previous - 1;
 }
 
 function renderSeparator(
   line: string,
   theme: Theme,
-  hidden: () => number | undefined,
+  count: number | undefined,
   lineNumberWidth: number,
 ): string {
   const safeLine = escapeControlChars(line);
   const trimmed = Str.trim(safeLine);
   if (trimmed === "...") {
-    const count = hidden();
     // The ellipsis sits in the gutter's `│` column.
     return theme.fg(
       "muted",

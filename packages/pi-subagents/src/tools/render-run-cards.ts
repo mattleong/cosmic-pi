@@ -96,7 +96,7 @@ export const cardBlockLines = (
 
 /** One Details line per run: ID, route, writer, usage, and timing, then exceptional evidence. */
 export const cardFactLines = (card: SubagentRunCard): ReadonlyArray<string> => {
-  const usage = aggregateUsage([card], "compact");
+  const usage = aggregateUsage([card]);
   const summary = Fn.pipe(
     [
       card.id,

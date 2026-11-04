@@ -54,13 +54,14 @@ Every surface must read well at both a desktop terminal (180×56) and a phone cl
 - `Esc` backs out one level, or closes the surface at the top level.
 - Label it `Esc Back` when nested, `Esc Close` at the top, and `Esc Cancel` for a pending decision. `exitKeyHint(level)` produces each one.
 - Show only that primary exit key. Aliases such as `C-c`, `q`, and `h` (in Vim-style lists) work where they apply but appear only in the expanded `? More` help, never as `Esc/C-c` in the default bar. `q` and `h` are aliases on non-text surfaces only.
-- A surface with a pending sub-state backs that out first: with a settings filter applied, `Esc Clear` clears the filter, and the next `Esc` closes.
+- A surface with a pending sub-state backs that out first: with a settings or picker filter applied, `Esc Clear` clears the filter, and the next `Esc` closes. A picker opened straight into search, where the search is the whole surface, reads `Esc Cancel` instead.
 - Nothing closes on "any key".
 
 ## Lists and selection
 
-- Mark the focused row with `›` (`LIST_CURSOR`) in every list, picker, and tree.
+- Mark the focused row with `›` (`LIST_CURSOR`) in every list, picker, and tree. Never let a pi-tui default such as `→` stand in for it.
 - Use `[ ]`/`[x]` for multi-select and `( )`/`(•)` for single-select (`selectionMarker`).
+- A picker that chooses a value marks every row `( )` and the current value `(•)`, so the current value stays visible while the cursor moves: settings choice lists do this, and `SearchableSelectPage` does it when given `markedValue`. Action and navigation lists carry no marker. Don't repeat the marker as `(current)` text.
 - Show scroll position as `n of N` or `n–m of N`.
 
 ## Glyphs
@@ -97,21 +98,22 @@ Each glyph has one meaning, suite-wide. Don't introduce a glyph that isn't liste
 
 ### Disclosure, selection, and structure
 
-| Glyph                | Meaning                                                                                                |
-| -------------------- | ------------------------------------------------------------------------------------------------------ |
-| `▸`                  | Collapsed: more is available (a folded tree branch, or `▸ output · C-o Expand`)                        |
-| `▾`                  | Expanded                                                                                               |
-| `›`                  | The focused row in a list, picker, or tree (`LIST_CURSOR`)                                             |
-| `[ ]` `[x]`          | Multi-select, unchecked and checked                                                                    |
-| `( )` `(•)`          | Single-select, unselected and selected; the dot inside parentheses is part of the marker               |
-| `[x] Stop`           | An action and its one key; the bracketed key is the key that runs it (see [action keys](#action-keys)) |
-| `●`                  | Unsaved edit                                                                                           |
-| `✎`                  | Write or edit your own answer (a questionnaire's custom option)                                        |
-| `▪` `◦`              | A directory and a file in `find`/`ls` results                                                          |
-| `│` `┆`              | In `grep` results, a matching line and a context line                                                  |
-| `├─` `└─` `│` `╭╮╰╯` | Tree branches and frames; structure only, with no meaning of their own                                 |
-| `…`                  | Clipped or omitted text                                                                                |
-| `␊` `␍␊`             | A visible line ending in a diff                                                                        |
+| Glyph         | Meaning                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------ |
+| `▸`           | Collapsed: more is available (a folded tree branch, or `▸ output · C-o Expand`)                        |
+| `▾`           | Expanded                                                                                               |
+| `›`           | The focused row in a list, picker, or tree (`LIST_CURSOR`)                                             |
+| `[ ]` `[x]`   | Multi-select, unchecked and checked                                                                    |
+| `( )` `(•)`   | Single-select, unselected and selected; the dot inside parentheses is part of the marker               |
+| `[x] Stop`    | An action and its one key; the bracketed key is the key that runs it (see [action keys](#action-keys)) |
+| `●`           | Unsaved edit                                                                                           |
+| `✎`           | Write or edit your own answer (a questionnaire's custom option)                                        |
+| `▪` `◦`       | A directory and a file in `find`/`ls` results                                                          |
+| `│` `┆`       | In `grep` results, a matching line and a context line                                                  |
+| `├─` `└─` `│` | Tree branches, in every tree (Activity, the live widget, codemode calls); structure only               |
+| `╭╮╰╯`        | Frame corners only, never tree branches                                                                |
+| `…`           | Clipped or omitted text                                                                                |
+| `␊` `␍␊`      | A visible line ending in a diff                                                                        |
 
 ### Footer and identity
 
@@ -149,7 +151,7 @@ A bare `/<command>` without its own handler shows one overview, built by `regist
 - Each subcommand gets one line: a two-column indent, then `/<name> <sub> [args]` padded to the widest entry, two spaces, and a short description, such as `  /code-previews health    Show renderer health`.
 - Every line stays within 55 columns, because Pi draws notices one column in and doesn't hang-indent its own wraps. If any aligned line would be wider, the whole list switches to a stacked form: the command on its own line, and its description on the next line indented four columns, wrapping with the same indent. Nothing wraps flush-left at 57 columns.
 - Notes such as examples (`overviewNotes`) follow the list verbatim.
-- Subcommand descriptions also serve as autocomplete text. Keep them short (about 28 columns or less), in sentence case, with no trailing period.
+- Subcommand descriptions also serve as autocomplete text. Pi's autocomplete shows only about 21 columns of description at 57 columns, so keep every autocomplete description within about 20 columns (`Footer settings`, `Show renderer health`), in sentence case, with no trailing period. Put detail in the settings surface or the overview notes, not the description.
 
 ## Panels, tables, and long text
 
@@ -185,4 +187,5 @@ A bare `/<command>` without its own handler shows one overview, built by `regist
 
 - State each fact once per surface. Don't repeat titles, statuses, or results.
 - Label compact values whose meaning isn't obvious (`cache r163k`, `~1 modified`) when there is room, and fall back to the short form only when narrow.
+- Token counts read `23k tokens` wherever there is room, on every surface; the abbreviation `tok` is only a narrow-width fallback. Two surfaces in the same pane never use different words for the same count.
 - Wrapped lines use a hanging indent. Truncation uses `…`. Nothing is cut mid-word without an ellipsis.

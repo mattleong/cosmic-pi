@@ -43,7 +43,7 @@ export function registerTasksCommand(
   };
   registerExtensionCommand(pi, {
     name: "tasks",
-    description: "Open background tasks in Activity, or change their settings",
+    description: "Background tasks",
     bare: {
       handler: (_args, ctx) =>
         invoke(ctx, (invocation, isCurrent) => {

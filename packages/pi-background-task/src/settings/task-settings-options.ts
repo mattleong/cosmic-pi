@@ -8,8 +8,8 @@ import { BACKGROUND_TASK_SETTINGS } from "../config/options.ts";
 import type { BackgroundTaskConfig, BackgroundTaskSettingId } from "../config/schema.ts";
 
 export const SCOPES = [
-  { name: "global", description: "Change a setting everywhere" },
-  { name: "project", description: "Change a setting for this trusted project" },
+  { name: "global", description: "Every project" },
+  { name: "project", description: "This trusted project" },
 ] as const;
 
 export const INHERIT = "inherit";
@@ -37,7 +37,7 @@ export const TASK_SETTING_DESCRIPTORS = Arr.map(BACKGROUND_TASK_SETTINGS, (setti
 
 export const TASK_SETTINGS_COMMAND = {
   name: "settings",
-  description: "Configure background tasks",
+  description: "Task settings",
   complete: (prefix: string) =>
     completeSettingsArguments(
       prefix,

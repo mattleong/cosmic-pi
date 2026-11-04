@@ -313,7 +313,7 @@ function source(
     firstLine,
     highlight = true,
   }: { readonly firstLine?: number | undefined; readonly highlight?: boolean } = {},
-): Text {
+): Component {
   return renderContentPreview({
     content,
     limit: 0,

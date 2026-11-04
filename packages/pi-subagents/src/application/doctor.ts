@@ -294,14 +294,3 @@ const readinessFailure = (
       Effect.timeoutOption(PREFLIGHT_TIMEOUT),
       Effect.map(Option.getOrElse(() => "readiness check timed out")),
     );
-
-const STATUS_GLYPHS = { ok: "✓", warning: "!", failed: "✗" } as const;
-
-export const formatDoctorReport = (checks: ReadonlyArray<DoctorCheck>): string =>
-  Arr.join(
-    [
-      "Subagents doctor",
-      ...Arr.map(checks, (item) => `${STATUS_GLYPHS[item.status]} ${item.label}: ${item.detail}`),
-    ],
-    "\n",
-  );

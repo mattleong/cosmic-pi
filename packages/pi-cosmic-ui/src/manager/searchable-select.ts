@@ -8,10 +8,10 @@ import { stripTerminalControls } from "pi-cosmic-core/security";
 import {
   fuzzyFilter,
   Input,
+  visibleWidth,
   type Component,
   type Focusable,
   type SelectItem,
-  SelectList,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { clipToWidth } from "./chrome.ts";
@@ -38,15 +38,15 @@ import {
   TEXT_INPUT_KEY_LABELS,
   type FramedKeyHints,
 } from "./key-labels.ts";
-import { focusedField } from "./style.ts";
+import { focusedField, LIST_CURSOR, selectionMarker } from "./style.ts";
 
-export const managerSelectTheme = (theme: Theme): ConstructorParameters<typeof SelectList>[2] => ({
-  selectedPrefix: (text) => focusedField(theme, text),
-  selectedText: (text) => focusedField(theme, text),
-  description: (text) => theme.fg("muted", text),
-  scrollInfo: (text) => theme.fg("dim", text),
-  noMatch: (text) => theme.fg("warning", text),
-});
+/** Labels keep this column, so descriptions shown with `? More` line up. */
+const PRIMARY_COLUMN = 32;
+const MIN_DESCRIPTION_WIDTH = 10;
+const CURSOR = `${LIST_CURSOR} `;
+const NO_CURSOR = "  ";
+
+const singleLine = (text: string): string => Str.trim(Str.replace(/[\r\n]+/g, " ")(text));
 
 export interface SearchableSelectPageChoice<A> {
   readonly value: string;
@@ -76,7 +76,13 @@ export interface SearchableSelectPageOptions<A> extends SearchableSelectHostOpti
   readonly title: string;
   readonly subtitle: string;
   readonly choices: ReadonlyArray<SearchableSelectPageChoice<A>>;
+  /** The row focused on opening. */
   readonly current?: string | undefined;
+  /**
+   * A value picker's current value. When set, every row carries a single-select marker and this
+   * value reads `(•)`. Action and navigation lists leave it unset.
+   */
+  readonly markedValue?: string | undefined;
   readonly notice?: string | undefined;
   readonly emptyText?: string | undefined;
   readonly initialQuery?: string | undefined;
@@ -96,7 +102,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   private readonly options: SearchableSelectPageOptions<A>;
   private query: string;
   private filtered: ReadonlyArray<SearchableSelectPageChoice<A>>;
-  private list: SelectList;
+  private selectedIndex = 0;
   private listHeight: number;
   private feedback: string | undefined;
   private searchMode: boolean;
@@ -113,7 +119,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     this.searchMode = options.initialSearchMode ?? Boolean(options.initialQuery);
     this.selectedIdentity = options.current ?? options.choices[0]?.value;
     if (this.query) this.input.setValue(this.query);
-    this.list = this.buildList();
+    this.refilter();
     this.input.focused = false;
   }
 
@@ -140,68 +146,93 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   }
 
   private resizeList(height: number): void {
-    const next = Math.max(1, height);
-    if (next === this.listHeight) return;
-    this.listHeight = next;
-    this.list = this.buildList();
+    this.listHeight = Math.max(1, height);
   }
 
   private selectedChoice(): SearchableSelectPageChoice<A> | undefined {
-    const selected = this.list?.getSelectedItem();
-    return selected
-      ? Option.getOrUndefined(
-          Arr.findFirst(this.filtered, (entry) => entry.value === selected.value),
-        )
-      : undefined;
+    return this.filtered[this.selectedIndex];
   }
 
-  private buildList(): SelectList {
+  private refilter(): void {
     this.filtered = fuzzyFilter(
       [...this.options.choices],
       this.query,
       (choice) => choice.searchText,
     );
+    const preferred = this.selectedIdentity
+      ? Arr.findFirstIndex(this.filtered, (choice) => choice.value === this.selectedIdentity)
+      : Option.none();
+    this.selectedIndex = Option.getOrElse(preferred, () => 0);
+  }
+
+  private rowLabel(choice: SearchableSelectPageChoice<A>): string {
+    const marked = this.options.markedValue;
+    const marker =
+      marked === undefined ? "" : `${selectionMarker("single", choice.value === marked)} `;
+    const label = stripTerminalControls(choice.item.label || choice.item.value);
+    const hint = choice.enabled === false && choice.disabledHint ? ` · ${choice.disabledHint}` : "";
+    return `${marker}${label}${hint}`;
+  }
+
+  // `? More` adds each row's description in a second column when there is room for it.
+  private rowColumns(choice: SearchableSelectPageChoice<A>, width: number) {
+    const label = this.rowLabel(choice);
+    const description =
+      this.alternateHelp && choice.item.description
+        ? singleLine(stripTerminalControls(choice.item.description))
+        : "";
+    const column = Math.min(PRIMARY_COLUMN, width - 4);
+    if (description && column > 2 && width - column > MIN_DESCRIPTION_WIDTH) {
+      const shown = clipToWidth(label, column - 2, "…");
+      return {
+        label: `${shown}${Fn.pipe(" ", Str.repeat(column - visibleWidth(shown)))}`,
+        description: clipToWidth(description, width - column, "…"),
+      };
+    }
+    return { label: clipToWidth(label, Math.max(1, width), "…"), description: "" };
+  }
+
+  private renderRow(choice: SearchableSelectPageChoice<A>, focused: boolean, width: number) {
     const theme = this.options.theme;
-    const list = new SelectList(
-      Arr.map(this.filtered, (choice) => {
-        const item = this.alternateHelp
-          ? choice.item
-          : { value: choice.item.value, label: choice.item.label };
-        return choice.enabled === false
-          ? {
-              ...item,
-              label: theme.fg(
-                "dim",
-                `${item.label ?? item.value}${choice.disabledHint ? ` · ${choice.disabledHint}` : ""}`,
-              ),
-            }
-          : { ...item, label: theme.fg(choice.tone ?? "text", item.label ?? item.value) };
-      }),
-      this.listHeight,
-      {
-        ...managerSelectTheme(theme),
-        selectedPrefix: (text: string) =>
-          this.searchMode ? theme.fg("muted", text) : focusedField(theme, text),
-        selectedText: (text: string) => {
-          if (this.searchMode) return text;
-          if (this.selectedChoice()?.enabled === false) {
-            const disabled = theme.bold(theme.fg("dim", stripTerminalControls(text)));
-            return theme.bg?.("selectedBg", disabled) ?? disabled;
-          }
-          return focusedField(theme, stripTerminalControls(text));
-        },
-        noMatch: (_text: string) =>
-          theme.fg("warning", `  ${this.options.emptyText ?? "No matching options"}`),
-      },
+    const { label, description } = this.rowColumns(choice, Math.max(1, width - CURSOR.length));
+    const disabled = choice.enabled === false;
+    if (focused && !this.searchMode) {
+      if (!disabled) return focusedField(theme, `${CURSOR}${label}${description}`);
+      const dim = theme.bold(theme.fg("dim", `${CURSOR}${label}${description}`));
+      return theme.bg?.("selectedBg", dim) ?? dim;
+    }
+    // While typing, the query keeps focus; the cursor stays visible but quiet.
+    const prefix = focused ? theme.fg("muted", CURSOR) : NO_CURSOR;
+    const styled = theme.fg(disabled ? "dim" : (choice.tone ?? "text"), label);
+    return `${prefix}${styled}${description ? theme.fg("muted", description) : ""}`;
+  }
+
+  /** The visible rows, with `n of N` in the last row when the list scrolls. */
+  private renderList(width: number): string[] {
+    const theme = this.options.theme;
+    const total = this.filtered.length;
+    if (total === 0)
+      return [
+        theme.fg(
+          "warning",
+          clipToWidth(`  ${this.options.emptyText ?? "No matching options"}`, width, "…"),
+        ),
+      ];
+    const scrolls = total > this.listHeight && this.listHeight > 1;
+    const capacity = scrolls ? this.listHeight - 1 : this.listHeight;
+    const start = Math.max(
+      0,
+      Math.min(this.selectedIndex - Math.floor(capacity / 2), total - capacity),
     );
-    const preferredIndex = this.selectedIdentity
-      ? Option.getOrElse(
-          Arr.findFirstIndex(this.filtered, (choice) => choice.value === this.selectedIdentity),
-          () => -1,
-        )
-      : -1;
-    if (preferredIndex >= 0) list.setSelectedIndex(preferredIndex);
-    return list;
+    const rows = Arr.map(this.filtered.slice(start, start + capacity), (choice, offset) =>
+      this.renderRow(choice, start + offset === this.selectedIndex, width),
+    );
+    return scrolls
+      ? [
+          ...rows,
+          theme.fg("dim", clipToWidth(`  ${this.selectedIndex + 1} of ${total}`, width, "…")),
+        ]
+      : rows;
   }
 
   private handleSelectAction(action: string): void {
@@ -233,7 +264,6 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         break;
       case "help":
         this.alternateHelp = !this.alternateHelp;
-        this.list = this.buildList();
         break;
     }
   }
@@ -246,15 +276,12 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     if (Predicate.isTagged(resolution, "Action")) {
       if (isListMotion(resolution.action)) {
         if (this.filtered.length > 0) {
-          const currentChoice = this.selectedChoice();
-          this.list.setSelectedIndex(
-            nextListMotionIndex(
-              resolution.action,
-              currentChoice ? this.filtered.indexOf(currentChoice) : 0,
-              this.filtered.length,
-              pageSteps(this.listHeight - 1),
-              true,
-            ),
+          this.selectedIndex = nextListMotionIndex(
+            resolution.action,
+            this.selectedIndex,
+            this.filtered.length,
+            pageSteps(this.listHeight - 1),
+            true,
           );
           this.selectedIdentity = this.selectedChoice()?.value ?? this.selectedIdentity;
         }
@@ -270,7 +297,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       if (next !== this.query) {
         this.query = next;
         this.feedback = undefined;
-        this.list = this.buildList();
+        this.refilter();
       }
       this.options.requestRender();
     }
@@ -281,7 +308,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     if (!this.query) return;
     this.query = "";
     this.input.setValue("");
-    this.list = this.buildList();
+    this.refilter();
   }
 
   private setSearchMode(active: boolean): void {
@@ -300,7 +327,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
   }
 
   private searchCancel(): string {
-    const verb = this.options.cancelBehavior === "close" ? "Cancel" : "Done";
+    const verb = this.options.cancelBehavior === "close" ? "Cancel" : "Clear";
     return `${this.keys().key("tui.select.cancel", "Esc")} ${verb}`;
   }
 
@@ -345,7 +372,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       const single = inputLine ?? noticeLine;
       if (single) return [single];
       this.resizeList(1);
-      return this.list.render(inner).slice(0, 1);
+      return this.renderList(inner).slice(0, 1);
     }
     if (bodyHeight <= 1) return [];
     const compactHeader = [
@@ -355,7 +382,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     ].slice(0, bodyHeight - 1);
     const listRows = Math.max(1, bodyHeight - compactHeader.length);
     this.resizeList(listRows);
-    return [...compactHeader, ...this.list.render(inner).slice(0, listRows)];
+    return [...compactHeader, ...this.renderList(inner).slice(0, listRows)];
   }
 
   private fullBody(bodyHeight: number, inner: number, activeNotice: string | undefined): string[] {
@@ -386,7 +413,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     ];
     const desiredListHeight = Math.max(1, bodyHeight - header.length);
     this.resizeList(desiredListHeight);
-    return [...header, ...this.list.render(inner).slice(0, desiredListHeight)];
+    return [...header, ...this.renderList(inner).slice(0, desiredListHeight)];
   }
 
   render(width: number): string[] {
@@ -423,6 +450,5 @@ export class SearchableSelectPage<A> implements Component, Focusable {
 
   invalidate(): void {
     this.input.invalidate();
-    this.list = this.buildList();
   }
 }

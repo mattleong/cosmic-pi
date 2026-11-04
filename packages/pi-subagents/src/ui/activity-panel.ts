@@ -56,6 +56,8 @@ export const EMPTY_ACTIVITY_PRESENTATION: SubagentActivityPresentationSnapshot =
 export const RECENT_MESSAGE_WINDOW_MS = 8_000;
 const MESSAGE_PREVIEW_CHARS = 240;
 const MIN_CLIPPED_MESSAGE_WIDTH = 16;
+// Narrower than this, a clipped activity says too little to keep beside the profile.
+const MIN_CLIPPED_ACTIVITY_WIDTH = 10;
 
 export interface RunMessagePreview {
   readonly direction: "in" | "out";
@@ -222,6 +224,8 @@ interface HeaderPart {
 
 interface OptionalHeaderPart extends HeaderPart {
   readonly priority: number;
+  /** A shorter form tried before the part is dropped, such as `84k tok` for `84k tokens`. */
+  readonly narrow?: string | undefined;
 }
 
 const HEADER_TITLE: HeaderPart = { color: "success", text: "Subagents" };
@@ -248,13 +252,14 @@ const fitPanelHeader = (
     if (remaining.length === 0)
       return clipToWidth(theme.fg(HEADER_COMMAND.color, HEADER_COMMAND.text), width, "");
     const lowest = Math.max(...Arr.map(remaining, (part) => part.priority));
-    remaining.splice(
-      Option.getOrElse(
-        Arr.findLastIndex(remaining, (part) => part.priority === lowest),
-        () => -1,
-      ),
-      1,
+    const index = Option.getOrElse(
+      Arr.findLastIndex(remaining, (part) => part.priority === lowest),
+      () => -1,
     );
+    const part = remaining[index];
+    if (part?.narrow !== undefined)
+      remaining.splice(index, 1, { ...part, text: part.narrow, narrow: undefined });
+    else remaining.splice(index, 1);
   }
 };
 
@@ -271,7 +276,7 @@ const panelHeader = (
   ).length;
   const waiting = Arr.filter(trackedRuns, (run) => run.state === "waiting_for_parent").length;
   const paused = Arr.filter(trackedRuns, (run) => run.state === "paused").length;
-  const usage = aggregateUsage(trackedRuns, "compact");
+  const usage = aggregateUsage(trackedRuns);
   const finishedIds = new Set(
     Fn.pipe(
       panel.awaitedRuns,
@@ -309,7 +314,12 @@ const panelHeader = (
         priority: 0,
       },
       paused > 0 && { color: runStateColor("paused"), text: `${paused} paused`, priority: 0 },
-      usage !== "" && { color: "muted", text: usage, priority: 4 },
+      usage !== "" && {
+        color: "muted",
+        text: usage,
+        narrow: aggregateUsage(trackedRuns, "compact"),
+        priority: 4,
+      },
     ],
     width,
     theme,
@@ -354,8 +364,8 @@ interface ActivityMetadataVariant {
   readonly parts: ReadonlyArray<string>;
   /** Right-aligned elapsed time, as the shared Activity widget shows it. */
   readonly elapsed?: string | undefined;
-  /** A lone message preview may be clipped to fit the row. */
-  readonly clippable?: boolean | undefined;
+  /** The last part may be clipped with `…` when at least this many columns remain for it. */
+  readonly clipLastAt?: number | undefined;
 }
 
 const ELAPSED_GAP = 2;
@@ -388,19 +398,26 @@ const activityMetadataVariants = (
   const themedElapsed = elapsed ? theme.fg("dim", elapsed) : undefined;
   const messageCount = ancestorOnly ? 0 : runMessageCount(panel, run.id);
   const messages = messageCount > 0 ? theme.fg("muted", countLabel(messageCount, "message")) : "";
+  // As in the shared Activity widget, the profile and elapsed time stay while the activity
+  // text clips with `…`.
   const variants: ActivityMetadataVariant[] = [
     { parts: [route, themedActivity, messages], elapsed: themedElapsed },
-    { parts: [route, themedActivity], elapsed: themedElapsed },
-    { parts: [route, themedActivity] },
+    {
+      parts: [route, themedActivity],
+      elapsed: themedElapsed,
+      clipLastAt: MIN_CLIPPED_ACTIVITY_WIDTH,
+    },
     // A stall warning or recent message outranks the route when the row is too narrow for both.
-    ...(stall
-      ? [{ parts: [themedActivity], elapsed: themedElapsed }, { parts: [themedActivity] }]
-      : message
-        ? [
-            { parts: [themedActivity], elapsed: themedElapsed, clippable: true },
-            { parts: [themedActivity], clippable: true },
-          ]
-        : []),
+    ...(stall || message
+      ? [
+          {
+            parts: [themedActivity],
+            elapsed: themedElapsed,
+            clipLastAt: MIN_CLIPPED_MESSAGE_WIDTH,
+          },
+          { parts: [themedActivity], clipLastAt: MIN_CLIPPED_MESSAGE_WIDTH },
+        ]
+      : []),
     { parts: [route], elapsed: themedElapsed },
     { parts: [route] },
   ];
@@ -425,9 +442,15 @@ const fitActivityMetadata = (
       : left;
   if (visibleWidth(prefix + metadata) + elapsedWidth <= width)
     return rightAligned(prefix + metadata);
-  const available = width - visibleWidth(prefix) - elapsedWidth;
-  return variant.clippable && available >= MIN_CLIPPED_MESSAGE_WIDTH
-    ? rightAligned(`${prefix}${clipToWidth(metadata, available)}`)
+  if (variant.clipLastAt === undefined) return undefined;
+  const kept = Arr.join(
+    Arr.map(Arr.dropRight(variant.parts, 1), (part) => `${part}${separator}`),
+    "",
+  );
+  const last = Arr.last(variant.parts).pipe(Option.getOrElse(() => ""));
+  const available = width - visibleWidth(prefix + kept) - elapsedWidth;
+  return available >= variant.clipLastAt
+    ? rightAligned(`${prefix}${kept}${clipToWidth(last, available)}`)
     : undefined;
 };
 

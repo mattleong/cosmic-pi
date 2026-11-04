@@ -114,7 +114,7 @@ export function registerSettingsCommand(
     settingsSubcommand<ResolvedCosmicUiConfig>({
       owner,
       root: "cosmic-ui",
-      description: "Configure the Cosmic UI footer",
+      description: "Footer settings",
       title: "Cosmic UI",
       isCurrent,
       descriptors: settingDescriptors,

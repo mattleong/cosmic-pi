@@ -67,10 +67,11 @@ const labeledItem = (
   return description ? { ...base, description: sanitizeTerminalLine(description) } : base;
 };
 
-const modelItem = (model: ModelPickerModel, current?: string): SelectItem => {
+// The picker marks the current model `(•)`, so the label doesn't repeat it.
+const modelItem = (model: ModelPickerModel): SelectItem => {
   const selector = sanitizeTerminalLine(modelSelector(model));
   const unavailable = model.available === false;
-  const status = `${current === selector ? " (current)" : ""}${unavailable ? " (unavailable)" : ""}`;
+  const status = unavailable ? " (unavailable)" : "";
   const unavailableReason = unavailable
     ? sanitizeTerminalLine(model.unavailableReason ?? "Model is unavailable")
     : undefined;
@@ -91,10 +92,9 @@ const modelItem = (model: ModelPickerModel, current?: string): SelectItem => {
 
 export const createModelPickerChoices = <M extends ModelPickerModel>(
   models: ReadonlyArray<M>,
-  current?: string,
 ): Array<SearchableSelectPageChoice<M>> =>
   Arr.map(models, (model) => {
-    const item = modelItem(model, current);
+    const item = modelItem(model);
     return {
       value: item.value,
       item,
@@ -171,8 +171,9 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
       breadcrumb: this.options.breadcrumb ?? "/models",
       title: this.options.title ?? "Choose model",
       subtitle: this.scopeSubtitle(),
-      choices: createModelPickerChoices(this.models(), this.options.current),
+      choices: createModelPickerChoices(this.models()),
       current: selected ?? this.options.current,
+      markedValue: this.options.current,
       notice: this.options.notice,
       emptyText: "No matching models",
       initialQuery: search?.query,

@@ -66,9 +66,22 @@ test("skipped-context gaps count the unchanged lines they hide", () => {
   const rows = Str.split(stripAnsi(renderPlainDiff(diff, plainTheme, 1000)), "\n");
   const gaps = Arr.filter(rows, (row) => Fn.pipe(row, Str.includes("…")));
   const counts = Arr.map(gaps, (row) => /(\d+)/u.exec(row)?.[1]);
-  // Pi shows four context lines: lines 1–16 lead, 26–46 sit between the changes, and the
-  // trailing gap's size isn't in the diff, so it stays uncounted.
-  assert.deepEqual(counts, ["16", "21", undefined]);
+  // Pi shows four context lines: lines 1–16 lead and 26–46 sit between the changes. The diff
+  // doesn't say where the file ends, so the trailing gap is left out instead of shown uncounted.
+  assert.deepEqual(counts, ["16", "21"]);
+  assert.match(rows.at(-1) ?? "", /line 54/u);
+});
+
+const gapCount = (diff: string) =>
+  /(\d+) unchanged/u.exec(stripAnsi(renderPlainDiff(diff, plainTheme, 1000)))?.[1];
+
+test("a gap beside a changed line counts from that line's number in the edited file", () => {
+  // Lines 3–4 sit between context line 2 and the removed line 5.
+  assert.equal(gapCount("-1 a\n+1 A\n 2 b\n   ...\n-5 e\n+5 E"), "2");
+  // An insertion shifts the old numbering: removed old line 9 sits at new line 10.
+  assert.equal(gapCount("+5 new\n   ...\n-9 old"), "4");
+  // A deletion before the gap: old line 5 is gone, so new lines 5–6 are hidden before line 7.
+  assert.equal(gapCount(" 4 d\n-5 e\n   ...\n 7 h"), "2");
 });
 
 test("plain diff escapes terminal control characters", () => {

@@ -196,7 +196,7 @@ const awaitActivity = (details: SubagentAwaitDetails): SubagentToolActivity => {
         phrases.length > MAX_NAMES
           ? `${phrases.length} subagents: ${Arr.join(phrases.slice(0, MAX_NAMES), ", ")} and ${phrases.length - MAX_NAMES} more`
           : Arr.join(phrases, ", "),
-        tokens > 0 ? `${formatTokens(tokens)} tok` : undefined,
+        tokens > 0 ? `${formatTokens(tokens)} tokens` : undefined,
       ],
       isTextFragment,
     ),

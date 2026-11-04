@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { test } from "vitest";
 import { indexOfFrom } from "pi-cosmic-core/text-scan";
@@ -32,4 +33,17 @@ test("a part without separators breaks mid-word only when nothing else fits", ()
   assert.ok(Arr.every(rows, (row) => visibleWidth(row) <= 10));
   assert.equal(rows[0], "short");
   assert.equal(Arr.join(rows, ""), "shortabcdefghijklmnopqrstuvwxyz");
+});
+
+test("a wrapped row never starts with the separator between facts", () => {
+  const text = "openai-codex/gpt-5.6-sol:low · 22k tokens · $0.08 · 5m";
+  for (const width of [50, 49, 44, 30, 20]) {
+    const rows = wrapPlainText(text, width);
+    assert.ok(Arr.every(rows, (row) => visibleWidth(row) <= width));
+    assert.ok(
+      Arr.every(rows.slice(1), (row) => !Fn.pipe(row, Str.startsWith("·"))),
+      `no leading · at ${width}`,
+    );
+    assert.equal(withoutSpaces(Arr.join(rows, "")), withoutSpaces(text));
+  }
 });

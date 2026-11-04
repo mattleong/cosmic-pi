@@ -284,6 +284,10 @@ function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
   };
 }
 
+/** A listed task's own issues, which an expanded listing shows beneath the task's row. */
+export const listedTaskIssues = (value: BackgroundTaskSnapshot): ReadonlyArray<CompactIssue> =>
+  taskSummary(value).issues;
+
 /** A finished task's notice: its outcome and issues as a status row has them, and its duration. */
 export function taskNoticeSummary(value: BackgroundTaskSnapshot): TaskSummary {
   const task = taskReportSummary(value);
@@ -413,16 +417,14 @@ function aggregateSummary(
     Arr.filter(issues, (entry) => entry.severity === severity),
   );
   const outcome = aggregateOutcome(outcomes);
-  // A listing is neutral even when listed tasks failed: its counts say so, and each task's issue
-  // is expanded-only information rather than a failure of the call.
+  // A listing is neutral even when listed tasks failed: its counts say so, and its expanded
+  // Tasks section shows each task's issues beneath the task (`listedTaskIssues`).
   const listing = details.action === "list";
   return {
     action,
     subject,
     counters: aggregateCounters(details.tasks),
-    issues: listing
-      ? Arr.map(ordered, (entry) => ({ ...entry, severity: "info" as const }))
-      : ordered,
+    issues: listing ? [] : ordered,
     outcome: listing && Arr.contains(LISTED_PROBLEMS, outcome) ? "returned" : outcome,
   };
 }

@@ -53,7 +53,7 @@ export interface SubagentToolActivityFact {
  * its model-facing content: a phrased summary, the words it returned, and its technical facts.
  */
 export interface SubagentToolActivity {
-  /** Such as `started Read tests (scout)` or `Read tests finished · 23k tok`. */
+  /** Such as `started Read tests (scout)` or `Read tests finished · 23k tokens`. */
   readonly summary: string;
   /** Authored words the call returned, such as a report or a reply, rendered as Markdown. */
   readonly text?: string | undefined;

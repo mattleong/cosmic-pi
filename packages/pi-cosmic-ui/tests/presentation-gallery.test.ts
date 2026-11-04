@@ -474,6 +474,12 @@ const detailFrames = () => {
     component.handleInput("k");
   capture("group summary · 140 cols", component.render(140));
   capture("group summary · narrow · 57 cols", component.render(57));
+  // The list-only layout has no detail heading, so the title carries `following`.
+  const phone = detailedManager(26);
+  phone.render(57);
+  select(phone, ticker.key, 8);
+  phone.handleInput("f");
+  capture("running task followed from the list · narrow · 57 cols", phone.render(57));
   return frames;
 };
 

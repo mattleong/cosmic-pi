@@ -124,7 +124,7 @@ describe("profile model catalog", () => {
         refresh: () => Promise.resolve({ aborted: false }),
       });
       const displayed = (picker: CandidateModelPickerData) => {
-        const choices = createModelPickerChoices(picker.choices, picker.current);
+        const choices = createModelPickerChoices(picker.choices);
         for (const choice of choices) {
           expect(hasTerminalControls(choice.item.label)).toBe(false);
           expect(hasTerminalControls(choice.item.description ?? "")).toBe(false);

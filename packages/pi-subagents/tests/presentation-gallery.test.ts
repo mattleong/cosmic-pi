@@ -109,13 +109,19 @@ import { tmpdir } from "node:os";
 import { piArgumentRejection } from "pi-cosmic-core/testing/sdk";
 import { view } from "./fixtures/run-view.ts";
 import { workspaceHarness, workspaceInspection } from "./fixtures/profile-workspace.ts";
-import { subagentCommandActionsFixture } from "./fixtures/profile-settings-inspection.ts";
+import {
+  INVALID_ROUTE,
+  profileSettingsInspection,
+  subagentCommandActionsFixture,
+} from "./fixtures/profile-settings-inspection.ts";
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
 import { settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
+import type { DoctorCheck } from "../src/application/doctor.ts";
+import { showDoctorReport } from "../src/settings/doctor-report.ts";
 import { registerSubagentApplication } from "../src/application/register.ts";
-import { profileCandidate } from "./fixtures/profiles.ts";
+import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import {
   subagentServiceDouble,
   type SubagentServiceDoubleInput,
@@ -2373,6 +2379,121 @@ const settingsLines = Effect.fn("SubagentGallery.settingsLines")(function* () {
   return lines;
 });
 
+const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = [
+  { label: "Pi", status: "ok", detail: "version 1.5.0" },
+  { label: "Node", status: "ok", detail: "/opt/homebrew/Cellar/node@22/22.22.1_1/bin/node" },
+  {
+    label: "Configuration",
+    status: "ok",
+    detail: "profile set claude-bridge opus-5.5 high (global)",
+  },
+  { label: "Project settings", status: "ok", detail: "trusted; project configuration applies" },
+  { label: "Profile scout", status: "ok", detail: "openai-codex/gpt-6-luna" },
+  {
+    label: "Profile oracle",
+    status: "failed",
+    detail: "No API key for openai-codex; run /login, then try again [auth_missing]",
+  },
+  {
+    label: ".worktreeinclude",
+    status: "ok",
+    detail: "none; isolated trees get no ignored or credential files",
+  },
+  {
+    label: "Git",
+    status: "warning",
+    detail: "2.30.1 at /usr/bin/git; isolated writers need 2.38 or later",
+  },
+];
+
+/** `/subagents doctor` opens a read-only panel whose wrapped details hang beneath each label. */
+const doctorLines = Effect.fn("SubagentGallery.doctorLines")(function* () {
+  const lines: string[] = [];
+  for (const width of [180, 57]) {
+    const surface = fakeCustomSurfaceHost({ columns: width, rows: 46 });
+    const mounted = deferredPromise();
+    const ctx = sessionContextFixture({
+      mode: "tui",
+      hasUI: true,
+      ui: {
+        notify: () => undefined,
+        custom: (factory, options) => {
+          const opened = surface.custom(factory, options);
+          queueMicrotask(() => {
+            surface.mount();
+            mounted.resolve();
+          });
+          return opened;
+        },
+      },
+    });
+    const shown = yield* step(() => showDoctorReport(ctx, DOCTOR_CHECKS, () => true)).pipe(
+      Effect.forkScoped,
+    );
+    yield* step(() => mounted.promise);
+    const panel = surface.overlays.at(-1) ?? surface.editor;
+    lines.push(
+      `── subagents doctor · a failed route and a Git warning · ${width} cols`,
+      ...Arr.map(panel?.render(width) ?? [], (line) => Str.trimEnd(line)),
+      "",
+    );
+    panel?.handleInput?.("\u001b");
+    yield* Fiber.join(shown);
+  }
+  return lines;
+});
+
+/**
+ * The saved-set library with a default set, an ordinary set, and one with an invalid profile,
+ * each selected in turn so its description wraps beneath it and replaces its badges.
+ */
+const profileSetPickerLines = (): ReadonlyArray<string> => {
+  const inspection = profileSettingsInspection({
+    globalDocument: {
+      version: 6,
+      defaultProfileSet: "review",
+      profileSets: {
+        broken: { profiles: { worker: INVALID_ROUTE } },
+        nightly: { profiles: { scout: declaredCandidate("openai-codex/gpt-6-luna") } },
+        review: { profiles: {} },
+      },
+    },
+    projectTrusted: true,
+  });
+  return Arr.flatMap([180, 57], (width) => {
+    const dashboard = new ProfileDashboardComponent({
+      ctx: extensionContextFixture({ isProjectTrusted: () => true }),
+      actions: subagentCommandActionsFixture({}),
+      isCurrent: () => true,
+      onInspection: () => undefined,
+      awaitDialog: () => Effect.runPromise(Effect.never),
+      workspace: {
+        theme: plainTheme,
+        inspection,
+        target: { kind: "session" },
+        initialProfile: "scout",
+        parentEffort: "high",
+        getHeight: () => 24,
+        requestRender: () => undefined,
+        close: () => undefined,
+        saveDraft: () => Promise.resolve({ inspection }),
+        loadModelPicker: () => Promise.reject(new Error("unused")),
+        supportedPiEfforts: () => undefined,
+      },
+    });
+    dashboard.handleInput("\t");
+    // The default set starts selected; each step moves up to the set above it.
+    return Arr.flatMap(["the default", "an ordinary", "an invalid"], (kind, index) => {
+      if (index > 0) dashboard.handleInput("\u001b[A");
+      return [
+        `── profiles dashboard · saved sets · ${kind} set selected · ${width} cols`,
+        ...Arr.map(dashboard.render(width), (line) => Str.trimEnd(line)),
+        "",
+      ];
+    });
+  });
+};
+
 const BACKGROUNDS = ["border", "on", "off"] as const;
 
 const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
@@ -2480,7 +2601,9 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...widgetLines(),
         ...profileEditorLines(),
         ...profileDashboardLines(),
+        ...profileSetPickerLines(),
         ...(yield* Effect.scoped(settingsLines())),
+        ...(yield* Effect.scoped(doctorLines())),
       );
       yield* writeGallerySection(directory, "pi-subagents", lines);
     }),

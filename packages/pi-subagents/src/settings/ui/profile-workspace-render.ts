@@ -176,20 +176,32 @@ const PROFILE_COLUMNS = [
   { minWidth: 2, priority: 1 },
 ] as const;
 
-/** `+1 fallback` where the list has room, and `+1` where the model would otherwise clip. */
+/**
+ * `+1 fallback` in its own column where the list has room. Where the model would otherwise clip,
+ * a bare `+1` follows the reasoning label instead, saving the column gap.
+ */
 const fallbackLabel = (count: number, compact: boolean): string =>
   count === 0 ? "" : compact ? `+${count}` : `+${count} fallback${count === 1 ? "" : "s"}`;
+
+// The table stops one column short of the pane edge, so no cell touches the frame.
+const PROFILE_TABLE_MARGIN = 1;
+
+const effortCell = (effort: string, fallbacks: string, compact: boolean): string =>
+  compact && fallbacks ? `${effort} ${fallbacks}` : effort;
 
 const profileTableCells = (
   row: ProfileTableRow,
   marked: boolean,
   compact: boolean,
-): ReadonlyArray<string> => [
-  `${row.profile}${marked ? " ●" : ""}`,
-  row.model,
-  row.effort,
-  fallbackLabel(row.fallbacks, compact),
-];
+): ReadonlyArray<string> => {
+  const fallbacks = fallbackLabel(row.fallbacks, compact);
+  return [
+    `${row.profile}${marked ? " ●" : ""}`,
+    row.model,
+    effortCell(row.effort, fallbacks, compact),
+    compact ? "" : fallbacks,
+  ];
+};
 
 /**
  * The width the profile table needs to show every model and fallback count unclipped, measured as
@@ -221,12 +233,12 @@ const profileTableLines = (
 ): ReadonlyArray<string> => {
   const rows = profileTableRows(state, theme);
   const marked = Arr.some(rows, (row) => row.edited);
-  const compact = profileTableNaturalWidth(rows) > width;
+  const compact = profileTableNaturalWidth(rows) > width - PROFILE_TABLE_MARGIN;
   // The shared table leaves out a column with no cells, such as fallbacks when there are none.
   const table = managerTable(
     Arr.map(rows, (row) => profileTableCells(row, marked, compact)),
     PROFILE_COLUMNS,
-    width - PROFILE_CURSOR_WIDTH,
+    width - PROFILE_CURSOR_WIDTH - PROFILE_TABLE_MARGIN,
   );
   return Arr.map(rows, (row) => {
     const identity =
@@ -234,11 +246,13 @@ const profileTableLines = (
         ? focusedField(theme, row.profile)
         : theme.fg(managerTone.identity, row.profile);
     const marker = row.edited ? theme.fg("warning", " ●") : "";
+    const label = fallbackLabel(row.fallbacks, compact);
+    const fallbacks = label ? theme.fg("muted", label) : "";
     return `${row.selected ? LIST_CURSOR : " "} ${table.row([
       identity + marker,
       row.model,
-      row.effort,
-      theme.fg("muted", fallbackLabel(row.fallbacks, compact)),
+      effortCell(row.effort, fallbacks, compact),
+      compact ? "" : fallbacks,
     ])}`;
   });
 };
@@ -249,7 +263,8 @@ const MIN_LIST_WIDTH = 32;
 
 /** Wide layouts give the list what its models need, and the editor everything else. */
 const wideListWidth = (state: ProfileWorkspaceRenderState, theme: Theme, inner: number) => {
-  const natural = profileTableNaturalWidth(profileTableRows(state, theme)) + 2;
+  const natural =
+    profileTableNaturalWidth(profileTableRows(state, theme)) + 2 + PROFILE_TABLE_MARGIN;
   const most = Math.max(MIN_LIST_WIDTH, inner - 1 - MIN_EDITOR_WIDTH);
   return Math.max(MIN_LIST_WIDTH, Math.min(natural, most, Math.floor(inner * 0.6)));
 };

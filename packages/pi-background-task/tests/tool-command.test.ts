@@ -18,7 +18,10 @@ import {
   prepareBackgroundTaskArguments,
   type BackgroundTaskToolInput,
 } from "../src/tools/schema.ts";
-import { projectBackgroundTaskCompactSummary } from "../src/ui/compact-summary.ts";
+import {
+  listedTaskIssues,
+  projectBackgroundTaskCompactSummary,
+} from "../src/ui/compact-summary.ts";
 import {
   provideTaskService,
   taskLogSlice,
@@ -431,9 +434,11 @@ describe("shared background task command", () => {
       ) =>
         Arr.map(
           Arr.filter(
-            summarize(args, { details })?.issues ?? [],
-            // A listing reports each task's failure as expanded-only information.
-            (issue) => issue.severity === (args.action === "list" ? "info" : "error"),
+            // A listing shows each task's failure beneath that task, not as the call's issue.
+            details.action === "list"
+              ? Arr.flatMap(details.tasks, listedTaskIssues)
+              : (summarize(args, { details })?.issues ?? []),
+            (issue) => issue.severity === "error",
           ),
           (issue) => issue.message,
         );

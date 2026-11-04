@@ -28,3 +28,25 @@ test("ANSI wrapping preserves short printable spans exactly", () => {
     assert.ok(Arr.every(rows, (row) => !Fn.pipe(row, Str.includes("\x1b"))));
   }
 });
+
+const wordWrap = (text: string, width: number) =>
+  Arr.map(wrapAnsiToWidth(text, width, 10, "  ", { breakAtWords: true }), stripAnsi);
+
+test("word-aware wrapping moves a word near the edge whole, and splits one that isn't", () => {
+  // `number` starts within a few columns of the edge, so it moves to the next row.
+  assert.deepEqual(wordWrap("items: LineItem[]): number {", 22), [
+    "items: LineItem[]): ",
+    "  number {",
+  ]);
+  // A token longer than the window still breaks at the edge rather than leaving a mostly empty row.
+  assert.deepEqual(wordWrap("a abcdefghijklmnopqrstuvwxyz", 20), [
+    "a abcdefghijklmnopqr",
+    "  stuvwxyz",
+  ]);
+  // Colors carry onto the moved word's row.
+  const colored = wrapAnsiToWidth("\x1b[31mred words here\x1b[39m", 12, 10, "", {
+    breakAtWords: true,
+  });
+  assert.equal(colored.length, 2);
+  assert.ok(Fn.pipe(colored[1] ?? "", Str.startsWith("\x1b[31m")));
+});

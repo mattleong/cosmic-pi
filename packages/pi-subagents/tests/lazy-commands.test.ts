@@ -33,6 +33,9 @@ const harness = (wait: Promise<void> = Promise.resolve()) => {
     Promise.resolve(),
   );
   const runDoctor = vi.fn<(ctx: ExtensionCommandContext) => Promise<[]>>(() => Promise.resolve([]));
+  const showDoctorReport = vi.fn<
+    typeof import("../src/settings/doctor-report.ts").showDoctorReport
+  >(() => Promise.resolve());
   const entered = deferredPromise();
   const modules = {
     profiles: vi.fn(() => {
@@ -51,7 +54,7 @@ const harness = (wait: Promise<void> = Promise.resolve()) => {
     }),
     doctor: vi.fn(() => {
       entered.resolve();
-      return wait.then(() => ({ formatDoctorReport: () => "Doctor report" }));
+      return wait.then(() => ({ showDoctorReport }));
     }),
   };
   const openActivity = vi.fn<(signal?: AbortSignal) => Promise<boolean>>(() =>
@@ -81,6 +84,7 @@ const harness = (wait: Promise<void> = Promise.resolve()) => {
     openProfileDashboard,
     settingsHandler,
     runDoctor,
+    showDoctorReport,
     openActivity,
     originalSignal: signal.signal,
     setSignal: (next: AbortSignal | undefined) => {
@@ -223,8 +227,8 @@ describe("lazy /subagents command implementations", () => {
       expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "error");
       expect(h.runDoctor).not.toHaveBeenCalled();
       yield* Effect.promise(() => h.run("doctor"));
-      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "info");
       expect(h.runDoctor).toHaveBeenCalledOnce();
+      expect(h.showDoctorReport).toHaveBeenCalledWith(h.ctx, [], expect.any(Function));
     }),
   );
 
@@ -252,6 +256,7 @@ describe("lazy /subagents command implementations", () => {
       report.resolve([]);
       yield* Effect.promise(() => checking);
       expect(current.notify).not.toHaveBeenCalled();
+      expect(current.showDoctorReport).not.toHaveBeenCalled();
     }),
   );
 

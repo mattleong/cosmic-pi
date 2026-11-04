@@ -28,7 +28,6 @@ const pseudoModel = (selector: string) => ({ provider: "profile", id: selector, 
 export function createPiModelOptions(input: {
   readonly models: ReadonlyArray<ProjectedPiModel>;
   readonly parentModel?: ProjectedPiModel | undefined;
-  readonly currentSelector: string;
 }): ProfileModelOption[] {
   const models = Arr.flatMap(input.models, (model) => {
     const selector = `${model.provider}/${model.id}`;
@@ -41,7 +40,7 @@ export function createPiModelOptions(input: {
   return [
     {
       ...pseudoModel("parent"),
-      label: `Current Pi model${canonical ? ` → ${boundedMiddle(sanitizeTerminalLine(canonical), 72)}` : ""}${input.currentSelector === "parent" ? " (current)" : ""}`,
+      label: `Current Pi model${canonical ? ` → ${boundedMiddle(sanitizeTerminalLine(canonical), 72)}` : ""}`,
       description: parent
         ? `${parent.name ? `${boundedMiddle(sanitizeTerminalLine(parent.name), 48)} · ` : ""}${parent.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${Arr.join(parent.supportedEfforts, ", ") || "none"}`
         : "Use the current Pi model when this run starts",
@@ -62,7 +61,7 @@ export const retainUnavailableCurrent = (
     : [
         {
           ...pseudoModel(current),
-          label: `${current} (current · unavailable)`,
+          label: `${current} (unavailable)`,
           searchText: `${current} current unavailable configured`,
           available: false,
           unavailableReason:

@@ -4,6 +4,8 @@ import { applyPresentationSettings, createToolPresentationHarness } from "../../
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
 import { builtinRenderers, stripAnsi, textResult } from "../support/render";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 type Style = "compact" | "preview";
 
@@ -81,6 +83,35 @@ describe("read results", () => {
           expect(rendered).not.toBe(unranged);
         }
       }
+  });
+
+  test("a wrapped line continues under the gutter instead of in the line-number column", () => {
+    applyPresentationSettings({ readLineNumbers: true });
+    const line = "export function subtotal(items: LineItem[]): number {";
+    for (const style of ["preview", "compact"] as const) {
+      const tool = harness("read", style);
+      tool.call({ path: "/project/cart.ts" }, { expanded: true });
+      tool.result(textResult(`${line}\n}`, {}), { expanded: true });
+      const text = Arr.join(Arr.map(tool.render(40), stripAnsi), "\n");
+      const wrapped = /^( *)1 │ export[^\n]*\n( *)│ ([^\n]*)$/mu.exec(text);
+      // The continuation's `│` sits under the line's own gutter, with no number before it.
+      expect(wrapped?.[2]?.length).toBe((wrapped?.[1]?.length ?? -1) + 2);
+      // The wrap lands between words rather than splitting one.
+      expect(Fn.pipe(line, Str.endsWith(` ${Str.trim(wrapped?.[3] ?? "")}`))).toBe(true);
+    }
+  });
+});
+
+describe("write content", () => {
+  test("a wrapped line continues past its own indentation", () => {
+    applyPresentationSettings({ toolCallCollapsedStyle: "compact" });
+    const tool = createToolPresentationHarness(builtinRenderers("write", true)!);
+    const content =
+      "test('sums', () => {\n    assert.equal(subtotal([{ sku: 'a', price: 5, quantity: 2 }]), 10);\n});";
+    tool.call({ path: "/project/cart.test.ts", content }, { expanded: true });
+    const text = Arr.join(Arr.map(tool.render(40), stripAnsi), "\n");
+    const wrapped = /^( *)assert\.equal[^\n]*\n( *)\S/mu.exec(text);
+    expect(wrapped?.[2]?.length).toBe((wrapped?.[1]?.length ?? -1) + 2);
   });
 });
 

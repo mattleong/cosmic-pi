@@ -2,13 +2,14 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Order from "effect/Order";
 import * as Str from "effect/String";
-import { codeUnitAt, indexOfFrom } from "pi-cosmic-core/text-scan";
+import { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
 // Bound once: Pi's loader routes each imported-helper call through an interop proxy.
 const codeAt = codeUnitAt;
 const indexFrom = indexOfFrom;
+const lastIndexFrom = lastIndexOfFrom;
 
 const ESCAPE_CODE = 0x1b;
 
@@ -138,6 +139,11 @@ export function injectVisibleRanges(
   return cursor.out;
 }
 
+/** How far back from the edge a wrap may move to land on a word boundary instead of mid-word. */
+const WORD_BREAK_WINDOW = 12;
+
+const NON_SPACE_RE = /\S/u;
+
 class AnsiWrapper {
   readonly rows: string[] = [];
   private row = "";
@@ -147,12 +153,17 @@ class AnsiWrapper {
   private readonly maxRows: number;
   private readonly continuationPrefix: string;
   private readonly continuationWidth: number;
+  private readonly breakAtWords: boolean;
+  // The latest space after the row's first word: where the row can wrap without splitting a word.
+  private wordBreak: { index: number; width: number; state: string } | undefined;
+  private rowHasWord = false;
 
-  constructor(width: number, maxRows: number, continuationPrefix: string) {
+  constructor(width: number, maxRows: number, continuationPrefix: string, breakAtWords: boolean) {
     this.width = width;
     this.maxRows = maxRows;
     this.continuationPrefix = continuationPrefix;
     this.continuationWidth = visibleWidth(continuationPrefix);
+    this.breakAtWords = breakAtWords;
   }
 
   appendSgr(sequence: string): void {
@@ -162,6 +173,7 @@ class AnsiWrapper {
 
   appendPlain(plain: string): boolean {
     if (plain.length <= this.width - this.rowWidth && PRINTABLE_ASCII_RE.test(plain)) {
+      if (this.breakAtWords) this.noteWordBreak(plain);
       this.row += plain;
       this.rowWidth += plain.length;
       return true;
@@ -184,7 +196,12 @@ class AnsiWrapper {
 
   private appendSegment(segment: string): boolean {
     const segmentWidth = visibleWidth(segment);
-    if (this.overflows(segmentWidth) && !this.pushRow()) return false;
+    if (this.overflows(segmentWidth)) {
+      // A space at the edge is the boundary itself; it would only indent the next row.
+      if (this.breakAtWords && segment === " " && this.rowHasWord) return this.pushRow();
+      const moved = this.breakAtWords ? this.wrapAtWordBreak(segmentWidth) : undefined;
+      if (moved === false || (moved === undefined && !this.pushRow())) return false;
+    }
     if (this.overflows(segmentWidth)) {
       this.row = this.state;
       this.rowWidth = 0;
@@ -197,13 +214,51 @@ class AnsiWrapper {
       }
       return this.pushRow();
     }
+    if (this.breakAtWords) this.noteWordBreak(segment);
     this.row += segment;
     this.rowWidth += segmentWidth;
     return true;
   }
 
+  /** Records the last space in `plain`, about to be appended, as a wrap point once a word precedes it. */
+  private noteWordBreak(plain: string): void {
+    const space = lastIndexFrom(plain, " ", plain.length);
+    if (space >= 0 && (this.rowHasWord || NON_SPACE_RE.test(Fn.pipe(plain, Str.slice(0, space)))))
+      this.wordBreak = {
+        index: this.row.length + space + 1,
+        width: this.rowWidth + space + 1,
+        state: this.state,
+      };
+    this.rowHasWord ||= NON_SPACE_RE.test(plain);
+  }
+
+  /**
+   * Moves the word in progress to the next row when its start is near the edge. Returns undefined
+   * when no boundary qualifies, so the caller breaks mid-word as before.
+   */
+  private wrapAtWordBreak(segmentWidth: number): boolean | undefined {
+    const wordBreak = this.wordBreak;
+    if (!wordBreak || this.rows.length + 1 >= this.maxRows) return undefined;
+    const tailWidth = this.rowWidth - wordBreak.width;
+    if (
+      tailWidth > WORD_BREAK_WINDOW ||
+      this.continuationWidth + tailWidth + segmentWidth > this.width
+    )
+      return undefined;
+    const tail = Fn.pipe(this.row, Str.slice(wordBreak.index));
+    this.row = Fn.pipe(this.row, Str.slice(0, wordBreak.index));
+    this.rowWidth = wordBreak.width;
+    if (!this.pushRow()) return false;
+    this.row = wordBreak.state + this.continuationPrefix + tail;
+    this.rowWidth = this.continuationWidth + tailWidth;
+    this.rowHasWord = tailWidth > 0;
+    return true;
+  }
+
   private pushRow(): boolean {
     this.rows.push(truncateWrappedRow(this.row, this.rowWidth, this.width));
+    this.wordBreak = undefined;
+    this.rowHasWord = false;
     if (this.rows.length >= this.maxRows) {
       truncateLastRow(this.rows, this.width);
       return false;
@@ -214,14 +269,25 @@ class AnsiWrapper {
   }
 }
 
+/**
+ * Wraps ANSI text to `width`, starting each continuation row with `continuationPrefix`. With
+ * `breakAtWords`, a row ends at the last space within a few columns of the edge rather than
+ * splitting the word that crosses it.
+ */
 export function wrapAnsiToWidth(
   text: string,
   width: number,
   maxRows = 3,
   continuationPrefix = "",
+  options: { readonly breakAtWords?: boolean } = {},
 ): string[] {
   if (width <= 0) return [""];
-  const wrapper = new AnsiWrapper(width, maxRows, continuationPrefix);
+  const wrapper = new AnsiWrapper(
+    width,
+    maxRows,
+    continuationPrefix,
+    options.breakAtWords === true,
+  );
   let index = 0;
   while (index < text.length) {
     const ansi = matchSgrSequence(text, index);

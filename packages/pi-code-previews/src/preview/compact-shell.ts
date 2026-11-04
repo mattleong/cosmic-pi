@@ -304,7 +304,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
       this.mode === "on" ? new Box(1, 1, (text) => theme.bg(background, text)) : new Container();
     shell.addChild(callSection);
     shell.addChild(details);
-    if (timing && !content) shell.addChild(new Text(theme.fg("muted", `╰─ ${timing.label}`), 0, 0));
+    if (timing && !content) shell.addChild(new Text(theme.fg("muted", `└─ ${timing.label}`), 0, 0));
     return shell;
   }
 

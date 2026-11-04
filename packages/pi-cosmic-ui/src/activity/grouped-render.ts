@@ -250,11 +250,13 @@ function activityList(
   const unseen = Arr.filter(urgent, (row) => !shown.has(row.key));
   const first = listHeight > 2 ? unseen[0] : undefined;
   const window = first ? shell.visibleWindow(entries.length, rows - 1) : full;
+  // A one-column gutter keeps right-aligned times off the frame and the pane divider.
+  const rowWidth = Math.max(0, listWidth - CURSOR.length - 1);
   const list = Arr.map(entries.slice(window.start, window.end), (entry) => {
     const isSelected = entry.id === selected?.id;
     const prefix = isSelected ? CURSOR : NO_CURSOR;
     return padListDetailRow(
-      `${isSelected ? options.theme.fg("accent", prefix) : prefix}${rowLine(entry, Math.max(0, listWidth - prefix.length), options, isSelected && listFocused)}`,
+      `${isSelected ? options.theme.fg("accent", prefix) : prefix}${rowLine(entry, rowWidth, options, isSelected && listFocused)}`,
       listWidth,
     );
   });
@@ -418,10 +420,11 @@ const activityTitle = (
   items: string,
   counts: ActivityAttentionCounts,
   startup: string,
+  following: boolean,
   width: number,
 ): string => {
   const title = (labels: readonly string[]) =>
-    ` ${joinInline(["Activity", items, ...labels])}${startup ? ` ${startup}` : ""} `;
+    ` ${joinInline(["Activity", items, ...labels, following ? "following" : undefined])}${startup ? ` ${startup}` : ""} `;
   const full = title(activityAttentionLabels(counts));
   return visibleWidth(full) <= width ? full : title(compactNotices(counts));
 };
@@ -527,6 +530,8 @@ export function renderGroupedActivity(
             countLabel(state.itemCount, "item"),
             counts,
             startup,
+            // Without a visible detail heading, the title says the cursor row is followed.
+            state.follow && tier === "narrow" && !shell.state.details,
             Math.max(0, inner - 2),
           ),
           inner,

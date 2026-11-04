@@ -106,6 +106,18 @@ const cartAfter = Fn.pipe(
   ),
 );
 
+/** Lines longer than a phone's code column, so the 57-column scenarios show how code wraps. */
+const cartTestSource = Arr.join(
+  [
+    "import { test } from 'node:test';",
+    "",
+    "test('subtotal sums prices multiplied by quantities', () => {",
+    "  assert.equal(subtotal([{ sku: 'a', price: 5, quantity: 2 }, { sku: 'b', price: 3, quantity: 1 }]), 13);",
+    "});",
+  ],
+  "\n",
+);
+
 const webCall: ToolRenderers = {
   renderCall: (args) => new Text(JSON.stringify(args), 0, 0),
   renderResult: (result) =>
@@ -867,6 +879,12 @@ const scenarios: ReadonlyArray<
     result: text("export const a = 1;\nexport const b = 2;\n"),
   },
   {
+    tool: "read",
+    title: "read lines wider than the code column",
+    args: { path: "/project/src/cart.ts" },
+    result: text(cartBefore),
+  },
+  {
     tool: "grep",
     title: "grep matches",
     args: { pattern: "TODO", path: "/project/src" },
@@ -1066,6 +1084,12 @@ const scenarios: ReadonlyArray<
     title: "write new file",
     args: { path: "/project/src/new.ts", content: writeSource },
     result: text("Successfully wrote to /project/src/new.ts", writeBefore(undefined)),
+  },
+  {
+    tool: "write",
+    title: "write new file with lines wider than the code column",
+    args: { path: "/project/src/cart.test.ts", content: cartTestSource },
+    result: text("Successfully wrote to /project/src/cart.test.ts", writeBefore(undefined)),
   },
   {
     tool: "write",

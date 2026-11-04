@@ -60,12 +60,9 @@ export const NESTING_FIELD_IDS = Rec.keys(NESTING_FIELDS);
 export const isNestingField = Schema.is(Schema.Literals(NESTING_FIELD_IDS));
 
 export const SCOPES = [
-  { name: "session", description: "Change delegation and nesting limits for this session only" },
-  {
-    name: "global",
-    description: "Change delegation and nesting limits for new sessions everywhere",
-  },
-  { name: "project", description: "Change delegation and nesting limits for this trusted project" },
+  { name: "session", description: "This session only" },
+  { name: "global", description: "All new sessions" },
+  { name: "project", description: "This trusted project" },
 ] as const;
 
 export const WORKSPACE_DESCRIPTION =
@@ -95,7 +92,7 @@ export const SUBAGENT_SETTING_DESCRIPTORS = [
 
 export const SUBAGENT_SETTINGS_COMMAND = {
   name: "settings",
-  description: "Configure delegation, the writer workspace, and nesting limits",
+  description: "Delegation settings",
   complete: (prefix: string) =>
     completeSettingsArguments(
       prefix,

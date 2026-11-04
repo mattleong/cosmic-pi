@@ -138,7 +138,7 @@ type PiModelOptionsInput = Pick<
 >;
 
 const piModelOptions = (
-  { candidate, piCatalog, parentSelector }: PiModelOptionsInput,
+  { piCatalog, parentSelector }: PiModelOptionsInput,
   models = piCatalog.piModels,
 ) =>
   createPiModelOptions({
@@ -146,7 +146,6 @@ const piModelOptions = (
     parentModel: Option.getOrUndefined(
       Arr.findFirst(piCatalog.piModels, (model) => canonicalPiSelector(model) === parentSelector),
     ),
-    currentSelector: candidate.model,
   });
 
 export const supportedPiEfforts = (

@@ -119,6 +119,7 @@ export const candidateFieldSelector = (
       selectChoice(choice.value, choice.label, choice.description, choice.value),
     ),
     current,
+    markedValue: current,
     notice: options.notice,
     emptyText: "No matching values",
     select: (value: string) =>

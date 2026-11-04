@@ -45,8 +45,9 @@ export function wrapPlainText(text: string, width: number): string[] {
     }
     return true;
   };
-  // Each word keeps the spaces after it, so wrapped rows lose only the spaces at their ends.
-  for (const word of Str.split(text, /(?<= )(?=[^ ])/u)) {
+  // Each word keeps the spaces after it, so wrapped rows lose only the spaces at their ends. A `·`
+  // between facts stays with the fact before it, so no row starts with a separator.
+  for (const word of Str.split(text, /(?<= )(?=[^ ·])/u)) {
     if (!place(word)) continue;
     for (const part of Str.split(word, BREAK_AFTER)) {
       if (!place(part)) continue;

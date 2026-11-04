@@ -88,5 +88,5 @@ export function showingFooter(theme: Theme, shown: number, total: number, label:
 }
 
 export function previewFooter(theme: Theme, text: string): string {
-  return `\n${theme.fg("muted", `╰─ ${text}`)}`;
+  return `\n${theme.fg("muted", `└─ ${text}`)}`;
 }
