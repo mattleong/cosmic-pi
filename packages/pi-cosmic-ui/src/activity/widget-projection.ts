@@ -11,6 +11,8 @@ export interface WidgetOptions {
   readonly theme?: Pick<Theme, "fg">;
   /** A questionnaire or other input dock is on screen, so its own waiting rows need no echo. */
   readonly inputDockVisible?: boolean;
+  /** Failures the user has already looked at in Activity, by `activityInspectionKey`. */
+  readonly inspected?: ReadonlySet<string>;
 }
 export interface WidgetAllocation {
   /** Rows set aside before entries are allocated, such as a Needs-you or failure line. */
@@ -56,13 +58,22 @@ export const widgetRows = (
 
 const RECENT_FAILURE_MS = 10 * 60_000;
 
+/** Identifies one outcome of an item, so a later failure of the same item counts as new. */
+export const activityInspectionKey = (row: ActivityRow): string =>
+  `${row.key}\u0000${row.generation}\u0000${row.revision}`;
+
+const recentFailure = (row: ActivityRow, now: number | undefined): boolean =>
+  now === undefined || now - (row.endedAt ?? row.updatedAt ?? now) <= RECENT_FAILURE_MS;
+
 /**
  * Failures the live checklist no longer lists because their work has finished. They stay
- * countable for a while so a failure never silently disappears from view.
+ * countable until the user inspects them in Activity, or for ten minutes, so a failure never
+ * silently disappears from view.
  */
 export const hiddenWidgetFailures = (
   rows: readonly ActivityRow[],
   now: number | undefined,
+  inspected?: ReadonlySet<string>,
 ): readonly ActivityRow[] => {
   const listed = new Set(
     Arr.flatMap(checklist(rows), (entry) => (entry.type === "member" ? [entry.row.key] : [])),
@@ -72,9 +83,21 @@ export const hiddenWidgetFailures = (
     (row) =>
       row.status === "failed" &&
       !listed.has(row.key) &&
-      (now === undefined || now - (row.endedAt ?? row.updatedAt ?? now) <= RECENT_FAILURE_MS),
+      recentFailure(row, now) &&
+      inspected?.has(activityInspectionKey(row)) !== true,
   );
 };
+
+/** Whether a clock step from `previous` to `now` retires a failure line, needing a repaint. */
+export const widgetFailuresExpire = (
+  rows: readonly ActivityRow[],
+  previous: number,
+  now: number,
+): boolean =>
+  Arr.some(
+    rows,
+    (row) => row.status === "failed" && recentFailure(row, previous) && !recentFailure(row, now),
+  );
 
 export function activityWidgetHeight(rows: readonly ActivityRow[], terminalRows: number): number {
   const failures = Arr.filter(checklist(rows), isFailedEntry).length;

@@ -1,5 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Editor } from "@earendil-works/pi-tui";
+import { type Editor, visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core/security";
@@ -12,7 +12,14 @@ import {
 } from "../questionnaire/schema.ts";
 import type { PreviewPane } from "./preview-pane.ts";
 import { RESUME_HINT } from "../boundary/host-ui.ts";
-import { appendHintBar, appendWrapped, borderLine, joinColumns, titleLabel } from "./layout.ts";
+import {
+  appendPacked,
+  appendHintBar,
+  appendWrapped,
+  borderLine,
+  joinColumns,
+  titleLabel,
+} from "./layout.ts";
 import type { EditorKeyLabels } from "./key-hints.ts";
 import { SELECTION_MARKER } from "./viewport.ts";
 import { clipToWidth, managerNoticeColor, managerNoticeGlyph } from "pi-cosmic-ui/manager";
@@ -62,7 +69,7 @@ function renderTabs(model: QuestionnaireRenderModel, width: number): string[] {
       : model.theme.fg(isQuestionnaireComplete(model.state) ? "accent" : "dim", review),
   );
   const lines: string[] = [];
-  appendWrapped(lines, " ", Arr.join(parts, " "), width);
+  appendPacked(lines, parts, width, { separator: " ", prefix: " ", continuation: " " });
   return lines;
 }
 
@@ -95,6 +102,10 @@ function renderHeading(model: QuestionnaireRenderModel, width: number): string[]
 
 type QuestionDraft = QuestionnaireState["drafts"][number];
 
+/** Every question prompt, and the note editor's heading in its place, reads the same way. */
+const promptText = (model: QuestionnaireRenderModel, text: string): string =>
+  model.theme.fg("text", text);
+
 function focusPrefix(model: QuestionnaireRenderModel, focused: boolean): string {
   return focused ? SELECTION_MARKER + model.theme.fg("accent", `${LIST_CURSOR} `) : "  ";
 }
@@ -102,22 +113,26 @@ function focusPrefix(model: QuestionnaireRenderModel, focused: boolean): string 
 const choiceMarker = (question: AskUserQuestion, selected: boolean): string =>
   selectionMarker(question.mode === "multiple" ? "multiple" : "single", selected);
 
+type AppendLine = (prefix: string, value: string, hang?: number) => void;
+
 function appendChoices(
   model: QuestionnaireRenderModel,
   question: AskUserQuestion,
   draft: QuestionDraft,
-  append: (prefix: string, value: string) => void,
+  append: AppendLine,
 ): void {
   const choices = question.mode === "text" ? [] : question.choices;
   Arr.forEach(choices, (choice, index) => {
     const focused = draft.cursor === index;
     const selected = draft.answer?.kind === "choices" && draft.answer.values.includes(choice.value);
+    const marker = `${choiceMarker(question, selected)} ${index + 1}. `;
     append(
       focusPrefix(model, focused),
       model.theme.fg(
         focused ? "accent" : "text",
-        `${choiceMarker(question, selected)} ${index + 1}. ${stripTerminalControls(choice.label)}`,
+        `${marker}${stripTerminalControls(choice.label)}`,
       ),
+      visibleWidth(marker),
     );
     append("      ", model.theme.fg("muted", stripTerminalControls(choice.description)));
   });
@@ -127,7 +142,7 @@ function appendCustomRow(
   model: QuestionnaireRenderModel,
   question: AskUserQuestion,
   draft: QuestionDraft,
-  append: (prefix: string, value: string) => void,
+  append: AppendLine,
 ): void {
   const focused = draft.cursor === (question.mode === "text" ? 0 : question.choices.length);
   const written = draft.answer?.kind === "custom" || draft.answer?.kind === "text";
@@ -143,6 +158,7 @@ function appendCustomRow(
   append(
     focusPrefix(model, focused),
     model.theme.fg(focused ? "accent" : "text", `✎ ${label}${custom}`),
+    2,
   );
 }
 
@@ -150,7 +166,7 @@ function appendContinueRow(
   model: QuestionnaireRenderModel,
   choiceCount: number,
   draft: QuestionDraft,
-  append: (prefix: string, value: string) => void,
+  append: AppendLine,
 ): void {
   const focused = draft.cursor === choiceCount + 1;
   const selectedCount = draft.answer?.kind === "choices" ? draft.answer.values.length : 0;
@@ -170,8 +186,9 @@ function renderQuestion(
   width: number,
 ): string[] {
   const lines: string[] = [];
-  const append = (prefix: string, value: string) => appendWrapped(lines, prefix, value, width);
-  append(" ", model.theme.fg("text", stripTerminalControls(question.prompt)));
+  const append: AppendLine = (prefix, value, hang) =>
+    appendWrapped(lines, prefix, value, width, hang);
+  append(" ", promptText(model, stripTerminalControls(question.prompt)));
   lines.push("");
   appendChoices(model, question, draft, append);
   appendCustomRow(model, question, draft, append);
@@ -186,7 +203,8 @@ function renderQuestion(
 
 function renderReview(model: QuestionnaireRenderModel, width: number): string[] {
   const lines: string[] = [];
-  const append = (prefix: string, value: string) => appendWrapped(lines, prefix, value, width);
+  const append: AppendLine = (prefix, value, hang) =>
+    appendWrapped(lines, prefix, value, width, hang);
   Arr.forEach(model.state.request.questions, (question, index) => {
     const draft = model.state.drafts[index];
     const answer = draft?.answer;
@@ -208,6 +226,7 @@ function renderReview(model: QuestionnaireRenderModel, width: number): string[] 
     append(
       " ",
       `${model.theme.fg(tone, `${managerNoticeGlyph(mark)} `)}${model.theme.fg(answer ? "muted" : tone, `${titleLabel(question.title)}: `)}${model.theme.fg(answer ? "text" : tone, stripTerminalControls(value))}`,
+      2,
     );
     if (draft?.note)
       append("   ", model.theme.fg("dim", `Note: ${stripTerminalControls(draft.note)}`));
@@ -233,11 +252,9 @@ function renderInput(
   const note = input.kind === "note";
   append(
     " ",
-    model.theme.fg(
-      "accent",
-      model.theme.bold(
-        note ? `Note for ${titleLabel(question.title)}` : stripTerminalControls(question.prompt),
-      ),
+    promptText(
+      model,
+      note ? `Note for ${titleLabel(question.title)}` : stripTerminalControls(question.prompt),
     ),
   );
   lines.push(...model.editor.render(width));
@@ -252,13 +269,12 @@ function renderInput(
   );
   if (model.externalEditorBusy) append(" ", model.theme.fg("warning", "External editor is open…"));
   if (model.inputError) append(" ", model.theme.fg("warning", model.inputError));
-  appendHintBar(lines, inputHelp(model, note), width, (text) => model.theme.fg("dim", text));
   return lines;
 }
 
 function inputHelp(model: QuestionnaireRenderModel, note: boolean): string {
   const { submit, newLine, externalEditor } = model.keys;
-  const commit = note ? "Save Note" : isSingleQuestion(model.state) ? "Submit" : "Save Answer";
+  const commit = !note && isSingleQuestion(model.state) ? "Submit" : "Save";
   return keyHintBar(
     {
       hints: [
@@ -371,7 +387,7 @@ function reviewHints(model: QuestionnaireRenderModel): HintSet {
       ? "Cancel"
       : isQuestionnaireComplete(model.state)
         ? "Submit"
-        : "Answer Next";
+        : "Answer";
   return { hints: [moveKeyHint(), keyHint("Enter", verb)], more: [keyHint("j/k", "Move")] };
 }
 
@@ -416,8 +432,9 @@ export function renderQuestionnaireView(model: QuestionnaireRenderModel, width: 
     ...renderBody(model, width),
     "",
   ];
-  if (!model.input)
-    appendHintBar(lines, navigationHelp(model), width, (text) => model.theme.fg("dim", text));
+  // One hint line, in the same place whether the user is choosing or writing.
+  const help = model.input ? inputHelp(model, model.input.kind === "note") : navigationHelp(model);
+  appendHintBar(lines, help, width, (text) => model.theme.fg("dim", text));
   lines.push(borderLine(width, model.theme));
   return lines;
 }

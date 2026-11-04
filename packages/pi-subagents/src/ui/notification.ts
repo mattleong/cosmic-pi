@@ -17,6 +17,7 @@ import {
   agentTextBlockLines,
   agentTextLines,
   bodyIndent,
+  indentedBody,
   detailsSectionLines,
   indentedLines,
 } from "./agent-text.ts";
@@ -261,12 +262,17 @@ const noticeBody = (
     return [
       ...Arr.map(stopped, (run) =>
         clipToWidth(
-          `  ${theme.fg("muted", managerActivityGlyph("stopped"))} ${sanitizeTerminalLine(run.name)} ${theme.fg("muted", `· was ${sanitizeTerminalLine(run.state)}`)}`,
+          `${Str.repeat(indent)(" ")}${theme.fg("muted", managerActivityGlyph("stopped"))} ${sanitizeTerminalLine(run.name)} ${theme.fg("muted", `· was ${sanitizeTerminalLine(run.state)}`)}`,
           width,
         ),
       ),
       ...(hidden > 0
-        ? [clipToWidth(theme.fg("dim", `  … ${countLabel(hidden, "more")}`), width)]
+        ? [
+            clipToWidth(
+              theme.fg("dim", `${Str.repeat(indent)(" ")}… ${countLabel(hidden, "more")}`),
+              width,
+            ),
+          ]
         : []),
       ...note,
       ...detailsSectionLines(
@@ -309,12 +315,20 @@ export const presentSubagentNotification: CodePreviewMessagePresenter = (input, 
     return {
       ...presentation,
       expandLabel: expansionLabel(details),
-      expanded: () => new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
+      expanded: () =>
+        indentedBody(
+          theme,
+          new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
+        ),
     };
-  const body = (expanded: boolean) => () =>
+  const body = (expanded: boolean) =>
     composeToolComponent(
       (width) =>
         noticeBody(details, width, theme, expanded, bodyIndent({ ...options, expanded })) ?? [],
     );
-  return { ...presentation, collapsed: body(false), expanded: body(true) };
+  return {
+    ...presentation,
+    collapsed: () => body(false),
+    expanded: () => indentedBody(theme, body(true)),
+  };
 };

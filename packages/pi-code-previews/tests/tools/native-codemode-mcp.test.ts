@@ -60,7 +60,7 @@ test("resource subjects and expanded argument previews redact complete and cut c
     const row = summarize(result)?.children?.entries[0];
     assert.ok(row);
     assert.equal(Fn.pipe(JSON.stringify(row), Str.includes("private-value")), false);
-    assert.ok(row.issues);
-    assert.ok(Arr.some(row.issues, (issue) => issue.code === "native-call-args"));
+    assert.ok(row.details);
+    assert.ok(Arr.some(row.details, (detail) => detail.label === "Arguments"));
   }
 });

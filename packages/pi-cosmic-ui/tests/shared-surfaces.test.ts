@@ -11,14 +11,16 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { plainTheme } from "pi-cosmic-core/testing";
-import { joinKeyHints, keyHintBar, wrapKeyHints } from "../src/manager/key-labels.ts";
+import { joinKeyHints, keyHintBar, keyHintRows, wrapKeyHints } from "../src/manager/key-labels.ts";
 import { TextPanelComponent } from "../src/manager/panel.ts";
 import {
   createSettingsGroupSubmenu,
   createSettingsListSurface,
   managerSettingsTheme,
   type SettingsSurfaceItem,
+  withSettingsGroupChildren,
 } from "../src/manager/settings-surface.ts";
+import { managerTable } from "../src/manager/table.ts";
 
 const DOWN = "\u001b[B";
 const ESC = "\u001b";
@@ -26,13 +28,14 @@ const ESC = "\u001b";
 beforeEach(() => setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS)));
 
 const surfaceFor = (items: SettingsSurfaceItem[], onChange = vi.fn()) => {
+  const onCancel = vi.fn();
   const created = createSettingsListSurface({
     header: new Text("Settings", 0, 0),
     items,
     height: items.length,
     listTheme: managerSettingsTheme(plainTheme),
     onChange,
-    onCancel: () => undefined,
+    onCancel,
     matchesKeybinding: undefined,
     requestRender: () => undefined,
     dim: (text) => text,
@@ -41,7 +44,12 @@ const surfaceFor = (items: SettingsSurfaceItem[], onChange = vi.fn()) => {
   const press = (...keys: string[]) => {
     for (const key of keys) created.surface.handleInput?.(key);
   };
-  return { press, onChange, text: () => Arr.join(created.surface.render(80), "\n") };
+  return {
+    press,
+    onChange,
+    onCancel,
+    text: () => Arr.join(created.surface.render(80), "\n"),
+  };
 };
 
 const rows = (): SettingItem[] => [
@@ -70,6 +78,46 @@ describe("shared settings surface", () => {
     expect(onChange).toHaveBeenLastCalledWith("last", "on", expect.anything());
     press("g", "g", "\r");
     expect(onChange).toHaveBeenLastCalledWith("first", "off", expect.anything());
+  });
+
+  it("clears an applied filter with Esc before Esc closes the surface", () => {
+    const { press, onCancel, text } = surfaceFor(rows());
+    press("/", "z", "z", "\r");
+    expect(text()).not.toContain("First");
+    press(ESC);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(text()).toContain("First");
+    press(ESC);
+    expect(onCancel).toHaveBeenCalledOnce();
+  });
+
+  it("saves rows inside a children group like top-level rows and shows the persisted value", () => {
+    const saved: Array<readonly [string, string]> = [];
+    const items = withSettingsGroupChildren(
+      [
+        {
+          id: "group:session",
+          label: "Session",
+          currentValue: "inherit all",
+          children: [
+            { id: "session:depth", label: "Depth", currentValue: "3", values: ["1", "3"] },
+          ],
+          summary: () => "depth 1",
+        },
+      ],
+      managerSettingsTheme(plainTheme),
+      (id, value, show) => {
+        saved.push([id, value]);
+        show("1 (saved)");
+      },
+    );
+    const { press, onChange, text } = surfaceFor(items);
+    press("\r", "\r", "k", "\r");
+    expect(saved).toEqual([["session:depth", "1"]]);
+    expect(text()).toContain("1 (saved)");
+    press(ESC);
+    expect(text()).toContain("depth 1");
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("returns from a choice list inside a group without leaving the group", () => {
@@ -165,6 +213,18 @@ describe("text panel", () => {
     expect(shown()).toContain("Line 1 ");
   });
 
+  it("breaks an over-long path after a slash instead of inside a name", () => {
+    const panel = new TextPanelComponent({
+      title: "Panel",
+      theme: plainTheme,
+      lines: ["    /Users/someone/.pi/agent/code-previews.json"],
+      done: () => undefined,
+    });
+    const shown = Arr.join(panel.render(40), "\n");
+    expect(shown).toContain("code-previews.json");
+    expect(shown).toContain("/agent/");
+  });
+
   it("wraps long lines instead of clipping them", () => {
     const words = Array.from({ length: 20 }, (_, index) => `word${index}`);
     const panel = new TextPanelComponent({
@@ -180,7 +240,34 @@ describe("text panel", () => {
   });
 });
 
+describe("manager table", () => {
+  it("gives no space to a column whose cells are all empty", () => {
+    const cells = [
+      ["scout", "openai-codex/gpt-6-luna", ""],
+      ["planner", "claude-bridge/claude-opus-5-5", ""],
+    ];
+    const table = managerTable(
+      cells,
+      [
+        { minWidth: 8, priority: 3 },
+        { minWidth: 8, priority: 2 },
+        { minWidth: 11, priority: 1 },
+      ],
+      48,
+    );
+    expect(table.widths[2]).toBe(0);
+    for (const row of cells) expect(table.row(row)).toContain(row[1]);
+  });
+});
+
 describe("key hints", () => {
+  it("keeps every pair, including the exit, when a bar wraps at a narrow width", () => {
+    const hint = joinKeyHints(["↑↓ Move", "Enter Inspect", "x Stop", "Esc Close", "? More"]);
+    const shown = Arr.join(keyHintRows(hint, 20), " ");
+    for (const pair of ["↑↓ Move", "Enter Inspect", "x Stop", "Esc Close", "? More"])
+      expect(shown).toContain(pair);
+  });
+
   it("keeps every default hint when help expands", () => {
     const bar = {
       hints: ["↑↓ Move", "Enter Inspect"],

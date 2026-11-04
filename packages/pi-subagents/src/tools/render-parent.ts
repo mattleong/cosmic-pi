@@ -22,6 +22,7 @@ import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.t
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 import { QUOTED_TEXT_LIMIT } from "./compact-run-issues.ts";
 import { errorSection, previewCall, rejectionAwareCall, textResultBody } from "./render-preview.ts";
+import { indentedBody } from "../ui/agent-text.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
 export const CONTACT_PARENT_LABEL = "Contact Parent";
@@ -104,12 +105,15 @@ export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["
       if (!Predicate.isObject(args)) return new Text("", 0, 0);
       const warning = "kind" in args && args.kind === "warning";
       const message = "message" in args ? args.message : undefined;
-      return new Text(
-        (!warning || context.isError) && Predicate.isString(message)
-          ? theme.fg("toolOutput", escapeControlChars(message))
-          : "",
-        0,
-        0,
+      return indentedBody(
+        theme,
+        new Text(
+          (!warning || context.isError) && Predicate.isString(message)
+            ? theme.fg("toolOutput", escapeControlChars(message))
+            : "",
+          0,
+          0,
+        ),
       );
     },
     renderResult: (result, options, theme, context) => {
@@ -122,7 +126,7 @@ export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["
       const text = escapeControlChars(getTextContent(result.content));
       if (summary && context.isError) return errorSection(theme, text);
       const shown = !summary || parentReplyText(result) !== undefined ? text : "";
-      return new Text(theme.fg("toolOutput", shown), 0, 0);
+      return indentedBody(theme, new Text(theme.fg("toolOutput", shown), 0, 0));
     },
   };
 

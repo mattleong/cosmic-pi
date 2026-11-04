@@ -9,6 +9,7 @@ import { failureMessage } from "pi-cosmic-core/message-text";
 import { sanitizeDiagnosticContent, sanitizeDiagnosticError } from "pi-cosmic-core/security";
 import type {
   CompactChild,
+  CompactDetail,
   CompactPhase,
   CompactSummary,
   CompactSummaryProvider,
@@ -28,7 +29,8 @@ import {
   safeNativeArgumentText,
   type NativeArgumentPreview,
 } from "./native-codemode-args";
-import { nativeCodemodeCallSubject } from "./native-codemode-subject";
+import { nativeCodemodeCallSubject, nativeMcpCall } from "./native-codemode-subject";
+import { nativeMcpResourceAction } from "./native-mcp-identity";
 import { visibleDiagnosticLine } from "./native-safe-content";
 import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-truncation";
 import {
@@ -81,34 +83,34 @@ function headingShowsArguments(name: string, preview: NativeArgumentPreview | un
   });
 }
 
-function childIssues(
+function childIssues(call: NativeCodemodeCall): CompactIssue[] {
+  return call.status === "error"
+    ? [issue("native-child-error", call.error ?? "The nested call failed")]
+    : [];
+}
+
+/**
+ * Facts the child's heading can't show: its registered name when the heading abbreviates or
+ * rewrites it, and arguments the heading doesn't state. Empty arguments say nothing.
+ */
+function childDetails(
   call: NativeCodemodeCall,
   preview: NativeArgumentPreview | undefined,
-  label: string | undefined,
-): CompactIssue[] {
-  const issues: CompactIssue[] = [];
-  if (label || Fn.pipe(call.name, Str.startsWith("mcp__")))
-    issues.push({
-      code: "native-call-name",
-      severity: "info",
-      message: "Registered tool",
-      detail: sanitizeDiagnosticContent(call.name),
-    });
-  if (call.status === "error")
-    issues.push(issue("native-child-error", call.error ?? "The nested call failed"));
-  if (call.args && !headingShowsArguments(call.name, preview))
-    issues.push({
-      code: "native-call-args",
-      severity: "info",
-      message: "Arguments preview",
-      detail:
-        preview?.text ??
-        (nativeModelCalls.has(call.name)
-          ? safeNativeArgumentText(call.args)
-          : "Argument preview is unavailable"),
-    });
-  return issues;
+  heading: string,
+): CompactDetail[] {
+  const details: CompactDetail[] = [];
+  if (heading !== call.name && !nativeMcpCall(call.name) && !nativeMcpResourceAction(call.name))
+    details.push({ label: "Tool", text: sanitizeDiagnosticContent(call.name) });
+  if (call.args && !headingShowsArguments(call.name, preview)) {
+    const text =
+      preview?.text ??
+      (nativeModelCalls.has(call.name) ? safeNativeArgumentText(call.args) : "unavailable");
+    if (!EMPTY_ARGUMENTS.has(Str.trim(text))) details.push({ label: "Arguments", text });
+  }
+  return details;
 }
+
+const EMPTY_ARGUMENTS: ReadonlySet<string> = new Set(["{}", "[]", ""]);
 
 function childStatus(call: NativeCodemodeCall, phase: CompactPhase): CompactChild["status"] {
   if (call.status === "ok") return "returned";
@@ -118,14 +120,17 @@ function childStatus(call: NativeCodemodeCall, phase: CompactPhase): CompactChil
 function child(call: NativeCodemodeCall, phase: CompactPhase, cwd: string): CompactChild {
   const preview = nativeArgumentPreview(call.args);
   const target = nativeCodemodeCallSubject(call.name, preview, cwd);
+  const label = sanitizeDiagnosticError(target.label ?? call.name, { maximumLength: 100 });
+  const details = childDetails(call, preview, label);
   const entry: CompactChild = {
     ...target,
-    label: sanitizeDiagnosticError(target.label ?? call.name, { maximumLength: 100 }),
+    label,
     showTiming: true,
     showShortTiming: true,
     subject: visibleDiagnosticLine(target.subject ?? "", 200),
     status: childStatus(call, phase),
-    issues: childIssues(call, preview, target.label),
+    issues: childIssues(call),
+    ...(details.length > 0 && { details }),
   };
   if (call.status === "ok") entry.returnedCheckmark = true;
   if (call.durationMs !== undefined) entry.durationMs = call.durationMs;

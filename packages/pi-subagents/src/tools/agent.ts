@@ -25,7 +25,7 @@ import {
   MAX_AGENT_MESSAGE_CHARS,
   MAX_RESUME_MESSAGE_CHARS,
 } from "../run/agent-messaging.ts";
-import { agentTextLines } from "../ui/agent-text.ts";
+import { agentTextLines, indentedBody } from "../ui/agent-text.ts";
 import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";
 import {
   createAgentCompactSummary,
@@ -330,19 +330,22 @@ export function registerAgentTools(
         // named once the result resolved them.
         renderCall: (args, theme, { state }) => {
           const call = decodeAgentCall(args) ?? {};
-          return composeToolComponent((width) => {
-            const requested = Arr.filter(
-              [
-                requestedLine(call, state.piSubagentsAgentNames),
-                call.to === undefined ? undefined : `To ${recipientLabel({ state }, call.to)}`,
-              ],
-              isTextFragment,
-            );
-            return [
-              ...agentTextLines(call.message, width, theme, { expanded: true, indent: 0 }),
-              ...Arr.flatMap(requested, (line) => wrapTextWithAnsi(theme.fg("dim", line), width)),
-            ];
-          });
+          return indentedBody(
+            theme,
+            composeToolComponent((width) => {
+              const requested = Arr.filter(
+                [
+                  requestedLine(call, state.piSubagentsAgentNames),
+                  call.to === undefined ? undefined : `To ${recipientLabel({ state }, call.to)}`,
+                ],
+                isTextFragment,
+              );
+              return [
+                ...agentTextLines(call.message, width, theme, { expanded: true, indent: 0 }),
+                ...Arr.flatMap(requested, (line) => wrapTextWithAnsi(theme.fg("dim", line), width)),
+              ];
+            }),
+          );
         },
         renderResult: (result, _options, theme, context) => {
           rememberRecipient(context, decodeAgentToolDetails(result.details));
@@ -353,9 +356,10 @@ export function registerAgentTools(
               : new Container();
           }
           const text = escapeControlChars(getTextContent(result.content));
-          return (
+          return indentedBody(
+            theme,
             detailsBody(name, result, true, theme) ??
-            (text ? new Text(theme.fg("toolOutput", text), 0, 0) : new Container())
+              (text ? new Text(theme.fg("toolOutput", text), 0, 0) : new Container()),
           );
         },
       },

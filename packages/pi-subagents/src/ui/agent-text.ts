@@ -2,8 +2,13 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Markdown, wrapTextWithAnsi, type MarkdownTheme } from "@earendil-works/pi-tui";
-import { escapeControlChars } from "pi-code-previews";
+import {
+  Markdown,
+  wrapTextWithAnsi,
+  type Component,
+  type MarkdownTheme,
+} from "@earendil-works/pi-tui";
+import { escapeControlChars, expandedSection } from "pi-code-previews";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth, type ManagerStatusColor } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
@@ -15,12 +20,20 @@ const pad = (width: number): string => Fn.pipe(" ", Str.repeat(width));
 
 /**
  * How far a message body indents its words: none beneath a collapsed compact row, which the message
- * shell already indents like the row's issues, and two columns below a preview heading.
+ * shell already indents like the row's issues, nor when expanded, where {@link indentedBody} indents
+ * the whole body; two columns below a collapsed preview heading.
  */
 export const bodyIndent = (options: {
   readonly expanded: boolean;
   readonly collapsedStyle: "compact" | "preview";
-}): number => (options.collapsedStyle === "compact" && !options.expanded ? 0 : 2);
+}): number => (options.collapsedStyle === "preview" && !options.expanded ? 2 : 0);
+
+/**
+ * An expanded body drawn from the heading's column, indented beneath it as every workspace tool's
+ * is: its words two columns in, and its `Details` label there with the facts two further.
+ */
+export const indentedBody = (theme: Pick<Theme, "fg">, content: Component): Component =>
+  expandedSection(theme, undefined, content);
 
 /** Agent-written text with its controls made visible and without surrounding blank lines. */
 export const agentText = (text: string | undefined): string =>

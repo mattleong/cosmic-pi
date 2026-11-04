@@ -23,6 +23,7 @@ import { beforeAll, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Rec from "effect/Record";
 import { Type } from "typebox";
 import type { ActivityItem } from "pi-cosmic-ui/activity";
 import { activityGalleryFrames } from "pi-cosmic-ui/activity/testing";
@@ -94,10 +95,24 @@ import {
 import { registerSubagentTools } from "../src/tools/subagent.ts";
 import { revisionReviewText } from "../src/run/workspace-review.ts";
 import type { WorkspaceRecord } from "../src/workspace/model.ts";
-import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  extensionApiFixture,
+  extensionContextFixture,
+  plainTheme,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
+import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
+import { tmpdir } from "node:os";
 import { piArgumentRejection } from "pi-cosmic-core/testing/sdk";
 import { view } from "./fixtures/run-view.ts";
-import { workspaceHarness } from "./fixtures/profile-workspace.ts";
+import { workspaceHarness, workspaceInspection } from "./fixtures/profile-workspace.ts";
+import { subagentCommandActionsFixture } from "./fixtures/profile-settings-inspection.ts";
+import { sessionContextFixture } from "./fixtures/pi-host.ts";
+import { settle, step } from "./support/effect-test.ts";
+import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
+import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
+import { registerSubagentApplication } from "../src/application/register.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 import {
   subagentServiceDouble,
@@ -1880,8 +1895,8 @@ const activityLines = (): ReadonlyArray<string> =>
     return [`── activity · ${activity.title} · published rows`].concat(
       Arr.map(items, activityRowLine),
       [""],
-      activityGalleryFrames({ ...gallery, widths: [60, 80, 100], maxRows: [8] }),
-      activityGalleryFrames({ ...gallery, widths: [80], maxRows: [3], open: activity.details }),
+      activityGalleryFrames({ ...gallery, widths: [57, 100, 180], maxRows: [8] }),
+      activityGalleryFrames({ ...gallery, widths: [57], maxRows: [3], open: activity.details }),
     );
   });
 
@@ -1994,7 +2009,7 @@ const widgetFrames = (
 ): ReadonlyArray<string> => {
   const panel = projectSubagentActivityPanel({ revision: 1, runs });
   return [`── widget · ${title}`].concat(
-    Arr.flatMap([60, 100], (width) =>
+    Arr.flatMap([57, 100, 180], (width) =>
       [`width ${width}`].concat(
         renderProjectedSubagentActivityPanel(panel, width, plainTheme, now),
         [""],
@@ -2015,12 +2030,121 @@ const profileEditorLines = (): ReadonlyArray<string> => {
     profileCandidate("claude-bridge/claude-opus-5-5"),
     profileCandidate("openai-codex/gpt-6-luna"),
   ]);
-  return Arr.flatMap([200, 120, 72], (width) => [
+  return Arr.flatMap([180, 72, 57], (width) => [
     `── profiles editor · Current Session · ${width} cols`,
     ...Arr.map(component.render(width), (line) => Str.trimEnd(line)),
     "",
   ]);
 };
+
+/** The profiles editor and its dashboard when every profile names its own model and no fallback. */
+const profileDashboardLines = (): ReadonlyArray<string> => {
+  const models = {
+    scout: "openai-codex/gpt-6-luna",
+    researcher: "openai-codex/gpt-6-luna",
+    planner: "claude-bridge/claude-opus-5-5",
+    worker: "claude-bridge/claude-opus-5-5",
+    reviewer: "claude-bridge/claude-opus-5-5",
+    oracle: "openai-codex/gpt-6-sol",
+    generalist: "claude-bridge/claude-opus-5-5",
+  } as const;
+  const inspection = workspaceInspection({
+    revision: 1,
+    overrides: Rec.map(models, (model) => ({ candidates: [profileCandidate(model)] })),
+  });
+  return Arr.flatMap([180, 57], (width) => {
+    const dashboard = new ProfileDashboardComponent({
+      ctx: extensionContextFixture({ isProjectTrusted: () => true }),
+      actions: subagentCommandActionsFixture({}),
+      isCurrent: () => true,
+      onInspection: () => undefined,
+      awaitDialog: () => Effect.runPromise(Effect.never),
+      workspace: {
+        theme: plainTheme,
+        inspection,
+        target: { kind: "session" },
+        initialProfile: "scout",
+        parentEffort: "high",
+        getHeight: () => 24,
+        requestRender: () => undefined,
+        close: () => undefined,
+        saveDraft: () => Promise.resolve({ inspection }),
+        loadModelPicker: () => Promise.reject(new Error("unused")),
+        supportedPiEfforts: () => undefined,
+      },
+    });
+    return [
+      `── profiles dashboard · explicit models, no fallbacks · ${width} cols`,
+      ...Arr.map(dashboard.render(width), (line) => Str.trimEnd(line)),
+      "",
+    ];
+  });
+};
+
+/** `/subagents settings` through the registered command: the scope groups, then one opened. */
+const settingsLines = Effect.fn("SubagentGallery.settingsLines")(function* () {
+  const agentDirectory = yield* step(() =>
+    nodeFsPromises.mkdtemp(nodePath.join(tmpdir(), "pi-subagents-gallery-")),
+  );
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(() => nodeFsPromises.rm(agentDirectory, { recursive: true, force: true })),
+  );
+  yield* step(() =>
+    nodeFsPromises.writeFile(
+      nodePath.join(agentDirectory, "pi-subagents.json"),
+      JSON.stringify({
+        version: 6,
+        delegation: "encouraged",
+        nesting: { maxDepth: 2 },
+        defaultProfileSet: "review",
+        profileSets: { review: { profiles: {} } },
+      }),
+    ),
+  );
+  const host = recordingExtensionHost({});
+  registerSubagentApplication(host.pi, {
+    getAgentDirectory: () => agentDirectory,
+    loadSettings: () => Promise.resolve(),
+  });
+  const surface = fakeCustomSurfaceHost();
+  const mounted = deferredPromise();
+  const ctx = sessionContextFixture({
+    mode: "tui",
+    hasUI: true,
+    isProjectTrusted: () => true,
+    ui: {
+      setStatus: () => undefined,
+      notify: () => undefined,
+      custom: (factory, options) => {
+        const opened = surface.custom(factory, options);
+        queueMicrotask(() => {
+          surface.mount();
+          mounted.resolve();
+        });
+        return opened;
+      },
+    },
+  });
+  yield* settle(() => host.emit("session_start", ctx));
+  const picker = yield* step(
+    () => host.commands.get("subagents")?.handler("settings", ctx) ?? Promise.resolve(),
+  ).pipe(Effect.forkScoped);
+  yield* step(() => mounted.promise);
+  const frames = (title: string) =>
+    Arr.flatMap([100, 57], (width) => [
+      `── subagents settings · ${title} · ${width} cols`,
+      ...Arr.map(surface.editor?.render(width) ?? [], (line) => Str.trimEnd(line)),
+      "",
+    ]);
+  const lines = [...frames("scope groups")];
+  // Writer workspace, then the Session group, which opens on its first row.
+  for (const key of ["j", "j", "\r"]) surface.editor?.handleInput?.(key);
+  lines.push(...frames("the Global group opened"));
+  for (const key of ["\u001b", "\u001b"]) surface.editor?.handleInput?.(key);
+  yield* Fiber.join(picker);
+  yield* settle(() => host.emit("session_shutdown", ctx));
+  return lines;
+});
 
 const BACKGROUNDS = ["border", "on", "off"] as const;
 
@@ -2124,7 +2248,13 @@ describe.skipIf(!directory)("presentation gallery", () => {
           restore();
         }
       }
-      lines.push(...activityLines(), ...widgetLines(), ...profileEditorLines());
+      lines.push(
+        ...activityLines(),
+        ...widgetLines(),
+        ...profileEditorLines(),
+        ...profileDashboardLines(),
+        ...(yield* Effect.scoped(settingsLines())),
+      );
       yield* writeGallerySection(directory, "pi-subagents", lines);
     }),
   );

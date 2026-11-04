@@ -17,6 +17,8 @@ export {
   galleryFrames,
   galleryMessageFrames,
   galleryTranscriptFrames,
+  GALLERY_VIEWS,
+  type GalleryView,
   type GalleryMessageScenario,
   type GalleryTranscriptEntry,
   type GalleryScenario,

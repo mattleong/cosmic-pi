@@ -57,12 +57,12 @@ The Saved profiles tab groups sets by Project and Global. Untrusted Project rows
 
 ## Delegation settings
 
-`/subagents settings` edits the delegation mode in Session, Global, or trusted Project scope with the same precedence and timing as nesting.
+`/subagents settings` edits the delegation mode in Session, Global, or trusted Project scope with the same precedence and timing as nesting. Each scope is one group row whose value lists what that scope sets itself, or `inherit`; opening it lists the scope's delegation and nesting rows.
 
 - `normal` leaves the system prompt unchanged. `encouraged` and `orchestration` replace the `agent_start` guideline that decides when to delegate and add a `subagent_delegation` prompt section.
 - Pi rebuilds prompt options before every run, so switching needs no cleanup. Only the root session applies the mode; nested children keep default guidance, and no mode restricts tools.
 - One save owner serves every row and picker invocation, so rapid choices save in order, including delegation and nesting rows that share a document. Closing doesn't cancel an admitted save, and reopening waits for it. [Delegation integration tests](../tests/delegation.test.ts) cover these races.
-- The `subagents` footer item shows Current Session's profile set, `*` when the session has its own route edits, and the mode when it isn't `normal`. It publishes to the Cosmic UI footer when active and a plain Pi status entry otherwise.
+- The `subagents` footer item shows Current Session's profile set, `*` when the session has its own route edits, and the mode when it isn't `normal`, labeled `subagents:` so it doesn't read as the active model, and as `⧉` in the compact footer. It publishes to the Cosmic UI footer when active and a plain Pi status entry otherwise.
 
 ## Nesting settings
 

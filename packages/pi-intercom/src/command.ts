@@ -74,12 +74,21 @@ const RECEIVE_CHOICES = ["on", "off"] as const;
 const notify = (ctx: ExtensionCommandContext, message: string, level: "info" | "warning") =>
   notifyAtHostBoundary(ctx, message, level);
 
+const OVERVIEW_COMMANDS = [
+  [`/${INTERCOM_COMMAND} list`, "List them and their state"],
+  [`/${INTERCOM_COMMAND} receive [on|off]`, "Allow or block messages"],
+] as const;
+
+const commandColumn = Math.max(...Arr.map(OVERVIEW_COMMANDS, ([usage]) => usage.length));
+
 /** The shared command overview, short enough for a narrow pane, plus how to message a session. */
 export const overview = Arr.join(
   [
     `/${INTERCOM_COMMAND}: ${DESCRIPTION}`,
-    `  /${INTERCOM_COMMAND} list  List them and their state`,
-    `  /${INTERCOM_COMMAND} receive [on|off]  Allow or block messages`,
+    ...Arr.map(
+      OVERVIEW_COMMANDS,
+      ([usage, description]) => `  ${Fn.pipe(usage, Str.padEnd(commandColumn))}  ${description}`,
+    ),
     ...howToMessage(undefined),
   ],
   "\n",

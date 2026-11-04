@@ -16,7 +16,8 @@ type FieldText = (key: string) => string;
 
 const mcpToolName = /^mcp__([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*)__([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*)$/;
 
-function nativeMcpCall(name: string): CallSubject | undefined {
+/** An MCP tool name the heading can state as `server / tool`, from which the name follows. */
+export function nativeMcpCall(name: string): CallSubject | undefined {
   if (name.length > 64 || (name.length === 64 && /_[0-9a-f]{8}$/.test(name))) return undefined;
   const match = mcpToolName.exec(name);
   const server = match?.[1];

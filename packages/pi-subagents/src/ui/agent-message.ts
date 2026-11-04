@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 import type { CodePreviewMessagePresenter } from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
-import { agentTextLines, bodyIndent, detailsSectionLines } from "./agent-text.ts";
+import { agentTextLines, bodyIndent, detailsSectionLines, indentedBody } from "./agent-text.ts";
 import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
 import { displayName, MAX_NOTICE_TEXT_CHARS } from "./notice-details.ts";
 
@@ -46,7 +46,11 @@ export const presentAgentMessage: CodePreviewMessagePresenter = (input, options,
     return {
       ...presentation,
       expandLabel: "message",
-      expanded: () => new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
+      expanded: () =>
+        indentedBody(
+          theme,
+          new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
+        ),
     };
   const facts = (width: number) =>
     details
@@ -68,9 +72,12 @@ export const presentAgentMessage: CodePreviewMessagePresenter = (input, options,
         agentTextLines(words, width, theme, { expanded: false, indent: bodyIndent(options) }),
       ),
     expanded: () =>
-      composeToolComponent((width) => [
-        ...agentTextLines(words, width, theme, { expanded: true }),
-        ...facts(width),
-      ]),
+      indentedBody(
+        theme,
+        composeToolComponent((width) => [
+          ...agentTextLines(words, width, theme, { expanded: true, indent: 0 }),
+          ...facts(width),
+        ]),
+      ),
   };
 };

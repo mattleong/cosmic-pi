@@ -12,7 +12,12 @@ import {
   type HostValue,
 } from "../../../shared/untrusted-value";
 import { escapeControlChars } from "../../../shared/terminal-text";
-import { getEditPreviewOperations, getPathArg } from "../../data/args";
+import {
+  editOperationInputs,
+  getEditOperations,
+  getEditPreviewOperations,
+  getPathArg,
+} from "../../data/args";
 import { getEditDiff, getTextContent } from "../../data/results";
 import { codePreviewSettings } from "../../../config/state";
 import { renderHighlightedText } from "../../../syntax/render";
@@ -36,6 +41,7 @@ import type { PreviewRenderers, RendererState, ToolRenderContext } from "./types
 import { writeBeforeSnapshot, writeDiffPlan } from "./write-result";
 import { editDiffShowsOperations, writeDiffShowsContent } from "./edit-diff-coverage";
 import { withoutReportedShellStatus } from "../../builtin-failure-shell";
+import { PATH_LIST_EMPTY_OUTPUT } from "../../builtin-result-detail";
 
 export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): PreviewRenderers {
   return {
@@ -43,9 +49,10 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       const input = hostObject(args);
       const path = getPathArg(input);
       const container = new Container();
-      const operations = tool === "edit" ? getEditPreviewOperations(input) : [];
-      const edits = ownField(input, "edits");
-      const completeEdits = Arr.isArray(edits) && operations.length === edits.length;
+      // Expansion shows every requested replacement, even one that would change nothing.
+      const operations = tool === "edit" ? getEditOperations(input) : [];
+      const completeEdits =
+        tool === "edit" && operations.length === editOperationInputs(input).length;
       const options = builtinOptionLabels(tool, hostValue(args), completeEdits);
       if (options.length)
         container.addChild(
@@ -83,7 +90,9 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
             expandedSection(
               theme,
               label,
-              source(text, path, theme, context.invalidate, { highlight }),
+              text === ""
+                ? new Text(theme.fg("muted", "empty"), 0, 0)
+                : source(text, path, theme, context.invalidate, { highlight }),
             ),
           );
       if (operations.length) container.addChild(unlessCallShownByResult(context.state, requested));
@@ -159,6 +168,9 @@ function builtinResultBody(
       0,
     );
   if (tool === "find" || tool === "ls") {
+    // An empty listing's note is not a path, so it gets no path marker.
+    if (Str.trim(output) === PATH_LIST_EMPTY_OUTPUT[tool])
+      return new Text(theme.fg("muted", PATH_LIST_EMPTY_OUTPUT[tool]), 0, 0);
     const pathList = createPathListRenderer(
       Str.split(output, "\n"),
       cwd,
@@ -167,7 +179,8 @@ function builtinResultBody(
     );
     return new Text(Arr.join(pathList.renderChunk(pathList.lines), "\n"), 0, 0);
   }
-  return new Text(escapeControlChars(output), 0, 0);
+  // A command's final newline would otherwise draw an empty row at the end of its output.
+  return new Text(escapeControlChars(Str.trimEnd(output)), 0, 0);
 }
 
 function writeResultBody(
@@ -259,12 +272,16 @@ function builtinOptionLabels(
   });
 }
 
+const HEADING_COMMAND_RESERVE = 16;
+
 function commandBody(command: string, theme: Theme, invalidate?: () => void): Component {
   const exactInHeading = normalizeShellCommandWhitespace(command) === command;
   let highlighted: Text | undefined;
   return {
     render(width) {
-      if (exactInHeading && visibleWidth(command) <= width - 30) return [];
+      // The heading sits two columns wider than this body and spends `✓ bash ` and at most
+      // ` · 59m 59s` of timing, so a command this short always appears there in full.
+      if (exactInHeading && visibleWidth(command) <= width - HEADING_COMMAND_RESERVE) return [];
       highlighted ??= new Text(
         Arr.join(renderHighlightedText(command, "bash", theme, invalidate), "\n"),
         0,

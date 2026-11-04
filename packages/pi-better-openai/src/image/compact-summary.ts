@@ -35,9 +35,6 @@ export const imageRecord = Fn.flow(
   Option.getOrUndefined,
 );
 
-const savedFileName = (path: string | undefined): string =>
-  path === undefined ? "" : Str.trim(Arr.lastNonEmpty(Str.split(path, "/")));
-
 type StatusSummary = Pick<CompactSummary, "outcome" | "issues">;
 const uncertain = (code: string, message: string): StatusSummary => ({
   outcome: "uncertain",
@@ -62,7 +59,6 @@ const STATUS_SUMMARIES = new Map<string, StatusSummary>([
 
 export interface ImageSummaryOptions {
   readonly hasImage: boolean;
-  readonly expanded: boolean;
   readonly prompt?: string | undefined;
 }
 
@@ -70,11 +66,10 @@ export function imageRecordSummary(
   record: CodexImageDetails,
   options: ImageSummaryOptions,
 ): CompactSummary | undefined {
-  const fileName = options.expanded ? "" : savedFileName(record.savedPath);
+  // The prompt names the image; where it was saved shows expanded.
   const base: CompactSummary = {
     action: record.action,
     subject: imagePromptSubject(options.prompt ?? record.prompt),
-    ...(fileName !== "" && { metadata: [fileName] }),
     ...(record.note !== undefined && {
       issues: [{ severity: "info", code: "image-note", message: record.note }],
     }),
@@ -140,7 +135,6 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
   if (!record) return undefined;
   return imageRecordSummary(record, {
     hasImage: result !== undefined && Arr.some(result.content, (part) => part.type === "image"),
-    expanded: context.expanded,
     prompt: args.prompt,
   });
 };

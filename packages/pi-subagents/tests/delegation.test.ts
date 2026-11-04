@@ -189,7 +189,8 @@ const openGlobalDelegation = function* (fixture: {
   const mounted = fixture.mounted();
   const picker = yield* fixture.settings("").pipe(Effect.forkScoped);
   yield* step(() => mounted);
-  for (let index = 0; index < 5; index += 1) fixture.surface.editor?.handleInput?.("j");
+  // Writer workspace, then the Session and Global groups; Global opens on its delegation row.
+  for (const key of ["j", "j", "\r"]) fixture.surface.editor?.handleInput?.(key);
   return picker;
 };
 
@@ -217,6 +218,8 @@ describe("delegation mode", () => {
       expect(saved.file.delegation).toBe("encouraged");
       expect(saved.file.nesting?.maxDepth).toBe(3);
       expect(Arr.filter(fixture.notify.mock.calls, ([, level]) => level !== "info")).toEqual([]);
+      // Back out of the Global group, then close the settings.
+      fixture.surface.editor?.handleInput?.("\u001b");
       fixture.surface.editor?.handleInput?.("\u001b");
       yield* Fiber.join(picker);
       yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));

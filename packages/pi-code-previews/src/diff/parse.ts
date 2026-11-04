@@ -49,3 +49,27 @@ export function* diffLineRuns(
 
 export const changedDiffBlocks = (lines: readonly (ParsedDiffLine | null)[]) =>
   diffLineRuns(lines, (line) => (line.kind === " " ? undefined : "changed"));
+
+/**
+ * Pi numbers an edit diff's context lines by their old position and added lines by their new one,
+ * so context after an insertion appears to go back in time. Renumber context by its new position;
+ * removed lines keep their old numbers.
+ */
+export function withNewContextLineNumbers(diff: string): string {
+  let shift = 0;
+  return Arr.join(
+    Arr.map(Str.split(diff, "\n"), (line) => {
+      const parsed = parseDiffLine(line);
+      if (!parsed) return line;
+      if (parsed.kind !== " ") {
+        shift += parsed.kind === "+" ? 1 : -1;
+        return line;
+      }
+      const old = Number(Str.trim(parsed.lineNumber));
+      if (shift === 0 || parsed.lineNumber === "" || !Number.isInteger(old)) return line;
+      const renumbered = Fn.pipe(String(old + shift), Str.padStart(parsed.lineNumber.length, " "));
+      return ` ${renumbered} ${parsed.content}`;
+    }),
+    "\n",
+  );
+}

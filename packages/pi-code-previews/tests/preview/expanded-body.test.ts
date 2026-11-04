@@ -1,0 +1,71 @@
+import assert from "node:assert/strict";
+import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
+import { plainTheme } from "pi-cosmic-core/testing";
+import { test } from "vitest";
+import {
+  expandedAuthoredText,
+  expandedBody,
+  expandedDetails,
+  expandedFields,
+  expandedText,
+} from "../../src/preview/expanded-body";
+
+const words = (lines: readonly string[]) =>
+  Fn.pipe(Arr.join(lines, " "), Str.split(/\s+/u), Arr.filter(Str.isNonEmpty));
+
+test("an expanded body keeps every field value at phone and desktop widths", () => {
+  const command = "pnpm vitest run tests/auth.test.ts --reporter verbose --bail";
+  const body = expandedBody(
+    expandedFields(plainTheme, [
+      { label: "Command", lines: [command, "echo done"] },
+      { label: "Notify", lines: ["when it finishes"] },
+      { label: "Empty", lines: [] },
+    ]),
+    expandedText(plainTheme, "Output", ["ok", { text: "boom", tone: "error" }]),
+    expandedDetails(plainTheme, ["task-1 · /project", "  pid 4"]),
+  );
+  for (const width of [180, 57, 24]) {
+    const text = words(body.render(width));
+    for (const word of [
+      ...Str.split(command, " "),
+      "echo",
+      "done",
+      "Notify",
+      "boom",
+      "task-1",
+      "pid",
+    ])
+      assert.ok(Arr.contains(text, word), `${word} at ${width}`);
+    assert.ok(!Arr.contains(text, "Empty"), `an empty field is omitted at ${width}`);
+  }
+});
+
+test("absent and empty parts take no space", () => {
+  const body = expandedBody(
+    undefined,
+    expandedFields(plainTheme, []),
+    expandedText(plainTheme, "Output", []),
+    expandedDetails(plainTheme, ["", "   "]),
+    expandedAuthoredText(plainTheme, "Message", "  \n "),
+  );
+  assert.deepEqual(body.render(57), []);
+});
+
+test("expanded authored text keeps every line beyond the collapsed budget", () => {
+  const text = Arr.join(
+    Arr.makeBy(30, (index) => `line ${index + 1}`),
+    "\n\n",
+  );
+  const rows = expandedAuthoredText(plainTheme, "Reply", text).render(57);
+  assert.ok(Arr.some(rows, Str.includes("line 30")));
+  assert.ok(!Arr.some(rows, Str.includes("more lines")));
+});
+
+test("controls in field values are made visible instead of reaching the terminal", () => {
+  const rows = expandedFields(plainTheme, [
+    { label: "Command", lines: ["echo \u001b[2Jhi"] },
+  ]).render(80);
+  assert.ok(!Arr.some(rows, Str.includes("\u001b")));
+});

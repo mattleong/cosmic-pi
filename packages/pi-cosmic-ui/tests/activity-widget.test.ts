@@ -3,7 +3,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { renderActivityWidget } from "../src/activity/widget.ts";
-import { activityWidgetSections } from "../src/activity/widget-projection.ts";
+import { activityWidgetSections, widgetFailuresExpire } from "../src/activity/widget-projection.ts";
 import { activityRow, memberRow } from "./support/activity.ts";
 
 const standalone = [
@@ -59,6 +59,13 @@ describe("grouped activity widget", () => {
     expect(recent).toContain("flaky build");
     const stale = Arr.join(renderActivityWidget([live, failed], 80, 8, { now: 3_600_000 }), "\n");
     expect(stale).not.toContain("flaky build");
+  });
+
+  it("repaints when a failure line expires even though nothing else changed", () => {
+    const failed = activityRow("flaky", "failed", undefined, { kind: "command", endedAt: 0 });
+    expect(widgetFailuresExpire([failed], 60_000, 120_000)).toBe(false);
+    expect(widgetFailuresExpire([failed], 599_999, 600_001)).toBe(true);
+    expect(widgetFailuresExpire([failed], 600_001, 601_000)).toBe(false);
   });
 
   it("leaves a questionnaire on screen to its dock and shows how to return to a hidden one", () => {

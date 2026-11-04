@@ -4,8 +4,10 @@ import { nodeFs } from "pi-cosmic-core/platform/node-builtins";
 import {
   parentReferenceInstruction,
   parseParentReference,
+  REX_BTW_CHILD_FLAG,
   REX_BTW_PARENT_FILE_FLAG,
   REX_BTW_PARENT_FLAG,
+  type ParentReference,
 } from "./launch.ts";
 
 const SECTION = "rex_btw_parent_reference";
@@ -19,6 +21,18 @@ export const isRegularFile = (path: string): boolean => {
   }
 };
 
+/** This session's parent reference, when it is a BTW child launched with one. */
+export const launchedParent = (pi: ExtensionAPI): ParentReference | undefined =>
+  invokeHostCallback(
+    () =>
+      parseParentReference(pi.getFlag(REX_BTW_PARENT_FLAG), pi.getFlag(REX_BTW_PARENT_FILE_FLAG)),
+    undefined,
+  );
+
+/** Whether this session is a BTW side session, whether or not it can see its parent. */
+export const isBtwChild = (pi: ExtensionAPI): boolean =>
+  invokeHostCallback(() => pi.getFlag(REX_BTW_CHILD_FLAG) === true, false);
+
 /**
  * A BTW child receives its parent's session ID and file as launch flags. Before every run the
  * reference is rechecked, so the note disappears if the parent file goes away.
@@ -27,6 +41,10 @@ export const registerParentReference = (
   pi: ExtensionAPI,
   { fileExists = isRegularFile }: { readonly fileExists?: (path: string) => boolean } = {},
 ): void => {
+  pi.registerFlag(REX_BTW_CHILD_FLAG, {
+    description: "Internal pi-rex-btw marker for a BTW side session.",
+    type: "boolean",
+  });
   pi.registerFlag(REX_BTW_PARENT_FLAG, {
     description: "Internal pi-rex-btw marker carrying the parent Pi session ID of a BTW pane.",
     type: "string",
@@ -38,11 +56,7 @@ export const registerParentReference = (
 
   pi.on("before_agent_start", (event) => {
     delete event.systemPromptOptions.sections[SECTION];
-    const parent = invokeHostCallback(
-      () =>
-        parseParentReference(pi.getFlag(REX_BTW_PARENT_FLAG), pi.getFlag(REX_BTW_PARENT_FILE_FLAG)),
-      undefined,
-    );
+    const parent = launchedParent(pi);
     if (parent !== undefined && fileExists(parent.path))
       event.systemPromptOptions.sections[SECTION] = parentReferenceInstruction(parent);
     return undefined;

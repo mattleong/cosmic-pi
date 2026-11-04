@@ -11,6 +11,7 @@ import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
+import { lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 import {
   framedFill,
   framedScreen,
@@ -42,14 +43,45 @@ const HANGING_INDENT = 2;
 
 const leadingSpaces = (line: string): number => line.length - Fn.pipe(line, Str.trimStart).length;
 
+const ESCAPE = "\u001b";
+
+/**
+ * Splits a plain path wider than `width` after its last `/` that fits, so `…/agent/` and
+ * `code-previews.json` wrap as units. A segment without a `/` keeps the default hard break.
+ */
+const pathSegments = (word: string, width: number): ReadonlyArray<string> => {
+  const segments: string[] = [];
+  let rest = word;
+  while (visibleWidth(rest) > width) {
+    const slash = lastIndexOfFrom(rest, "/", width - 1);
+    if (slash <= 0) break;
+    segments.push(Fn.pipe(rest, Str.slice(0, slash + 1)));
+    rest = Fn.pipe(rest, Str.slice(slash + 1));
+  }
+  return [...segments, rest];
+};
+
+const breakLongPaths = (line: string, width: number): string =>
+  Fn.pipe(line, Str.includes(ESCAPE))
+    ? line
+    : Arr.join(
+        Arr.map(Str.split(line, " "), (word) =>
+          visibleWidth(word) > width && Fn.pipe(word, Str.includes("/"))
+            ? Arr.join(pathSegments(word, width), "\n")
+            : word,
+        ),
+        " ",
+      );
+
 /** Wraps one line, indenting continuation rows beneath the line's own indentation. */
 export const wrapWithHangingIndent = (line: string, width: number): ReadonlyArray<string> => {
   const safeWidth = Math.max(1, Math.floor(width));
   if (visibleWidth(line) <= safeWidth) return [line];
   const hang = Math.min(leadingSpaces(line) + HANGING_INDENT, Math.max(0, safeWidth - 1));
   const indent = Fn.pipe(" ", Str.repeat(hang));
+  const wrapWidth = Math.max(1, safeWidth - hang);
   // Wrapping at the continuation width keeps every row, including the first, within bounds.
-  return Arr.map(wrapTextWithAnsi(line, Math.max(1, safeWidth - hang)), (part, index) =>
+  return Arr.map(wrapTextWithAnsi(breakLongPaths(line, wrapWidth), wrapWidth), (part, index) =>
     index === 0 ? part : `${indent}${Str.trimStart(part)}`,
   );
 };

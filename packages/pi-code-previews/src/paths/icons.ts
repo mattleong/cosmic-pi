@@ -57,7 +57,8 @@ const NERD_BY_EXT = new Map<string, string>(
 
 export function pathIcon(path: string, isDirectory: boolean, mode: PathIconMode): string {
   if (mode === "off") return "";
-  if (mode === "unicode") return isDirectory ? "▸" : "•";
+  // Distinct from the suite's status and disclosure glyphs (`▸` collapsed, `•` neutral).
+  if (mode === "unicode") return isDirectory ? "▪" : "◦";
   if (isDirectory) return NERD_DIR;
   const name = Str.toLowerCase(nodePath.basename(path));
   return (

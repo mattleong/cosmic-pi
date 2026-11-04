@@ -8,6 +8,7 @@ import {
   galleryTranscriptFrames,
   withPresentationSettings,
   writeGallerySection,
+  GALLERY_VIEWS,
   type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
@@ -121,6 +122,57 @@ const everyKind: AskUserOutcome = {
     },
   ],
 };
+const store: AskUserQuestion = {
+  key: "store",
+  title: "Persistence",
+  prompt: "Which persistence layer should the cart use?",
+  mode: "single",
+  choices: [
+    {
+      value: "sqlite",
+      label: "SQLite",
+      description: "Local file storage with minimal setup.",
+      preview: "```ts\nconst db = new Database('cart.sqlite');\n```",
+    },
+    {
+      value: "postgres",
+      label: "Postgres",
+      description: "Shared database for scaled deployments.",
+    },
+    { value: "memory", label: "In-memory", description: "Resets on restart." },
+  ],
+};
+const features: AskUserQuestion = {
+  key: "features",
+  title: "Features",
+  prompt: "Which cart features should ship first?",
+  mode: "multiple",
+  choices: [
+    { value: "quantity", label: "Quantity editing", description: "Update item quantities." },
+    { value: "discounts", label: "Discount codes", description: "Apply promotional savings." },
+    { value: "saved", label: "Saved carts", description: "Restore carts across visits." },
+    { value: "inventory", label: "Inventory checks", description: "Check stock at checkout." },
+  ],
+};
+const notes: AskUserQuestion = {
+  key: "notes",
+  title: "Notes",
+  prompt: "Anything else the implementer should know?",
+  mode: "text",
+};
+const cartPlan: AskUserOutcome = {
+  outcome: "submitted",
+  answers: [
+    { key: "store", kind: "choices", values: ["sqlite"], labels: ["SQLite"] },
+    {
+      key: "features",
+      kind: "choices",
+      values: ["quantity", "discounts", "inventory"],
+      labels: ["Quantity editing", "Discount codes", "Inventory checks"],
+    },
+    { key: "notes", kind: "text", text: "Keep prices in integer cents." },
+  ],
+};
 const chosenWithCustom: AskUserOutcome = { outcome: "submitted", answers: [chosen, custom] };
 const cancelled: AskUserOutcome = { outcome: "cancelled", answers: [] };
 
@@ -155,7 +207,10 @@ type ToolName = "ask_user" | "ask_user_async" | "ask_user_async_control";
 type ToolArgs = AskUserRequest | AskUserAsyncRequest | AskUserAsyncControl;
 interface ToolScenario extends GalleryScenario {
   readonly tool: ToolName;
+  /** Also drawn collapsed at desktop width, where a collapsed row can say more. */
+  readonly wide?: boolean;
 }
+const WIDE_COLLAPSED = [{ expanded: false, width: 180 }] as const;
 
 const executed = (
   tool: ToolName,
@@ -270,7 +325,19 @@ const dialogScenarios: ReadonlyArray<DialogScenario> = [
     title: "several questions",
     request: { questions: [environment, checks, library, summary] },
     keys: [],
-    widths: [100, 60, 40],
+    widths: [100, 57, 40],
+  },
+  {
+    title: "several questions · choice with a preview",
+    request: { questions: [store, features, notes] },
+    keys: [],
+    widths: [180, 57],
+  },
+  {
+    title: "several questions · writing an answer",
+    request: { questions: [store, features, notes] },
+    keys: ["1", "1", "2", "4", DOWN, DOWN, ENTER, "Keep prices in integer cents"],
+    widths: [180, 57],
   },
   {
     title: "several questions · help expanded",
@@ -306,7 +373,7 @@ const pressKeys = (dialog: AskUserDialog, keys: ReadonlyArray<string>) => {
 };
 
 const dialogFrames = (): string[] =>
-  Arr.flatMap(dialogScenarios, ({ title, request, keys, widths = [100, 60] }) => {
+  Arr.flatMap(dialogScenarios, ({ title, request, keys, widths = [100, 57] }) => {
     const { dialog } = makeDialog(request);
     dialog.focused = true;
     pressKeys(dialog, keys);
@@ -338,6 +405,9 @@ describe.skipIf(!directory)("presentation gallery", () => {
           "every answer kind with notes",
           { questions: [environment, checks, library, summary] },
           everyKind,
+        ),
+        asked("several short answers", { questions: [store, features, notes] }, cartPlan).pipe(
+          Effect.map((scenario) => ({ ...scenario, wide: true })),
         ),
         asked("questionnaire cancelled", { questions: [environment, library] }, cancelled),
         failed(
@@ -409,7 +479,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         });
         try {
           const { tools, messageRenderers } = captureRegistrations(registerAll);
-          for (const { tool, ...scenario } of scenarios)
+          for (const { tool, wide, ...scenario } of scenarios)
             lines.push(
               ...galleryFrames(
                 Option.getOrThrow(Arr.findFirst(tools, (entry) => entry.name === tool)),
@@ -417,6 +487,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
                   ...scenario,
                   title: `${style} · ${tool} · ${scenario.title}`,
                 },
+                wide ? [...GALLERY_VIEWS, ...WIDE_COLLAPSED] : GALLERY_VIEWS,
               ),
             );
           expect(messageRenderers.get(ASYNC_MESSAGE_TYPE)).toBe(renderAskUserAsyncMessage);

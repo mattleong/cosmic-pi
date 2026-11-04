@@ -128,13 +128,21 @@ const usageLine = (run: SubagentRunView): string =>
     Arr.join(" · "),
   );
 
+const REPORT_STATUS = {
+  available: "ready for the parent",
+  claimed: "being delivered",
+  delivered: "delivered to the parent",
+  missing: "missing",
+} as const satisfies Record<NonNullable<SubagentRunView["reportStatus"]>, string>;
+
+// The Activity row carries the route, override marker included, so it is left to the shell.
 const technical = (run: SubagentRunView): ActivityDetailField[] =>
   Arr.filter(
     [
       { label: "ID", value: run.id },
-      { label: "Assignment", value: `report ${run.reportGeneration}` },
-      { label: "Report", value: run.reportStatus ?? "unknown" },
-      { label: "Route", value: `${run.model}:${run.effort}` },
+      // A first assignment is the only one; later ones say which they are, as run cards do.
+      { label: "Assignment", value: run.reportGeneration > 1 ? String(run.reportGeneration) : "" },
+      { label: "Report", value: run.reportStatus ? REPORT_STATUS[run.reportStatus] : "" },
       { label: "Directory", value: run.cwd },
       { label: "PID", value: run.pid === undefined ? "none" : String(run.pid) },
       { label: "Writes", value: run.writeIntent },

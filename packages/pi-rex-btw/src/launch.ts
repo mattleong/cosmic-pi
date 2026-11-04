@@ -5,6 +5,8 @@ import * as Str from "effect/String";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 
 export const BTW_COMMAND = "btw";
+/** Marks every BTW side session, including one that can't see its parent. */
+export const REX_BTW_CHILD_FLAG = "rex-btw";
 export const REX_BTW_PARENT_FLAG = "rex-btw-parent";
 export const REX_BTW_PARENT_FILE_FLAG = "rex-btw-parent-file";
 
@@ -103,6 +105,7 @@ const piArguments = (launch: ChildLaunch): ReadonlyArray<string> => [
   launch.extensionPath,
   "--name",
   BTW_SESSION_NAME,
+  `--${REX_BTW_CHILD_FLAG}`,
   ...(launch.model === undefined
     ? []
     : ["--provider", launch.model.provider, "--model", launch.model.id]),
@@ -136,10 +139,9 @@ export const parentReferenceInstruction = (parent: ParentReference): string =>
       "## Parent Pi session (BTW side session)",
       "",
       "You are a BTW side session: a separate Pi conversation the user opened from a parent Pi session that keeps running in another Rex pane. This conversation started blank; nothing from the parent was copied in.",
-      `- Parent session file: ${JSON.stringify(parent.path)}`,
-      `- Parent session ID: ${parent.id}`,
       "",
-      "The parent may be working right now. Its session file is a live JSONL transcript that grows as it works, so whenever a request depends on what the parent is doing or has done, read the latest entries first (for example with the read tool, or tail or rg in bash), even if you read the file earlier in this conversation. The file is read-only to you: never edit, resume, or compact it.",
+      "The parent may be working right now. Whenever a request depends on what the parent is doing or has done, call parent_conversation first to read its latest messages, even if you read them earlier in this conversation.",
+      `Only when you need history older than parent_conversation returns, search the parent's session file with read-only tools: ${JSON.stringify(parent.path)} (session ID ${parent.id}). It is a live JSONL transcript; never edit, resume, or compact it.`,
     ],
     "\n",
   );

@@ -35,7 +35,11 @@ export interface ActivityRowVisual {
   readonly awaited?: boolean;
   readonly omittedChildren?: number;
   readonly history?: boolean;
+  /** Live progress after the name, such as a task's latest output line; dropped when cramped. */
+  readonly activity?: string | undefined;
 }
+
+const MINIMUM_ACTIVITY_WIDTH = 8;
 
 // The widget uses compact three-column connectors. The manager's four-column connectors carry
 // the fold marker in place of the last stroke, so glyphs sit right after their connector.
@@ -191,11 +195,14 @@ export function renderActivityRow(
   const guide = paint("dim", clipToWidth(treeGuide(continuations, levels, fold), guideBudget, ""));
   const glyph = paint(row.color, row.glyph);
   const name = rowName(row, interactive, suffix, paint, focusedStyle);
-  const left = clipToWidth(
-    `${guide}${paint("accent", awaited)}${glyph} ${name}${paint("dim", omitted)}`,
-    Math.max(0, leftWidth),
-    "…",
-  );
+  const lead = `${guide}${paint("accent", awaited)}${glyph} ${name}${paint("dim", omitted)}`;
+  // Keep one space before the status column so the activity never runs into it.
+  const room = leftWidth - visibleWidth(lead) - 3 - Number(rightWidth !== undefined);
+  const activity =
+    row.activity && room >= MINIMUM_ACTIVITY_WIDTH
+      ? paint("muted", ` · ${clipToWidth(row.activity, room, "…")}`)
+      : "";
+  const left = clipToWidth(`${lead}${activity}`, Math.max(0, leftWidth), "…");
   return rightWidth === undefined
     ? left
     : `${left}${Fn.pipe(" ", Str.repeat(Math.max(1, width - visibleWidth(left) - rightWidth)))}${paint(row.statusColor, clipToWidth(status, rightWidth, "…"))}`;

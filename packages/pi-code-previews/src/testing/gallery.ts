@@ -29,15 +29,17 @@ export interface GalleryScenario<TArgs = unknown, TDetails = unknown> {
   readonly durationMs?: number;
 }
 
-interface GalleryView {
+export interface GalleryView {
   readonly expanded: boolean;
   readonly width: number;
 }
 
-const GALLERY_VIEWS: readonly GalleryView[] = [
+/** Wide and phone-sized views; 57 columns is the narrowest client the suite is reviewed at. */
+export const GALLERY_VIEWS: readonly GalleryView[] = [
   { expanded: false, width: 100 },
-  { expanded: false, width: 60 },
+  { expanded: false, width: 57 },
   { expanded: true, width: 100 },
+  { expanded: true, width: 57 },
 ];
 
 interface TimingSeed {

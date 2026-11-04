@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
@@ -90,10 +91,20 @@ const targetHeading = (target: ProfileWorkspaceTarget): string =>
   target.kind === "session"
     ? "Editing Current Session"
     : `Editing ${target.set.name} · session not affected`;
-const destination = (target: ProfileWorkspaceTarget): string =>
-  target.kind === "session"
-    ? "Changes affect later launches. Active runs are unchanged."
-    : `Saving to ${qualifiedProfileSetLabel(target.set)} · session not affected`;
+/** Where edits go, shortened rather than clipped when the full sentence doesn't fit. */
+const destination = (target: ProfileWorkspaceTarget, width: number): string => {
+  const [full, short] =
+    target.kind === "session"
+      ? [
+          "Changes affect later launches. Active runs are unchanged.",
+          "Changes affect later launches.",
+        ]
+      : [
+          `Saving to ${qualifiedProfileSetLabel(target.set)} · session not affected`,
+          `Saving to ${qualifiedProfileSetLabel(target.set)}`,
+        ];
+  return visibleWidth(full) <= width ? full : short;
+};
 
 const workspaceCandidateSummary = (
   candidate: ProfileCandidate,
@@ -151,17 +162,33 @@ const profileTableRows = (
 const PROFILE_COLUMN_GAP = 2;
 const PROFILE_CURSOR_WIDTH = 2;
 
-/** The width the profile table needs to show every model and fallback count unclipped. */
+// The model is what the list is for, so it keeps its width before the reasoning label.
+const PROFILE_COLUMNS = [
+  { minWidth: 12, priority: 5 },
+  { minWidth: 8, priority: 4 },
+  { minWidth: 7, priority: 3 },
+  { minWidth: 11, priority: 1 },
+] as const;
+
+const profileTableCells = (row: ProfileTableRow): ReadonlyArray<string> => [
+  `${row.profile} ●`,
+  row.model,
+  row.effort,
+  row.fallbacks,
+];
+
+/**
+ * The width the profile table needs to show every model and fallback count unclipped, measured as
+ * the table lays out: each shown column at least its minimum, and empty columns not at all.
+ */
 const profileTableNaturalWidth = (rows: ReadonlyArray<ProfileTableRow>): number => {
-  const widest = (cell: (row: ProfileTableRow) => string) =>
-    Math.max(0, ...Arr.map(rows, (row) => visibleWidth(cell(row))));
-  const columns = [
-    widest((row) => `${row.profile} ●`),
-    widest((row) => row.model),
-    widest((row) => row.effort),
-    widest((row) => row.fallbacks),
-  ];
-  const shown = Arr.filter(columns, (width) => width > 0);
+  const shown = Arr.filterMap(PROFILE_COLUMNS, (column, index) => {
+    const widest = Math.max(
+      0,
+      ...Arr.map(rows, (row) => visibleWidth(profileTableCells(row)[index] ?? "")),
+    );
+    return widest === 0 ? Result.failVoid : Result.succeed(Math.max(column.minWidth, widest));
+  });
   return (
     PROFILE_CURSOR_WIDTH +
     Arr.reduce(shown, 0, (total, width) => total + width) +
@@ -175,15 +202,10 @@ const profileTableLines = (
   width: number,
 ): ReadonlyArray<string> => {
   const rows = profileTableRows(state, theme);
+  // The shared table leaves out a column with no cells, such as fallbacks when there are none.
   const table = managerTable(
-    Arr.map(rows, (row) => [row.profile + " ●", row.model, row.effort, row.fallbacks]),
-    // The model is what the list is for, so it keeps its width before the reasoning label.
-    [
-      { minWidth: 12, priority: 5 },
-      { minWidth: 8, priority: 4 },
-      { minWidth: 7, priority: 3 },
-      { minWidth: 11, priority: 1 },
-    ],
+    Arr.map(rows, profileTableCells),
+    PROFILE_COLUMNS,
     width - PROFILE_CURSOR_WIDTH,
   );
   return Arr.map(rows, (row) => {
@@ -227,7 +249,7 @@ const profileLines = (
     ...(state.target.kind === "session"
       ? [
           "",
-          theme.fg(managerTone.session, theme.bold("Current Session")),
+          listDetailHeading(theme, "Current Session", false, managerTone.session),
           state.saveFocused && state.pane === "profiles" ? focusedField(theme, save) : save,
         ]
       : []),
@@ -259,6 +281,8 @@ const fieldValue = (
   );
 };
 
+const EDITOR_GUTTER = "  ";
+
 const editorLines = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
@@ -278,16 +302,21 @@ const editorLines = (
   const lines: string[] = [];
   let selectedLine = 0;
   let previousSection: string | undefined;
+  // Section headings align with the pane's heading, and their fields indent beneath them.
+  const headingWidth = Math.max(0, width - EDITOR_GUTTER.length);
+  const fieldWidth = Math.max(0, headingWidth - EDITOR_GUTTER.length);
   Arr.forEach(rows, (row, index) => {
     const section = row.scope === "candidate" ? `candidate:${row.candidateIndex}` : row.scope;
     if (section !== previousSection) {
       if (previousSection !== undefined) lines.push("");
-      lines.push(sectionHeading(state, theme, row, profile, width));
+      lines.push(EDITOR_GUTTER + sectionHeading(state, theme, row, profile, headingWidth));
       previousSection = section;
     }
     if (index === state.fieldIndex) selectedLine = lines.length;
     const selected = index === state.fieldIndex && state.pane !== "profiles";
-    lines.push(fieldLine(state, theme, row, { selected, labelWidth, width }));
+    lines.push(
+      EDITOR_GUTTER + fieldLine(state, theme, row, { selected, labelWidth, width: fieldWidth }),
+    );
   });
   const limit = Math.max(0, height - 1);
   const start = listWindowStart(lines.length, selectedLine, limit);
@@ -549,10 +578,14 @@ export const renderProfileWorkspace = (
         ...framedFill(
           frame,
           [
-            theme.fg(
+            // Indented with the pane headings above it.
+            `  ${theme.fg(
               "muted",
-              `${state.message?.kind === "success" ? "✓ Saved · " : ""}${destination(state.target)}`,
-            ),
+              `${state.message?.kind === "success" ? "✓ Saved · " : ""}${destination(
+                state.target,
+                inner - 2 - (state.message?.kind === "success" ? 10 : 0),
+              )}`,
+            )}`,
           ],
           Math.min(1, bodyHeight),
           inner,

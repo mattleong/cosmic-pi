@@ -22,7 +22,7 @@ import {
   type ActivityServiceOptions,
 } from "../activity/service.ts";
 import { renderActivityWidget } from "../activity/widget.ts";
-import { activityWidgetHeight } from "../activity/widget-projection.ts";
+import { activityWidgetHeight, widgetFailuresExpire } from "../activity/widget-projection.ts";
 import { fullScreenKeybindingOptions } from "../manager/key-labels.ts";
 import { openOwnedSurface } from "./host-surface.ts";
 import type { ActivitySection } from "../activity/view-protocol.ts";
@@ -112,13 +112,16 @@ export function createActivityHost(
         },
         tick: (now) => {
           if (!binding) return;
+          const previous = binding.now;
           binding.now = now;
-          // Finished rows show fixed times, so only live work or the open manager's ages change.
+          // Finished rows show fixed times, so only live work, the open manager's ages, or an
+          // expiring failure line change.
           if (
             binding.active &&
             (binding.starting > 0 ||
               binding.manager !== undefined ||
-              Arr.some(binding.rows, (row) => !isFinished(row)))
+              Arr.some(binding.rows, (row) => !isFinished(row)) ||
+              widgetFailuresExpire(binding.rows, previous, now))
           )
             safe(binding.render);
         },
@@ -248,7 +251,10 @@ export function createActivityHost(
                     theme,
                     now: binding.now,
                     inputDockVisible: docked,
-                    ...(binding.presentation && { collapsed: binding.presentation.collapsed }),
+                    ...(binding.presentation && {
+                      collapsed: binding.presentation.collapsed,
+                      inspected: binding.presentation.inspected,
+                    }),
                   },
                 );
               },

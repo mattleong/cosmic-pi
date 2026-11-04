@@ -6,7 +6,7 @@ import { applyPresentationSettings } from "../../testing";
 import { plainTheme, stripAnsi } from "../support/render";
 import { FullWidthDiffText } from "../../src/diff/full-width-text";
 import { renderPlainDiff } from "../../src/diff/render";
-import { parseDiffLine } from "../../src/diff/parse";
+import { parseDiffLine, withNewContextLineNumbers } from "../../src/diff/parse";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -69,4 +69,26 @@ test("full-width diff wrapping preserves wide graphemes beside a narrow continua
 
   assert.ok(Arr.every(rows, (row) => visibleWidth(row) <= 6));
   assert.match(stripAnsi(Arr.join(rows, "")), /😀/);
+});
+
+test("edit diff context after a change is numbered by its position in the edited file", () => {
+  const before = Arr.join(
+    Arr.makeBy(20, (index) => `line ${index + 1}`),
+    "\n",
+  );
+  const lines = Str.split(before, "\n");
+  const after = Arr.join(
+    [...lines.slice(0, 2), "inserted a", "inserted b", ...lines.slice(2, 9), ...lines.slice(10)],
+    "\n",
+  );
+  const { diff } = generateDiffString(before, after);
+  const numbered = Arr.flatMap(Str.split(withNewContextLineNumbers(diff), "\n"), (line) => {
+    const parsed = parseDiffLine(line);
+    return parsed && parsed.kind !== "-"
+      ? [[Number(Str.trim(parsed.lineNumber)), parsed.content]]
+      : [];
+  });
+  const afterLines = Str.split(after, "\n");
+  for (const [number, content] of numbered) assert.equal(afterLines[Number(number) - 1], content);
+  assert.ok(Arr.some(numbered, ([, content]) => content === "line 11"));
 });

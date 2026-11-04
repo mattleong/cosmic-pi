@@ -25,6 +25,7 @@ import {
   REX_UNAVAILABLE_MESSAGE,
   rexLocation,
 } from "./launch.ts";
+import { registerParentConversation } from "./parent/application.ts";
 import { isRegularFile, registerParentReference } from "./parent-reference.ts";
 import { isRexBtwError, RexClient } from "./rex.ts";
 
@@ -62,6 +63,7 @@ const captureRequest = (
 
 export default function rexBtw(pi: ExtensionAPI): void {
   registerParentReference(pi);
+  registerParentConversation(pi);
 
   const slot = makePiSessionRuntimeSlot<RexBtwInput & { readonly ctx: ExtensionContext }, RexBtw>({
     makeRuntime: (input) =>

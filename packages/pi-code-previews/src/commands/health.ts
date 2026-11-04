@@ -1,6 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
 import { countLabel } from "pi-cosmic-core/display";
+import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
+import { abbreviateHomePath } from "pi-cosmic-core/platform/paths";
 import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import { hasCustomSurface, openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
@@ -64,7 +66,8 @@ function healthLines(cwd: string): string[] {
     `  Background: ${settings.toolCallBackground} · ${RELOAD}`,
     `  Timing: ${formatOnOff(settings.toolCallTiming)}`,
     `  Path icons: ${settings.pathIcons}`,
-    "Collapsed previews · expanded rows always show full content",
+    // Named as the settings group is; expanded rows always show full content.
+    "Output previews",
     `  Read content: ${formatOnOff(settings.readContentPreview)}`,
     `  Write content: ${formatOnOff(settings.writeContentPreview)}`,
     `  Edit diff: ${formatOnOff(settings.editDiffPreview)}`,
@@ -77,7 +80,7 @@ function healthLines(cwd: string): string[] {
     ...toolRows(),
     `  MCP calls: ${isNativeMcpRendererAvailable() ? "previewed" : "not available"}`,
     "Settings",
-    `  File: ${getSettingsPath()}`,
+    `  File: ${abbreviateHomePath(getSettingsPath(), nodeDisplayHomeDirectory())}`,
     ...Arr.map(
       codePreviewSettingsProblems,
       (problem) => `  ${describeSettingsProblem(problem, cwd)}`,

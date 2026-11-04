@@ -5,8 +5,9 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { expandedArguments, expandedSection, previewIssuesSlot } from "pi-code-previews";
+import { failureMessage, restatesText } from "pi-cosmic-core/message-text";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { clipToWidth } from "pi-cosmic-ui/manager";
+import { clipToWidth, INLINE_SEPARATOR } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderExpansionAffordance,
@@ -19,7 +20,7 @@ import type {
   AskUserAsyncRequest,
   AskUserRequest,
 } from "../questionnaire/schema.ts";
-import { appendWrapped, titleLabel } from "./layout.ts";
+import { appendPacked, appendWrapped, titleLabel } from "./layout.ts";
 import {
   requestArguments,
   type ReplayedAnswer,
@@ -81,8 +82,33 @@ const answerEntries = (
     note: answer.note === undefined ? undefined : stripTerminalControls(answer.note),
   }));
 
-const indentLines = (text: string, indent: string): string =>
-  Fn.pipe(text, Str.replace(/\r?\n/gu, `\n${indent}`));
+/** Rows that depend only on the width, rebuilt when it changes. */
+const widthRows = (rows: (width: number) => string[]): Component => {
+  let last: { readonly width: number; readonly rows: string[] } | undefined;
+  return {
+    render: (width) => {
+      if (last?.width !== width) last = { width, rows: rows(width) };
+      return last.rows;
+    },
+    invalidate: () => {
+      last = undefined;
+    },
+  };
+};
+
+// Each written line wraps on its own and hangs under the text after the label.
+function appendAnswerLines(
+  lines: string[],
+  lead: string,
+  text: string,
+  style: (value: string) => string,
+  indent: string,
+  width: number,
+): void {
+  const [first, ...rest] = Str.split(text, /\r?\n/u);
+  appendWrapped(lines, indent, `${lead}${style(first)}`, width, 2);
+  for (const line of rest) appendWrapped(lines, `${indent}  `, style(line), width);
+}
 
 interface FirstLine {
   readonly text: string;
@@ -103,17 +129,22 @@ export function answersBody(
 ): Component {
   const entries = answerEntries(answers, titles);
   if (!bounded)
-    return new Text(
-      Arr.join(
-        Arr.flatMap(entries, ({ label, value, note }) => [
-          `${theme.fg("muted", `${label}:`)} ${indentLines(value, "  ")}`,
-          ...(note === undefined ? [] : [theme.fg("dim", `  Note: ${indentLines(note, "    ")}`)]),
-        ]),
-        "\n",
-      ),
-      0,
-      0,
-    );
+    return widthRows((width) => {
+      const lines: string[] = [];
+      for (const { label, value, note } of entries) {
+        appendAnswerLines(lines, theme.fg("muted", `${label}: `), value, Fn.identity, "", width);
+        if (note !== undefined)
+          appendAnswerLines(
+            lines,
+            theme.fg("dim", "Note: "),
+            note,
+            (text) => theme.fg("dim", text),
+            "  ",
+            width,
+          );
+      }
+      return lines;
+    });
   // Splitting long answers is width-independent; rows are rebuilt only when the width changes.
   const firstLines = Arr.map(entries, ({ label, value, note }) => ({
     label,
@@ -157,11 +188,24 @@ const rawResultSection = (theme: Theme, text: string, isError: boolean): Compone
     new Text(theme.fg(isError ? "error" : "toolOutput", text), 0, 0),
   );
 
+// The shell's error issue already shows a one-sentence error; repeating it as detail adds nothing.
+const restatesIssue = (raw: string, isError: boolean): boolean =>
+  isError && restatesText(raw, failureMessage(raw, ""));
+
+// A fact list wraps between its `·`-separated parts, so an ID never breaks across lines.
 const detailsSection = (theme: Theme, facts: readonly string[]): Component =>
   expandedSection(
     theme,
     "Details",
-    new Text(theme.fg("dim", Arr.join(Arr.map(facts, stripTerminalControls), "\n")), 0, 0),
+    widthRows((width) => {
+      const lines: string[] = [];
+      for (const fact of facts)
+        appendPacked(lines, Str.split(stripTerminalControls(fact), INLINE_SEPARATOR), width, {
+          separator: INLINE_SEPARATOR,
+          style: (text) => theme.fg("dim", text),
+        });
+      return lines;
+    }),
   );
 
 const MODE_NOTES = {
@@ -172,20 +216,24 @@ const MODE_NOTES = {
 
 function requestRows(request: RequestView, theme: Theme, width: number): string[] {
   const lines: string[] = [];
-  const append = (prefix: string, text: string) => appendWrapped(lines, prefix, text, width);
+  const append = (prefix: string, text: string, hang = 0) =>
+    appendWrapped(lines, prefix, text, width, hang);
   for (const question of request.questions) {
     const note = MODE_NOTES[question.mode ?? "single"];
     append(
       "",
       `${theme.fg("muted", `${titleLabel(question.title)}:`)} ${theme.fg("text", stripTerminalControls(question.prompt))}${note ? theme.fg("dim", ` · ${note}`) : ""}`,
+      2,
     );
     Arr.forEach(question.choices ?? [], (choice, index) => {
       const description = choice.description
         ? ` — ${stripTerminalControls(choice.description)}`
         : "";
+      const number = `${index + 1}. `;
       append(
         "  ",
-        `${theme.fg("text", `${index + 1}. ${stripTerminalControls(choice.label)}`)}${theme.fg("muted", description)}`,
+        `${theme.fg("text", `${number}${stripTerminalControls(choice.label)}`)}${theme.fg("muted", description)}`,
+        number.length,
       );
       if (choice.preview)
         for (const line of Str.split(stripTerminalControls(choice.preview), /\r?\n/u))
@@ -193,11 +241,16 @@ function requestRows(request: RequestView, theme: Theme, width: number): string[
     });
   }
   if (request.independentWork)
-    append("", theme.fg("muted", `Meanwhile: ${stripTerminalControls(request.independentWork)}`));
+    append(
+      "",
+      theme.fg("muted", `Meanwhile: ${stripTerminalControls(request.independentWork)}`),
+      2,
+    );
   if (request.blockedWork)
     append(
       "",
       theme.fg("muted", `Blocked until answered: ${stripTerminalControls(request.blockedWork)}`),
+      2,
     );
   return lines;
 }
@@ -220,16 +273,11 @@ export function requestSection(
       ? emptyBody()
       : detailsSection(theme, [control.requestId ?? "All retained questionnaires"]);
   if (!request) return expandedArguments(theme, args.fields);
-  let last: { readonly width: number; readonly rows: string[] } | undefined;
-  return expandedSection(theme, "Questions", {
-    render: (width) => {
-      if (last?.width !== width) last = { width, rows: requestRows(request, theme, width) };
-      return last.rows;
-    },
-    invalidate: () => {
-      last = undefined;
-    },
-  });
+  return expandedSection(
+    theme,
+    "Questions",
+    widthRows((width) => requestRows(request, theme, width)),
+  );
 }
 
 /**
@@ -275,7 +323,9 @@ export function expandedResult(input: ExpandedResultInput, theme: Theme): Compon
     input.args === undefined ? [] : [requestSection(theme, input.args, input.decoded)];
   if (!input.decoded)
     return stacked([
-      ...(input.raw ? [rawResultSection(theme, input.raw, input.isError)] : []),
+      ...(input.raw && !restatesIssue(input.raw, input.isError)
+        ? [rawResultSection(theme, input.raw, input.isError)]
+        : []),
       ...request,
     ]);
   const facts = input.facts ?? [];

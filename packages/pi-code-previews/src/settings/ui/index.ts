@@ -7,6 +7,8 @@ import {
   type SettingsSurfaceItem,
 } from "pi-cosmic-ui/manager/settings-surface";
 import { getSettingsPath } from "../../config/store";
+import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
+import { abbreviateHomePath } from "pi-cosmic-core/platform/paths";
 import type { CodePreviewSettings } from "../../config/schema";
 import { formatOnOff, formatSettingValue } from "../../config/values";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../tools/names";
@@ -195,7 +197,10 @@ function createSettingItem(
     id,
     label: definition.label,
     description: definition.description,
-    currentValue: id === "settingsFile" ? getSettingsPath() : formatSettingValue(current, id),
+    currentValue:
+      id === "settingsFile"
+        ? abbreviateHomePath(getSettingsPath(), nodeDisplayHomeDirectory())
+        : formatSettingValue(current, id),
   };
   if (definition.values) item.values = [...definition.values];
   if (id === "shikiTheme")

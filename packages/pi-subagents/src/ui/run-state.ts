@@ -2,6 +2,7 @@ import {
   managerActivityColor,
   managerActivityGlyph,
   managerActivityLabel,
+  SUITE_STATUS_GLYPHS,
   type ManagerActivityKind,
   type ManagerStatusColor,
 } from "pi-cosmic-ui/manager";
@@ -27,8 +28,11 @@ const RUN_STATE_KINDS = {
 export const runStateGlyph = (state: SubagentRunState, frame?: number): string =>
   managerActivityGlyph(RUN_STATE_KINDS[state], frame);
 
-/** Marks running work in a row that never redraws, where a spinner would freeze on one frame. */
-export const SNAPSHOT_RUNNING_GLYPH = "▸";
+/**
+ * Marks running work in a row that never redraws, where a spinner would freeze on one frame: the
+ * suite's neutral glyph, as background-task snapshots of running tasks use.
+ */
+export const SNAPSHOT_RUNNING_GLYPH = SUITE_STATUS_GLYPHS.neutral;
 
 /** A run's glyph in a saved snapshot: running work is marked, not drawn as a stopped spinner. */
 export const runStateSnapshotGlyph = (state: SubagentRunState): string =>

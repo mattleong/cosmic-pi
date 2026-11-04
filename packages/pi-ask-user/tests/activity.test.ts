@@ -67,16 +67,16 @@ it.effect("tells Activity how to resume a hidden questionnaire, and only while i
     const resumable = () => {
       const [item] = f.items();
       return {
-        summary: item?.summary,
+        resumeHint: item?.summary === RESUME_HINT,
         resume: Arr.some(item?.actions ?? [], (action) => action.id === "resume"),
       };
     };
     f.bridge.markOpened(token);
-    expect(resumable()).toEqual({ summary: "open", resume: false });
+    expect(resumable()).toEqual({ resumeHint: false, resume: false });
     f.bridge.markCollapsed(token);
-    expect(resumable()).toEqual({ summary: RESUME_HINT, resume: true });
+    expect(resumable()).toEqual({ resumeHint: true, resume: true });
     f.bridge.resume(token);
-    expect(resumable()).toEqual({ summary: "open", resume: false });
+    expect(resumable()).toEqual({ resumeHint: false, resume: false });
     f.activity.dispose();
   }),
 );

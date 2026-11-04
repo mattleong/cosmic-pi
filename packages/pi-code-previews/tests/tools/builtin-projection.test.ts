@@ -159,3 +159,27 @@ describe("builtin projection policy", () => {
     ).toMatchObject({ outcome: "success", issues: [] });
   });
 });
+
+describe("path listing counts", () => {
+  const listed = (
+    tool: "find" | "ls",
+    text: string,
+    details: { readonly resultLimitReached?: number } = {},
+  ) =>
+    projectBuiltinCompactSummary(tool, {
+      ...base,
+      args: { path: ".", pattern: "*.ts" },
+      result: { content: [{ type: "text", text }], details },
+    })?.counters;
+
+  it("counts complete find and ls results", () => {
+    expect(listed("find", "a.ts\nsrc/b.ts\n")?.[0]).toContain("2");
+    expect(listed("ls", "src/\ntests/\npackage.json")?.[0]).toContain("3");
+    expect(listed("find", "No files found matching pattern")?.[0]).toContain("0");
+  });
+
+  it("does not count a listing that stopped early", () => {
+    const counters = listed("find", "a.ts\nb.ts", { resultLimitReached: 2 }) ?? [];
+    expect(Arr.some(counters, Str.includes("2 "))).toBe(false);
+  });
+});

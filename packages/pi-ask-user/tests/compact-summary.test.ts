@@ -39,6 +39,14 @@ function summarize(
   });
 }
 
+const pairedAnswers = (label: string) => ({
+  outcome: "submitted",
+  answers: [
+    { key: "store", kind: "choices", labels: [label] },
+    { key: "notes", kind: "text", text: "Keep prices in cents" },
+  ],
+});
+
 describe("questionnaire compact outcome projection", () => {
   it.each([false, true])(
     "never interprets cancellation as approval or replaces its detail (Pi error flag: %s)",
@@ -64,6 +72,20 @@ describe("questionnaire compact outcome projection", () => {
       expect(first).toContain("Keep the current library");
       expect(first).not.toContain("more");
     }
+  });
+  it("names several answers only by choice labels the call actually offered", () => {
+    const args = {
+      questions: [
+        { key: "store", title: "Store", choices: [{ label: "SQLite" }, { label: "Postgres" }] },
+        { key: "notes", title: "Notes", mode: "text" },
+      ],
+    };
+    const [offered] =
+      summarize(askUserCompactSummary, pairedAnswers("SQLite"), { args })?.counters ?? [];
+    expect(offered).toContain("SQLite");
+    expect(offered).toContain("Keep prices in cents");
+    const forged = summarize(askUserCompactSummary, pairedAnswers("Drop the database"), { args });
+    expect(Arr.join(forged?.counters ?? [], " ")).not.toContain("Drop the database");
   });
   it("classifies failed questionnaires as errors that say no answer was recorded", () => {
     for (const [details, args] of [

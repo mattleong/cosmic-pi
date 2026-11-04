@@ -4,6 +4,8 @@ import type { ActivityRow } from "../src/activity/model.ts";
 import { activityRow, memberRow, mountActivity } from "./support/activity.ts";
 import { activitySectionId } from "../src/activity/grouped-tree.ts";
 import type { ActivityActionRequest } from "../src/activity/service.ts";
+import { freshActivityPresentation } from "../src/activity/component.ts";
+import { hiddenWidgetFailures } from "../src/activity/widget-projection.ts";
 
 describe("activity presentation", () => {
   it("accepts only the latest detail refresh even for the same revision", () => {
@@ -62,6 +64,37 @@ describe("activity presentation", () => {
     component.handleInput("1");
     expect(closed[0]).toMatchObject({ revision: "1", actionId: "open" });
   });
+  it("runs each action from exactly one key: its letter, or a digit when it has none", () => {
+    const actions = [
+      { id: "export", label: "Export" },
+      { id: "stop", label: "Stop" },
+      { id: "pin", label: "Pin" },
+    ];
+    const run = (key: string) => {
+      const { component, closed } = mountActivity(() => [{ ...activityRow("a"), actions }]);
+      component.render(80);
+      component.handleInput(key);
+      return closed[0]?.actionId;
+    };
+    expect(run("x")).toBe("stop");
+    expect(run("1")).toBe("export");
+    expect(run("2")).toBe("pin");
+    expect(run("3")).toBeUndefined();
+  });
+  it("records a failure as inspected only once its detail has been on screen", () => {
+    const presentation = freshActivityPresentation();
+    const failed = activityRow("flaky", "failed", undefined, { kind: "command", endedAt: 1 });
+    const narrow = mountActivity(() => [failed], { presentation });
+    narrow.component.render(57);
+    expect(hiddenWidgetFailures([failed], 2, presentation.inspected)).toHaveLength(1);
+    narrow.component.handleInput("\r");
+    narrow.component.render(57);
+    expect(hiddenWidgetFailures([failed], 2, presentation.inspected)).toEqual([]);
+    const again = { ...failed, revision: "2" };
+    expect(hiddenWidgetFailures([again], 2, presentation.inspected)).toHaveLength(1);
+    mountActivity(() => [again], { presentation }).component.render(140);
+    expect(hiddenWidgetFailures([again], 2, presentation.inspected)).toEqual([]);
+  });
   it("requires a separate confirmation and retains the displayed destructive scope", () => {
     const stop = {
       id: "stop",
@@ -78,14 +111,13 @@ describe("activity presentation", () => {
       },
     });
     component.render(80);
-    component.handleInput("1");
-    component.handleInput("1");
+    component.handleInput("x");
     expect(invoked).toEqual([]);
     current = { ...current, revision: "2", summary: "still running" };
     component.handleInput("accept");
     expect(invoked[0]).toMatchObject({ revision: "2", actionId: "stop" });
     component.render(80);
-    component.handleInput("1");
+    component.handleInput("x");
     current = {
       ...current,
       revision: "3",

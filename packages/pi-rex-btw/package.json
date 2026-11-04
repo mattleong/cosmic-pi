@@ -37,18 +37,24 @@
   },
   "dependencies": {
     "effect": "catalog:",
-    "pi-cosmic-core": "workspace:*"
+    "pi-code-previews": "workspace:*",
+    "pi-cosmic-core": "workspace:*",
+    "pi-cosmic-ui": "workspace:*"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
     "@effect/vitest": "catalog:",
     "@types/node": "catalog:",
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
+    "typebox": "catalog:",
     "vitest": "catalog:"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=1.4.0"
+    "@earendil-works/pi-coding-agent": ">=1.4.0",
+    "@earendil-works/pi-tui": ">=1.4.0",
+    "typebox": "*"
   },
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"

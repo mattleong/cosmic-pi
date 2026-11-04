@@ -11,13 +11,9 @@ import type {
 } from "../manager/keymap.ts";
 import { listDetailMotionFromAction, type DetailWindowPosition } from "../manager/list-detail.ts";
 import { ListDetailShell } from "../manager/list-detail-shell.ts";
-import {
-  ACTIVITY_ACTION_PAGE_SIZE,
-  activityActionForKey,
-  activityActionPages,
-  activityShortcuts,
-} from "./action-keys.ts";
+import { activityActionForKey, activityActionPages, activityShortcuts } from "./action-keys.ts";
 import { needsYou } from "./attention.ts";
+import { activityInspectionKey } from "./widget-projection.ts";
 import type { ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
 import {
@@ -35,12 +31,15 @@ export interface ActivityPresentation {
   readonly shell: ListDetailShell;
   readonly collapsed: Set<string>;
   readonly expandedHistory: Set<string>;
+  /** Failures the user has looked at, by `activityInspectionKey`; the widget retires them. */
+  readonly inspected: Set<string>;
   focus: string | undefined;
 }
 export const freshActivityPresentation = (): ActivityPresentation => ({
   shell: new ListDetailShell(),
   collapsed: new Set(),
   expandedHistory: new Set(),
+  inspected: new Set(),
   focus: undefined,
 });
 export interface ActivityComponentOptions {
@@ -66,6 +65,9 @@ interface TreeCache {
   readonly rows: readonly ActivityRow[];
   readonly entries: readonly GroupedActivityRow[];
 }
+interface FullTreeCache extends TreeCache {
+  readonly members: number;
+}
 interface VisibleCache extends TreeCache {
   readonly focus: string | undefined;
   readonly collapsed: ReadonlySet<string>;
@@ -86,7 +88,6 @@ interface PendingConfirmation {
   readonly action: ActivityAction;
   readonly key: string | undefined;
 }
-const NUMBERED_ACTION = /^[1-9]$/;
 
 export class ActivityComponent {
   readonly shell: ListDetailShell;
@@ -109,7 +110,7 @@ export class ActivityComponent {
     | { readonly request: ActivityDetailRequest; readonly detail: ActivityDetail }
     | undefined;
   private confirmation: PendingConfirmation | undefined;
-  private fullTree: TreeCache | undefined;
+  private fullTree: FullTreeCache | undefined;
   private visibleTree: VisibleCache | undefined;
   private readonly options: ActivityComponentOptions;
   constructor(options: ActivityComponentOptions) {
@@ -121,13 +122,20 @@ export class ActivityComponent {
     this.syncDetails(source(this.selected().selected));
   }
   private allEntries() {
+    return this.fullTreeCache().entries;
+  }
+  private fullTreeCache(): FullTreeCache {
     const rows = this.options.snapshot();
-    if (this.fullTree?.rows === rows) return this.fullTree.entries;
+    if (this.fullTree?.rows === rows) return this.fullTree;
     const entries = groupedActivityTree(rows, {
       expandedHistory: new Set(Arr.map(rows, (row) => row.key)),
     });
-    this.fullTree = { rows, entries };
-    return entries;
+    this.fullTree = {
+      rows,
+      entries,
+      members: Arr.filter(entries, (entry) => entry.type === "member").length,
+    };
+    return this.fullTree;
   }
   private entries() {
     const prefs = this.presentation;
@@ -436,10 +444,7 @@ export class ActivityComponent {
   private invokeShortcutAction(key: string, row: ActivityRow): void {
     const shown = this.displayed;
     if (!shown || shown.row.key !== row.key || shown.row.generation !== row.generation) return;
-    const numbered = NUMBERED_ACTION.test(key);
-    const action = numbered
-      ? shown.row.actions?.[shown.actionPage * ACTIVITY_ACTION_PAGE_SIZE + Number(key) - 1]
-      : activityActionForKey(shown.row.actions ?? [], key);
+    const action = activityActionForKey(shown.row.actions ?? [], key, shown.actionPage);
     if (!action) return;
     const request = {
       key: shown.row.key,
@@ -448,8 +453,7 @@ export class ActivityComponent {
       actionId: action.id,
     };
     if (handsOff(action) || !this.options.invoke) this.cancelDetails();
-    if (action.confirmation !== undefined)
-      this.confirmation = { request, action, key: numbered ? undefined : key };
+    if (action.confirmation !== undefined) this.confirmation = { request, action, key };
     else this.dispatch(request, action);
   }
   private enterSelection(): void {
@@ -492,6 +496,17 @@ export class ActivityComponent {
     if (this.openAtTop) return "top";
     return this.preserveDetailPosition || this.anchored ? false : undefined;
   }
+  /** A failure shown in the preview or details has been seen, so the widget can let it go. */
+  private markInspected(row: ActivityRow): void {
+    if (row.status !== "failed") return;
+    const inspected = this.presentation.inspected;
+    const key = activityInspectionKey(row);
+    if (inspected.has(key)) return;
+    // Keep only failures that are still published, so the set stays bounded.
+    const live = new Set(Arr.map(this.options.snapshot(), activityInspectionKey));
+    for (const seen of inspected) if (!live.has(seen)) inspected.delete(seen);
+    inspected.add(key);
+  }
   invalidate(): void {}
   render(width: number): string[] {
     if (width <= 0) return [];
@@ -505,6 +520,7 @@ export class ActivityComponent {
       {
         shell: this.shell,
         entries,
+        itemCount: this.fullTreeCache().members,
         selected,
         alternateHelp: this.alternateHelp,
         actionPage: this.actionPage,
@@ -524,6 +540,9 @@ export class ActivityComponent {
       },
       width,
     );
+    // A narrow list hides the preview; elsewhere the selected item's detail is on screen.
+    if (row && (this.shell.state.layout !== "narrow" || this.shell.state.details))
+      this.markInspected(row);
     if (this.options.height() > 3) this.preserveDetailPosition = false;
     if (
       detailPosition === "top" &&

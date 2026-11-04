@@ -16,7 +16,7 @@ import {
 import { createWorkingRow } from "../src/working/row.ts";
 import { ActivityComponent } from "../src/activity/component.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
-import { activityWidgetHeight } from "../src/activity/widget-projection.ts";
+import { activityInspectionKey, activityWidgetHeight } from "../src/activity/widget-projection.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
 import type { ActivityDetail } from "../src/activity/protocol.ts";
 import { activityRow, memberRow } from "./support/activity.ts";
@@ -225,6 +225,7 @@ const managerFrames = (rows: readonly ActivityRow[], tiers: boolean) => {
   const component = manager(rows, 24);
   const frames: Array<readonly [string, readonly string[]]> = [
     ["manager · 140 cols", component.render(140)],
+    ["manager · narrow · 57 cols", component.render(57)],
   ];
   if (tiers) frames.push(["stacked manager · 80 cols", component.render(80)]);
   if (!Arr.some(rows, (row) => row.parent !== undefined)) return frames;
@@ -275,6 +276,20 @@ const footerScenarios: ReadonlyArray<readonly [string, readonly ActivityRow[], s
   ["One stop action", running, review.key],
   ["Queued placeholder stop action", running, queued[0]!.key],
   ["Several direct actions", [steered], steered.key],
+  [
+    "Direct and numbered actions together",
+    [
+      {
+        ...steered,
+        actions: [
+          { id: "stop", label: "Stop" },
+          { id: "export", label: "Export transcript" },
+          { id: "pin", label: "Pin" },
+        ],
+      },
+    ],
+    steered.key,
+  ],
   ["More actions than one page", [crowdedActions], crowdedActions.key],
   ["No actions", stoppedRows, stopped.key],
 ];
@@ -282,12 +297,16 @@ const footerFrames = (rows: readonly ActivityRow[], key: string) => {
   const component = manager(rows, 12);
   component.render(140);
   select(component, key, 16);
+  // A bar wider than the border wraps into rows above it; show those rows with the border.
   const footer = (width: number, help: string) => {
-    const line = component.render(width).at(-1);
-    if (line === undefined) throw new Error("Manager footer was not rendered");
-    return `${help}${width} cols ${line}`;
+    const frame = component.render(width);
+    let start = frame.length - 1;
+    while (start > 0 && /^│ \S/u.test(frame[start - 1] ?? "")) start--;
+    if (start < frame.length - 1 && Str.startsWith("├")(frame[start - 1] ?? "")) start--;
+    else start = frame.length - 1;
+    return Arr.map(frame.slice(start), (line) => `${help}${width} cols ${line}`);
   };
-  const footers = (help: string) => Arr.map([140, 100, 80, 50], (width) => footer(width, help));
+  const footers = (help: string) => Arr.flatMap([180, 100, 80, 57], (width) => footer(width, help));
   const lines = footers("");
   component.handleInput("?");
   const help = footers("? ");
@@ -300,7 +319,7 @@ const footerFrames = (rows: readonly ActivityRow[], key: string) => {
     ...lines,
     ...help,
     ...Arr.map(component.render(80), (line) => `confirm 80 cols ${line}`),
-    footer(50, "confirm "),
+    ...footer(57, "confirm "),
   ];
 };
 
@@ -333,6 +352,7 @@ const flaky = activityRow("flaky", "failed", undefined, {
 const checker = activityRow("checker", "done", undefined, {
   title: "Check tests",
   profile: "scout",
+  route: "openai-codex/gpt-6-sol:low · override",
   startedAt: 0,
   endedAt: 33_000,
   actions: [{ id: "resume", label: "Resume" }],
@@ -380,7 +400,7 @@ const taskDetails = {
     ],
     technical: [
       { label: "ID", value: "agent-25fzx71b0s" },
-      { label: "Route", value: "openai-codex/gpt-6-sol:low" },
+      { label: "Report", value: "delivered to the parent" },
       { label: "Session", value: "~/.pi/agent/subagents/01a1a537/agent-25fzx71b0s.jsonl" },
     ],
   },
@@ -435,7 +455,77 @@ const detailFrames = () => {
   capture("failed task inspected · narrow · 57 cols", component.render(57));
   component.handleInput("?");
   capture("expanded help while inspecting", component.render(140));
+  capture("expanded help while inspecting · narrow · 57 cols", component.render(57));
+  component.handleInput("?");
+  component.handleInput("t");
+  component.handleInput("\u001b");
+  component.handleInput("g");
+  component.handleInput("g");
+  select(component, ticker.key, 8);
+  component.handleInput("\r");
+  component.render(57);
+  component.handleInput("G");
+  capture("running task scrolled to its end · narrow · 57 cols", component.render(57));
+  component.handleInput("\u001b");
+  capture("list · narrow · 57 cols", component.render(57));
   return frames;
+};
+
+const liveTicker = activityRow("live-ticker", "running", undefined, {
+  title: "ticker",
+  kind: "command",
+  startedAt: 72_000,
+  summary: "tick 18",
+});
+const liveServer = activityRow("live-server", "running", undefined, {
+  title: "dev server",
+  kind: "command",
+  startedAt: 76_000,
+  summary: "listening on http://localhost:4173",
+});
+const liveAgents = [
+  activityRow("live-checker", "running", undefined, {
+    title: "Check tests",
+    profile: "scout",
+    startedAt: 80_000,
+    summary: "running bash · sleep 25",
+  }),
+  activityRow("live-mapper", "running", undefined, {
+    title: "Map cart module",
+    profile: "scout",
+    startedAt: 80_000,
+    summary: "running read · src/cart.ts",
+  }),
+];
+const liveRows: readonly ActivityRow[] = [...liveAgents, liveServer, liveTicker, flaky];
+
+const liveFrames = () => {
+  const lines: string[] = [];
+  for (const width of [180, 100, 57])
+    lines.push(
+      `── Live progress · widget · ${width} cols`,
+      ...renderActivityWidget(liveRows, width, 8, { now: 90_000, theme: plainTheme }),
+      "",
+    );
+  const inspected = new Set([activityInspectionKey(flaky)]);
+  lines.push(
+    "── Live progress · widget · failure inspected in Activity · 100 cols",
+    ...renderActivityWidget(liveRows, 100, 8, { now: 90_000, theme: plainTheme, inspected }),
+    "",
+    "── Live progress · widget · failure line expires after ten minutes · 100 cols",
+    ...renderActivityWidget(liveRows, 100, 8, { now: 26_000 + 10 * 60_000 + 1, theme: plainTheme }),
+    "",
+  );
+  const component = manager(liveRows, 24);
+  lines.push(
+    "── Live progress · manager · 180 cols",
+    ...component.render(180),
+    "",
+    "── Live progress · manager · narrow · 57 cols",
+    ...component.render(57),
+    "",
+  );
+  return lines;
 };
 
 const attentionRows = (phase: "open" | "hidden"): readonly ActivityRow[] => [
@@ -460,9 +550,14 @@ const attentionRows = (phase: "open" | "hidden"): readonly ActivityRow[] => [
   }),
 ];
 
-const attentionWidget = (label: string, rows: readonly ActivityRow[], docked: boolean) => [
+const attentionWidget = (
+  label: string,
+  rows: readonly ActivityRow[],
+  docked: boolean,
+  width = 80,
+) => [
   `── Attention · widget · ${label}`,
-  ...renderActivityWidget(rows, 80, docked ? 3 : 8, {
+  ...renderActivityWidget(rows, width, docked ? 3 : 8, {
     now: 90_000,
     theme: plainTheme,
     inputDockVisible: docked,
@@ -478,6 +573,13 @@ const attentionFrames = () => {
     `── Attention · manager · answered questionnaire leaves Attention`,
     ...manager(attentionRows("hidden"), 12).render(120),
     "",
+    `── Attention · manager · answered questionnaire leaves Attention · narrow · 57 cols`,
+    ...manager(attentionRows("hidden"), 12).render(57),
+    "",
+    `── Attention · manager · waiting question scrolled out of view banners above the list`,
+    ...manager([...attentionRows("hidden"), ...running], 12).render(120),
+    "",
+    ...widget("questionnaire hidden · 57 cols", attentionRows("hidden"), false, 57),
     ...widget("finished failure outside the live checklist", [ticker, flaky], false),
     ...widget(
       "several recent failures",
@@ -544,7 +646,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       for (const scenario of scenarios) {
         const widgets: ReadonlyArray<readonly [string, number, number]> = [
           ...Arr.map(
-            [60, 80, 100],
+            [57, 80, 100, 180],
             (width) => [`${width} cols`, width, activityWidgetHeight(scenario.rows, 24)] as const,
           ),
           ...(scenario.tiers ? [["compact beside an input dock · 80 cols", 80, 3] as const] : []),
@@ -563,7 +665,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       }
       for (const [title, rows, key] of footerScenarios)
         lines.push(`── Footer · ${title}`, ...footerFrames(rows, key), "");
-      lines.push(...detailFrames(), ...attentionFrames());
+      lines.push(...detailFrames(), ...liveFrames(), ...attentionFrames());
       lines.push(...workingFrames());
       lines.push(...sharedSurfaceGalleryLines());
       yield* writeGallerySection(

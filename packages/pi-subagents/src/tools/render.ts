@@ -39,7 +39,7 @@ import { renderCompactResultComponent, renderProfileRoutesComponent } from "./re
 import { formatAwaitCounters, renderAwaitProgressComponent } from "./render-await.ts";
 import { textResultBody } from "./render-preview.ts";
 import { cardBlockLines, cardFactLines } from "./render-run-cards.ts";
-import { agentTextLines, detailsSectionLines } from "../ui/agent-text.ts";
+import { agentTextLines, detailsSectionLines, indentedBody } from "../ui/agent-text.ts";
 import { renderStartReceiptComponent } from "./render-start.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
@@ -351,9 +351,12 @@ const workspaceBodyLines = (
 ): string[] => {
   if (body === undefined) return [];
   const text = new Text(theme.fg("toolOutput", escapeControlChars(body)), 0, 0);
-  return receipt.operation === "review"
-    ? expandedSection(theme, "Diff", text).render(width)
-    : text.render(width);
+  if (receipt.operation !== "review") return text.render(width);
+  // Labeled like the Details beside it, whose section the caller indents with this one.
+  return [
+    clipToWidth(theme.fg("muted", "Diff"), width),
+    ...Arr.map(text.render(Math.max(1, width - 2)), (line) => (line === "" ? "" : `  ${line}`)),
+  ];
 };
 
 const renderWorkspaceContent = (
@@ -364,13 +367,16 @@ const renderWorkspaceContent = (
   if (!receipt) return undefined;
   const view = workspaceView(receipt, result.content);
   if (!view) return rawResultSection(result.content, theme) ?? renderComponent(() => []);
-  return renderComponent((width) => {
-    const safeWidth = Math.max(1, width);
-    return [
-      ...workspaceBodyLines(receipt, view.body, safeWidth, theme),
-      ...detailsSectionLines(view.facts, safeWidth, theme),
-    ];
-  });
+  return indentedBody(
+    theme,
+    renderComponent((width) => {
+      const safeWidth = Math.max(1, width);
+      return [
+        ...workspaceBodyLines(receipt, view.body, safeWidth, theme),
+        ...detailsSectionLines(view.facts, safeWidth, theme),
+      ];
+    }),
+  );
 };
 
 const renderWorkspacePreview = (
@@ -404,6 +410,10 @@ const renderWorkspacePreview = (
   });
 };
 
+/**
+ * A compact row's expanded result, indented beneath its heading. Labeled sections such as a
+ * failure's Error or a raw result already indent themselves.
+ */
 export const renderSubagentExpandedContent = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   isPartial: boolean,
@@ -414,12 +424,18 @@ export const renderSubagentExpandedContent = (
   if (workspace) return workspace;
   const details = decodeStartAwaitCardDetails(result.details);
   if (details)
-    return isPartial
-      ? renderPartialStartAwait(details, true, theme, options)
-      : renderSettledStartAwait(details, true, theme);
+    return indentedBody(
+      theme,
+      isPartial
+        ? renderPartialStartAwait(details, true, theme, options)
+        : renderSettledStartAwait(details, true, theme),
+    );
   const compact = decodeCompactToolDetails(result.details);
-  if (!compact) return renderTextFallback(result, isPartial, true, theme, options.isError);
-  return renderCompactDetails(compact, true, theme);
+  if (!compact) {
+    const fallback = renderTextFallback(result, isPartial, true, theme, options.isError);
+    return options.isError ? fallback : indentedBody(theme, fallback);
+  }
+  return indentedBody(theme, renderCompactDetails(compact, true, theme));
 };
 
 export const renderSubagentResult = (

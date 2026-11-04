@@ -70,12 +70,66 @@ export const managerSettingsTheme = (theme: Theme): SettingsListTheme => ({
   hint: (text) => managerSettingsHint(theme, text),
 });
 
+/** The title every settings surface opens with: a blank row, then the title at column 1. */
+export const settingsSurfaceHeader = (
+  theme: Pick<Theme, "fg" | "bold">,
+  title: string,
+): Component => new Text(theme.fg("accent", theme.bold(title)), 1, 1);
+
+// Nested titles and descriptions sit in the surface header's column, above the list rows.
+const NESTED_TITLE_INDENT = " ";
+
+const nestedTitleLines = (
+  theme: SettingsListTheme,
+  title: string,
+  description: string | undefined,
+  width: number,
+): string[] => [
+  clipToWidth(`${NESTED_TITLE_INDENT}${theme.label(title, false)}`, width, "…"),
+  ...(description
+    ? Arr.map(
+        wrapTextWithAnsi(description, Math.max(1, width - 2)),
+        (line) => `${NESTED_TITLE_INDENT}${theme.description(line)}`,
+      )
+    : []),
+];
+
+/**
+ * pi-tui clips a long row value without a marker. Knowing the rows, the surface restores the `…`
+ * on a value that is a clipped prefix of a row's full value.
+ */
+const STYLE_RESET = "\u001b[0m";
+
+const withClippedValueMarker = (
+  theme: SettingsListTheme,
+  items: ReadonlyArray<SettingItem>,
+): SettingsListTheme => ({
+  ...theme,
+  value: (text, selected) => {
+    // pi-tui closes a clipped value with a style reset, which never belongs to the value itself.
+    const shown = Fn.pipe(text, Str.endsWith(STYLE_RESET))
+      ? Fn.pipe(text, Str.slice(0, -STYLE_RESET.length))
+      : text;
+    const clipped =
+      shown.length > 1 &&
+      !Arr.some(items, (item) => item.currentValue === shown) &&
+      Arr.some(items, (item) => Fn.pipe(item.currentValue, Str.startsWith(shown)));
+    return theme.value(clipped ? `${Fn.pipe(shown, Str.slice(0, -1))}…` : text, selected);
+  },
+});
+
 /**
  * `kind: "group"` rows open a nested list (`Enter Open`). A row with a submenu that picks a value
  * should set `kind: "setting"` so Enter reads `Enter Change`.
+ *
+ * In a `SettingsSession.picker`, a group row may list its rows as `children` instead of building a
+ * submenu: the picker opens them as a nested list and saves them like top-level rows. `summary`
+ * supplies the group's value after the nested list closes.
  */
 export type SettingsSurfaceItem = SettingItem & {
   readonly kind?: "setting" | "group";
+  readonly children?: ReadonlyArray<SettingsSurfaceItem> | undefined;
+  readonly summary?: (() => string) | undefined;
 };
 
 interface SettingsChoiceSubmenuOptions {
@@ -152,12 +206,7 @@ class SettingsChoiceSubmenu implements Component {
     });
     const position =
       values.length > visible ? [theme.hint(`  ${this.index + 1} of ${values.length}`)] : [];
-    const about = description
-      ? Arr.map(wrapTextWithAnsi(description, Math.max(1, safeWidth - 2)), (line) =>
-          theme.description(line),
-        )
-      : [];
-    return [theme.label(title, false), ...about, "", ...rows, ...position];
+    return [...nestedTitleLines(theme, title, description, safeWidth), "", ...rows, ...position];
   }
 
   handleInput(data: string): void {
@@ -276,13 +325,16 @@ class SettingsGroupSubmenu extends Container {
     this.list = new SettingsList(
       items,
       Math.min(items.length + 2, 12),
-      options.listTheme,
+      withClippedValueMarker(options.listTheme, items),
       notifyChange,
       () => options.done(options.summary?.()),
       { enableSearch: false },
     );
-    this.addChild(new Text(options.title, 0, 0));
-    if (options.description) this.addChild(new Text(options.description, 0, 0));
+    this.addChild({
+      render: (width) =>
+        nestedTitleLines(options.listTheme, options.title, options.description, width),
+      invalidate: () => undefined,
+    });
     this.addChild(new Spacer(1));
     this.addChild(this.list);
   }
@@ -316,6 +368,48 @@ class SettingsGroupSubmenu extends Container {
 export const createSettingsGroupSubmenu = (options: SettingsGroupSubmenuOptions): Component =>
   new SettingsGroupSubmenu(options);
 
+/**
+ * Saves one row and calls `show` with the value that persisted, so a failed save restores it.
+ * A returned Promise lets the nested list reconcile its rows once the save settles.
+ */
+export type SettingsRowChange = (
+  id: string,
+  value: string,
+  show: (shown: string) => void,
+) => void | Promise<void>;
+
+/**
+ * Turns rows that list `children` into group rows (`Enter Open`) whose nested list saves each
+ * child through `change`, exactly like a top-level row.
+ */
+export const withSettingsGroupChildren = (
+  items: ReadonlyArray<SettingsSurfaceItem>,
+  listTheme: SettingsListTheme,
+  change: SettingsRowChange,
+): SettingsSurfaceItem[] =>
+  Arr.map(items, (item): SettingsSurfaceItem => {
+    const { children } = item;
+    if (!children) return item;
+    const rows = Arr.map(children, (child): SettingsSurfaceItem => ({ ...child }));
+    const show = (id: string) => (shown: string) => {
+      for (const row of rows) if (row.id === id) row.currentValue = shown;
+    };
+    return {
+      ...item,
+      kind: "group",
+      submenu: (_value, done) =>
+        createSettingsGroupSubmenu({
+          title: item.label,
+          description: item.description,
+          items: () => rows,
+          onChange: (id, value) => change(id, value, show(id)),
+          done,
+          summary: item.summary,
+          listTheme,
+        }),
+    };
+  });
+
 interface SettingsListSurfaceOptions {
   readonly header: Component;
   readonly items: SettingsSurfaceItem[];
@@ -335,7 +429,7 @@ export const createSettingsListSurface = (options: SettingsListSurfaceOptions) =
   const list: SettingsList = new SettingsList(
     withSettingChoiceLists(options.items, options.listTheme),
     options.height,
-    options.listTheme,
+    withClippedValueMarker(options.listTheme, options.items),
     withoutGroupRowChanges(options.items, (id, value) => options.onChange(id, value, list)),
     options.onCancel,
     { enableSearch: true },

@@ -13,6 +13,7 @@ import {
   type ManagerNoticeKind,
   clipToWidth,
 } from "../manager/chrome.ts";
+import { formatKeyIds, keyHint } from "../manager/key-labels.ts";
 
 export const composeToolComponent = (render: (width: number) => string[]): Component => ({
   render,
@@ -52,14 +53,16 @@ export const toolRunningLine = (theme: Pick<Theme, "fg">, frame = 0): string =>
 
 const isExpandKey = Schema.is(Schema.String.check(Schema.isMaxLength(32)));
 
+const DEFAULT_EXPAND_KEY = "ctrl+o";
+
+/** `C-o Expand`, naming the configured `app.tools.expand` key the way every hint bar does. */
 export const toolExpandHint = (): string => {
   const keys = invokeHostCallback((): ReadonlyArray<string> => {
     const configured: unknown = getKeybindings().getKeys("app.tools.expand");
     return Arr.isArray(configured) ? Arr.filter(configured.slice(0, 4), isExpandKey) : [];
   }, []);
-  return keys.length > 0
-    ? `${Arr.join(Arr.map(keys, sanitizeTerminalLine), "/")} to expand`
-    : "ctrl+o to expand";
+  const first = keys[0];
+  return keyHint(sanitizeTerminalLine(formatKeyIds([first ?? DEFAULT_EXPAND_KEY])), "Expand");
 };
 
 export const renderExpansionAffordance = (

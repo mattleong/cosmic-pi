@@ -13,6 +13,7 @@ import {
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
 import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
+import { finishToolSessionEvent, startToolSessionEvent } from "../src/run/session-events.ts";
 import { view } from "./fixtures/run-view.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -231,6 +232,32 @@ describe("subagent activity provider", () => {
     expect(detail?.sections).toContainEqual(expect.objectContaining({ format: "markdown" }));
     expect(Arr.join(bodies, "\n")).not.toContain("/private/workspace");
     expect(JSON.stringify(detail?.technical)).toContain("/private/workspace");
+  });
+
+  it("describes what a running agent is doing and keeps tool output indented as printed", () => {
+    const started = startToolSessionEvent([], {
+      toolCallId: "t",
+      toolName: "bash",
+      args: { command: "sleep 25" },
+      startedAt: 1,
+    });
+    const running = view({
+      id: "run",
+      state: "running",
+      currentTool: "bash",
+      sessionEvents: started,
+    });
+    expect(subagentActivityItems({ revision: 1, runs: [running] })[0]?.summary).toBe(
+      "running bash · sleep 25",
+    );
+    const finished = finishToolSessionEvent(started, {
+      toolCallId: "t",
+      toolName: "bash",
+      isError: false,
+      endedAt: 2,
+      outputPreview: "\n     1\tfirst\n     2\tsecond  \n\n",
+    });
+    expect(finished[0]).toMatchObject({ outputPreview: "     1\tfirst\n     2\tsecond" });
   });
 
   it("keeps terminal transitions discoverable and redacts producer payloads", () => {

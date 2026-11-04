@@ -14,20 +14,21 @@ import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
+import { PATH_LIST_EMPTY_OUTPUT } from "../builtin-result-detail";
 import { hostObject } from "../../shared/untrusted-value";
 
 const PATH_LISTS = {
   find: {
     previewEnabled: () => codePreviewSettings.findResultPreview,
     loadingLabel: "Finding…",
-    emptyMarker: "No files found matching pattern",
+    emptyMarker: PATH_LIST_EMPTY_OUTPUT.find,
     emptyLabel: (output: string) => output || "No files found",
     footerNoun: "paths",
   },
   ls: {
     previewEnabled: () => codePreviewSettings.lsResultPreview,
     loadingLabel: "Listing…",
-    emptyMarker: "(empty directory)",
+    emptyMarker: PATH_LIST_EMPTY_OUTPUT.ls,
     emptyLabel: () => "Empty directory",
     footerNoun: "entries",
   },

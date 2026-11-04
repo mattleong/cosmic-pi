@@ -1,17 +1,23 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Container, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
-import { exitStatusMeaning, expandedSection } from "pi-code-previews";
+import {
+  exitStatusMeaning,
+  expandedDetails,
+  expandedFields,
+  expandedSection,
+} from "pi-code-previews";
 import { countLabel, formatDuration } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth, managerActivityColor } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { failingExitCode, type BackgroundTaskSnapshot } from "../task/model.ts";
 import { quotedWaitText } from "../ui/compact-summary.ts";
+import { styledTaskOutputLine } from "../ui/output-lines.ts";
 import { failureFactLines, resultFactLines } from "../ui/result-facts.ts";
 import { taskDisplayName, taskStatePresentation } from "../ui/task-state.ts";
 import {
@@ -20,7 +26,7 @@ import {
   type BackgroundTaskToolDetails,
 } from "./command.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
-import { commandLines, labeledRowsComponent, type LabeledRow } from "./request-view.ts";
+import { commandLines, type LabeledRow } from "./request-view.ts";
 
 type PreviewTheme = Pick<Theme, "fg" | "bold">;
 
@@ -87,7 +93,7 @@ const hiddenMarker = (hidden: number, theme: PreviewTheme): Row => ({
 
 function boundedLines(lines: ReadonlyArray<string>, label: string, theme: PreviewTheme): Row[] {
   const shown = LOG_HEAD_LINES + LOG_TAIL_LINES;
-  const text = (line: string): Row => ({ text: theme.fg("toolOutput", line) });
+  const text = (line: string): Row => ({ text: styledTaskOutputLine(line, theme) });
   if (lines.length <= shown) return Arr.map(lines, text);
   return [
     ...Arr.map(lines.slice(0, LOG_HEAD_LINES), text),
@@ -138,7 +144,7 @@ function tailRows(tail: string | undefined, theme: PreviewTheme): Row[] {
   if (lines.length === 0) return [];
   const shown = lines.slice(-COLLAPSED_TAIL_LINES);
   return [
-    ...Arr.map(shown, (line) => ({ text: theme.fg("toolOutput", line) })),
+    ...Arr.map(shown, (line) => ({ text: styledTaskOutputLine(line, theme) })),
     ...(shown.length < lines.length
       ? [
           {
@@ -196,7 +202,7 @@ function logRows(
   const lines = backgroundLogLines(text, details);
   if (lines.length === 0) return [{ text: theme.fg("muted", "No new output") }];
   return expanded
-    ? Arr.map(lines, (line) => ({ text: theme.fg("toolOutput", line) }))
+    ? Arr.map(lines, (line) => ({ text: styledTaskOutputLine(line, theme) }))
     : boundedLines(lines, "log lines", theme);
 }
 
@@ -239,7 +245,7 @@ interface Section {
   /** Labeled sections indent beneath their label, like the arguments above them. */
   readonly label?: string;
   readonly rows: Row[];
-  /** Labeled facts, drawn in a shared label column instead of rows. */
+  /** Labeled facts, drawn in a shared label column beneath the heading instead of rows. */
   readonly facts?: ReadonlyArray<LabeledRow>;
 }
 
@@ -307,7 +313,7 @@ function expandedSections(
           ? [
               {
                 label: "Recent output",
-                rows: Arr.map(tail, (line) => ({ text: theme.fg("toolOutput", line) })),
+                rows: Arr.map(tail, (line) => ({ text: styledTaskOutputLine(line, theme) })),
               },
             ]
           : []),
@@ -400,13 +406,14 @@ function rowsComponent(rows: ReadonlyArray<Row>): Component {
 
 function buildPreview(input: BackgroundTaskPreviewInput, theme: Theme): Component {
   const container = new Container();
-  // Beneath a compact heading, unlabeled rows indent with the labeled sections around them.
-  const indentUnlabeled = input.expanded && input.headingShowsState === true;
+  // Expanded, unlabeled rows indent with the labeled sections around them.
+  const indentUnlabeled = input.expanded;
   for (const section of previewSections(input, theme)) {
-    const rows =
-      section.facts === undefined
-        ? rowsComponent(section.rows)
-        : labeledRowsComponent(section.facts, theme);
+    if (section.facts !== undefined) {
+      container.addChild(expandedFields(theme, section.facts));
+      continue;
+    }
+    const rows = rowsComponent(section.rows);
     container.addChild(
       section.label !== undefined
         ? expandedSection(theme, section.label, rows)
@@ -415,11 +422,7 @@ function buildPreview(input: BackgroundTaskPreviewInput, theme: Theme): Componen
           : rows,
     );
   }
-  const facts = factLines(input);
-  if (facts.length > 0)
-    container.addChild(
-      expandedSection(theme, "Details", new Text(theme.fg("dim", Arr.join(facts, "\n")), 0, 0)),
-    );
+  container.addChild(expandedDetails(theme, factLines(input)));
   return container;
 }
 

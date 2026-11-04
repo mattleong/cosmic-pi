@@ -46,7 +46,44 @@ Output clipping is informational only when bounded native metadata supplies a us
 
 `expandedContent.renderCall` and `expandedContent.renderResult` use the original signatures and return unique content without a second heading or issue list. An empty `Container` intentionally contributes no content; an omitted callback preserves the original slot.
 
-For valid summaries, compact expansion composes the shared heading, issues with details, unique call content, then unique result content. Conversational surfaces follow the [conversation rules](#conversation-surfaces) instead of showing model-facing frames. Missing or malformed summaries retain original renderers. Preserve complete arguments, source, commands, proposed edits, output, and recovery instructions, including after failure. Do not subtract evidence merely because an issue repeats it; label raw content or agent notes instead. Input that the heading cannot show exactly remains available in full.
+For valid summaries, compact expansion composes the shared heading, issues with details, unique call content, then unique result content. Conversational surfaces follow the [conversation rules](#conversation-surfaces) instead of showing model-facing frames. Missing or malformed summaries retain original renderers. Preserve complete arguments, source, commands, proposed edits, output, and recovery instructions, including after failure. Do not subtract evidence merely because an issue repeats it; label raw content or agent notes instead. The one exception is an issue's own detail: when it is exactly the issue's message, omit it, because the message already shows those words. Input that the heading cannot show exactly remains available in full.
+
+### Expanded body layout
+
+Every workspace tool row and custom message expands into the same layout. The heading sits at the frame's column; everything below it indents two columns beneath the heading:
+
+```text
+ ✗ background_task tests · failed
+   ✗ Exited with code 1: FAIL tests/auth.test.ts > rejects expired tokens
+   Command       pnpm test
+   Notify        when it finishes
+   Output
+     ✓ tests/session.test.ts (4 tests) 18ms
+     FAIL tests/auth.test.ts > rejects expired tokens
+   Details
+     task-15 · /project · pid 48633
+```
+
+- Issues come first, through the shell.
+- Short labeled facts use one muted label column. When the value column would be narrower than 16 cells, as at 57 columns with a long label, each value stacks beneath its label.
+- A longer body is a section: a muted label such as `Output`, `Message`, `Reply`, or `Questions`, with its content indented two more columns. A row whose only body is its result, such as a successful `read` or `bash`, may show it unlabeled at the body column; once a row has two kinds of body, label each one.
+- Technical facts such as IDs, routes, paths, PIDs, and usage come last, in a dim `Details` section.
+- Nothing in the body sits flush with the heading, and no section repeats the heading's facts.
+
+Build bodies with the helpers exported from `pi-code-previews`; don't indent or label sections by hand:
+
+| Helper                                           | Draws                                                                    |
+| ------------------------------------------------ | ------------------------------------------------------------------------ |
+| `expandedBody(...parts)`                         | The parts in order; `undefined` and empty parts take no space            |
+| `expandedFields(theme, [{ label, lines }])`      | Labeled facts in a shared label column                                   |
+| `expandedText(theme, label, lines, tone?)`       | A labeled section of plain text; a line may carry its own `ExpandedTone` |
+| `expandedAuthoredText(theme, label, text)`       | Words an agent or session wrote, in full, as markdown                    |
+| `expandedDetails(theme, lines)`                  | The dim `Details` section; leading spaces nest a fact under the previous |
+| `expandedSection(theme, label, ...components)`   | A labeled section around any component, such as a diff or a table        |
+| `expandedArguments(theme, args)`                 | The raw `Arguments` section, for input the labeled facts can't show      |
+| `authoredTextLines(text, width, theme, options)` | Authored markdown as lines, collapsed to about ten rows or in full       |
+
+Each helper returns a `Component`, so `expandedContent.renderCall`/`renderResult` and message renderers return the composed body directly; a renderer that builds lines calls `render(width)`. Values are plain text: the helpers make control characters visible and apply the tone, so pass unstyled text. Stderr, for example, is a line with the `error` tone rather than a `[stderr]` prefix.
 
 Original and content-only callbacks keep independent call/result `lastComponent` caches. Retained components capture needed values and renderer state, not the render context whose prior component would chain history. Preserve existing invalidation, mouse routing, live panels, and owner-scoped animation. Construction or drawing failure restores safe raw-result fallback without replaying the failing renderer. External adapters preserve opaque downstream components and append complete arguments/raw evidence when the provider's expansion may clip them. Pi retains native images and transcript separators.
 
@@ -54,7 +91,7 @@ Original and content-only callbacks keep independent call/result `lastComponent`
 
 Agent and session messaging, questions, reports, and agent status are read by the user, not the model. Their presentation shows what was said and only the status the user needs:
 
-- Text an agent or session wrote appears collapsed with its line breaks, bounded to about ten wrapped lines with an expansion affordance, and in full when expanded.
+- Text an agent or session wrote renders as markdown the way Pi renders assistant text. It appears collapsed with its line breaks, bounded to about ten wrapped lines with an expansion affordance, and in full when expanded. `CompactSummary.quote` and `authoredTextLines` collapse it; `expandedAuthoredText` shows it in full.
 - Display names identify agents and sessions. Run and session IDs appear only in expanded details.
 - Ordinary delivery or completion adds no explanation. Queued, held, resumed, or answered delivery is a short muted status; failures and uncertainty are issues.
 - Model routes, usage, cost, timing, ancestry, selection reasons, workspace identifiers, and saved-file paths appear only in a compact expanded details section. Collapsed aggregates may show one muted usage total.

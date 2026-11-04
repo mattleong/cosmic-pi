@@ -29,18 +29,22 @@ export const joinInline = (parts: ReadonlyArray<string | false | null | undefine
   );
 
 /**
- * Suite-wide status glyphs; each has exactly one meaning. Running work uses the spinner from
- * `managerActivityGlyph` instead of a static glyph.
+ * Suite-wide status glyphs; each has exactly one meaning (docs/architecture/ui-conventions.md).
+ * Live running work uses the spinner from `managerActivityGlyph`; `neutral` marks a state with no
+ * verdict, such as work still running in a saved snapshot, where a spinner would freeze.
  */
 export const SUITE_STATUS_GLYPHS = {
   succeeded: "✓",
   failed: "✗",
   warning: "⚠",
   stopped: "⊘",
+  stopping: "◒",
   uncertain: "≈",
   paused: "‖",
   queued: "○",
   waiting: "?",
+  info: "ℹ",
+  neutral: "•",
 } as const;
 
 export type ManagerLayoutTier = "narrow" | "stacked" | "wide";

@@ -11,7 +11,12 @@ import {
   type CompactSummary,
 } from "../tools/compact-summary";
 import { layoutCompactRow, type CompactRowInput } from "./compact-row";
-import { compactIssueLabel, renderCompactIssues, wrapHanging } from "./compact-issues";
+import {
+  compactIssueLabel,
+  renderCompactDetails,
+  renderCompactIssues,
+  wrapHanging,
+} from "./compact-issues";
 import { formatDuration } from "pi-cosmic-core/display";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
@@ -88,7 +93,11 @@ export function renderCompactChildren(
       Math.max(0, width - visibleWidth(prefix)),
     );
     rows.push(clipToWidth(`${prefix}${row}`, width, ""));
-    if (flat) rows.push(...renderCompactIssues(entry.issues, theme, width, true));
+    if (flat)
+      rows.push(
+        ...renderCompactIssues(entry.issues, theme, width, true),
+        ...renderCompactDetails(entry.details, theme, width),
+      );
     else if (issueLabel && !issueShown) {
       const rail = theme.fg("dim", branch === "├─" ? "  │    " : "       ");
       rows.push(...wrapHanging(issueLabel, width, rail, rail, 8));

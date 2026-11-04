@@ -166,6 +166,16 @@ describe("session tool rows", () => {
     expect(expanded?.text).toContain("line 30");
   });
 
+  it("shows a read reply collapsed in compact style, rendered as markdown", () => {
+    const reply = { ...read, text: "Use `pnpm test` now.\nThen **lint**." } as const;
+    const harness = createToolPresentationHarness(toolFor(SESSION_TOOL.read, "compact"));
+    const [collapsed] = harness.cycle({ to: web.sessionId }, result(readText(reply), reply), {
+      states: [false],
+    });
+    expect(collapsed?.text).toContain("Use pnpm test now.");
+    expect(collapsed?.text).toContain("Then lint.");
+  });
+
   it("falls back to the result text when its details don't decode", () => {
     const harness = createToolPresentationHarness(toolFor(SESSION_TOOL.read, "preview"));
     const [, expanded] = harness.cycle(

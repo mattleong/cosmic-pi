@@ -1,23 +1,18 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { expandedArguments, expandedSection } from "pi-code-previews";
+import { expandedArguments, expandedFields, type ExpandedField } from "pi-code-previews";
 import { formatDuration } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
-type LabeledRowsTheme = Pick<Theme, "fg">;
-
-export interface LabeledRow {
-  readonly label: string;
-  /** Display lines; a multi-line command keeps its line breaks. */
-  readonly lines: ReadonlyArray<string>;
-}
+/** One labeled request fact; a multi-line command keeps its line breaks. */
+export type LabeledRow = ExpandedField;
 
 const NOTIFY_LABELS = {
   exit: "when it finishes",
@@ -217,48 +212,6 @@ export function backgroundTaskRequestRows(args: unknown): BackgroundTaskRequestV
   };
 }
 
-const LABEL_GAP = 2;
-// One label column for a row's request and result facts, so both sections align.
-const MIN_LABEL_WIDTH = 12;
-const MIN_VALUE_WIDTH = 16;
-
-/** Labeled rows with a shared label column; wrapped values keep a hanging indent. */
-export function labeledRowsComponent(
-  rows: ReadonlyArray<LabeledRow>,
-  theme: LabeledRowsTheme,
-): Component {
-  let cached: { readonly width: number; readonly lines: string[] } | undefined;
-  return {
-    render(width) {
-      if (!Number.isFinite(width) || width < 1) return [];
-      if (cached?.width === width) return cached.lines;
-      const labelWidth = Math.max(
-        MIN_LABEL_WIDTH,
-        ...Arr.map(rows, (entry) => visibleWidth(entry.label)),
-      );
-      const column = labelWidth + LABEL_GAP;
-      const stacked = width - column < MIN_VALUE_WIDTH;
-      const lines = Arr.flatMap(rows, (entry) => {
-        const label = theme.fg("muted", entry.label);
-        const values = Arr.flatMap(entry.lines, (line) =>
-          wrapTextWithAnsi(theme.fg("toolOutput", line), stacked ? width - 2 : width - column),
-        );
-        if (stacked) return [label, ...Arr.map(values, (value) => `  ${value}`)];
-        const pad = Fn.pipe(" ", Str.repeat(column));
-        const labelPad = Fn.pipe(" ", Str.repeat(column - visibleWidth(entry.label)));
-        return Arr.map(values, (value, index) =>
-          index === 0 ? `${label}${labelPad}${value}` : `${pad}${value}`,
-        );
-      });
-      cached = { width, lines };
-      return lines;
-    },
-    invalidate() {
-      cached = undefined;
-    },
-  };
-}
-
 /** The expanded call: the request in words, plus the raw arguments when words can't show it all. */
 export function renderBackgroundTaskRequest(
   args: Partial<BackgroundTaskToolInput>,
@@ -266,8 +219,7 @@ export function renderBackgroundTaskRequest(
 ): Component {
   const { rows, complete } = backgroundTaskRequestRows(args);
   const children: Component[] = [];
-  if (rows.length > 0)
-    children.push(expandedSection(theme, undefined, labeledRowsComponent(rows, theme)));
+  if (rows.length > 0) children.push(expandedFields(theme, rows));
   if (!complete) children.push(expandedArguments(theme, args));
   return {
     render: (width) => Arr.flatMap(children, (child) => child.render(width)),

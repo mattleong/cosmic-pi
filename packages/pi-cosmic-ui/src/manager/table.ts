@@ -17,6 +17,10 @@ const columnPriorityOrder = Order.combine(
   Order.mapInput(Order.Number, (column: IndexedColumn) => column.index),
 );
 
+/**
+ * Lays out rows in columns that fit `width`, admitting columns by priority and growing them to
+ * their natural width. A column whose cells are all empty takes no space and renders nothing.
+ */
 export const managerTable = (
   rows: ReadonlyArray<ReadonlyArray<string>>,
   columns: ReadonlyArray<ManagerTableColumn>,
@@ -26,11 +30,12 @@ export const managerTable = (
   const gap = "  ";
   const widths = Arr.map(columns, () => 0);
   const priority = Arr.sort(
-    Arr.map(columns, (column, index) => ({
-      ...column,
-      index,
-      natural: Math.max(column.minWidth, ...Arr.map(rows, (row) => visibleWidth(row[index] ?? ""))),
-    })),
+    Arr.filterMap(columns, (column, index) => {
+      const content = Math.max(0, ...Arr.map(rows, (row) => visibleWidth(row[index] ?? "")));
+      return content === 0
+        ? Result.failVoid
+        : Result.succeed({ ...column, index, natural: Math.max(column.minWidth, content) });
+    }),
     columnPriorityOrder,
   );
   let remaining = available;

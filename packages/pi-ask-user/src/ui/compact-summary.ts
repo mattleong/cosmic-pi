@@ -9,9 +9,8 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
-import { countLabel } from "pi-cosmic-core/display";
+import { clipText, countLabel } from "pi-cosmic-core/display";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   callTitles,
   decodeAsyncControl,
@@ -57,13 +56,15 @@ function liveSummary(args: QuestionnaireArgs): CompactSummary | undefined {
   return identity(args);
 }
 
+type CompactQuestion = NonNullable<ReturnType<typeof decodeCompactChoices>>["questions"][number];
+
+// Labels come from the result, so only labels that match the asked choices are shown verbatim.
 function verifiedLabels(
-  args: QuestionnaireArgs,
+  question: CompactQuestion | undefined,
   answer: ReplayedAnswer,
+  maxWidth: number,
 ): readonly string[] | undefined {
-  const questions = decodeCompactChoices(args)?.questions;
-  const question = questions?.length === 1 ? questions[0] : undefined;
-  if (!question?.key || answer.key !== question.key || answer.kind !== "choices") return undefined;
+  if (!question || answer.kind !== "choices") return undefined;
   const labels = answer.labels;
   const verified =
     labels.length > 0 &&
@@ -71,17 +72,19 @@ function verifiedLabels(
       labels,
       (label) =>
         Str.isNonEmpty(Str.trim(label)) &&
-        label.length <= 40 &&
+        label.length <= maxWidth &&
         !/[\r\n]/u.test(label) &&
-        Arr.some(question.choices, (choice) => choice.label === label),
+        Arr.some(question.choices ?? [], (choice) => choice.label === label),
     );
   return verified ? Arr.map(labels, stripTerminalControls) : undefined;
 }
 
 // A written answer's first line, quoted so it reads as the user's words rather than a listed choice.
 const MAX_WRITTEN_ANSWER_WIDTH = 48;
+// Several answers share one row, so each stays short.
+const MAX_SHARED_ANSWER_WIDTH = 32;
 
-function writtenAnswer(text: string): string {
+function writtenAnswer(text: string, maxWidth = MAX_WRITTEN_ANSWER_WIDTH): string {
   const first = Option.getOrElse(
     Arr.findFirst(
       Arr.map(Str.split(stripTerminalControls(text), /\r?\n/u), Str.trim),
@@ -90,17 +93,41 @@ function writtenAnswer(text: string): string {
     () => "",
   );
   const more = Str.trim(stripTerminalControls(text)) !== first;
-  const clipped = clipToWidth(first, MAX_WRITTEN_ANSWER_WIDTH);
+  // Plain clipping: the row escapes control text, so a styled ellipsis would show its codes.
+  const clipped = clipText(first, maxWidth);
   return `“${more && clipped === first ? `${first}…` : clipped}”`;
 }
 
+/**
+ * One answer among several: a lone choice by its verified name, several choices by count, and
+ * written words quoted. A lone choice whose name can't be verified leaves the row to its count.
+ */
+function sharedAnswer(
+  question: CompactQuestion | undefined,
+  answer: ReplayedAnswer,
+): string | undefined {
+  if (answer.kind !== "choices") return writtenAnswer(answer.text, MAX_SHARED_ANSWER_WIDTH);
+  if (answer.labels.length > 1) return countLabel(answer.labels.length, "choice");
+  const [label, ...others] = verifiedLabels(question, answer, MAX_SHARED_ANSWER_WIDTH) ?? [];
+  return others.length === 0 ? label : undefined;
+}
+
+// Alternatives, most informative first; the row shows the first that fits beside the titles.
 function answerCounters(args: QuestionnaireArgs, answers: readonly ReplayedAnswer[]): string[] {
   const count = countLabel(answers.length, "answer");
+  const questions = decodeCompactChoices(args)?.questions ?? [];
+  const questionFor = (answer: ReplayedAnswer) =>
+    Option.getOrUndefined(Arr.findFirst(questions, (question) => question.key === answer.key));
   const [answer] = answers;
-  if (answers.length !== 1 || !answer) return [count];
-  if (answer.kind === "custom" || answer.kind === "text")
-    return [writtenAnswer(answer.text), count];
-  const labels = verifiedLabels(args, answer);
+  if (!answer) return [count];
+  if (answers.length > 1) {
+    const shared = Arr.map(answers, (entry) => sharedAnswer(questionFor(entry), entry));
+    return Arr.every(shared, Predicate.isString) ? [Arr.join(shared, " · "), count] : [count];
+  }
+  if (answer.kind !== "choices") return [writtenAnswer(answer.text), count];
+  // A lone question's labels may be longer, since they share the row with nothing else.
+  const labels =
+    questions.length === 1 ? verifiedLabels(questionFor(answer), answer, 40) : undefined;
   return labels ? [Arr.join(labels, ", "), countLabel(labels.length, "choice")] : [count];
 }
 

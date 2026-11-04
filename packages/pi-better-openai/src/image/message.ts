@@ -35,7 +35,7 @@ export const presentImageMessage =
       ? undefined
       : Option.getOrUndefined(Arr.findFirst(content, isImagePart));
     const { collapsedSummary } = planCompactPresentation({
-      summary: record && imageRecordSummary(record, { hasImage: image !== undefined, expanded }),
+      summary: record && imageRecordSummary(record, { hasImage: image !== undefined }),
       phase: "settled",
       isError: false,
       expanded,

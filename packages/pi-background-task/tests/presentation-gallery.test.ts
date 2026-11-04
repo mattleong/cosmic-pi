@@ -32,6 +32,11 @@ import { TASK_NOTICE_MESSAGE_TYPE } from "../src/task/notice.ts";
 import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
 import { backgroundTaskFailure, executeBackgroundTaskCommand } from "../src/tools/command.ts";
 import { renderTaskNotice } from "../src/ui/notice-message.ts";
+import {
+  backgroundTaskActivityDetail,
+  backgroundTaskActivityItems,
+} from "../src/boundary/host-activity.ts";
+import { activityGalleryFrames } from "pi-cosmic-ui/activity/testing";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 import {
   provideTaskService,
@@ -647,6 +652,75 @@ const noticeScenarios: ReadonlyArray<GalleryMessageScenario> = [
   },
 ];
 
+/** Retained output events from display lines, one second apart. */
+const logEvents = (lines: ReadonlyArray<Line>, at: number): BackgroundLogEvent[] =>
+  Arr.map(lines, (line, index) => ({
+    ...line,
+    cursor: index + 1,
+    timestamp: at + index * 1_000,
+    bytes: line.text.length,
+  }));
+
+/** Live tasks as the shared Activity widget and view show them, beside a failed one. */
+const activityLines = (): ReadonlyArray<string> => {
+  const now = 120_000;
+  const ticks = Arr.makeBy(18, (index) => out(`tick ${index + 1}`));
+  const projection = {
+    tasks: [
+      {
+        ...task({
+          id: "task-0000000021",
+          name: "ticker",
+          state: "running",
+          command: "for i in $(seq 1 90); do echo tick $i; sleep 1; done",
+          startedAt: now - 18_000,
+          logCursor: ticks.length,
+        }),
+        logs: logEvents(ticks, now - 18_000),
+      },
+      {
+        ...task({
+          id: "task-0000000022",
+          name: "dev server",
+          state: "running",
+          command: "pnpm dev --port 4173",
+          startedAt: now - 72_000,
+          logCursor: 2,
+        }),
+        logs: logEvents(
+          [out("  VITE v6.3.5  ready in 412 ms"), out("  ➜  Local:   http://localhost:4173/")],
+          now - 70_000,
+        ),
+      },
+      {
+        ...task({
+          id: "task-0000000023",
+          name: "flaky build",
+          command: "pnpm build",
+          state: "failed",
+          startedAt: now - 30_000,
+          endedAt: now - 24_000,
+          exitCode: 2,
+          failureCause: "error: missing semicolon",
+          logCursor: 2,
+        }),
+        logs: logEvents([out("compiling"), err("error: missing semicolon")], now - 25_000),
+      },
+    ],
+  };
+  const gallery = {
+    title: "a ticker, a dev server, and a failed build",
+    providerId: "pi-background-task",
+    items: backgroundTaskActivityItems(projection),
+    detail: (id: string) => backgroundTaskActivityDetail(projection, id),
+    now,
+  };
+  return [
+    ...activityGalleryFrames({ ...gallery, widths: [57, 180], maxRows: [8] }),
+    ...activityGalleryFrames({ ...gallery, widths: [57], maxRows: [3], open: ["task-0000000023"] }),
+  ];
+};
+
 const directory = galleryDirectory(process.env) ?? "";
 
 const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
@@ -718,6 +792,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
           restore();
         }
       }
+      lines.push(...activityLines());
       yield* writeGallerySection(directory, "pi-background-task", lines);
     }),
   );

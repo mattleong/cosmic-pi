@@ -1,5 +1,10 @@
 import { countLabel } from "pi-cosmic-core/display";
-import { Markdown, wrapTextWithAnsi, type MarkdownTheme } from "@earendil-works/pi-tui";
+import {
+  Markdown,
+  visibleWidth,
+  wrapTextWithAnsi,
+  type MarkdownTheme,
+} from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -15,11 +20,12 @@ import {
 import {
   configuredKeyLabels,
   exitKeyHint,
+  exitKeyVerb,
   helpKeyHint,
   joinKeyHints,
   keyHint,
+  keyHintRows,
   moveKeyHint,
-  wrapKeyHints,
 } from "../manager/key-labels.ts";
 import {
   detailWindowPositionLabel,
@@ -37,7 +43,12 @@ import {
   type ListDetailShell,
 } from "../manager/list-detail-shell.ts";
 import { activityActionHints, activityShortcuts, type ActivityActionHints } from "./action-keys.ts";
-import { activityAttentionLabels, needsYou } from "./attention.ts";
+import {
+  activityAttentionLabels,
+  compactNotices,
+  needsYou,
+  type ActivityAttentionCounts,
+} from "./attention.ts";
 import { activityStartupGlyph, activityOwnerLabel } from "./widget.ts";
 import { groupedMemberLine } from "./row-line.ts";
 import { groupedActivitySource, type GroupedActivityRow } from "./grouped-tree.ts";
@@ -63,7 +74,11 @@ function rowLine(
   if (entry.type === "member")
     return groupedMemberLine(entry, width, paint, "manager", focusedStyle);
   const fold = entry.children ? (entry.expanded ? "▾ " : "▸ ") : "  ";
-  const summary = joinInline(groupSummaryLabels(entry.summary));
+  const full = joinInline(groupSummaryLabels(entry.summary));
+  const summary =
+    visibleWidth(`${fold}${entry.title} · ${full}`) <= width
+      ? full
+      : joinInline(groupSummaryLabels(entry.summary, true));
   return clipToWidth(
     `${theme.fg("dim", fold)}${focused ? focusedField(theme, entry.title) : theme.fg("accent", entry.title)}${summary ? theme.fg("muted", ` · ${summary}`) : ""}`,
     width,
@@ -73,7 +88,9 @@ function rowLine(
 
 interface ActivityKeys {
   readonly confirm: string;
+  /** The primary cancel key; any other configured cancel keys are aliases for expanded help. */
   readonly cancel: string;
+  readonly cancelAliases: ReadonlyArray<string>;
   readonly move: string;
 }
 
@@ -113,26 +130,46 @@ const navigationHints = (
     more: [
       listFocused ? "j/k Move · h/l Fold" : "j/k Scroll · h Back",
       "C-u/C-d Half-page · PgUp/PgDn Page · gg/G Ends",
-      actions.all === actions.primary ? undefined : actions.all,
       listFocused ? technical : undefined,
       "z Zoom",
-      "w Next needing you",
+      "w Next input",
       view.selectable ? "r Refresh" : undefined,
+      keys.cancelAliases.length
+        ? keyHint(Arr.join(keys.cancelAliases, "/"), exitKeyVerb(exit))
+        : undefined,
       "q Close",
     ],
     close: exitKeyHint(exit, [], keys.cancel),
   };
 };
 
-// Collapsed bars shed hints from the end as width shrinks; exit and help always remain.
-function navigationFooterVariants(
+interface NavigationFooter {
+  readonly bottom: string;
+  /** Hints that didn't fit the border, shown in wrapped rows above it. */
+  readonly overflow: string | undefined;
+}
+
+/**
+ * The bottom border carries the whole bar when it fits. Otherwise it keeps exit and help, and
+ * the other hints wrap between pairs into rows above it, so none is dropped at any width.
+ */
+function navigationFooter(
   { hints, close }: NavigationHints,
   expanded: boolean,
-): ReadonlyArray<ReadonlyArray<ManagerFooterGroup>> {
+  inner: number,
+): NavigationFooter {
   const help = helpKeyHint(expanded);
-  if (expanded) return [[joinKeyHints([close, help])]];
-  const bar = (shown: ReadonlyArray<string | undefined>) => joinKeyHints([...shown, close, help]);
-  return [[bar(hints)], [bar(Arr.take(hints, 3))], [bar(Arr.take(hints, 2))], [bar([])]];
+  const tail = joinKeyHints([close, help]);
+  if (expanded)
+    return { bottom: renderResponsiveManagerFooter(inner, [[tail]]), overflow: undefined };
+  const full = joinKeyHints([...hints, close, help]);
+  // The border keeps a corner and a rule on each side of the bar.
+  if (visibleWidth(full) + 2 <= inner)
+    return { bottom: renderResponsiveManagerFooter(inner, [[full]]), overflow: undefined };
+  return {
+    bottom: renderResponsiveManagerFooter(inner, [[tail]]),
+    overflow: joinKeyHints(hints) || undefined,
+  };
 }
 
 /**
@@ -145,6 +182,8 @@ const expandedHelp = ({ hints, more }: NavigationHints): string =>
 interface GroupedActivityState {
   readonly shell: ListDetailShell;
   readonly entries: readonly GroupedActivityRow[];
+  /** Items the tree presents, including those inside folded branches. */
+  readonly itemCount: number;
   readonly selected: GroupedActivityRow | undefined;
   readonly alternateHelp: boolean;
   readonly actionPage: number;
@@ -176,7 +215,7 @@ function needsYouLine(
 ): string {
   const more = urgent.length > 1 ? ` +${urgent.length - 1}` : "";
   const jump = " · w Jump";
-  const prefix = `${managerNoticeGlyph("attention")} Needs you: `;
+  const prefix = `${managerNoticeGlyph("attention")} Needs your input: `;
   return options.theme.fg(
     managerNoticeColor("attention"),
     clipToWidth(
@@ -201,11 +240,19 @@ function activityList(
   const { options, state, urgent, listFocused } = context;
   const { shell, entries, selected } = state;
   const showHeading = listHeight > 1;
-  const first = listHeight > 2 ? urgent[0] : undefined;
-  const window = shell.visibleWindow(
-    entries.length,
-    listHeight - Number(showHeading) - Number(first !== undefined),
-  );
+  const listed = (start: number, end: number) =>
+    new Set(
+      Arr.flatMap(entries.slice(start, end), (entry) =>
+        entry.type === "member" ? [entry.row.key] : [],
+      ),
+    );
+  // The banner points at waiting work the list doesn't show; a visible row speaks for itself.
+  const rows = listHeight - Number(showHeading);
+  const full = shell.visibleWindow(entries.length, rows);
+  const shown = listed(full.start, full.end);
+  const unseen = Arr.filter(urgent, (row) => !shown.has(row.key));
+  const first = listHeight > 2 ? unseen[0] : undefined;
+  const window = first ? shell.visibleWindow(entries.length, rows - 1) : full;
   const list = Arr.map(entries.slice(window.start, window.end), (entry) => {
     const isSelected = entry.id === selected?.id;
     const prefix = isSelected ? CURSOR : NO_CURSOR;
@@ -215,7 +262,7 @@ function activityList(
     );
   });
   if (!list.length) list.push(options.theme.fg("dim", "No activity yet"));
-  if (first) list.unshift(needsYouLine(context, first, listWidth));
+  if (first) list.unshift(needsYouLine({ ...context, urgent: unseen }, first, listWidth));
   if (showHeading) {
     const above = window.start;
     const below = Math.max(0, entries.length - window.end);
@@ -313,15 +360,23 @@ const wrappedDetail = (
 const detailHeading = (
   { state, row, listFocused }: GroupedBodyContext,
   sameItem: boolean,
-  overflow: string | undefined,
+  overflow: { readonly start: number; readonly label: string } | undefined,
+  width: number,
 ): string => {
-  if (!row) return joinInline(["Summary", overflow]);
+  if (!row) return joinInline(["Summary", overflow?.label]);
   const stale = sameItem && state.loaded?.request.revision !== row.revision;
-  return joinInline([
-    listFocused ? "Preview" : "Details",
-    state.follow ? "following" : stale && !listFocused ? "newer output · r Refresh" : undefined,
-    overflow,
-  ]);
+  const heading = (item: string | undefined) =>
+    joinInline([
+      listFocused ? "Preview" : "Details",
+      item,
+      state.follow ? "following" : stale && !listFocused ? "newer output · r Refresh" : undefined,
+      overflow?.label,
+    ]);
+  // Once the breadcrumb scrolls away, the heading keeps naming the item.
+  if (!overflow || overflow.start <= 1) return heading(undefined);
+  const breadcrumb = Arr.join(state.selected?.breadcrumbs ?? [row.title], " › ");
+  const full = heading(breadcrumb);
+  return visibleWidth(full) <= width ? full : heading(row.title);
 };
 
 function activityDetail(context: GroupedBodyContext, detailHeight: number, detailWidth: number) {
@@ -347,16 +402,32 @@ function activityDetail(context: GroupedBodyContext, detailHeight: number, detai
     state.detailPosition,
   );
   if (!showHeading) return details.visible;
-  const overflow = details.overflow ? detailWindowPositionLabel(details.overflow) : undefined;
+  const overflow = details.overflow && {
+    start: details.overflow.start,
+    label: detailWindowPositionLabel(details.overflow),
+  };
   return [
     paneHeading(
       options.theme,
-      clipToWidth(detailHeading(context, sameItem, overflow), detailWidth, "…"),
+      clipToWidth(detailHeading(context, sameItem, overflow, detailWidth), detailWidth, "…"),
       !listFocused,
     ),
     ...details.visible,
   ];
 }
+
+// A narrow title shortens parent waits before it clips, so attention stays readable.
+const activityTitle = (
+  items: string,
+  counts: ActivityAttentionCounts,
+  startup: string,
+  width: number,
+): string => {
+  const title = (labels: readonly string[]) =>
+    ` ${joinInline(["Activity", items, ...labels])}${startup ? ` ${startup}` : ""} `;
+  const full = title(activityAttentionLabels(counts));
+  return visibleWidth(full) <= width ? full : title(compactNotices(counts));
+};
 
 const movementLabel = (up: string, down: string): string =>
   Str.length(up) === 1 && Str.length(down) === 1 ? `${up}${down}` : `${up}/${down}`;
@@ -375,12 +446,14 @@ export function renderGroupedActivity(
   const inner = Math.max(0, width - 2);
   const frame = listDetailFrame(options.theme, shell.state.pane);
   const urgent = needsYou(rows);
-  const attention = joinInline(activityAttentionLabels(summarizeGroup(rows).attention));
+  const counts = summarizeGroup(rows).attention;
   const startup = activityStartupGlyph(rows, options.starting?.() ?? 0, options.now?.());
   const { key: hint } = configuredKeyLabels(options.keybindingLabel, activityShortcuts);
+  const [cancel, ...cancelAliases] = Str.split(hint("tui.select.cancel", "Esc"), "/");
   const keys: ActivityKeys = {
     confirm: hint("tui.select.confirm", "Enter"),
-    cancel: hint("tui.select.cancel", "Esc"),
+    cancel,
+    cancelAliases,
     move: movementLabel(hint("tui.select.up", "↑"), hint("tui.select.down", "↓")),
   };
   const listFocused = shell.state.pane === "list";
@@ -397,18 +470,21 @@ export function renderGroupedActivity(
     },
     keys,
   );
-  const bottom = renderResponsiveManagerFooter(
-    inner,
-    state.confirmation
-      ? confirmationFooterVariants(state.confirmation, keys)
-      : navigationFooterVariants(navigation, state.alternateHelp),
-  );
-  const help =
-    state.alternateHelp && !state.confirmation
-      ? Arr.map(wrapKeyHints(expandedHelp(navigation), Math.max(1, inner - 1)), (line) =>
-          options.theme.fg("dim", ` ${line}`),
-        )
-      : [];
+  const footer = state.confirmation
+    ? {
+        bottom: renderResponsiveManagerFooter(
+          inner,
+          confirmationFooterVariants(state.confirmation, keys),
+        ),
+        overflow: undefined,
+      }
+    : navigationFooter(navigation, state.alternateHelp, inner);
+  const bottom = footer.bottom;
+  const hintText =
+    state.alternateHelp && !state.confirmation ? expandedHelp(navigation) : footer.overflow;
+  const help = hintText
+    ? keyHintRows(hintText, inner, (line) => options.theme.fg("dim", line))
+    : [];
   const activityBody = (
     bodyHeight: number,
     { listWidth, detailWidth }: { readonly listWidth: number; readonly detailWidth: number },
@@ -456,14 +532,19 @@ export function renderGroupedActivity(
       top: options.theme.fg(
         "accent",
         clipToWidth(
-          ` ${joinInline(["Activity", countLabel(rows.length, "item"), attention])}${startup ? ` ${startup}` : ""} `,
+          activityTitle(
+            countLabel(state.itemCount, "item"),
+            counts,
+            startup,
+            Math.max(0, inner - 2),
+          ),
           inner,
-          "",
+          "…",
         ),
       ),
       bottom,
       body: (fullHeight) => {
-        // Expanded help takes rows at the bottom so every hint stays readable at any width.
+        // Wrapped or expanded hints take rows at the bottom so each stays readable at any width.
         const helpRows = fullHeight > help.length + 4 ? help : [];
         const bodyHeight = fullHeight - (helpRows.length ? helpRows.length + 1 : 0);
         const geometry =

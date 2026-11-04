@@ -7,7 +7,7 @@ import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/
 import { joinInline } from "../manager/chrome.ts";
 import { detailFieldRows, type ListDetailField } from "../manager/list-detail-shell.ts";
 import { managerTone } from "../manager/style.ts";
-import { ACTIVITY_ACTION_PAGE_SIZE, activityActionPages } from "./action-keys.ts";
+import { activityActionKeys } from "./action-keys.ts";
 import { activityStatus } from "./attention.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
 import { workStateLabels, type GroupSummary } from "./group-summary.ts";
@@ -107,8 +107,20 @@ const technicalFields = (
   row: ActivityRow,
   context: readonly ActivityRow[],
   provided: ReadonlyArray<ActivityDetailField>,
+): ListDetailField[] => {
+  const labels = new Set(Arr.map(provided, (field) => Str.toLowerCase(field.label)));
+  // A field the provider already supplied is stated once, in its words.
+  const shell = Arr.filter(
+    shellTechnicalFields(row, context),
+    (field) => !labels.has(Str.toLowerCase(field.label)),
+  );
+  return [...Arr.map(provided, (field) => ({ label: field.label, value: field.value })), ...shell];
+};
+
+const shellTechnicalFields = (
+  row: ActivityRow,
+  context: readonly ActivityRow[],
 ): ListDetailField[] => [
-  ...Arr.map(provided, (field) => ({ label: field.label, value: field.value })),
   ...(row.route ? [{ label: "Route", value: row.route, tone: managerTone.value }] : []),
   {
     label: "Source",
@@ -136,11 +148,14 @@ function sourceDetail(
   const { theme } = options;
   const { row, context } = entry;
   const loaded = options.loaded ?? (row.detail ? { sections: [{ body: row.detail }] } : undefined);
-  // A provider's lead section often opens with the same cause as the row summary.
+  // A provider's lead section often opens with the same cause as the row summary, and live
+  // progress is already in the loaded output.
+  const live = row.status === "running" || row.status === "pending" || row.status === "stopping";
   const summary = Option.getOrUndefined(
     Option.filter(
       Option.fromUndefinedOr(distinctSummary(row)),
       (shown) =>
+        !(live && options.loaded) &&
         !Arr.some(
           loaded?.sections ?? [],
           (section) => Str.trim(Str.split(section.body, "\n")[0] ?? "") === shown,
@@ -179,18 +194,17 @@ function actionBlocks(
   row: ActivityRow,
   page: number,
 ): readonly ActivityDetailBlock[] {
-  const actions = row.retained ? [] : (row.actions ?? []);
-  if (!actions.length) return [];
-  const pages = activityActionPages(actions);
+  const keys = activityActionKeys(row.retained ? [] : row.actions, page);
+  if (!keys.shown.length) return [];
   return [
     spacer,
     ...Arr.map(
-      actions.slice(page * ACTIVITY_ACTION_PAGE_SIZE, (page + 1) * ACTIVITY_ACTION_PAGE_SIZE),
-      // Bracketed keys, so a lone "1" never reads as a count of actions.
-      (action, index) => text(`${theme.fg("dim", `[${index + 1}]`)} ${action.label}`),
+      keys.shown,
+      // Each action shows the one key that runs it, the same key the hint bar names.
+      ({ key, action }) => text(`${theme.fg("dim", `[${key}]`)} ${action.label}`),
     ),
-    ...(pages > 1
-      ? [text(theme.fg("dim", `[a] More actions · page ${page + 1} of ${pages}`))]
+    ...(keys.pages > 1
+      ? [text(theme.fg("dim", `[a] More actions · page ${keys.page + 1} of ${keys.pages}`))]
       : []),
   ];
 }

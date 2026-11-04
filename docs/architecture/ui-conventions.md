@@ -4,36 +4,54 @@ Every visible Cosmic Pi surface follows these conventions: tool rows, the footer
 
 Shared helpers implement most of this. Use them instead of writing separators, hint text, or markers by hand:
 
-| Need                           | Helper                                                                                                                                        | Import                                  |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
-| Separator between inline facts | `INLINE_SEPARATOR`, `joinInline(parts)`                                                                                                       | `pi-cosmic-ui/manager`                  |
-| Status glyphs                  | `SUITE_STATUS_GLYPHS`, `managerActivityGlyph`, `managerNoticeGlyph`                                                                           | `pi-cosmic-ui/manager`                  |
-| Key hints                      | `keyHint`, `joinKeyHints`, `keyHintBar`, `exitKeyHint`, `helpKeyHint`, `moveKeyHint`, `settingAffordanceHint`, `wrapKeyHints`, `formatKeyIds` | `pi-cosmic-ui/manager/key-labels`       |
-| List cursor and markers        | `LIST_CURSOR`, `selectionMarker`                                                                                                              | `pi-cosmic-ui/manager/style`            |
-| Settings values and rows       | `ON_OFF_SETTING_VALUES`, `settingOnOff`, `AUTO_SETTING_VALUE`, `settingInherited`, `createSettingsChoiceSubmenu`, `settingsListHint`          | `pi-cosmic-ui/manager/settings-surface` |
-| Read-only text panel           | `TextPanelComponent`                                                                                                                          | `pi-cosmic-ui/manager/panel`            |
-| Durations, ages, sizes, counts | `formatDuration`, `formatRelativeAge`, `formatBytes`, `countLabel`                                                                            | `pi-cosmic-core/display`                |
-| Width-safe clipping            | `clipToWidth`                                                                                                                                 | `pi-cosmic-ui/manager`                  |
+| Need                           | Helper                                                                                                                                                       | Import                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Separator between inline facts | `INLINE_SEPARATOR`, `joinInline(parts)`                                                                                                                      | `pi-cosmic-ui/manager`                                                                 |
+| Status glyphs                  | `SUITE_STATUS_GLYPHS`, `managerActivityGlyph`, `managerNoticeGlyph`                                                                                          | `pi-cosmic-ui/manager`                                                                 |
+| Key hints                      | `keyHint`, `joinKeyHints`, `keyHintBar`, `exitKeyHint`, `helpKeyHint`, `moveKeyHint`, `settingAffordanceHint`, `wrapKeyHints`, `keyHintRows`, `formatKeyIds` | `pi-cosmic-ui/manager/key-labels`                                                      |
+| List cursor and markers        | `LIST_CURSOR`, `selectionMarker`                                                                                                                             | `pi-cosmic-ui/manager/style`                                                           |
+| Settings surface               | `openSettingsList` (string header), `settingsSurfaceHeader`, `SettingsSurfaceItem` (`kind`, `children`, `summary`), `createSettingsGroupSubmenu`             | `pi-cosmic-ui/boundary/host-settings-command`, `pi-cosmic-ui/manager/settings-surface` |
+| Settings values and rows       | `ON_OFF_SETTING_VALUES`, `settingOnOff`, `AUTO_SETTING_VALUE`, `settingInherited`, `createSettingsChoiceSubmenu`, `settingsListHint`                         | `pi-cosmic-ui/manager/settings-surface`                                                |
+| Columns                        | `managerTable`                                                                                                                                               | `pi-cosmic-ui/manager/table`                                                           |
+| Read-only text panel           | `TextPanelComponent`                                                                                                                                         | `pi-cosmic-ui/manager/panel`                                                           |
+| Expansion affordance           | `renderExpansionAffordance`, `toolExpandHint`                                                                                                                | `pi-cosmic-ui/tool`                                                                    |
+| Expanded tool bodies           | `expandedBody`, `expandedFields`, `expandedText`, `expandedDetails`, … ([layout](tool-presentation.md#expanded-body-layout))                                 | `pi-code-previews`                                                                     |
+| Durations, ages, sizes, counts | `formatDuration`, `formatRelativeAge`, `formatBytes`, `countLabel`                                                                                           | `pi-cosmic-core/display`                                                               |
+| Width-safe clipping            | `clipToWidth`                                                                                                                                                | `pi-cosmic-ui/manager`                                                                 |
+
+Every surface must read well at both a desktop terminal (180×56) and a phone client (57×46). Check both widths in the presentation gallery, and add a 57-column scenario for every surface you change.
 
 ## Separators
 
 - Use `·` (middle dot with spaces) between facts everywhere: tool rows, footer, Activity, notices, and hint bars.
-- Don't use `•`, `|`, or `│` as inline separators. Box-drawing characters are for borders only.
+- Don't use `•`, `|`, or `│` as inline separators. Box-drawing characters are for borders, gutters, and tree structure only.
 
 ## Key hints
 
 - A hint is a `Key Verb` pair with a Title Case verb, such as `Enter Inspect`. Pairs are joined by `·`: `↑↓ Move · Enter Inspect · Esc Close · ? More`.
-- Name keys the way `formatKeyIds` does: `Enter`, `Esc`, `Tab`, `Space`, `PgUp`, `PgDn`, arrows as `↑↓←→`, and modifiers as `C-g`, `A-x`, `⇧Tab`. Show the configured key when Pi has one.
-- Keep the default bar short. Put aliases (`j/k`, `h`, `l`, `q`, `Space`, `C-u/C-d`, `gg/G`) and less common keys behind `? More`, which toggles to `? Less`.
+- Name keys the way `formatKeyIds` does: `Enter`, `Esc`, `Tab`, `Space`, `PgUp`, `PgDn`, arrows as `↑↓←→`, and modifiers as `C-g`, `A-x`, `⇧Tab`. Show the configured key when Pi has one. Arrows inside a hint name keys; they are not glyphs.
+- Keep the default bar short. Put aliases (`j/k`, `h`, `l`, `q`, `C-c`, `Space`, `C-u/C-d`, `gg/G`) and less common keys behind `? More`, which toggles to `? Less`.
 - The expanded bar is a superset. It keeps every default pair and adds to it; it never replaces them. `keyHintBar({ hints, more, exit, exitAliases }, expanded)` enforces this.
-- When the bar does not fit, wrap it between pairs with `wrapKeyHints`. Never clip a hint mid-pair.
 - Show one hint line per surface. A nested view replaces its parent's hint; it never stacks a second one.
+
+### Action keys
+
+- Each action has exactly one key. Use its letter wherever one exists: `x` Stop, `i` Interrupt, `m` Message, `e` Rename, `c` Clear.
+- An action list shows that same key, `[x] Stop`, and the hint bar names the same key, `x Stop`. Never offer the same action under a letter in one place and a digit in another.
+- Digits are only for actions that have no letter, and then the list and the hint both show the digit.
+
+### Wrapping
+
+- When a bar doesn't fit, wrap it between complete `Key Verb` pairs: `wrapKeyHints(hint, width)` returns the rows, and `keyHintRows(hint, width, style)` returns them styled with the surface's one-column gutter. Never clip a pair mid-way.
+- Wrapping takes rows; it never drops essential hints. At every width, including 57 columns, the bar keeps Move or Scroll, the primary action, and the exit (`Esc Close`, `Esc Back`, or `Esc Cancel`). Only `? More` content may wait for expansion.
+- A framed surface may keep its exit and `? More` in the bottom border and wrap the remaining pairs into rows above it.
 
 ## Leaving a surface
 
 - `Esc` backs out one level, or closes the surface at the top level.
 - Label it `Esc Back` when nested, `Esc Close` at the top, and `Esc Cancel` for a pending decision. `exitKeyHint(level)` produces each one.
-- `q` (and `h` in Vim-style lists) are aliases on non-text surfaces only, and appear only in expanded help.
+- Show only that primary exit key. Aliases such as `C-c`, `q`, and `h` (in Vim-style lists) work where they apply but appear only in the expanded `? More` help, never as `Esc/C-c` in the default bar. `q` and `h` are aliases on non-text surfaces only.
+- A surface with a pending sub-state backs that out first: with a settings filter applied, `Esc Clear` clears the filter, and the next `Esc` closes.
 - Nothing closes on "any key".
 
 ## Lists and selection
@@ -42,39 +60,94 @@ Shared helpers implement most of this. Use them instead of writing separators, h
 - Use `[ ]`/`[x]` for multi-select and `( )`/`(•)` for single-select (`selectionMarker`).
 - Show scroll position as `n of N` or `n–m of N`.
 
-## Status glyphs
+## Glyphs
 
-Each glyph has one meaning, suite-wide:
+Each glyph has one meaning, suite-wide. Don't introduce a glyph that isn't listed here, and don't reuse a listed glyph for something else, such as `○` or `✓` for an unanswered tab or a static tab icon. Add a row here in the same change that adds a glyph.
 
-| Glyph   | Meaning               |
-| ------- | --------------------- |
-| `✓`     | Succeeded or done     |
-| `✗`     | Failed                |
-| `⚠`     | Warning               |
-| `⊘`     | Stopped or cancelled  |
-| `≈`     | Uncertain             |
-| `‖`     | Paused                |
-| Spinner | Running               |
-| `○`     | Queued or not started |
-| `?`     | Waiting on the user   |
+### Status
 
-Don't reuse `○` or `✓` for anything else, such as an unanswered tab or a static tab icon.
+| Glyph                           | Meaning                                                                                                                                                     |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `✓`                             | Succeeded or done                                                                                                                                           |
+| `✗`                             | Failed or error                                                                                                                                             |
+| `⚠`                             | Warning                                                                                                                                                     |
+| `ℹ`                             | Information: an expanded-only note that is neither a problem nor a result                                                                                   |
+| `?`                             | Waiting on the user, or on an agent's reply or decision (attention)                                                                                         |
+| `⊘`                             | Stopped or cancelled                                                                                                                                        |
+| `≈`                             | Uncertain: the outcome could not be confirmed                                                                                                               |
+| `‖`                             | Paused                                                                                                                                                      |
+| `○`                             | Queued or not started                                                                                                                                       |
+| `◌ ◔ ◑ ◕` (animated)            | Starting                                                                                                                                                    |
+| `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` (spinner) | Running, on a surface that redraws                                                                                                                          |
+| `◒`                             | Stopping                                                                                                                                                    |
+| `•`                             | Neutral: no verdict, such as work still running when a saved snapshot was taken (where a spinner would freeze) or a call that returned without pass or fail |
+
+`SUITE_STATUS_GLYPHS`, `managerActivityGlyph`, and `managerNoticeGlyph` own these; use them instead of literals.
+
+### Messages and relationships
+
+| Glyph | Meaning                                                                                     |
+| ----- | ------------------------------------------------------------------------------------------- |
+| `→`   | Toward: a message sent to its recipient, or a profile routed to its model (`scout → gpt-6`) |
+| `←`   | From: a message or reply received                                                           |
+| `◎`   | Awaited: the parent agent is waiting on this run                                            |
+
+### Disclosure, selection, and structure
+
+| Glyph                | Meaning                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `▸`                  | Collapsed: more is available (a folded tree branch, or `▸ output · C-o Expand`)                        |
+| `▾`                  | Expanded                                                                                               |
+| `›`                  | The focused row in a list, picker, or tree (`LIST_CURSOR`)                                             |
+| `[ ]` `[x]`          | Multi-select, unchecked and checked                                                                    |
+| `( )` `(•)`          | Single-select, unselected and selected; the dot inside parentheses is part of the marker               |
+| `[x] Stop`           | An action and its one key; the bracketed key is the key that runs it (see [action keys](#action-keys)) |
+| `●`                  | Unsaved edit                                                                                           |
+| `✎`                  | Write or edit your own answer (a questionnaire's custom option)                                        |
+| `▪` `◦`              | A directory and a file in `find`/`ls` results                                                          |
+| `│` `┆`              | In `grep` results, a matching line and a context line                                                  |
+| `├─` `└─` `│` `╭╮╰╯` | Tree branches and frames; structure only, with no meaning of their own                                 |
+| `…`                  | Clipped or omitted text                                                                                |
+| `␊` `␍␊`             | A visible line ending in a diff                                                                        |
+
+### Footer and identity
+
+| Glyph | Meaning                  |
+| ----- | ------------------------ |
+| `⌂`   | Working directory        |
+| `⎇`   | Git branch               |
+| `▤`   | Context window usage     |
+| `↺`   | Usage limit reset time   |
+| `⚡`  | OpenAI fast mode         |
+| `⧉`   | The subagent profile set |
+
+Some Code Previews tool headings carry a per-tool icon, such as `📖 read`. The icon names the tool and carries no status.
 
 ## Settings
 
+- Every `/<extension> settings` surface opens the same way: a blank row, then the accent title `<Name> settings` at column 1. Pass the title as `openSettingsList`'s string `header`; custom surfaces use `settingsSurfaceHeader`. A nested list or choice list puts its own title and description in the same column.
 - Booleans read `on`/`off`. Automatic choices read `auto`. An inherited value reads `inherit (value)`, showing the value that applies.
 - Enter says what it does, and the hint names it:
   - On a boolean it toggles and saves: `Enter Toggle`.
   - On an enum it opens a choice list: `Enter Change`. Moving through the list saves nothing; Enter on a new value saves it, and Esc returns without a change.
   - On a group or a view it opens it: `Enter Open`.
 - The shared settings surface infers this from each row: `values` of exactly `on`/`off` toggle, any other `values` open a choice list, and a `submenu` opens. Mark a submenu that picks a value with `kind: "setting"` so it reads `Enter Change`.
+- Group related rows instead of prefixing every label with its scope or category. In a settings session's picker, a row with `children` becomes a group row whose nested list saves its rows like top-level ones; `summary` supplies the group's value.
+- `/` filters the list. While typing, the hint reads `Type to filter · … · Esc Clear`; once a filter is applied, `Esc Clear` stays until it is cleared.
 - A component shown inside a settings surface may implement `settingsHint(expanded)` to supply the single hint line while it is active. Use `settingsListHint` for a component that wraps a pi-tui `SettingsList`.
 - Show every row when it fits. Don't hide one row behind a scroll indicator.
+- An inline surface ends with a blank row so its hint never touches the footer below it.
 
-## Panels and long text
+## Panels, tables, and long text
 
-- Read-only text uses `TextPanelComponent`. It wraps long lines with a hanging indent, scrolls when it doesn't fit, and closes with `Esc` (or `q`).
+- Read-only text uses `TextPanelComponent`. It wraps long lines with a hanging indent, scrolls when it doesn't fit, and closes with `Esc`.
 - Put one fact per row as `Label: value`. Split long lists into one row per item.
+- Columns use `managerTable`, which drops a column whose cells are all empty so the space goes to columns with content.
+
+## Tool rows
+
+- A collapsed row that has more shows `▸ label · C-o Expand`, naming the configured expand key in the suite key format (`renderExpansionAffordance`). Never hard-code the shortcut or write `ctrl+o to expand`.
+- Every workspace tool expands into one layout: the body indents two columns under the heading, labeled sections use the Code Previews style, and technical facts close in a dim `Details` section. Build it with the `pi-code-previews` helpers described in [expanded body layout](tool-presentation.md#expanded-body-layout).
 
 ## Time
 

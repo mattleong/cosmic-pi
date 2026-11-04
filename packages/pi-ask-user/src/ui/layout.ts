@@ -5,6 +5,7 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { padListDetailRow } from "pi-cosmic-ui/manager/list-detail";
 import { clipToWidth } from "pi-cosmic-ui/manager";
+import { wrapKeyHints } from "pi-cosmic-ui/manager/key-labels";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 
 // Titles only label tabs, review rows, and headings; the schema admits longer ones than fit there.
@@ -13,23 +14,32 @@ const MAX_TITLE_LABEL_WIDTH = 24;
 export const titleLabel = (title: string): string =>
   clipToWidth(stripTerminalControls(title), MAX_TITLE_LABEL_WIDTH);
 
-export function appendWrapped(lines: string[], prefix: string, value: string, width: number): void {
+/**
+ * Wraps `value` after `prefix`. Continuation lines hang `hang` columns further in, under the text
+ * that follows a list number or label; every line wraps at the narrower width so they align.
+ */
+export function appendWrapped(
+  lines: string[],
+  prefix: string,
+  value: string,
+  width: number,
+  hang = 0,
+): void {
   const safeWidth = Math.max(1, width);
   const safePrefix = clipToWidth(prefix, safeWidth, "");
   const prefixWidth = visibleWidth(safePrefix);
-  const available = Math.max(1, safeWidth - prefixWidth);
+  const indent = Math.max(0, Math.min(hang, safeWidth - prefixWidth - 8));
+  const available = Math.max(1, safeWidth - prefixWidth - indent);
   const wrapped = wrapTextWithAnsi(value, available);
-  const continuation = Fn.pipe(" ", Str.repeat(prefixWidth));
+  const continuation = Fn.pipe(" ", Str.repeat(prefixWidth + indent));
   for (const [index, line] of wrapped.entries()) {
     lines.push(clipToWidth(`${index === 0 ? safePrefix : continuation}${line}`, safeWidth, ""));
   }
 }
 
-const HINT_SEPARATOR = " · ";
-
 /**
  * Wraps a hint bar between `Key Verb` pairs, so a key never lands on a different line than its
- * verb; continuation lines hang under the first hint.
+ * verb and every hint survives at narrow widths.
  */
 export function appendHintBar(
   lines: string[],
@@ -37,19 +47,46 @@ export function appendHintBar(
   width: number,
   style: (text: string) => string,
 ): void {
-  const available = Math.max(1, width - 1);
-  const rows: string[] = [];
+  for (const entry of wrapKeyHints(hints, Math.max(1, width - 1)))
+    appendWrapped(lines, " ", style(entry), width);
+}
+
+interface PackedRows {
+  readonly separator: string;
+  /** Styles each row's text; parts may also arrive pre-styled. */
+  readonly style?: (text: string) => string;
+  /** Leads the first row. */
+  readonly prefix?: string;
+  /** Leads each later row; by default it hangs two columns past `prefix`. */
+  readonly continuation?: string;
+}
+
+/**
+ * Packs parts into rows joined by `separator`, breaking only between parts so a tab, ID, or fact
+ * never splits across lines. A part wider than the row is clipped with `…`.
+ */
+export function appendPacked(
+  lines: string[],
+  parts: readonly string[],
+  width: number,
+  { separator, style = Fn.identity, prefix = "", continuation = `${prefix}  ` }: PackedRows,
+): void {
+  const safeWidth = Math.max(1, width);
+  let lead = prefix;
   let row = "";
-  for (const hint of Str.split(hints, HINT_SEPARATOR)) {
-    const candidate = row === "" ? hint : `${row}${HINT_SEPARATOR}${hint}`;
-    if (row === "" || visibleWidth(candidate) <= available) row = candidate;
+  const flush = () => {
+    lines.push(clipToWidth(`${lead}${style(row)}`, safeWidth));
+    lead = continuation;
+  };
+  for (const part of parts) {
+    const candidate = row === "" ? part : `${row}${separator}${part}`;
+    if (row === "" || visibleWidth(lead) + visibleWidth(candidate) <= safeWidth) row = candidate;
     else {
-      rows.push(row);
-      row = hint;
+      flush();
+      row = part;
     }
   }
-  if (row !== "") rows.push(row);
-  for (const entry of rows) appendWrapped(lines, " ", style(entry), width);
+  if (row !== "") flush();
 }
 
 export const borderLine = (width: number, theme: Theme): string =>

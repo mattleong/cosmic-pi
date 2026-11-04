@@ -35,6 +35,9 @@ const Summary = Schema.Struct({
           ...Fields,
           label: Schema.String,
           returnedCheckmark: Schema.optionalKey(Schema.Literal(true)),
+          details: Schema.optionalKey(
+            Schema.Array(Schema.Struct({ label: Schema.String, text: Schema.String })),
+          ),
           subject: Schema.optionalKey(Schema.String),
           durationMs: Schema.optionalKey(Schema.Finite),
           status: Schema.Literals(["pending", "running", ...CompactOutcomeSchema.literals]),

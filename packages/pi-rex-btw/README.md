@@ -5,7 +5,7 @@ Opens "by the way" side conversations: each `/btw` starts a fresh Pi in a new [R
 ## Features
 
 - **A clean context every time.** Each pane is its own blank conversation; open as many as you like.
-- **Sees the live parent.** The side session is told where the parent's transcript is and re-reads it whenever a question depends on what the parent is doing. Nothing is copied in automatically.
+- **Sees the live parent.** The side session has a read-only `parent_conversation` tool that reads the parent's latest messages, and calls it again whenever a question depends on what the parent is doing. Nothing is copied in automatically, and nothing goes back.
 - **Same model.** The side session starts with the parent's current model and thinking level.
 - **Stays out of your way.** The first pane splits yours; later ones stack beside the newest BTW pane that's still open.
 
@@ -26,7 +26,7 @@ Then run `/reload`. It requires Pi running interactively inside a Rex pane.
 /btw What does the parent's latest test failure mean?
 ```
 
-Text after the command becomes the side session's first message.
+Text after the command becomes the side session's first message. The side pane opens with a one-line note saying it can read the parent session, and its reads show as `parent_conversation last 15 messages`; expand one to see the messages it read.
 
 Things to know:
 
@@ -38,6 +38,6 @@ Things to know:
 
 ## How it works
 
-`/btw` runs `rex split` beside the anchor pane. When your shell is a POSIX shell such as zsh or bash, Pi starts through an interactive shell so the environment from your shell configuration, such as API keys, is available. The child gets `--no-session`, the parent's model, and internal flags naming the parent session; it also loads this package explicitly so it understands those flags. Before each run, the child checks that the parent file still exists and adds a short note to its system prompt pointing at it.
+`/btw` runs `rex split` beside the anchor pane. When your shell is a POSIX shell such as zsh or bash, Pi starts through an interactive shell so the environment from your shell configuration, such as API keys, is available. The child gets `--no-session`, the parent's model, and internal flags marking it as a side session and naming the parent session; it also loads this package explicitly so it understands those flags. Only a child with a parent gets the `parent_conversation` tool, which reads the end of the parent's session file and follows its current branch back, by default through the last 15 messages and at most 50. Before each run, the child checks that the parent file still exists and adds a short note to its system prompt pointing at the tool.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

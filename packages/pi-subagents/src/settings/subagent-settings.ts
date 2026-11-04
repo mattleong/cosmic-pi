@@ -19,7 +19,7 @@ import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
-import { settingInherited } from "pi-cosmic-ui/manager/settings-surface";
+import { settingInherited, type SettingsSurfaceItem } from "pi-cosmic-ui/manager/settings-surface";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
@@ -162,6 +162,12 @@ const inheritedValue = (
       );
 };
 
+const SCOPED_SETTING_LABELS = {
+  [DELEGATION]: "delegation",
+  ...Rec.map(NESTING_FIELDS, (field) => field.label),
+} as const satisfies Record<typeof DELEGATION | NestingField, string>;
+
+/** One scoped setting as a row of its scope's group, which already names the scope. */
 const scopedSettingItem = (
   inspection: ProfileSettingsInspection,
   scope: ProfileSettingsScope,
@@ -170,10 +176,11 @@ const scopedSettingItem = (
   const reloadNote = scope === "session" ? "" : " Takes effect after /reload.";
   const inherited = settingInherited(inheritedValue(inspection, scope, id));
   const source = `Inherit uses ${INHERITED_FROM[scope]}.`;
+  const label = Str.capitalize(SCOPED_SETTING_LABELS[id]);
   if (id === DELEGATION)
     return {
       id: `${scope}:${DELEGATION}`,
-      label: `${SCOPE_LABELS[scope]} · delegation`,
+      label,
       description: `${DELEGATION_DESCRIPTION} ${source}${reloadNote}`,
       currentValue: scopeDelegation(inspection, scope) ?? inherited,
       values: [...DELEGATION_MODES, inherited],
@@ -182,11 +189,29 @@ const scopedSettingItem = (
   const currentValue = own === INHERIT ? inherited : own;
   return {
     id: `${scope}:${id}`,
-    label: `${SCOPE_LABELS[scope]} · ${NESTING_FIELDS[id].label}`,
+    label,
     description: `${NESTING_FIELDS[id].description} ${source}${reloadNote}`,
     currentValue,
     values: withCurrent([...NESTING_FIELDS[id].presets, inherited], currentValue),
   };
+};
+
+const SCOPE_GROUP_DESCRIPTIONS = {
+  session: "Delegation and nesting limits for this session only. Changes apply now.",
+  global: "Delegation and nesting limits for new sessions everywhere. Changes apply after /reload.",
+  project:
+    "Delegation and nesting limits for this trusted project, which win over global ones. Changes apply after /reload.",
+} as const satisfies Record<ProfileSettingsScope, string>;
+
+/** A scope's group value: the settings it sets itself, or `inherit` when it sets none. */
+const scopeGroupSummary = (values: ReadonlyArray<readonly [string, string]>): string => {
+  const own = Arr.filter(values, ([, value]) => inheritChoice(value) !== INHERIT);
+  return own.length === 0
+    ? INHERIT
+    : Arr.join(
+        Arr.map(own, ([label, value]) => `${label} ${value}`),
+        ", ",
+      );
 };
 
 export function subagentSettingsSubcommand(actions: SubagentCommandActions): ExtensionSubcommand {
@@ -361,12 +386,33 @@ function subagentSettingsCommand(
             currentValue: workspace.mode,
             values: [...WRITER_WORKSPACE_MODES],
           },
-          ...Arr.flatMap(scopes, (scope) =>
-            Arr.map(SCOPED_SETTING_IDS, (id) => scopedSettingItem(inspection, scope, id)),
-          ),
         ];
         for (const item of items) committed.set(item.id, item.currentValue);
-        return session.picker(items);
+        // Each scope is one group row, so the list reads by scope instead of repeating it.
+        const groups = Arr.map(scopes, (scope): SettingsSurfaceItem => {
+          const children = Arr.map(SCOPED_SETTING_IDS, (id) =>
+            scopedSettingItem(inspection, scope, id),
+          );
+          for (const child of children) committed.set(child.id, child.currentValue);
+          const summary = () =>
+            scopeGroupSummary(
+              Arr.map(
+                SCOPED_SETTING_IDS,
+                (id) =>
+                  [SCOPED_SETTING_LABELS[id], committed.get(rowId(id, scope)) ?? INHERIT] as const,
+              ),
+            );
+          return {
+            id: `group:${scope}`,
+            label: SCOPE_LABELS[scope],
+            kind: "group",
+            description: SCOPE_GROUP_DESCRIPTIONS[scope],
+            currentValue: summary(),
+            children,
+            summary,
+          };
+        });
+        return session.picker([...items, ...groups]);
       },
     );
   };

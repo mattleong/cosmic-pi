@@ -12,9 +12,12 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import {
   compactPlainText,
-  expandedSection,
+  expandedBody,
+  expandedFields,
+  expandedText,
   getTextContent,
   previewIssuesSlot,
+  type ExpandedField,
 } from "pi-code-previews";
 import { formatBytes } from "pi-cosmic-core/display";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
@@ -105,15 +108,21 @@ export interface ImageRequestOptions {
   readonly action: boolean;
 }
 
-const optionLines = (args: Partial<ToolParams>, shown: ImageRequestOptions): string[] =>
+const optionFields = (args: Partial<ToolParams>, shown: ImageRequestOptions): ExpandedField[] =>
   Arr.flatMap(Rec.toEntries<string, unknown>(args), ([key, value]) => {
     if (key === "prompt" || (key === "action" && shown.action) || value === undefined) return [];
-    const label = OPTION_LABELS.get(key) ?? key;
     const entries: readonly unknown[] = Arr.isArray(value) ? value : [value];
-    return Arr.map(entries, (entry) => {
-      const encoded: string | undefined = Predicate.isString(entry) ? entry : JSON.stringify(entry);
-      return `${label}: ${compactPlainText(encoded ?? "undefined")}`;
-    });
+    return [
+      {
+        label: OPTION_LABELS.get(key) ?? key,
+        lines: Arr.map(entries, (entry) => {
+          const encoded: string | undefined = Predicate.isString(entry)
+            ? entry
+            : JSON.stringify(entry);
+          return compactPlainText(encoded ?? "undefined");
+        }),
+      },
+    ];
   });
 
 export function renderImageRequest(
@@ -121,21 +130,12 @@ export function renderImageRequest(
   theme: Theme,
   shown: ImageRequestOptions,
 ): Component {
-  const container = new Container();
-  if (!shown.prompt && Predicate.isString(args.prompt))
-    container.addChild(
-      expandedSection(
-        theme,
-        "Prompt",
-        new Text(theme.fg("toolOutput", compactPlainText(args.prompt)), 0, 0),
-      ),
-    );
-  const options = optionLines(args, shown);
-  if (options.length > 0)
-    container.addChild(
-      expandedSection(theme, undefined, new Text(theme.fg("muted", Arr.join(options, "\n")), 0, 0)),
-    );
-  return container;
+  return expandedBody(
+    !shown.prompt && Predicate.isString(args.prompt)
+      ? expandedText(theme, "Prompt", [compactPlainText(args.prompt)])
+      : undefined,
+    expandedFields(theme, optionFields(args, shown)),
+  );
 }
 
 export function renderImageCall(
@@ -165,13 +165,8 @@ const rawText = (view: ImageView): string =>
     ? view.text
     : "";
 
-const recordFacts = (
-  record: CodexImageDetails,
-  view: ImageView,
-  expanded: boolean,
-  theme: Theme,
-): Component[] => {
-  const models = expanded
+const imageModels = (record: CodexImageDetails, expanded: boolean): string =>
+  expanded
     ? Arr.join(
         Arr.filter(
           [record.imageModel, `via ${record.model}`],
@@ -179,60 +174,75 @@ const recordFacts = (
         ),
         " ",
       )
-    : record.imageModel;
-  const summary = Arr.filter(
-    [
-      Str.toUpperCase(record.outputFormat),
-      view.imageBytes === undefined ? undefined : formatBytes(view.imageBytes),
-      models,
-    ],
-    (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
+    : (record.imageModel ?? "");
+
+const imageFormat = (record: CodexImageDetails, view: ImageView): string =>
+  Arr.join(
+    Arr.filter(
+      [
+        Str.toUpperCase(record.outputFormat),
+        view.imageBytes === undefined ? undefined : formatBytes(view.imageBytes),
+      ],
+      (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
+    ),
+    " · ",
   );
-  const facts = [new Text(theme.fg("muted", sanitizeTerminalLine(Arr.join(summary, " · "))), 0, 0)];
-  if (record.savedPath)
-    facts.push(
-      new Text(
-        `${theme.fg("muted", "Saved to")} ${theme.fg("toolOutput", compactPlainText(formatDisplayPath(record.savedPath, view.cwd)))}`,
-        0,
-        0,
-      ),
-    );
-  return facts;
+
+const savedPath = (record: CodexImageDetails, view: ImageView): string =>
+  record.savedPath ? compactPlainText(formatDisplayPath(record.savedPath, view.cwd)) : "";
+
+/** A collapsed preview's facts: one muted summary line and where the image was saved. */
+const collapsedFacts = (record: CodexImageDetails, view: ImageView, theme: Theme): Component[] => {
+  const summary = Arr.filter(
+    [imageFormat(record, view), imageModels(record, false)],
+    Str.isNonEmpty,
+  );
+  const saved = savedPath(record, view);
+  return [
+    new Text(theme.fg("muted", sanitizeTerminalLine(Arr.join(summary, " · "))), 0, 0),
+    ...(saved
+      ? [new Text(`${theme.fg("muted", "Saved to")} ${theme.fg("toolOutput", saved)}`, 0, 0)]
+      : []),
+  ];
 };
+
+/** Expanded, the image's facts share one label column beneath the heading. */
+const factField = (label: string, value: string): ExpandedField[] =>
+  Str.isNonEmpty(value) ? [{ label, lines: [sanitizeTerminalLine(value)] }] : [];
+
+const expandedFacts = (record: CodexImageDetails, view: ImageView, theme: Theme): Component =>
+  expandedFields(theme, [
+    ...factField("Image", imageFormat(record, view)),
+    ...factField("Model", imageModels(record, true)),
+    ...factField("Saved to", savedPath(record, view)),
+  ]);
+
+// An error that only restates its issue adds nothing; the issue above already shows it.
+const restatesIssue = (raw: string, error: boolean): boolean =>
+  error && restatesText(raw, imageFailureIssue(raw).message);
 
 const expandedDetails = (
   record: CodexImageDetails | undefined,
   raw: string,
   error: boolean,
   theme: Theme,
-): Component[] => [
-  ...(record?.revisedPrompt
-    ? [
-        expandedSection(
-          theme,
-          "Revised prompt",
-          new Text(theme.fg("toolOutput", compactPlainText(record.revisedPrompt)), 0, 0),
-        ),
-      ]
-    : []),
-  ...(raw
-    ? [
-        expandedSection(
+): Component =>
+  expandedBody(
+    record?.revisedPrompt
+      ? expandedText(theme, "Revised prompt", [compactPlainText(record.revisedPrompt)])
+      : undefined,
+    raw && !restatesIssue(raw, error)
+      ? expandedText(
           theme,
           error ? "Error" : "Raw result",
-          new Text(
-            theme.fg(error ? "error" : "toolOutput", Str.trimEnd(compactPlainText(raw))),
-            0,
-            0,
-          ),
-        ),
-      ]
-    : []),
-];
+          Str.split(Str.trimEnd(compactPlainText(raw)), "\n"),
+          error ? "error" : "toolOutput",
+        )
+      : undefined,
+  );
 
 const hasHiddenDetails = (record: CodexImageDetails | undefined, raw: string, error: boolean) =>
-  Boolean(record?.revisedPrompt) ||
-  (raw !== "" && !(error && restatesText(raw, imageFailureIssue(raw).message)));
+  Boolean(record?.revisedPrompt) || (raw !== "" && !restatesIssue(raw, error));
 
 export function renderImageBody(
   view: ImageView,
@@ -240,18 +250,22 @@ export function renderImageBody(
   theme: Theme,
 ): Component {
   const { record } = view;
-  const container = new Container();
-  const facts = options.nested ? new Container() : container;
-  if (options.nested) container.addChild(expandedSection(theme, undefined, facts));
-  if (record?.status === "cancelled" && !options.nested && !options.isError)
-    container.addChild(new Text(toolStatusLine(theme, "stopped", "Cancelled"), 0, 0));
-  if (record)
-    for (const fact of recordFacts(record, view, options.expanded, theme)) facts.addChild(fact);
   const raw = rawText(view);
   const error = options.isError && !record;
-  if (options.expanded)
-    for (const detail of expandedDetails(record, raw, error, theme)) container.addChild(detail);
-  else if (hasHiddenDetails(record, raw, error))
+  const cancelled =
+    record?.status === "cancelled" && !options.nested && !options.isError
+      ? new Text(toolStatusLine(theme, "stopped", "Cancelled"), 0, 0)
+      : undefined;
+  if (options.expanded || options.nested)
+    return expandedBody(
+      cancelled,
+      record && expandedFacts(record, view, theme),
+      options.expanded ? expandedDetails(record, raw, error, theme) : undefined,
+    );
+  const container = new Container();
+  if (cancelled) container.addChild(cancelled);
+  if (record) for (const fact of collapsedFacts(record, view, theme)) container.addChild(fact);
+  if (hasHiddenDetails(record, raw, error))
     container.addChild(new Text(renderExpansionAffordance("details", false, theme), 0, 0));
   return container;
 }

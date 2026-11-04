@@ -22,14 +22,11 @@ export function renderProfileDashboard(
   const height = Math.max(0, Math.floor(options.height));
   const inner = Math.max(0, width - 2);
   const frame = listDetailFrame(options.theme);
-  const tab = (id: "session" | "saved", label: string) => {
-    const active = state.tab === id;
-    const text = `${active ? "[" : " "}${label}${active ? "]" : " "}`;
-    return options.theme.fg(
-      active ? "accent" : "muted",
-      active ? options.theme.bold(options.theme.underline(text)) : text,
-    );
-  };
+  // Tabs read like the questionnaire's: the current one highlighted, the others muted.
+  const tab = (id: "session" | "saved", label: string) =>
+    state.tab === id
+      ? options.theme.bg("selectedBg", options.theme.fg("text", ` ${label} `))
+      : options.theme.fg("muted", ` ${label} `);
   const header = managerTabs(
     [tab("session", "Current Session"), tab("saved", "Saved profiles")],
     state.tab === "session" ? 0 : 1,

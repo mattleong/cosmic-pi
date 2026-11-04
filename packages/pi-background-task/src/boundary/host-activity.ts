@@ -13,6 +13,7 @@ import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import {
   isActiveTaskState,
   sortTasksByActivity,
@@ -49,6 +50,23 @@ const firstFailure = (task: BackgroundTaskView): string | undefined => {
     : sanitizeDiagnosticContent(sanitizeTerminalLine(first), { maximumLength: 512 });
 };
 
+const LATEST_LINE_EVENTS = 8;
+
+/** The last line a live task printed, so its widget row shows progress rather than a timer. */
+const latestOutputLine = (task: BackgroundTaskView): string | undefined => {
+  if (!isActiveTaskState(task.state)) return undefined;
+  for (const event of Arr.reverse(task.logs.slice(-LATEST_LINE_EVENTS))) {
+    const line = Arr.findLast(Str.split(event.text, "\n"), (part) =>
+      Str.isNonEmpty(Str.trim(part)),
+    );
+    if (Option.isSome(line))
+      return sanitizeDiagnosticContent(sanitizeTerminalLine(Str.trim(line.value)), {
+        maximumLength: 200,
+      });
+  }
+  return undefined;
+};
+
 export function backgroundTaskActivityItems(
   projection: BackgroundTaskProjection,
 ): readonly ActivityItem[] {
@@ -64,8 +82,9 @@ export function backgroundTaskActivityItems(
         title,
         status: ACTIVITY_STATUS[task.state],
         revision: `${task.startedAt}:${task.state}:${task.logCursor}`,
-        // A failure leads with its cause, so the live widget can say why without opening it.
-        summary: firstFailure(task) ?? taskStateLabel(task.state),
+        // A failure leads with its cause and live work with its latest output, so the widget
+        // can say why or how far without opening it.
+        summary: firstFailure(task) ?? latestOutputLine(task) ?? taskStateLabel(task.state),
         awaited: task.awaited === true,
         startedAt: task.startedAt,
         updatedAt: task.endedAt ?? task.logs.at(-1)?.timestamp ?? task.startedAt,

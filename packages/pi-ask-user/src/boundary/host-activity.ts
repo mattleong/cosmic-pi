@@ -10,6 +10,19 @@ import type { QuestionnaireActivity } from "../questionnaire/service.ts";
 import { titleLabel } from "../ui/layout.ts";
 import { RESUME_HINT, type AskUserDialogBridge } from "./host-ui.ts";
 
+// The same words the questionnaire tool rows use for each state.
+const PHASE_SUMMARIES = {
+  open: "waiting for your answers",
+  // Activity renders a hidden row's summary verbatim as its resume affordance.
+  hidden: RESUME_HINT,
+  closing: "closing",
+} as const;
+const SETTLED_SUMMARIES = {
+  submitted: "answered",
+  cancelled: "cancelled",
+  failed: "failed",
+} as const;
+
 interface Row {
   readonly item: ActivityItem;
   readonly cancel?: Effect.Effect<void>;
@@ -55,7 +68,7 @@ export function createQuestionnaireActivity(options: {
             kind: "question",
             title: Arr.join(
               Arr.map(questions, (question) => titleLabel(question.title)),
-              " / ",
+              ", ",
             ),
             status: "pending",
             revision: "",
@@ -85,7 +98,7 @@ export function createQuestionnaireActivity(options: {
             status: outcome === "submitted" ? "done" : outcome,
             inputTarget: undefined,
             blockedReason: undefined,
-            summary: outcome,
+            summary: SETTLED_SUMMARIES[outcome],
             actions: [],
           },
         });
@@ -115,8 +128,7 @@ export function createQuestionnaireActivity(options: {
             status: "needs-input",
             inputTarget: "user",
             blockedReason: undefined,
-            // Activity renders a hidden row's summary verbatim as its resume affordance.
-            summary: event.phase === "hidden" ? RESUME_HINT : event.phase,
+            summary: PHASE_SUMMARIES[event.phase],
             actions: event.phase === "hidden" ? [resumeAction, cancelAction] : [cancelAction],
           },
         });

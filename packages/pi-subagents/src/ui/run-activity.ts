@@ -107,6 +107,25 @@ const runIdentity = (run: SubagentRunView): string =>
     run.writerCleanupQuarantined ?? null,
   ]);
 
+const LIVE_TARGET_WIDTH = 160;
+
+/** What a running agent is doing now, phrased: `running bash · sleep 25`, or its last progress. */
+const liveActivity = (run: SubagentRunView): string | undefined => {
+  if (run.state !== "running") return undefined;
+  const tool = Arr.findLast(
+    run.sessionEvents,
+    (event) => event.type === "tool" && event.state === "running",
+  );
+  if (Option.isSome(tool) && tool.value.type === "tool") {
+    const { toolName, target } = tool.value;
+    const shown = target && Str.trim(Str.split(Str.trim(target), "\n")[0] ?? "");
+    return shown
+      ? `running ${toolName} · ${Fn.pipe(shown, Str.slice(0, LIVE_TARGET_WIDTH))}`
+      : `running ${toolName}`;
+  }
+  return run.currentTool ? `running ${run.currentTool}` : run.progress;
+};
+
 const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
   const reason = run.state === "failed" ? userRunText(run).error : undefined;
   const cleanup = runCleanupAttention(run);
@@ -117,7 +136,7 @@ const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
         ? "Writer admission is blocked by another run's cleanup"
         : reason
           ? Str.split(reason, "\n")[0]
-          : (run.currentTool ?? run.progress);
+          : (liveActivity(run) ?? run.progress);
   return summary
     ? { summary: sanitizeDiagnosticContent(summary, { maximumLength: ACTIVITY_LIMITS.text }) }
     : {};

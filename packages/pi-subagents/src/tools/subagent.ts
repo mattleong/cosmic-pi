@@ -7,7 +7,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { expandedSection, withCodePreviewShell } from "pi-code-previews";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, type Component } from "@earendil-works/pi-tui";
 import { createSubagentCompactSummary } from "./compact-summary.ts";
 import { isTypedReceipt, requestedRunIds, type SummaryArguments } from "./compact-heading.ts";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
@@ -27,6 +27,7 @@ import {
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
 import { hasReturnedFailureEvidence } from "./outcome.ts";
 import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
+import { indentedBody } from "../ui/agent-text.ts";
 import { rejectionAwareCall } from "./render-preview.ts";
 import { hasRecordedFailure } from "./failure-details.ts";
 import {
@@ -333,35 +334,39 @@ export function registerSubagentTools(
     const wrapped = shell(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       expandedContent: {
+        // Expanded bodies indent beneath the heading, as every workspace tool's do.
         renderCall: (args, theme, context) => {
-          if (
-            tool.name === SUBAGENT_TOOL_NAME.start &&
-            "agents" in args &&
-            Arr.isArray(args.agents)
-          )
-            return renderSubagentStartCall(args.agents, theme, true, true);
-          // Run IDs are opaque; the result names each run and lists its ID among its details.
-          const ids = requestedRunIds(args);
-          if (
-            ids &&
-            (tool.name === SUBAGENT_TOOL_NAME.await || tool.name === SUBAGENT_TOOL_NAME.lifecycle)
-          )
-            return renderRequestedRuns(
-              ids,
-              {
-                until: awaitUntil(args),
-                ...("timeoutSeconds" in args &&
-                  Predicate.isNumber(args.timeoutSeconds) && {
-                    timeoutSeconds: args.timeoutSeconds,
-                  }),
-              },
-              tool.name,
-              theme,
-              context.toolCallId,
-            );
-          if (tool.name === SUBAGENT_TOOL_NAME.workspace)
-            return renderWorkspaceCallArguments(decodeCallArguments(args), theme);
-          return renderSubagentInputContent(decodeCallArguments(args), theme);
+          const content = (): Component => {
+            if (
+              tool.name === SUBAGENT_TOOL_NAME.start &&
+              "agents" in args &&
+              Arr.isArray(args.agents)
+            )
+              return renderSubagentStartCall(args.agents, theme, true, true);
+            // Run IDs are opaque; the result names each run and lists its ID among its details.
+            const ids = requestedRunIds(args);
+            if (
+              ids &&
+              (tool.name === SUBAGENT_TOOL_NAME.await || tool.name === SUBAGENT_TOOL_NAME.lifecycle)
+            )
+              return renderRequestedRuns(
+                ids,
+                {
+                  until: awaitUntil(args),
+                  ...("timeoutSeconds" in args &&
+                    Predicate.isNumber(args.timeoutSeconds) && {
+                      timeoutSeconds: args.timeoutSeconds,
+                    }),
+                },
+                tool.name,
+                theme,
+                context.toolCallId,
+              );
+            if (tool.name === SUBAGENT_TOOL_NAME.workspace)
+              return renderWorkspaceCallArguments(decodeCallArguments(args), theme);
+            return renderSubagentInputContent(decodeCallArguments(args), theme);
+          };
+          return indentedBody(theme, content());
         },
         renderResult: (result, options, theme, context) => {
           // The requested line beside this result draws later and names its runs from here.
@@ -374,11 +379,9 @@ export function registerSubagentTools(
             context,
           });
           if (!summary)
-            return renderSubagentResult(
-              { content: result.content },
-              options.isPartial,
-              true,
+            return indentedBody(
               theme,
+              renderSubagentResult({ content: result.content }, options.isPartial, true, theme),
             );
           if (issueCarriesFailure(result, options.isPartial, context)) return new Container();
           const content = renderSubagentExpandedContent(result, options.isPartial, theme, {

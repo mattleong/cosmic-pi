@@ -5,15 +5,17 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 
+import { withNewContextLineNumbers } from "../../diff/parse";
 import { ownField, ownObject, type HostObject } from "../../shared/untrusted-value";
 
 export function isTruncated(details: HostObject | undefined): boolean {
   return ownField(ownObject(details, "truncation"), "truncated") === true;
 }
 
+/** Pi's edit diff, with context lines numbered by their position in the edited file. */
 export function getEditDiff(details: HostObject | undefined): string | undefined {
   const diff = ownField(details, "diff");
-  return Predicate.isString(diff) ? diff : undefined;
+  return Predicate.isString(diff) ? withNewContextLineNumbers(diff) : undefined;
 }
 
 export function getTextContent(

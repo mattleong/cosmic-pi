@@ -3,10 +3,10 @@ import {
   KeybindingsManager as TuiKeybindingsManager,
   setKeybindings,
   TUI_KEYBINDINGS,
-  Text,
   type SettingItem,
 } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import {
   extensionApiFixture,
   extensionContextFixture,
@@ -26,8 +26,13 @@ import {
   createSettingsGroupSubmenu,
   createSettingsListSurface,
   managerSettingsTheme,
+  settingsSurfaceHeader,
   type SettingsSurfaceItem,
+  withSettingsGroupChildren,
 } from "../../src/manager/settings-surface.ts";
+import { managerTable } from "../../src/manager/table.ts";
+import { keyHintBar, keyHintRows, moveKeyHint, keyHint } from "../../src/manager/key-labels.ts";
+import { renderExpansionAffordance } from "../../src/tool/presentation.ts";
 import type { CosmicFooterContribution } from "../../src/protocol/protocol.ts";
 import { cosmicUiSettingsItems } from "../../src/settings/controller.ts";
 
@@ -113,7 +118,7 @@ const listTheme = managerSettingsTheme(plainTheme);
 
 const settingsSurface = (items: SettingsSurfaceItem[], title: string) => {
   const created = createSettingsListSurface({
-    header: new Text(title, 1, 1),
+    header: settingsSurfaceHeader(plainTheme, title),
     items,
     height: items.length,
     listTheme,
@@ -150,12 +155,143 @@ const cosmicUiSettingsFrames = (): string[] => {
   lines.push(...frame("Settings · expanded help", render, 100));
   surface.handleInput?.("?");
   lines.push(...frame("Settings · narrow", render, 57));
+  surface.handleInput?.("\r");
+  lines.push(...frame("Settings · choice list", render, 57));
+  surface.handleInput?.(ESC);
+  surface.handleInput?.("?");
+  lines.push(...frame("Settings · expanded help, wrapped between pairs", render, 57));
+  surface.handleInput?.("?");
   surface.handleInput?.("/");
   surface.handleInput?.("g");
   surface.handleInput?.("i");
   lines.push(...frame("Settings · filtering", render, 100));
+  surface.handleInput?.("\r");
+  lines.push(...frame("Settings · filter kept after Enter (Esc Clear)", render, 57));
+  surface.handleInput?.(ESC);
+  surface.handleInput?.("/");
+  for (const key of "zzz") surface.handleInput?.(key);
+  surface.handleInput?.("\r");
+  lines.push(...frame("Settings · filter applied, nothing matches", render, 57));
   return lines;
 };
+
+const scopeGroup = (name: string, own: boolean): SettingsSurfaceItem => ({
+  kind: "group",
+  id: `group:${name}`,
+  label: name,
+  description: `Delegation and nesting limits for the ${Str.toLowerCase(name)} scope.`,
+  currentValue: own ? "normal · 32 children · depth 3 · 16 active" : "inherit all",
+  children: [
+    {
+      id: `${name}:delegation`,
+      label: "Delegation",
+      currentValue: own ? "normal" : "inherit (normal)",
+      values: ["inherit", "normal", "eager", "off"],
+    },
+    {
+      id: `${name}:maxChildren`,
+      label: "Max children",
+      currentValue: own ? "32" : "inherit (32)",
+      values: ["inherit", "8", "16", "32"],
+    },
+    {
+      id: `${name}:maxDepth`,
+      label: "Max depth",
+      currentValue: own ? "3" : "inherit (3)",
+      values: ["inherit", "1", "2", "3"],
+    },
+    {
+      id: `${name}:maxActive`,
+      label: "Max active",
+      currentValue: own ? "16" : "inherit (16)",
+      values: ["inherit", "4", "8", "16"],
+    },
+  ],
+});
+
+const scopedSettingsFrames = (): string[] => {
+  const surface = settingsSurface(
+    withSettingsGroupChildren(
+      [
+        {
+          id: "workspace",
+          label: "Writer workspace",
+          description: "Default for writers that don't set isolation.",
+          currentValue: "shared-checkout",
+          values: ["shared-checkout", "worktree"],
+        },
+        scopeGroup("Session", false),
+        scopeGroup("Global", true),
+        scopeGroup("Project", false),
+      ],
+      listTheme,
+      () => undefined,
+    ),
+    "Subagents settings",
+  );
+  const render = (width: number) => surface.render(width);
+  const lines = [...frame("Settings · rows grouped by scope", render, 100)];
+  lines.push(...frame("Settings · rows grouped by scope", render, 57));
+  surface.handleInput?.(DOWN);
+  surface.handleInput?.(DOWN);
+  surface.handleInput?.("\r");
+  lines.push(...frame("Settings · inside a scope group", render, 57));
+  return lines;
+};
+
+const tableFrames = (): string[] => {
+  const rows = [
+    ["scout", "openai-codex/gpt-6-luna", "low", ""],
+    ["planner", "claude-bridge/claude-opus-5-5", "high", ""],
+    ["oracle", "openai-codex/gpt-6-astra", "xhigh", ""],
+  ];
+  const columns = [
+    { minWidth: 8, priority: 5 },
+    { minWidth: 8, priority: 4 },
+    { minWidth: 5, priority: 3 },
+    { minWidth: 11, priority: 1 },
+  ];
+  const render = (width: number) => {
+    const table = managerTable(rows, columns, width - 2);
+    return Arr.map(rows, (row) => `  ${table.row(row)}`);
+  };
+  return [
+    ...frame("Table · an all-empty column takes no space", render, 100),
+    ...frame("Table · an all-empty column takes no space", render, 57),
+  ];
+};
+
+const hintFrames = (): string[] => {
+  const hint = keyHintBar(
+    {
+      hints: [
+        moveKeyHint("↑↓"),
+        keyHint("Enter", "Inspect"),
+        keyHint("x", "Stop"),
+        keyHint("c", "Clear finished"),
+      ],
+      more: [keyHint("j/k", "Move"), keyHint("PgUp/PgDn", "Page"), keyHint("gg/G", "Ends")],
+      exit: "top",
+      exitAliases: ["C-c", "q"],
+    },
+    true,
+  );
+  const render = (width: number) => keyHintRows(hint, width);
+  return [
+    ...frame("Hint bar · wraps between pairs", render, 57),
+    ...frame("Hint bar · wraps between pairs", render, 40),
+  ];
+};
+
+const affordanceFrames = (): string[] =>
+  frame(
+    "Expansion affordance · collapsed and expanded",
+    () => [
+      renderExpansionAffordance("output", false, plainTheme),
+      renderExpansionAffordance("output", true, plainTheme),
+    ],
+    57,
+  );
 
 const panelLines = [
   "Status: ready",
@@ -294,6 +430,10 @@ export const sharedSurfaceGalleryLines = (): string[] => {
     ...footerFrames("auto"),
     ...cosmicUiSettingsFrames(),
     ...groupedSettingsFrames(),
+    ...scopedSettingsFrames(),
     ...panelFrames(),
+    ...tableFrames(),
+    ...hintFrames(),
+    ...affordanceFrames(),
   ];
 };

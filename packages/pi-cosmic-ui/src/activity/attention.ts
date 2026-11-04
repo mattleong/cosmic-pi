@@ -88,8 +88,11 @@ export const activityAttentionLabels = (counts: ActivityAttentionCounts): string
     Str.isNonEmpty,
   );
 
+/** The same words as `activityAttentionLabels`, with parent waits shortened, for tight rows. */
 export const compactNotices = (attention: ActivityAttentionCounts): string[] => [
-  ...(attention.user ? [`${attention.user} ${attention.user === 1 ? "needs" : "need"} you`] : []),
+  ...(attention.user
+    ? [`${attention.user} ${attention.user === 1 ? "needs" : "need"} your input`]
+    : []),
   ...(attention.parent ? [`${attention.parent} waiting`] : []),
   ...(attention.blocked ? [`${attention.blocked} blocked`] : []),
   ...(attention.failed ? [`${attention.failed} failed`] : []),

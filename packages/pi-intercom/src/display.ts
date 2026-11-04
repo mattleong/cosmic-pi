@@ -1,55 +1,30 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { countLabel } from "pi-cosmic-core/display";
+import { authoredTextLines, expandedDetails } from "pi-code-previews";
+import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
+import { abbreviateHomePath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
-import { clipToWidth } from "pi-cosmic-ui/manager";
-import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 
-/** Wrapped rows a collapsed message or reply shows before its expansion affordance. */
-export const COLLAPSED_BODY_ROWS = 10;
-
-const bodyLines = (text: string): ReadonlyArray<string> =>
-  Fn.pipe(
-    stripTerminalControls(text),
-    Str.replace(/\t/gu, "  "),
-    Str.replace(/^\n+/u, ""),
-    Str.trimEnd,
-    Str.split("\n"),
-  );
+/** Words a session wrote, without terminal escape sequences that would restyle the view. */
+export const sessionText = (text: string): string => stripTerminalControls(text);
 
 /**
- * Text an agent wrote, with its line breaks. Collapsed, it shows at most
- * {@link COLLAPSED_BODY_ROWS} wrapped rows and says how many more expansion shows.
+ * Text a session wrote, rendered as markdown the way Pi renders assistant text. Collapsed, it shows
+ * about ten wrapped rows and says how many more expansion shows.
  */
 export const textBody = (
   text: string,
-  theme: Pick<Theme, "fg">,
+  theme: Pick<Theme, "fg" | "bold">,
   expanded: boolean,
-  color: "toolOutput" | "text" = "toolOutput",
 ): Component => {
-  const lines = bodyLines(text);
   let cached: { readonly width: number; readonly rows: string[] } | undefined;
   return {
     render(width) {
       if (!Number.isFinite(width) || width < 1) return [];
       if (cached?.width === width) return cached.rows;
-      const wrapped = Arr.flatMap(lines, (line) =>
-        line === "" ? [""] : wrapTextWithAnsi(line, width),
-      );
-      const shown = expanded ? wrapped : wrapped.slice(0, COLLAPSED_BODY_ROWS);
-      const rows = Arr.map(shown, (row) => theme.fg(color, row));
-      const hidden = wrapped.length - shown.length;
-      if (hidden > 0)
-        rows.push(
-          clipToWidth(
-            renderExpansionAffordance(countLabel(hidden, "more line"), false, theme),
-            width,
-            "",
-          ),
-        );
+      const rows = authoredTextLines(sessionText(text), width, theme, { expanded, indent: 0 });
       cached = { width, rows };
       return rows;
     },
@@ -63,13 +38,22 @@ export const textBody = (
 export const statusLine = (text: string, theme: Pick<Theme, "fg">): Component =>
   new Text(theme.fg("muted", sanitizeTerminalLine(text)), 0, 0);
 
-/** The technical facts expansion adds below a row, such as a session's id and directory. */
-export const detailsLine = (parts: ReadonlyArray<string>, theme: Pick<Theme, "fg">): Component =>
-  new Text(
-    theme.fg(
-      "dim",
-      Arr.join(Arr.filter(Arr.map(parts, sanitizeTerminalLine), Str.isNonEmpty), " · "),
+/** A working directory as people read it, with the home directory shortened to `~`. */
+export const displayDirectory = (cwd: string): string =>
+  abbreviateHomePath(sanitizeTerminalLine(cwd), nodeDisplayHomeDirectory());
+
+/** The expanded `Details` section: a session's full id and its directory. */
+export const sessionDetails = (
+  theme: Pick<Theme, "fg">,
+  sessionId: string,
+  cwd: string | undefined,
+): Component =>
+  expandedDetails(theme, [
+    Arr.join(
+      Arr.filter(
+        [`Session ${sanitizeTerminalLine(sessionId)}`, displayDirectory(cwd ?? "")],
+        Str.isNonEmpty,
+      ),
+      " · ",
     ),
-    0,
-    0,
-  );
+  ]);

@@ -73,12 +73,16 @@ export function editOperationInputs(args: HostObject | undefined): Array<HostObj
   return Arr.isArray(edits) ? Arr.map(edits, (edit) => hostObject(edit)) : [args];
 }
 
-export function getEditPreviewOperations(args: HostObject | undefined): EditPreviewOperation[] {
+/** Every requested replacement with both texts, including one that would change nothing. */
+export function getEditOperations(args: HostObject | undefined): EditPreviewOperation[] {
   return Arr.flatMap(editOperationInputs(args), (edit) => {
     const oldText = ownField(edit, "oldText") ?? ownField(edit, "old_text");
     const newText = ownField(edit, "newText") ?? ownField(edit, "new_text");
-    return Predicate.isString(oldText) && Predicate.isString(newText) && oldText !== newText
-      ? [{ oldText, newText }]
-      : [];
+    return Predicate.isString(oldText) && Predicate.isString(newText) ? [{ oldText, newText }] : [];
   });
+}
+
+/** Replacements a diff can show: those that change something. */
+export function getEditPreviewOperations(args: HostObject | undefined): EditPreviewOperation[] {
+  return Arr.filter(getEditOperations(args), ({ oldText, newText }) => oldText !== newText);
 }

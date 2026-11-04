@@ -4,6 +4,7 @@ import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
 import { invokeBestEffort, invokeHostCallback } from "pi-cosmic-core/host-session";
 import {
@@ -19,8 +20,8 @@ import {
   keyHint,
   keyHintBar,
   moveKeyHint,
+  keyHintRows,
   settingAffordanceHint,
-  wrapKeyHints,
   type KeyHintBar,
   type SettingAffordance,
 } from "./key-labels.ts";
@@ -96,6 +97,8 @@ export interface SettingsHintOptions {
   readonly level: "top" | "nested";
   readonly expanded: boolean;
   readonly searching?: boolean | undefined;
+  /** A filter is applied after typing ended; Esc clears it before it closes the surface. */
+  readonly filtered?: boolean | undefined;
   readonly filterable?: boolean | undefined;
 }
 
@@ -130,6 +133,14 @@ export const settingsListHint = (list: Component, options: SettingsHintOptions):
   const enter = affordance && settingAffordanceHint(affordance);
   if (options.searching)
     return joinKeyHints(["Type to filter", moveKeyHint(), enter, keyHint("Esc", "Clear")]);
+  if (options.filtered)
+    return keyHintBar(
+      {
+        hints: [moveKeyHint(), enter, keyHint("/", "Filter"), keyHint("Esc", "Clear")],
+        more: [keyHint("j/k", "Move"), keyHint("gg/G", "Ends"), keyHint("q", "Close")],
+      },
+      options.expanded,
+    );
   return keyHintBar(
     {
       hints: [moveKeyHint(), enter, options.filterable === true && keyHint("/", "Filter")],
@@ -238,14 +249,20 @@ const settingsSearchInput = (child: Component) => {
 
 const isValueGetter = Schema.is(ForeignCallable<[]>());
 
-// An idle, empty filter prompt is noise; the hint advertises `/ Filter` instead.
-const hasEmptySearchInput = (child: Component): boolean => {
+/** The child's filter text, or none when it has no readable filter input. */
+const searchFilterText = (child: Component): Option.Option<string> => {
   const input = settingsSearchInput(child);
   const getValue = input?.getValue;
-  if (!isValueGetter(getValue)) return false;
-  const value = invokeHostCallback<unknown>(() => getValue.call(input), undefined);
-  return Option.contains(decodeHintText(value), "");
+  if (!isValueGetter(getValue)) return Option.none();
+  return decodeHintText(invokeHostCallback<unknown>(() => getValue.call(input), undefined));
 };
+
+// An idle, empty filter prompt is noise; the hint advertises `/ Filter` instead.
+const hasEmptySearchInput = (child: Component): boolean =>
+  Option.contains(searchFilterText(child), "");
+
+const hasAppliedFilter = (child: Component): boolean =>
+  Option.exists(searchFilterText(child), Str.isNonEmpty);
 
 const clearSettingsFilter = (child: Component): void => {
   const input = settingsSearchInput(child);
@@ -305,9 +322,17 @@ export class VimSettingsAdapter implements Component, Focusable {
     }
   }
 
+  // A filter left applied after typing ends is cleared by Esc before Esc closes the surface.
+  private filterApplied(): boolean {
+    return openSettingsSubmenu(this.child) === undefined && hasAppliedFilter(this.child);
+  }
+
   private handleNavigationInput(data: string, action: FullScreenAction | undefined): boolean {
     if (action === "help") this.helpExpanded = !this.helpExpanded;
-    else if (action === "search") {
+    else if (action === "cancel" && this.filterApplied()) {
+      clearSettingsFilter(this.child);
+      this.helpExpanded = false;
+    } else if (action === "search") {
       this.mode = "search";
       this.helpExpanded = false;
       this.keymap.resetChord();
@@ -349,6 +374,7 @@ export class VimSettingsAdapter implements Component, Focusable {
           level: "top",
           expanded: this.helpExpanded,
           searching: this.mode === "search",
+          filtered: this.mode === "navigation" && this.filterApplied(),
           filterable: this.options.filterable,
         })
       : "";
@@ -362,13 +388,9 @@ export class VimSettingsAdapter implements Component, Focusable {
         clipToWidth(line, safeWidth, ""),
       ),
     );
-    if (!styleHint || !hint) return lines;
-    const rows = wrapKeyHints(hint, Math.max(1, safeWidth - 2));
-    return [
-      ...lines,
-      "",
-      ...Arr.map(rows, (row) => clipToWidth(styleHint(` ${row} `), safeWidth, "")),
-    ];
+    if (!styleHint) return lines;
+    // The trailing blank row keeps the surface off whatever Pi renders below it, such as the footer.
+    return hint ? [...lines, "", ...keyHintRows(hint, safeWidth, styleHint), ""] : [...lines, ""];
   }
 
   invalidate(): void {

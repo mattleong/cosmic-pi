@@ -38,7 +38,7 @@ export {
   outputFailureLine,
   OUTPUT_FAILURE_LINE_LIMIT,
 } from "./src/tools/process-failure";
-export { renderCompactIssues } from "./src/preview/compact-issues";
+export { renderCompactIssues, repeatsIssueMessage } from "./src/preview/compact-issues";
 export { previewIssuesSlot } from "./src/preview/preview-issues";
 export { createBoundedCompactIssuesSchema } from "./src/tools/compact-issues-schema";
 export { planCompactPresentation } from "./src/tools/compact-presentation";
@@ -51,6 +51,7 @@ export {
   type CompactOutcome,
   type CompactStatus,
   type CompactChild,
+  type CompactDetail,
   type CompactSummary,
   type CompactSummaryProvider,
 } from "./src/tools/compact-summary";
@@ -58,6 +59,24 @@ export {
 export { selectCompactChildren, renderCompactChildren } from "./src/preview/compact-children";
 export { compactPlainText, renderCompactRow } from "./src/preview/compact-row";
 export { expandedArguments, expandedSection } from "./src/preview/expanded-section";
+export {
+  expandedAuthoredText,
+  expandedBody,
+  expandedDetails,
+  expandedFields,
+  expandedText,
+  type ExpandedField,
+  type ExpandedLine,
+  type ExpandedTone,
+} from "./src/preview/expanded-body";
+export {
+  authoredText,
+  authoredTextLines,
+  COLLAPSED_AUTHORED_TEXT_ROWS,
+  type AuthoredTextColor,
+  type AuthoredTextOptions,
+  type AuthoredTextTheme,
+} from "./src/preview/authored-text";
 export { escapeControlChars } from "./src/shared/terminal-text";
 export { captureCodePreviewPresentationPolicy } from "./src/preview/presentation-policy";
 export {

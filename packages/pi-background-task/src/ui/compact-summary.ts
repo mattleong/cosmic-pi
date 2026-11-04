@@ -262,12 +262,15 @@ function taskReportSummary(value: BackgroundTaskSnapshot): TaskSummary {
   return { ...task, issues: [...task.issues, ...discardedOutputIssue(value)] };
 }
 
-/** A start that admitted its task reads as done, so its row never goes stale as "running". */
-function startSummary(value: BackgroundTaskSnapshot): TaskSummary {
+/**
+ * A start that admitted its task reads as done, so its row never goes stale as "running". Its
+ * "started" already states the verb, so the row drops the action; a failed start keeps it.
+ */
+function startSummary(value: BackgroundTaskSnapshot, action: string): CompactSummary {
   const task = taskSummary(value);
   return value.state === "starting" || value.state === "running"
-    ? { ...task, metadata: ["started"], outcome: "success" }
-    : task;
+    ? { ...task, action: "", metadata: ["started"], outcome: "success" }
+    : { ...task, action };
 }
 
 function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
@@ -563,7 +566,7 @@ export const projectBackgroundTaskCompactSummary = ({
   result,
   isError,
 }: BackgroundTaskCompactSummaryInput): CompactSummary | undefined => {
-  const action = args.action ?? "task";
+  const action = args.action === undefined ? "task" : backgroundTaskActionLabel(args.action);
   const subject = backgroundTaskCallSubject(args);
   if (phase !== "settled") return { action, subject };
   if (isError) return failureSummary(decodeBackgroundTaskFailure(result?.details), action, subject);
@@ -600,7 +603,7 @@ function settledSummary(
 ): CompactSummary | undefined {
   switch (details.action) {
     case "start":
-      return { ...startSummary(details.snapshot), action };
+      return startSummary(details.snapshot, action);
     case "status":
       return { ...taskReportSummary(details.snapshot), action };
     case "stop":
@@ -629,14 +632,10 @@ export const backgroundTaskCompactSummary: CompactSummaryProvider<BackgroundTask
   args,
   result,
   context,
-}) => {
-  const summary = projectBackgroundTaskCompactSummary({
+}) =>
+  projectBackgroundTaskCompactSummary({
     phase,
     args,
     result: result && { details: result.details },
     isError: context.isError,
   });
-  return summary && args.action
-    ? { ...summary, action: backgroundTaskActionLabel(args.action) }
-    : summary;
-};

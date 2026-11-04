@@ -20,7 +20,7 @@ import {
   activityStatus,
   addAttention,
 } from "./attention.ts";
-import type { ActivityRow } from "./model.ts";
+import { isFinished, type ActivityRow } from "./model.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
 import { renderActivityRow, STATUS_DROP, type ActivityStatusPart } from "./row-render.ts";
 
@@ -99,10 +99,20 @@ const memberStatus = (
       { text: attention, drop: STATUS_DROP.progress },
       { text: reason, drop: STATUS_DROP.state, clip: REASON_MINIMUM_WIDTH },
     ];
-  return [
-    { text: attention },
-    { text: activityElapsed(row, now, width < 60), drop: STATUS_DROP.elapsed },
-  ];
+  const elapsed = activityElapsed(row, now, width < 60);
+  // Beside a status, a bare duration would read as an age: say what it measures.
+  const measured =
+    attention && elapsed ? (isFinished(row) ? `after ${elapsed}` : `· ${elapsed}`) : elapsed;
+  return [{ text: attention }, { text: measured, drop: STATUS_DROP.elapsed }];
+};
+
+/** What running work is doing now, in its producer's words, when that adds to its status. */
+const liveActivity = (row: ActivityRow): string | undefined => {
+  if (row.status !== "running" || row.summary === undefined) return undefined;
+  const summary = Str.trim(Str.split(row.summary, "\n")[0] ?? "");
+  return summary && Str.toLowerCase(summary) !== Str.toLowerCase(activityStatus(row))
+    ? summary
+    : undefined;
 };
 
 export function groupedMemberLine(
@@ -144,6 +154,7 @@ export function groupedMemberLine(
       ...(row.kind === "agent" && row.profile && { profile: row.profile }),
       ...(row.awaited && { awaited: true }),
       ...(row.omittedChildren && { omittedChildren: row.omittedChildren }),
+      ...(!interactive && { activity: liveActivity(row) }),
     },
     width,
     options.theme,

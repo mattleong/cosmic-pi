@@ -70,7 +70,8 @@ for (const style of ["compact", "preview"] as const)
     const expanded = stripAnsi(Arr.join(h.render(160), "\n"));
     for (const marker of [
       "PROGRAM_RETAINED",
-      "mcp__docs__lookup",
+      // The heading names the MCP tool exactly, so its registered name is not repeated.
+      "mcp call docs / lookup",
       "ARGUMENT_RETAINED",
       "FAILURE_RETAINED",
       "DIAGNOSTIC_RETAINED",

@@ -72,3 +72,16 @@ test("attention issues show collapsed with the same message as expanded", () => 
   expect(expanded).toContain("Thewholequestion");
   expect(Fn.pipe(collapsed, Str.includes("Page1"))).toBe(false);
 });
+
+test("expanded detail that only repeats its message is shown once", () => {
+  const issue: CompactIssue = {
+    severity: "error",
+    code: "disabled",
+    message: "Image generation is disabled in config",
+    detail: "Image generation is disabled in config.",
+  };
+  const rows = render([issue], 100, true);
+  expect(Arr.filter(rows, Str.includes("disabled in config"))).toHaveLength(1);
+  const distinct = render([{ ...issue, detail: "Set image.enabled to true" }], 100, true);
+  expect(Arr.some(distinct, Str.includes("image.enabled"))).toBe(true);
+});

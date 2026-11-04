@@ -83,11 +83,20 @@ describe("background task activity provider", () => {
     dispose();
   });
 
-  it("publishes root-only metadata without logs", () => {
-    const items = backgroundTaskActivityItems({ tasks: [task] });
+  it("publishes root-only metadata with only the latest output line of live work", () => {
+    const logs = [
+      { ...task.logs[0]!, text: "private output\n" },
+      { ...task.logs[0]!, cursor: 2, text: "  tick 18  \n\n" },
+    ];
+    const items = backgroundTaskActivityItems({ tasks: [{ ...task, logs }] });
     expect(items[0]?.parent).toBeUndefined();
     expect(JSON.stringify(items)).not.toContain("private output");
     expect(items[0]?.status).toBe("running");
+    expect(items[0]?.summary).toBe("tick 18");
+    const finished = backgroundTaskActivityItems({
+      tasks: [{ ...task, logs, state: "exited", exitCode: 0, endedAt: 2 }],
+    });
+    expect(JSON.stringify(finished)).not.toContain("tick 18");
   });
 
   it("redacts credentials before publishing summaries or selected details", () => {

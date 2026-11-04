@@ -12,7 +12,8 @@ import type {
   BackgroundOutputSkip,
 } from "../task/model.ts";
 
-const STDERR_LABEL = "[stderr] ";
+/** The label every stderr line carries in combined output. */
+export const STDERR_LABEL = "[stderr] ";
 const NEWLINE = 0x0a;
 
 // Bound once: Pi's loader routes each call through an imported binding via an interop proxy,

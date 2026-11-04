@@ -221,11 +221,9 @@ export function openOpenAISettingsMenu(
             });
           }
           return {
-            header: {
-              // The config file is under Diagnostics; a path here truncates at narrow widths.
-              render: () => [theme.fg("accent", theme.bold("Better OpenAI settings")), ""],
-              invalidate() {},
-            },
+            // The shared settings header; the config file is under Diagnostics, since a path
+            // here truncates at narrow widths.
+            header: "Better OpenAI settings",
             items: sections(),
             height: 8,
             onChange: reconcilePicker,

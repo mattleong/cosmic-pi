@@ -7,9 +7,18 @@ import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { getTextContent, previewIssuesSlot } from "pi-code-previews";
+import {
+  expandedAuthoredText,
+  expandedBody,
+  expandedDetails,
+  expandedFields,
+  expandedText,
+  getTextContent,
+  previewIssuesSlot,
+  type ExpandedField,
+  type ExpandedLine,
+} from "pi-code-previews";
 import { countLabel, formatBytes } from "pi-cosmic-core/display";
-import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
@@ -18,7 +27,7 @@ import {
   toolRunningLine,
   type ToolHeader,
 } from "pi-cosmic-ui/tool";
-import { detailsLine, statusLine, textBody } from "../display.ts";
+import { displayDirectory, sessionDetails, sessionText, statusLine, textBody } from "../display.ts";
 import { MAX_READ_BYTES } from "../transport/protocol.ts";
 import {
   SESSION_TOOL,
@@ -67,11 +76,14 @@ const stacked = (parts: ReadonlyArray<Component>): Component => {
   return body;
 };
 
-/** The message a send carries, from its arguments: bounded collapsed, complete expanded. */
-const callBody = (args: SessionToolArgs, theme: Theme, expanded: boolean): Component =>
-  Str.isNonEmpty(args.message ?? "")
-    ? textBody(args.message ?? "", theme, expanded)
-    : new Container();
+/** The message a send carries, from its arguments: bounded collapsed, a complete section expanded. */
+const callBody = (args: SessionToolArgs, theme: Theme, expanded: boolean): Component => {
+  const message = args.message ?? "";
+  if (!Str.isNonEmpty(message)) return new Container();
+  return expanded
+    ? expandedAuthoredText(theme, "Message", sessionText(message))
+    : textBody(message, theme, false);
+};
 
 /**
  * The heading names the session, by name once a result says it; a send's message follows it.
@@ -102,47 +114,67 @@ const STATE_COLORS = {
   unreachable: "warning",
 } as const satisfies Record<ListedSession["state"], "muted" | "accent" | "warning">;
 
-/** A session's label and state; expansion adds its directory and full id. */
-const listedRow = (
-  session: ListedSession,
-  label: string,
-  theme: Theme,
-  expanded: boolean,
-): string =>
+type ListDetails = Extract<SessionToolDetails, { readonly tool: "session_list" }>;
+
+const stateWords = (session: ListedSession): ReadonlyArray<string> => [
+  SESSION_STATE_LABELS[session.state],
+  ...(session.duplicate ? ["duplicate id"] : []),
+];
+
+/** A collapsed preview row: a session's label and state. */
+const listedRow = (session: ListedSession, label: string, theme: Theme): string =>
   Arr.join(
     [
       theme.fg("toolOutput", label),
       theme.fg(STATE_COLORS[session.state], SESSION_STATE_LABELS[session.state]),
       ...(session.duplicate ? [theme.fg("warning", "duplicate id")] : []),
-      ...(expanded
-        ? [
-            theme.fg("dim", sanitizeTerminalLine(session.cwd)),
-            theme.fg("dim", sanitizeTerminalLine(session.sessionId)),
-          ]
-        : []),
     ],
     theme.fg("dim", " · "),
   );
 
-const listBody = (
-  details: Extract<SessionToolDetails, { readonly tool: "session_list" }>,
-  theme: Theme,
-  expanded: boolean,
-): Component => {
+/** Expanded, each session is a labeled row of its state and `~` directory; full ids come last. */
+const listExpanded = (details: ListDetails, theme: Theme): Component => {
+  if (details.sessions.length === 0)
+    return expandedText(theme, undefined, [{ text: "No other live sessions", tone: "muted" }]);
+  const labels = distinctSessionLabels(details.sessions);
+  const label = (index: number) => labels[index] ?? "";
+  const fields = Arr.map(
+    details.sessions,
+    (session, index): ExpandedField => ({
+      label: label(index),
+      lines: [
+        {
+          text: Arr.join([...stateWords(session), displayDirectory(session.cwd)], " · "),
+          tone:
+            session.duplicate || STATE_COLORS[session.state] === "warning"
+              ? "warning"
+              : "toolOutput",
+        },
+      ],
+    }),
+  );
+  const omitted: ReadonlyArray<ExpandedLine> =
+    details.omitted > 0 ? [{ text: `and ${details.omitted} more`, tone: "muted" }] : [];
+  return expandedBody(
+    expandedFields(theme, fields),
+    expandedText(theme, undefined, omitted),
+    expandedDetails(
+      theme,
+      Arr.map(details.sessions, (session, index) => `${label(index)} · ${session.sessionId}`),
+    ),
+  );
+};
+
+const listBody = (details: ListDetails, theme: Theme): Component => {
   if (details.sessions.length === 0) return statusLine("No other live sessions", theme);
   const labels = distinctSessionLabels(details.sessions);
-  const shown = expanded ? details.sessions : details.sessions.slice(0, MAX_COLLAPSED_SESSIONS);
-  const hidden = details.sessions.length - shown.length + (expanded ? 0 : details.omitted);
+  const shown = details.sessions.slice(0, MAX_COLLAPSED_SESSIONS);
+  const hidden = details.sessions.length - shown.length + details.omitted;
   return composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
     const rows = Arr.map(shown, (session, index) =>
-      clipToWidth(
-        listedRow(session, labels[index] ?? sessionSubject(session), theme, expanded),
-        width,
-      ),
+      clipToWidth(listedRow(session, labels[index] ?? sessionSubject(session), theme), width),
     );
-    if (expanded && details.omitted > 0)
-      rows.push(clipToWidth(theme.fg("muted", `and ${details.omitted} more`), width));
     if (hidden > 0)
       rows.push(
         clipToWidth(
@@ -155,16 +187,9 @@ const listBody = (
   });
 };
 
-/** The session's id and directory, and how it was addressed when no session answered. */
-const sessionDetails = (
-  session: SessionView | undefined,
-  to: string | undefined,
-  extra: ReadonlyArray<string>,
-  theme: Theme,
-): Component =>
-  session
-    ? detailsLine([`Session ${session.sessionId}`, session.cwd, ...extra], theme)
-    : detailsLine([`Session ${sanitizeTerminalLine(to ?? "")}`, ...extra], theme);
+/** The `Details` section: the session's id and directory, or how it was addressed. */
+const detailsOf = (session: SessionView | undefined, to: string | undefined, theme: Theme) =>
+  sessionDetails(theme, session?.sessionId ?? to ?? "", session?.cwd);
 
 const DELIVERY_STATUS = {
   woken: "Delivered; it started a turn to read it",
@@ -172,62 +197,100 @@ const DELIVERY_STATUS = {
   held: "Holding until its user's next prompt",
 } as const;
 
-const sendResult = (
-  details: SessionSendDetails | SessionRefusal,
-  to: string | undefined,
-  theme: Theme,
-  expanded: boolean,
-): ReadonlyArray<Component> => {
-  const status =
-    details.outcome === "delivered" && (expanded || details.disposition !== "woken")
-      ? [statusLine(DELIVERY_STATUS[details.disposition], theme)]
-      : [];
-  const session = "session" in details ? details.session : undefined;
-  return expanded ? [...status, sessionDetails(session, to, [], theme)] : status;
-};
+type SendOutcome = SessionSendDetails | SessionRefusal;
+type ReadOutcome = SessionReadContract | SessionRefusal;
 
-const readResult = (
-  details: SessionReadContract | SessionRefusal,
-  to: string | undefined,
-  theme: Theme,
-  expanded: boolean,
-): ReadonlyArray<Component> => {
-  if ("outcome" in details) return expanded ? [sessionDetails(details.session, to, [], theme)] : [];
-  const status = Arr.filter(
+/** Collapsed, a delivery shows how it will be read only when that departs from the usual. */
+const sendCollapsed = (details: SendOutcome, theme: Theme): ReadonlyArray<Component> =>
+  details.outcome === "delivered" && details.disposition !== "woken"
+    ? [statusLine(DELIVERY_STATUS[details.disposition], theme)]
+    : [];
+
+const sendExpanded = (details: SendOutcome, to: string | undefined, theme: Theme): Component =>
+  expandedBody(
+    details.outcome === "delivered"
+      ? expandedFields(theme, [
+          { label: "Delivery", lines: [DELIVERY_STATUS[details.disposition]] },
+        ])
+      : undefined,
+    detailsOf("session" in details ? details.session : undefined, to, theme),
+  );
+
+/** The reply's text, unless the latest message has none to show. */
+const replyText = (details: SessionReadContract): string | undefined =>
+  details.text !== undefined && Str.isNonEmpty(Str.trim(details.text)) ? details.text : undefined;
+
+const readStatus = (details: SessionReadContract): ReadonlyArray<string> =>
+  Arr.filter(
     [
-      details.text === undefined ? "No reply yet" : "",
+      replyText(details) === undefined ? "No reply yet" : "",
       details.state === "busy" ? "Still working" : "",
-      expanded && details.truncated ? `Cut to the first ${formatBytes(MAX_READ_BYTES)}` : "",
     ],
     Str.isNonEmpty,
   );
+
+const readCollapsed = (details: ReadOutcome, theme: Theme): ReadonlyArray<Component> => {
+  if ("outcome" in details) return [];
+  const status = readStatus(details);
+  const reply = replyText(details);
   return [
-    ...(details.text === undefined ? [] : [textBody(details.text, theme, expanded)]),
+    ...(reply === undefined ? [] : [textBody(reply, theme, false)]),
     ...(status.length > 0 ? [statusLine(Arr.join(status, " · "), theme)] : []),
-    ...(expanded ? [sessionDetails(details.session, to, [details.state], theme)] : []),
   ];
 };
 
-const resultContent = (
+/**
+ * Expanded, the reply in full, then the session's state, then its id and directory. A compact
+ * heading already says when there is no reply yet; a preview heading doesn't.
+ */
+const readExpanded = (
+  details: ReadOutcome,
+  to: string | undefined,
+  theme: Theme,
+  compact: boolean,
+): Component => {
+  if ("outcome" in details) return detailsOf(details.session, to, theme);
+  const reply = replyText(details);
+  const noReply: ReadonlyArray<ExpandedField> =
+    reply === undefined && !compact
+      ? [{ label: "Reply", lines: [{ text: "No reply yet", tone: "muted" }] }]
+      : [];
+  return expandedBody(
+    expandedAuthoredText(theme, "Reply", reply && sessionText(reply)),
+    expandedFields(theme, [
+      ...noReply,
+      { label: "State", lines: [SESSION_STATE_LABELS[details.state]] },
+      ...(details.truncated
+        ? [{ label: "Length", lines: [`Cut to the first ${formatBytes(MAX_READ_BYTES)}`] }]
+        : []),
+    ]),
+    detailsOf(details.session, to, theme),
+  );
+};
+
+const collapsedContent = (details: SessionToolDetails, theme: Theme): ReadonlyArray<Component> => {
+  if (details.tool === SESSION_TOOL.list) return [listBody(details, theme)];
+  if (details.tool === SESSION_TOOL.send) return sendCollapsed(details, theme);
+  return readCollapsed(details, theme);
+};
+
+const expandedContent = (
   details: SessionToolDetails,
   args: SessionToolArgs,
   theme: Theme,
-  expanded: boolean,
-): ReadonlyArray<Component> => {
-  if (details.tool === SESSION_TOOL.list) return [listBody(details, theme, expanded)];
-  if (details.tool === SESSION_TOOL.send) return sendResult(details, args.to, theme, expanded);
-  return readResult(details, args.to, theme, expanded);
+  compact: boolean,
+): Component => {
+  if (details.tool === SESSION_TOOL.list) return listExpanded(details, theme);
+  if (details.tool === SESSION_TOOL.send) return sendExpanded(details, args.to, theme);
+  return readExpanded(details, args.to, theme, compact);
 };
 
 /** A result whose details don't decode shows the text the agent read, as before. */
 const fallbackText = (result: AgentToolResult<unknown>, theme: Theme): Component =>
-  new Text(
-    theme.fg(
-      "toolOutput",
-      Fn.pipe(stripTerminalControls(getTextContent(result.content)), Str.replace(/\n+$/u, "")),
-    ),
-    0,
-    0,
+  expandedText(
+    theme,
+    undefined,
+    Fn.pipe(getTextContent(result.content), Str.replace(/\n+$/u, ""), Str.split("\n")),
   );
 
 const settledTarget = (details: SessionToolDetails): string => {
@@ -248,7 +311,9 @@ export const renderSessionResult =
     const target = details ? settledTarget(details) : "";
     context.state.sessionTarget = Str.isNonEmpty(target) ? target : undefined;
     if (!details) return options.expanded ? fallbackText(result, theme) : new Container();
-    return stacked(resultContent(details, context.args, theme, options.expanded));
+    return options.expanded
+      ? expandedContent(details, context.args, theme, false)
+      : stacked(collapsedContent(details, theme));
   };
 
 /** Content compact expansion shows below the shared heading and issues. */
@@ -263,7 +328,7 @@ export const sessionExpandedContent = (tool: SessionToolName) => ({
   ): Component => {
     const details = sessionToolDetails(tool, result);
     return details
-      ? stacked(resultContent(details, context.args, theme, true))
+      ? expandedContent(details, context.args, theme, true)
       : fallbackText(result, theme);
   },
 });

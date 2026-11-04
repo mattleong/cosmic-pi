@@ -150,7 +150,7 @@ const needsYouLine = (
   const first = waiting[0];
   if (!first) return undefined;
   const glyph = managerNoticeGlyph("attention");
-  const prefix = `Needs you${waiting.length > 1 ? ` (${waiting.length})` : ""}: `;
+  const prefix = `Needs your input${waiting.length > 1 ? ` (${waiting.length})` : ""}: `;
   const label = activityOwnerLabel(rows, first, Math.max(0, width - prefix.length - 2));
   const text = `${prefix}${label}`;
   const theme = options.theme;
@@ -186,7 +186,11 @@ export function renderActivityWidget(
   if (width <= 0 || maxRows <= 0) return [];
   const rows = widgetRows(published, options.inputDockVisible);
   const urgent = needsYou(rows);
-  const failures = failureLine(hiddenWidgetFailures(rows, options.now), width, options);
+  const failures = failureLine(
+    hiddenWidgetFailures(rows, options.now, options.inspected),
+    width,
+    options,
+  );
   const reserved = Number(failures !== undefined);
   let sections = activityWidgetSections(rows, maxRows, { ...options, reserved });
   // Waiting rows the checklist already shows need no heading; only the unseen ones do.

@@ -27,6 +27,10 @@ const stringField = (value: ToolArguments | undefined, key: string): string | un
   return Predicate.isString(field) && Str.trim(field) ? Str.trim(field) : undefined;
 };
 
+/** Drops surrounding blank lines and trailing spaces but keeps the first line's indentation. */
+const trimOutput = (text: string): string =>
+  Fn.pipe(text, Str.replace(/^(?:[^\S\n]*\n)+/u, ""), Str.trimEnd);
+
 const eventBytes = new WeakMap<SubagentSessionEvent, number>();
 
 const bytes = (event: SubagentSessionEvent): number => {
@@ -183,7 +187,7 @@ export function finishToolSessionEvent(
   const toolCallId = sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS);
   const outputPreview =
     input.outputPreview &&
-    Str.trim(sanitizeOutputText(input.outputPreview, MAX_TOOL_PREVIEW_CHARS));
+    trimOutput(sanitizeOutputText(input.outputPreview, MAX_TOOL_PREVIEW_CHARS));
   const index = Arr.findLastIndex(
     current,
     (event) => event.type === "tool" && event.toolCallId === toolCallId,

@@ -1,5 +1,5 @@
 import type { ExtensionCommandContext as ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Text, type Component, type SettingsList } from "@earendil-works/pi-tui";
+import type { Component, SettingsList } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
@@ -23,7 +23,9 @@ import type { FullScreenKeymapOptions } from "../manager/keymap.ts";
 import {
   createSettingsListSurface,
   managerSettingsTheme,
+  settingsSurfaceHeader,
   type SettingsSurfaceItem,
+  withSettingsGroupChildren,
 } from "../manager/settings-surface.ts";
 import {
   hasCustomSurface,
@@ -158,9 +160,7 @@ export const openSettingsList = (
       const { header, onCancel, afterInput, onList, ...list } = content(host);
       const created = createSettingsListSurface({
         ...list,
-        header: Predicate.isString(header)
-          ? new Text(theme.fg("accent", theme.bold(header)), 1, 1)
-          : header,
+        header: Predicate.isString(header) ? settingsSurfaceHeader(theme, header) : header,
         listTheme: managerSettingsTheme(theme),
         onCancel: onCancel ?? (() => finish(undefined)),
         matchesKeybinding: guardedKeybindingMatcher(keybindings),
@@ -315,35 +315,41 @@ export function settingsSubcommand<Config>(
       const latest = new Map<string, object>();
       return openSettingsList(
         ctx,
-        ({ tui, finish }) => ({
-          header: `${title} settings`,
-          items,
-          height: Math.min(maxHeight, items.length + 2),
-          onCancel: () => {
-            active = false;
-            finish(undefined);
-          },
-          onChange: (row, value, list) => {
+        ({ tui, theme, finish }) => {
+          // Saves a row and shows the value that persisted, ignoring superseded changes.
+          const change = (row: string, value: string, show: (shown: string) => void) => {
             const [scope, id] = rowSetting(row);
-            const change = {};
-            latest.set(row, change);
-            apply(
+            const token = {};
+            latest.set(row, token);
+            return apply(
               id,
               value,
               (shown) => {
-                if (latest.get(row) !== change) return false;
+                if (latest.get(row) !== token) return false;
                 invokeHostCallback(() => {
-                  list.updateValue(row, shown);
+                  show(shown);
                   tui.requestRender();
                 }, undefined);
                 return true;
               },
               scope,
             ).catch(() => {
-              if (active && latest.get(row) === change) notify(ctx, unavailable, "warning");
+              if (active && latest.get(row) === token) notify(ctx, unavailable, "warning");
             });
-          },
-        }),
+          };
+          const withGroups = withSettingsGroupChildren(items, managerSettingsTheme(theme), change);
+          return {
+            header: `${title} settings`,
+            items: withGroups,
+            height: Math.min(maxHeight, withGroups.length + 2),
+            onCancel: () => {
+              active = false;
+              finish(undefined);
+            },
+            onChange: (row, value, list) =>
+              void change(row, value, (shown) => list.updateValue(row, shown)),
+          };
+        },
         isCurrent,
       );
     };

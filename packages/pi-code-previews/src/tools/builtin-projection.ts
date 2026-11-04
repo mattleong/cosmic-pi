@@ -5,6 +5,7 @@ import * as Rec from "effect/Record";
 import {
   editResultDetail,
   grepResultDetail,
+  pathListResultDetail,
   projectWriteResultDetail,
 } from "./builtin-result-detail";
 import { hostObject, ownField, type HostObject } from "../shared/untrusted-value";
@@ -93,6 +94,10 @@ export function projectBuiltinCompactSummary(
   const counters = [...live.counters, ...settled.counters];
   if (tool === "grep" && counters.length === 0)
     counters.push(...grepCounters(output, decoded.details));
+  if ((tool === "find" || tool === "ls") && counters.length === 0) {
+    const detail = pathListResultDetail(tool, output, decoded.details);
+    if (detail) counters.push(detail);
+  }
   const merged = mergeCompactIssues([...issues, ...settled.issues]);
   return {
     subject,

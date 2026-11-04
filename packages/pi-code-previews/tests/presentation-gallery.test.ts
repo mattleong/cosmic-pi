@@ -1,5 +1,9 @@
 import type * as Schema from "effect/Schema";
-import type { AgentToolResult, ToolRenderers } from "@earendil-works/pi-coding-agent";
+import {
+  generateDiffString,
+  type AgentToolResult,
+  type ToolRenderers,
+} from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
@@ -80,6 +84,26 @@ function registered(style: "compact" | "preview", background?: "border") {
     ]),
   );
 }
+
+const cartBefore = Arr.join(
+  [
+    "export function subtotal(items: LineItem[]): number {",
+    "  return items.reduce((total, item) => total + item.price, 0);",
+    "}",
+    "",
+    "export function applyDiscount(total: number, percent: number): number {",
+    "  return total - total * (percent / 100);",
+    "}",
+  ],
+  "\n",
+);
+const cartAfter = Fn.pipe(
+  cartBefore,
+  Str.replace(
+    "}\n\nexport function applyDiscount",
+    "}\n\nexport function itemCount(items: LineItem[]): number {\n  return items.length;\n}\n\nexport function applyDiscount",
+  ),
+);
 
 const webCall: ToolRenderers = {
   renderCall: (args) => new Text(JSON.stringify(args), 0, 0),
@@ -818,6 +842,12 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "bash",
+    title: "bash success ending in a newline draws no blank row",
+    args: { command: "git --no-pager diff --stat && node --version" },
+    result: text(" src/cart.ts | 4 ++++\n 1 file changed, 4 insertions(+)\nv22.22.1\n\n"),
+  },
+  {
+    tool: "bash",
     title: "bash cancelled",
     args: { command: "pnpm dev" },
     result: text("Command aborted"),
@@ -846,6 +876,18 @@ const scenarios: ReadonlyArray<
     title: "absolute and relative listing paths retain their identity",
     args: { pattern: "*", path: "/project" },
     result: text("/\n/etc/hosts\netc/passwd"),
+  },
+  {
+    tool: "find",
+    title: "find with no matches",
+    args: { pattern: "*.snap", path: "/project" },
+    result: text("No files found matching pattern"),
+  },
+  {
+    tool: "ls",
+    title: "list an empty directory",
+    args: { path: "/project/empty" },
+    result: text("(empty directory)"),
   },
   {
     tool: "ls",
@@ -1061,6 +1103,23 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "edit",
+    title: "edit insertion numbers later context by its new line",
+    args: {
+      path: "/project/src/cart.ts",
+      edits: [
+        {
+          oldText: "}\n\nexport function applyDiscount",
+          newText:
+            "}\n\nexport function itemCount(items: LineItem[]): number {\n  return items.length;\n}\n\nexport function applyDiscount",
+        },
+      ],
+    },
+    result: text("Successfully replaced 1 block(s) in /project/src/cart.ts.", {
+      diff: generateDiffString(cartBefore, cartAfter).diff,
+    }),
+  },
+  {
+    tool: "edit",
     title: "edit without a diff",
     args: editArgs,
     result: text("Successfully replaced text in /project/src/a.ts."),
@@ -1097,8 +1156,9 @@ describe.skipIf(!directory)("presentation gallery", () => {
                   scenario.narrow
                     ? [
                         { expanded: false, width: 16 },
-                        { expanded: false, width: 60 },
+                        { expanded: false, width: 57 },
                         { expanded: true, width: 40 },
+                        { expanded: true, width: 57 },
                       ]
                     : undefined,
                 ),

@@ -1,14 +1,19 @@
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
-import { Text, type Component } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
-import { withCodePreviewMessageShell, type CodePreviewMessagePresenter } from "pi-code-previews";
-import { stripTerminalControls } from "pi-cosmic-core/security";
-import { composeToolComponent } from "pi-cosmic-ui/tool";
+import * as Str from "effect/String";
+import {
+  expandedAuthoredText,
+  expandedBody,
+  expandedText,
+  withCodePreviewMessageShell,
+  type CodePreviewMessagePresenter,
+} from "pi-code-previews";
 import { INTERCOM_MESSAGE_TYPE } from "./delivery.ts";
-import { detailsLine, textBody } from "./display.ts";
+import { sessionDetails, sessionText, textBody } from "./display.ts";
 import { sessionSubject } from "./identity.ts";
 import { MAX_MESSAGE_CHARS, SenderSchema } from "./transport/protocol.ts";
 
@@ -39,9 +44,6 @@ const contentText = (content: string | ReadonlyArray<unknown> | undefined): stri
         "\n",
       );
 
-const stack = (parts: ReadonlyArray<Component>): Component =>
-  composeToolComponent((width) => Arr.flatMap(parts, (part) => part.render(width)));
-
 /**
  * Shows a message from another session as what its sender wrote: who sent it, then the message
  * with its line breaks, bounded collapsed and complete expanded with the sender's session id and
@@ -54,7 +56,8 @@ export const presentIntercomMessage: CodePreviewMessagePresenter = (message, _op
   const from = Option.getOrUndefined(decodeSender(envelope?.details))?.from;
   const text = Option.getOrUndefined(decodeText(envelope?.details))?.text;
   const sender = from ? sessionSubject(from) : "another session";
-  const details = () => (from ? [detailsLine([`Session ${from.sessionId}`, from.cwd], theme)] : []);
+  const details = (): Component | undefined =>
+    from ? sessionDetails(theme, from.sessionId, from.cwd) : undefined;
   const presentation = {
     name: "session_message",
     label: "Session message",
@@ -65,15 +68,20 @@ export const presentIntercomMessage: CodePreviewMessagePresenter = (message, _op
       ...presentation,
       expandLabel: "message",
       expanded: () =>
-        stack([
-          new Text(stripTerminalControls(contentText(envelope?.content)), 0, 0),
-          ...details(),
-        ]),
+        expandedBody(
+          expandedText(
+            theme,
+            "Message",
+            Str.split(sessionText(contentText(envelope?.content)), "\n"),
+          ),
+          details(),
+        ),
     };
   return {
     ...presentation,
-    collapsed: () => textBody(text, theme, false, "text"),
-    expanded: () => stack([textBody(text, theme, true, "text"), ...details()]),
+    collapsed: () => textBody(text, theme, false),
+    expanded: () =>
+      expandedBody(expandedAuthoredText(theme, "Message", sessionText(text)), details()),
   };
 };
 

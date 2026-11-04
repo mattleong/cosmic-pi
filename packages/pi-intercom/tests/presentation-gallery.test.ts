@@ -1,5 +1,6 @@
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, it } from "@effect/vitest";
+import { homedir } from "node:os";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -29,8 +30,10 @@ import {
 import { registerSessionTools } from "../src/tools/register.ts";
 import { listText, readText, refusalText, sendText } from "../src/tools/text.ts";
 
-const web = { sessionId: "019a2f6e-web", name: "web work", cwd: "/Users/example/web" };
-const api = { sessionId: "019a2f6e-api", cwd: "/Users/example/api" };
+// Directories under the home directory show as `~/…`.
+const home = homedir();
+const web = { sessionId: "019a2f6e-web", name: "web work", cwd: `${home}/web` };
+const api = { sessionId: "019a2f6e-api", cwd: `${home}/api` };
 
 const result = (
   text: string,
@@ -50,19 +53,19 @@ const listing: SessionListContract = {
     { ...web, state: "idle", duplicate: false },
     {
       sessionId: "019a2f6e-reloading",
-      cwd: "/Users/example/reloading",
+      cwd: `${home}/reloading`,
       state: "unavailable",
       duplicate: false,
     },
     {
       sessionId: "019a2f6e-old",
-      cwd: "/Users/example/old",
+      cwd: `${home}/old`,
       state: "unresponsive",
       duplicate: false,
     },
     {
       sessionId: "019a2f6e-gone",
-      cwd: "/Users/example/gone",
+      cwd: `${home}/gone`,
       state: "unreachable",
       duplicate: false,
     },
@@ -77,20 +80,20 @@ const sameRepository: SessionListContract = {
   sessions: [
     {
       sessionId: "01a19957-15d8-7047-8e3f-7bccf1353038",
-      cwd: "/Users/example/dev/cosmic-pi",
+      cwd: `${home}/dev/cosmic-pi`,
       state: "idle",
       duplicate: false,
     },
     {
       sessionId: "01a19e61-2b7b-74a4-b983-b7dabe523478",
-      cwd: "/Users/example/dev/dotfiles",
+      cwd: `${home}/dev/dotfiles`,
       state: "idle",
       duplicate: false,
     },
     { ...web, state: "busy", duplicate: false },
     {
       sessionId: "01a1a535-9b8a-73fd-aa1f-8ea278e57905",
-      cwd: "/Users/example/dev/cosmic-pi",
+      cwd: `${home}/dev/cosmic-pi`,
       state: "busy",
       duplicate: false,
     },
@@ -158,6 +161,22 @@ const longMessage = Arr.join(
   ],
   "\n",
 );
+
+const markdownReply = Arr.join(
+  [
+    "The web tests pass. I changed **two** things:",
+    "",
+    "- `header.test.ts` now waits for the toolbar.",
+    "- The fixtures moved to `tests/fixtures/v2`.",
+    "",
+    "```sh",
+    "pnpm test --filter web",
+    "```",
+  ],
+  "\n",
+);
+
+const markdownRead: SessionReadContract = { ...read, text: markdownReply };
 
 const busyRead: SessionReadContract = {
   ...contractEnvelope,
@@ -240,6 +259,12 @@ const scenarios = [
     result: result(readText(read), read),
   },
   {
+    title: "read a reply written in markdown",
+    tool: SESSION_TOOL.read,
+    args: { to: web.sessionId },
+    result: result(readText(markdownRead), markdownRead),
+  },
+  {
     title: "read a busy session with no reply yet",
     tool: SESSION_TOOL.read,
     args: { to: web.sessionId },
@@ -308,6 +333,10 @@ describe.skipIf(!directory)("presentation gallery", () => {
             ...galleryMessageFrames(renderIntercomMessage, {
               title: `${style} · message from another session`,
               message: inboundMessage(inbound.text),
+            }),
+            ...galleryMessageFrames(renderIntercomMessage, {
+              title: `${style} · markdown message from another session`,
+              message: inboundMessage(markdownReply),
             }),
             ...galleryMessageFrames(renderIntercomMessage, {
               title: `${style} · long message from another session`,

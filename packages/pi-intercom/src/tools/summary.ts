@@ -16,6 +16,7 @@ import {
   type ToolRefusalCode,
 } from "./contract.ts";
 import { addresseeSubject, SESSION_STATE_LABELS, sessionSubject } from "../identity.ts";
+import { sessionText } from "../display.ts";
 import { UNCERTAIN_TEXT } from "./text.ts";
 
 const REFUSAL_MESSAGES: Record<ToolRefusalCode, string> = {
@@ -106,15 +107,24 @@ const settled = (details: SessionToolDetails): CompactSummary => {
   if (details.tool === SESSION_TOOL.list) return listSummary(details);
   if ("outcome" in details && details.outcome === "refused") return refusedSummary(details);
   if (details.tool === SESSION_TOOL.read)
-    return {
-      subject: sessionSubject(details.session),
-      metadata: [
-        ...(details.state === "busy" ? ["busy"] : []),
-        ...(details.text === undefined ? ["no reply yet"] : []),
-        ...(details.truncated ? ["truncated"] : []),
-      ],
-      outcome: "success",
-    };
+    // A reply reads as a received message beneath the heading; without one, the heading says so
+    // before routine state, and stays neutral rather than successful.
+    return details.text === undefined || Str.trim(details.text) === ""
+      ? {
+          subject: sessionSubject(details.session),
+          metadata: ["no reply yet", ...(details.state === "busy" ? ["busy"] : [])],
+          outcome: "returned",
+        }
+      : {
+          subject: sessionSubject(details.session),
+          metadata: [
+            ...(details.state === "busy" ? ["busy"] : []),
+            ...(details.truncated ? ["truncated"] : []),
+          ],
+          outcome: "success",
+          messageIcon: "received",
+          quote: sessionText(details.text),
+        };
   if (details.outcome === "uncertain")
     return {
       subject: sessionSubject(details.session),
@@ -149,7 +159,7 @@ export const sessionToolCompactSummary =
       tool === SESSION_TOOL.send &&
       Predicate.isString(args.message) &&
       Str.isNonEmpty(Str.trim(args.message))
-        ? { quote: args.message }
+        ? { quote: sessionText(args.message) }
         : {};
     if (phase !== "settled") return { ...pending(tool, args.to), ...words };
     const details = sessionToolDetails(tool, result);

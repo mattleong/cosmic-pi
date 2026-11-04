@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -25,7 +26,6 @@ import {
 import { aggregateUsage } from "./metrics.ts";
 import {
   duplicateRunNames,
-  formatRunRouteLine,
   formatSessionAge,
   projectRunRoutePresentation,
   shortRunId,
@@ -205,10 +205,23 @@ export const subagentActivityPanelCadence = ({
 const runElapsed = (run: SubagentRunView, now: number): string =>
   formatSessionAge(run.endedAt ?? now, run.startedAt);
 
+/** What a run is doing, phrased as the shared Activity row phrases it: `running bash · sleep 25`. */
 const runActivity = (run: SubagentRunView): string => {
   if (run.state === "waiting_for_parent" || run.state === "paused") return runStateLabel(run.state);
   if (run.state !== "running") return "";
-  return sanitizeTerminalLine(run.currentTool ?? run.progress ?? "");
+  const tool = Arr.findLast(
+    run.sessionEvents,
+    (event) => event.type === "tool" && event.state === "running",
+  );
+  if (Option.isSome(tool) && tool.value.type === "tool") {
+    const target = Str.trim(Str.split(Str.trim(tool.value.target ?? ""), "\n")[0] ?? "");
+    return sanitizeTerminalLine(
+      target ? `running ${tool.value.toolName} · ${target}` : `running ${tool.value.toolName}`,
+    );
+  }
+  return sanitizeTerminalLine(
+    run.currentTool ? `running ${run.currentTool}` : (run.progress ?? ""),
+  );
 };
 
 interface HeaderPart {
@@ -312,23 +325,12 @@ const panelHeader = (
   );
 };
 
-type RunRouteLayout = "full" | "compact" | "model";
-
-const renderRunRoute = (
-  run: SubagentRunView,
-  theme: Theme,
-  layout: RunRouteLayout,
-  dimmed: boolean,
-): string => {
-  if (layout === "full")
-    return dimmed ? theme.fg("dim", formatRunRouteLine(run)) : formatRunRouteLine(run, theme);
-  const { profile, model, narrowModel } = projectRunRoutePresentation(run);
-  const plain = layout === "model" ? `${profile} · ${narrowModel}` : `${profile} ${model}`;
-  if (dimmed) return theme.fg("dim", plain);
-  return layout === "model"
-    ? `${theme.fg("muted", profile)}${theme.fg("dim", " · ")}${theme.fg("toolOutput", narrowModel)}`
-    : `${theme.fg("muted", profile)} ${theme.fg("toolOutput", model)}`;
-};
+/**
+ * A run's profile, as the shared Activity widget names it; the model route belongs to the run's
+ * details, not its live row.
+ */
+const renderRunProfile = (run: SubagentRunView, theme: Theme, dimmed: boolean): string =>
+  theme.fg(dimmed ? "dim" : "muted", projectRunRoutePresentation(run).profile);
 
 const activityIdentity = (
   row: FleetTreeRow,
@@ -350,14 +352,12 @@ const activityIdentity = (
         shortRunId(sanitizeTerminalLine(run.id)),
       )}`
     : "";
-  const messageCount = runMessageCount(panel, run.id);
-  const messages =
-    messageCount > 0 ? theme.fg(ancestorOnly ? "dim" : "muted", ` ← ${messageCount}`) : "";
-  return `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}${messages}`;
+  return `${theme.fg("success", branch)}${theme.fg(identityColor, stateIdentity)}${id}`;
 };
 
+/** The latest message: `→` to the peer it was sent to, `←` from the peer it came from. */
 const messageActivity = (message: RunMessagePreview): string =>
-  `↔ ${message.direction === "out" ? "to" : "from"} ${message.peer}: "${message.text}"`;
+  `${message.direction === "out" ? "→" : "←"} ${message.peer}: "${message.text}"`;
 
 interface ActivityMetadataVariant {
   readonly parts: ReadonlyArray<string>;
@@ -391,7 +391,10 @@ const activityMetadataVariants = (
   const themedActivity = activity ? theme.fg(tone, activity) : "";
   const elapsed = ancestorOnly ? "" : runElapsed(run, now);
   const themedElapsed = elapsed ? theme.fg("dim", elapsed) : "";
+  const messageCount = ancestorOnly ? 0 : runMessageCount(panel, run.id);
+  const messages = messageCount > 0 ? theme.fg("muted", countLabel(messageCount, "message")) : "";
   const variants: ActivityMetadataVariant[] = [
+    { parts: [route, themedActivity, messages, themedElapsed] },
     { parts: [route, themedActivity, themedElapsed] },
     { parts: [route, themedActivity] },
     // A stall warning or recent message outranks the route when the row is too narrow for both.
@@ -452,15 +455,13 @@ const renderActivityRow = (
   const { run } = row;
   const ancestorOnly = !panel.trackedRunIds.has(run.id);
   const identity = activityIdentity(row, panel, theme, now, duplicates, ancestorOnly);
-  const route = renderRunRoute(run, theme, tier === "wide" ? "full" : "model", ancestorOnly);
-  const compactRoute =
-    tier === "wide" ? renderRunRoute(run, theme, "compact", ancestorOnly) : route;
+  const profile = renderRunProfile(run, theme, ancestorOnly);
   const separator = theme.fg("dim", " · ");
-  for (const variant of activityMetadataVariants(run, panel, route, theme, now, ancestorOnly)) {
+  for (const variant of activityMetadataVariants(run, panel, profile, theme, now, ancestorOnly)) {
     const fitted = fitActivityMetadata(identity, variant, width, separator);
     if (fitted !== undefined) return fitted;
   }
-  return clippedActivityRow(identity, compactRoute, width, tier, separator);
+  return clippedActivityRow(identity, profile, width, tier, separator);
 };
 
 export const renderProjectedSubagentActivityPanel = (

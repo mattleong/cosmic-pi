@@ -199,8 +199,11 @@ export const decodeCompactChoices = decodeUnknownOrUndefined(
       Schema.Struct({
         key: Schema.String,
         title: Schema.String,
-        choices: Schema.Array(Schema.Struct({ label: Schema.String })).check(
-          Schema.isMaxLength(MAX_CHOICES),
+        // Text questions have no choices.
+        choices: Schema.optional(
+          Schema.Array(Schema.Struct({ label: Schema.String })).check(
+            Schema.isMaxLength(MAX_CHOICES),
+          ),
         ),
       }),
     ).check(Schema.isMaxLength(MAX_QUESTIONS)),

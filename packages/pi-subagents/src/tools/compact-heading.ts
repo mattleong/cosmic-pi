@@ -43,13 +43,31 @@ const targetIds = Fn.flow(
 export const requestedRunIds = (input: SummaryArguments): string[] | undefined =>
   targetIds(input.runIds);
 
+// Raw arguments: a launch names itself, its custom agent, or its profile.
+const LaunchNaming = Schema.Struct({
+  name: Schema.optional(Schema.String),
+  agent: Schema.optional(Schema.String),
+  profile: Schema.optional(Schema.String),
+});
+const decodeLaunchNaming = Schema.decodeUnknownOption(LaunchNaming);
+
+const launchLabel = (launch: typeof LaunchNaming.Type): string =>
+  Str.trim(launch.name ?? launch.agent ?? launch.profile ?? "");
+
+// A few short names read as a list in the heading; longer batches leave it to the counters.
+const MAX_NAMED_LAUNCHES = 3;
+const MAX_NAMED_LAUNCH_CHARS = 48;
+
+/** The launch's name, or a short batch's names when every launch has one. */
 function startSubject(input: SummaryArguments): string {
-  if (!Arr.isArray(input.agents) || input.agents.length !== 1) return "";
-  const agent: unknown = input.agents[0];
-  if (!Predicate.isObject(agent)) return "";
-  if ("name" in agent && Predicate.isString(agent.name)) return agent.name;
-  if ("agent" in agent && Predicate.isString(agent.agent)) return agent.agent;
-  return "profile" in agent && Predicate.isString(agent.profile) ? agent.profile : "";
+  if (!Arr.isArray(input.agents) || input.agents.length === 0) return "";
+  if (input.agents.length > MAX_NAMED_LAUNCHES) return "";
+  const labels = Arr.map(input.agents, (agent) =>
+    Option.match(decodeLaunchNaming(agent), { onNone: () => "", onSome: launchLabel }),
+  );
+  if (input.agents.length === 1) return labels[0] ?? "";
+  const joined = Arr.join(labels, ", ");
+  return Arr.every(labels, Str.isNonEmpty) && joined.length <= MAX_NAMED_LAUNCH_CHARS ? joined : "";
 }
 
 export function argumentSummary(

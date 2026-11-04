@@ -4,6 +4,7 @@ import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
+import { clipToWidth } from "./chrome.ts";
 import type { FullScreenSelectionKeybindingId } from "./keymap.ts";
 
 const SPECIAL_KEY_LABELS = new Map<string, string>(
@@ -197,6 +198,22 @@ export const wrapKeyHints = (hint: string, width: number): string[] => {
   }
   if (current) rows.push(current);
   return rows;
+};
+
+/**
+ * A hint bar as styled surface rows: wrapped between pairs to fit `width` with a one-column
+ * gutter on each side. Every pair survives, so Move and Esc stay visible at narrow widths.
+ */
+export const keyHintRows = (
+  hint: string,
+  width: number,
+  style: (row: string) => string = Fn.identity,
+): string[] => {
+  const safeWidth = Math.max(0, Math.floor(width));
+  if (safeWidth === 0 || !hint) return [];
+  return Arr.map(wrapKeyHints(hint, Math.max(1, safeWidth - 2)), (row) =>
+    clipToWidth(style(` ${row}`), safeWidth),
+  );
 };
 
 export const configuredKeyLabels = (

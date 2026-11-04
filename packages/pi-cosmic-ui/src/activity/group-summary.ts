@@ -79,8 +79,10 @@ export const endedWorkLabels = (summary: Pick<GroupSummary, "stopped">): string[
 const finishedWork = (summary: GroupSummary): number =>
   Math.max(0, summary.terminal - summary.stopped - summary.attention.failed);
 
-export const groupSummaryLabels = (summary: GroupSummary): string[] => [
-  ...compactNotices(summary.attention),
+// Section rows use the same attention words as the title and the Needs-your-input banner;
+// compact rows shorten only parent waits.
+export const groupSummaryLabels = (summary: GroupSummary, compact = false): string[] => [
+  ...(compact ? compactNotices(summary.attention) : activityAttentionLabels(summary.attention)),
   ...activeWorkLabels(summary),
   ...endedWorkLabels(summary),
   ...(summary.awaited ? [`${summary.awaited} awaited`] : []),

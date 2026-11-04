@@ -54,6 +54,34 @@ export function grepResultDetail(
   return count ? countLabel(count, "matching line") : undefined;
 }
 
+/** What Pi's find and ls return when nothing matched or the directory is empty. */
+export const PATH_LIST_EMPTY_OUTPUT = {
+  find: "No files found matching pattern",
+  ls: "(empty directory)",
+} as const;
+
+const PATH_LIST_RESULTS = {
+  find: { limit: "resultLimitReached", empty: PATH_LIST_EMPTY_OUTPUT.find, unit: "match" },
+  ls: { limit: "entryLimitReached", empty: PATH_LIST_EMPTY_OUTPUT.ls, unit: "entry" },
+} as const;
+
+const PATH_LIST_PLURALS = { match: "matches", entry: "entries" } as const;
+
+/** How many paths a complete find or ls listing returned; clipped listings state their limit. */
+export function pathListResultDetail(
+  tool: "find" | "ls",
+  output: string,
+  details: HostObject | undefined,
+): string | undefined {
+  const { limit, empty, unit } = PATH_LIST_RESULTS[tool];
+  if (isTruncated(details) || ownField(details, limit) !== undefined) return undefined;
+  if (Str.trim(output) === empty) return tool === "ls" ? "empty" : `0 ${PATH_LIST_PLURALS[unit]}`;
+  const lines = Arr.filter(Str.split(output, "\n"), (line) => Str.trim(line) !== "");
+  // A trailing bracketed notice means the listing is incomplete, so its count would mislead.
+  if (lines.length === 0 || /^\[[^\]]*\]$/u.test(Str.trim(lines.at(-1) ?? ""))) return undefined;
+  return countLabel(lines.length, unit, PATH_LIST_PLURALS[unit]);
+}
+
 export function writeResultDetail(
   before: HostObject | undefined,
   content: string,

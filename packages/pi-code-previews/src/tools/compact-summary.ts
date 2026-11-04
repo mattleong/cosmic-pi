@@ -17,6 +17,12 @@ export type CompactPhase = "pending" | "running" | "settled";
 export type CompactOutcome = typeof CompactOutcomeSchema.Type;
 export type CompactStatus = Exclude<CompactPhase, "settled"> | CompactOutcome;
 
+/** A labeled plain fact an expanded child call shows beneath its heading; it is not an issue. */
+export interface CompactDetail {
+  readonly label: string;
+  readonly text: string;
+}
+
 export interface CompactChild {
   label: string;
   action?: string;
@@ -25,6 +31,8 @@ export interface CompactChild {
   counters?: readonly string[];
   metadata?: readonly string[];
   issues?: readonly CompactIssue[];
+  /** Plain facts shown only when expanded, after the call's issues. */
+  details?: readonly CompactDetail[];
   durationMs?: number;
   status: CompactStatus;
   returnedCheckmark?: true;

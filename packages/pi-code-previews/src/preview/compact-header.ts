@@ -54,7 +54,12 @@ export function layoutCompactHeader(
         Arr.findFirst(optional, (value) => value !== undefined && Str.isNonEmpty(Str.trim(value))),
       );
   const remaining = width - visibleWidth(identity);
-  if (remaining <= 0) return { row: clipToWidth(identity, width, ""), counter: undefined };
+  // A clipped heading always ends in an ellipsis, so it never reads as complete.
+  if (remaining <= 0)
+    return {
+      row: clipToWidth(`${identity}${subject ? ` ${subject}` : ""}`, width),
+      counter: undefined,
+    };
   const subjectWidth = visibleWidth(subject);
   const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
   const counterBudget = remaining - subjectMinimum;
@@ -70,6 +75,8 @@ export function layoutCompactHeader(
       ? timingToken
       : "";
   const target = middleElide(subject, remaining - counterWidth - visibleWidth(timingText) - 1);
+  if (subject && !target)
+    return { row: clipToWidth(`${identity} ${subject}`, width), counter: undefined };
   const row = identity + (target ? ` ${target}` : "") + counterText;
   const token = extra === undefined ? "" : `${separator}${extra}`;
   const fits =

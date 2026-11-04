@@ -8,7 +8,7 @@ import { fallbackArguments } from "../tools/data/args";
 import { type HostValue } from "../shared/untrusted-value";
 
 export function expandedSection(
-  theme: Theme,
+  theme: Pick<Theme, "fg">,
   label: string | undefined,
   ...children: Component[]
 ): Component {
@@ -31,7 +31,9 @@ export function expandedSection(
       const heading = label ? [clipToWidth(`  ${theme.fg("muted", label)}`, width, "")] : [];
       const pad = Fn.pipe(" ", Str.repeat(indent));
       const rows = heading.concat(
-        Arr.flatMap(parts, (lines) => Arr.map(lines, (line) => `${pad}${line}`)),
+        Arr.flatMap(parts, (lines) =>
+          Arr.map(lines, (line) => (line === "" ? "" : `${pad}${line}`)),
+        ),
       );
       cached = { width, parts, rows };
       return rows;

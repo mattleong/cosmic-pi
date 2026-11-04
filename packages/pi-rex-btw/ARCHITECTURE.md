@@ -16,12 +16,25 @@ saves no child sessions, and never closes panes.
   the parent-reference note.
 - [Parent reference](src/parent-reference.ts) runs in the child. Before each run it rechecks the
   marker flags and the parent file and sets or clears its system-prompt section.
+- [Parent conversation](src/parent/application.ts) runs in the child too. A child launched with a
+  parent reference gets a session runtime and the `parent_conversation` tool; every BTW child
+  shows a one-line orientation notice at startup. The [reader](src/parent/reader.ts) opens the
+  parent file without following a final link and reads at most its last 16 MiB; the pure
+  [transcript](src/parent/transcript.ts) decodes each JSONL entry with Schema, skips what doesn't
+  decode, and follows the newest entry's branch back to the session's start, a compaction, the
+  requested message count (default 15, at most 50), or the read window. Results are bounded and
+  render through the code-preview shell.
 
 ## Lifecycle
 
 Session start inside Rex (`REX_SESSION` and `REX_BLOCK` set) creates the runtime; elsewhere no
 runtime exists and `/btw` explains that it needs a Rex pane. Shutdown disposes the runtime and
 forgets the newest pane; panes and their Pi processes stay with the user.
+
+In a child, session start also loads trusted preview settings and starts the parent-conversation
+runtime when the parent flags decode, then registers the tool and publishes its replay renderer,
+anchored to `/btw`. Other sessions register no tool. Shutdown retires replay and disposes that
+runtime.
 
 ## Critical invariants
 
@@ -32,9 +45,10 @@ forgets the newest pane; panes and their Pi processes stay with the user.
   reparses them, and a prompt beginning with `@` is kept from being read as a file attachment.
 - The child loads this package with `-e` because Pi rejects unregistered flags; Pi skips the copy
   when settings also load it.
-- The parent reference conveys a path only. The child reads the transcript with its own read-only
-  tools; nothing is imported, synchronized, or sent back to the parent.
+- The parent reference conveys a path only. The child reads the transcript through the read-only
+  `parent_conversation` tool, or for older history its own read-only tools; nothing is imported,
+  synchronized, or sent back to the parent.
 
 [Launch tests](tests/launch.test.ts), [placement tests](tests/btw.test.ts),
-[Rex client tests](tests/rex.test.ts), and [parent-reference tests](tests/parent-reference.test.ts)
-protect these boundaries.
+[Rex client tests](tests/rex.test.ts), [parent-reference tests](tests/parent-reference.test.ts), and
+[parent-conversation tests](tests/parent-conversation.test.ts) protect these boundaries.
