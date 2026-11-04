@@ -105,7 +105,7 @@ export function formatSettingsSaveError(cause: unknown): string {
     Predicate.hasProperty(cause, "message") && Predicate.isString(cause.message)
       ? failureMessage(cause.message, "unknown error")
       : "unknown error";
-  return `Couldn't save code preview settings: ${message}`;
+  return `Couldn't save Code Previews settings: ${message}`;
 }
 
 export function describeSettingsProblem(problem: SettingsLoadProblem, cwd: string): string {

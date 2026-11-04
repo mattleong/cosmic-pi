@@ -28,7 +28,7 @@ const technicalIdentity = (value: string): string =>
 
 const sectionFields = (summary: GroupSummary): ListDetailField[] => [
   {
-    label: "Sources",
+    label: "Status",
     value: joinInline([countLabel(summary.items, "item"), ...workStateLabels(summary)]),
   },
   ...(summary.awaited ? [{ label: "Progress", value: `${summary.awaited} awaited` }] : []),

@@ -67,11 +67,13 @@ function programText(
 }
 
 export function renderNativeCodemodeProgram(
-  source: string,
+  program: string,
   theme: Theme,
   { expanded, argumentsStreaming, invalidate }: NativeProgramContext,
   sourceIntentNote?: string,
 ): Component {
+  // A trailing line break would draw a blank row at the end of the Program section.
+  const source = Str.trimEnd(program);
   const note = sourceIntentNote && expanded ? new Text(sourceIntentNote, 0, 0) : undefined;
   // Collapsed highlighting covers only the shown lines, so the full program decides whether
   // highlighting is skipped.

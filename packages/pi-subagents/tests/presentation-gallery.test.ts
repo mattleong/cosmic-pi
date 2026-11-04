@@ -39,6 +39,8 @@ import {
 } from "../src/run/agent-messaging.ts";
 import { executeAgentActionEffect } from "../src/tools/execute-agents.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
+import { normalizeRpcEvent } from "../src/backend/local-pi-events.ts";
+import { finishToolSessionEvent, startToolSessionEvent } from "../src/run/session-events.ts";
 import {
   projectSubagentActivityPanel,
   renderProjectedSubagentActivityPanel,
@@ -1787,10 +1789,191 @@ const activityRowLine = (item: ActivityItem): string => {
   return `${item.parent ? "  " : ""}${head}${actions}`;
 };
 
+interface ToolCallFixture {
+  readonly id: string;
+  readonly toolName: string;
+  readonly args: unknown;
+  /** Absent while the call is still running. */
+  readonly result?: unknown;
+  readonly isError?: boolean;
+  readonly at: number;
+}
+
+/** Session events built the way a child's RPC events reach them, through the backend. */
+const backendToolEvents = (
+  calls: ReadonlyArray<ToolCallFixture>,
+): SubagentRunView["sessionEvents"] => {
+  const none: SubagentRunView["sessionEvents"] = [];
+  return Arr.reduce(calls, none, (events, call) => {
+    const started = startToolSessionEvent(events, {
+      toolCallId: call.id,
+      toolName: call.toolName,
+      args: call.args,
+      startedAt: call.at,
+    });
+    if (call.result === undefined) return started;
+    const finished = Effect.runSync(
+      normalizeRpcEvent(
+        {
+          type: "tool_execution_end",
+          toolCallId: call.id,
+          toolName: call.toolName,
+          result: call.result,
+          isError: call.isError ?? false,
+        },
+        1,
+      ),
+    );
+    return finished?.type === "tool_finished"
+      ? finishToolSessionEvent(started, { ...finished, endedAt: call.at + 1_000 })
+      : started;
+  });
+};
+
+const readTestsReport =
+  "Test names in `src/cart.test.ts`:\n\n- subtotal sums prices times quantities\n- applyDiscount reduces the total by the percentage\n- itemCount sums quantities";
+const readTests = view({
+  id: "agent-27hak204b9",
+  name: "Read tests",
+  task: "Run sleep 40 via bash, then list the test names in src/cart.test.ts",
+  profile: "scout",
+  model: "openai-codex/gpt-6-luna",
+  openaiFastMode: true,
+  parentRunId: "agent-1137j23qjv",
+  depth: 2,
+  usage: usage(23_000, 0.0017),
+  ...timing(1),
+  sessionEvents: backendToolEvents([
+    {
+      id: "c1",
+      toolName: "bash",
+      args: { command: "sleep 40" },
+      at: now - 50_000,
+    },
+  ]),
+});
+const readTestsDone = view({
+  ...readTests,
+  state: "completed",
+  reportGeneration: 1,
+  reportStatus: "delivered",
+  finalText: readTestsReport,
+  reportArchive: {
+    path: "/Users/me/.pi/agent/subagents/reports/01a1a5ac/agent-27hak204b9-1-a8c6a115.md",
+    chars: 160,
+    lines: 5,
+    complete: true,
+  },
+  ...timing(1, 0.2),
+  sessionEvents: backendToolEvents([
+    {
+      id: "c1",
+      toolName: "read",
+      args: { path: "src/cart.test.ts" },
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "    it('subtotal sums prices', () => {\n      expect(subtotal(cart)).toBe(42);\n    });",
+          },
+        ],
+      },
+      at: now - 20_000,
+    },
+  ]),
+});
+const reviewCartStart: ToolCallFixture = {
+  id: "p1",
+  toolName: "agent_start",
+  args: { agents: [{ name: "Read tests", task: "List the test names", profile: "scout" }] },
+  result: {
+    content: [
+      {
+        type: "text",
+        text: "agent-27hak204b9 Read tests · scout · openai-codex/gpt-6-luna:high ⚡",
+      },
+    ],
+    details: startDetails({
+      startEntries: [
+        {
+          index: 0,
+          name: "Read tests",
+          profile: "scout",
+          status: "started",
+          routeStatus: "selected",
+          model: "openai-codex/gpt-6-luna",
+          effort: "high",
+          openaiFastMode: true,
+          runId: readTests.id,
+        },
+      ],
+    }),
+  },
+  at: now - 55_000,
+};
+const reviewCart = view({
+  id: "agent-1137j23qjv",
+  name: "Review cart",
+  task: "Start one child named Read tests, wait for it, and report its answer in one line",
+  profile: "scout",
+  directChildCount: 1,
+  descendantCount: 1,
+  usage: usage(7_500, 0.0036),
+  ...timing(1),
+  sessionEvents: backendToolEvents([
+    reviewCartStart,
+    { id: "p2", toolName: "agent_await", args: { runIds: [readTests.id] }, at: now - 50_000 },
+  ]),
+});
+const reviewCartDone = view({
+  ...reviewCart,
+  state: "completed",
+  reportGeneration: 1,
+  finalText:
+    "src/cart.test.ts tests: “subtotal sums prices times quantities”, “applyDiscount reduces the total by the percentage”, and “itemCount sums quantities”.",
+  ...timing(1, 0.1),
+  sessionEvents: backendToolEvents([
+    reviewCartStart,
+    {
+      id: "p2",
+      toolName: "agent_await",
+      args: { runIds: [readTests.id] },
+      result: {
+        content: [
+          {
+            type: "text",
+            text: `Waiting for subagents · 1/1 · 23k tok\n\n${readTests.id} Read tests · finished · scout\nRead the full report: ${readTestsDone.reportArchive?.path ?? ""}`,
+          },
+        ],
+        details: awaitDetails({ runs: [readTestsDone], awaitUntil: "all_finished" }),
+      },
+      at: now - 8_000,
+    },
+  ]),
+});
+// Between tool calls, after its last one finished.
+const mapCart = view({
+  id: "agent-30map",
+  name: "Map cart module",
+  task: "Summarize src/cart.ts in 3 bullets",
+  profile: "scout",
+  ...timing(0.5),
+  sessionEvents: backendToolEvents([
+    {
+      id: "m1",
+      toolName: "bash",
+      args: { command: "sleep 20" },
+      result: { content: [{ type: "text", text: "" }] },
+      at: now - 25_000,
+    },
+  ]),
+});
+
 interface ActivityScenario {
   readonly title: string;
   readonly runs: ReadonlyArray<SubagentRunView>;
   readonly details: ReadonlyArray<string>;
+  readonly technical?: boolean;
 }
 
 const activityScenarios: ReadonlyArray<ActivityScenario> = [
@@ -1867,6 +2050,17 @@ const activityScenarios: ReadonlyArray<ActivityScenario> = [
     details: ["agent-30"],
   },
   {
+    title: "a nested parent waiting on its child, beside an agent between tool calls",
+    runs: [reviewCart, readTests, mapCart],
+    details: [reviewCart.id, mapCart.id],
+  },
+  {
+    title: "a nested parent after its child reported",
+    runs: [reviewCartDone, readTestsDone],
+    details: [reviewCartDone.id, readTestsDone.id],
+    technical: true,
+  },
+  {
     title: "a paused reviewer beside a writer question",
     runs: [{ ...authReview, state: "paused" }, dbMigration],
     details: [authReview.id, dbMigration.id],
@@ -1896,7 +2090,13 @@ const activityLines = (): ReadonlyArray<string> =>
       Arr.map(items, activityRowLine),
       [""],
       activityGalleryFrames({ ...gallery, widths: [57, 100, 180], maxRows: [8] }),
-      activityGalleryFrames({ ...gallery, widths: [57], maxRows: [3], open: activity.details }),
+      activityGalleryFrames({
+        ...gallery,
+        widths: [57],
+        maxRows: [3],
+        open: activity.details,
+        ...(activity.technical && { technical: true, managerWidths: [57, 140] }),
+      }),
     );
   });
 
@@ -1950,7 +2150,7 @@ const messagingRuns: ReadonlyArray<SubagentRunView> = [
     state: "running",
     startedAt: minutesAgo(4),
     lastActivityAt: now - 2_000,
-    currentTool: "read src/app.ts",
+    currentTool: "read",
     messageCount: 3,
     sessionEvents: [
       {
@@ -1969,7 +2169,7 @@ const messagingRuns: ReadonlyArray<SubagentRunView> = [
     state: "running",
     startedAt: minutesAgo(4),
     lastActivityAt: now - 2_000,
-    currentTool: "grep /TODO/ src",
+    currentTool: "grep",
     messageCount: 2,
     sessionEvents: [
       {
@@ -1988,7 +2188,7 @@ const messagingRuns: ReadonlyArray<SubagentRunView> = [
     state: "running",
     startedAt: minutesAgo(3),
     lastActivityAt: now,
-    currentTool: "bash pnpm test",
+    currentTool: "bash",
     messageCount: 1,
     sessionEvents: [
       {
@@ -1998,6 +2198,14 @@ const messagingRuns: ReadonlyArray<SubagentRunView> = [
         peer: "main",
         text: "an older message past the recent window",
         createdAt: minutesAgo(2),
+      },
+      {
+        type: "tool",
+        toolCallId: "t1",
+        toolName: "bash",
+        target: "pnpm test",
+        state: "running",
+        startedAt: minutesAgo(1),
       },
     ],
   }),
@@ -2022,19 +2230,31 @@ const widgetLines = (): ReadonlyArray<string> => [
   ...widgetFrames("stalled children (tool open, silent, failing tools)", stalledRuns),
   ...widgetFrames("agent messages (recent message, counts, expired message)", messagingRuns),
   ...widgetFrames("a question and a paused run", [{ ...authReview, state: "paused" }, dbMigration]),
+  ...widgetFrames("a nested parent waiting on its child, beside an agent between tool calls", [
+    reviewCart,
+    readTests,
+    mapCart,
+  ]),
 ];
 
-/** The profiles editor at a wide, a medium, and a narrow terminal, with long model routes. */
+/**
+ * The profiles editor at a wide, a medium, and a narrow terminal, with long model routes, then
+ * with its field pane focused, whose hints name that pane's own movement and Enter action.
+ */
 const profileEditorLines = (): ReadonlyArray<string> => {
   const { component } = workspaceHarness({}, [
     profileCandidate("claude-bridge/claude-opus-5-5"),
     profileCandidate("openai-codex/gpt-6-luna"),
   ]);
-  return Arr.flatMap([180, 72, 57], (width) => [
-    `── profiles editor · Current Session · ${width} cols`,
-    ...Arr.map(component.render(width), (line) => Str.trimEnd(line)),
-    "",
-  ]);
+  const frames = (title: string, widths: ReadonlyArray<number>) =>
+    Arr.flatMap(widths, (width) => [
+      `── profiles editor · ${title} · ${width} cols`,
+      ...Arr.map(component.render(width), (line) => Str.trimEnd(line)),
+      "",
+    ]);
+  const profiles = frames("Current Session", [180, 72, 57]);
+  component.handleInput("\r");
+  return [...profiles, ...frames("field pane focused", [180, 57])];
 };
 
 /** The profiles editor and its dashboard when every profile names its own model and no fallback. */
@@ -2073,8 +2293,15 @@ const profileDashboardLines = (): ReadonlyArray<string> => {
         supportedPiEfforts: () => undefined,
       },
     });
-    return [
+    const session = [
       `── profiles dashboard · explicit models, no fallbacks · ${width} cols`,
+      ...Arr.map(dashboard.render(width), (line) => Str.trimEnd(line)),
+      "",
+    ];
+    dashboard.handleInput("\t");
+    return [
+      ...session,
+      `── profiles dashboard · Saved profiles · profile set picker · ${width} cols`,
       ...Arr.map(dashboard.render(width), (line) => Str.trimEnd(line)),
       "",
     ];

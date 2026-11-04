@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { safeTextPrefix } from "pi-cosmic-core/text";
@@ -14,6 +15,7 @@ export const MAX_PARENT_MESSAGES = 50;
 // Bounds keep one read's result small enough for the child's context and the saved transcript.
 const MAX_TEXT_CHARS = 4_000;
 const MAX_TOOL_INPUT_CHARS = 200;
+const MAX_TOOL_SUBJECT_CHARS = 120;
 const MAX_TOOL_OUTPUT_CHARS = 300;
 const MAX_RESULT_CHARS = 48_000;
 
@@ -25,7 +27,10 @@ export const parentMessageCount = (requested: number | undefined): number =>
 
 const ToolUseSchema = Schema.Struct({
   name: Schema.String,
+  /** The raw arguments as one clipped JSON line, for the agent. */
   input: Schema.String,
+  /** The argument a person recognizes the call by, such as a command or path; may be empty. */
+  subject: Schema.String,
   outcome: Schema.Literals(["done", "failed", "pending"]),
   output: Schema.String,
 });
@@ -143,6 +148,36 @@ const toolInput = (input: Schema.Json | undefined): string => {
   return oneLine(encoded ?? "", MAX_TOOL_INPUT_CHARS);
 };
 
+// Arguments that name what a call acts on, in the order a person would look for them.
+const SUBJECT_ARGUMENTS = [
+  "command",
+  "path",
+  "file_path",
+  "pattern",
+  "query",
+  "url",
+  "name",
+  "prompt",
+  "message",
+  "task",
+] as const;
+
+/** The call's subject: its first well-known string argument, else its first string argument. */
+const toolSubject = (input: Schema.Json | undefined): string => {
+  if (Predicate.isString(input)) return oneLine(input, MAX_TOOL_SUBJECT_CHARS);
+  if (!Predicate.isObject(input)) return "";
+  const subject = Arr.findFirst([...SUBJECT_ARGUMENTS, ...Rec.keys(input)], (key) => {
+    const value = input[key];
+    return Predicate.isString(value) && Str.isNonEmpty(Str.trim(value))
+      ? Option.some(value)
+      : Option.none();
+  });
+  return Option.match(subject, {
+    onNone: () => "",
+    onSome: (value) => oneLine(value, MAX_TOOL_SUBJECT_CHARS),
+  });
+};
+
 interface ToolResult {
   readonly failed: boolean;
   readonly output: string;
@@ -185,6 +220,7 @@ const entryItem = (
         return {
           name: oneLine(call.name, MAX_TOOL_INPUT_CHARS),
           input: toolInput(call.arguments),
+          subject: toolSubject(call.arguments),
           outcome: result === undefined ? "pending" : result.failed ? "failed" : "done",
           output: result?.output ?? "",
         };
@@ -227,7 +263,11 @@ const toolResultOf = (entry: Entry): readonly [string, ToolResult] | undefined =
 
 const itemChars = (entry: ConversationItem): number =>
   entry.text.length +
-  Arr.reduce(entry.tools, 0, (total, tool) => total + tool.input.length + tool.output.length);
+  Arr.reduce(
+    entry.tools,
+    0,
+    (total, tool) => total + tool.input.length + tool.subject.length + tool.output.length,
+  );
 
 const present = <A>(value: A | undefined): ReadonlyArray<A> => (value === undefined ? [] : [value]);
 

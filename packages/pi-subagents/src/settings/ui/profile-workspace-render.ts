@@ -6,6 +6,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { listWindowStart } from "pi-cosmic-ui/manager/list-detail";
 import {
+  framedBodyWithHints,
   framedFill,
   framedScreen,
   framedStackedRows,
@@ -14,14 +15,19 @@ import {
   listDetailFrame,
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import { focusedField, LIST_CURSOR, managerTone } from "pi-cosmic-ui/manager/style";
-import {
-  managerLayoutTier,
-  managerNoticeColor,
-  renderResponsiveManagerFooter,
-  clipToWidth,
-} from "pi-cosmic-ui/manager";
+import { managerLayoutTier, managerNoticeColor, clipToWidth } from "pi-cosmic-ui/manager";
 import { managerTable } from "pi-cosmic-ui/manager/table";
-import { exitKeyHint, helpKeyHint, joinKeyHints, keyHint } from "pi-cosmic-ui/manager/key-labels";
+import {
+  borderKeyHint,
+  exitKeyHint,
+  framedKeyHints,
+  helpKeyHint,
+  joinKeyHints,
+  keyHint,
+  keyHintRows,
+  moveKeyHint,
+  type FramedKeyHints,
+} from "pi-cosmic-ui/manager/key-labels";
 import { PROFILE_IDS, type ProfileId, type ProfileCandidate } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
@@ -128,7 +134,9 @@ interface ProfileTableRow {
   readonly selected: boolean;
   readonly model: string;
   readonly effort: string;
-  readonly fallbacks: string;
+  readonly fallbacks: number;
+  /** Whether this profile changed during the visit, so its row carries the unsaved marker. */
+  readonly edited: boolean;
 }
 
 const profileTableRows = (
@@ -152,10 +160,8 @@ const profileTableRows = (
       effort: first
         ? `${theme.fg("muted", candidateEffortLevel(profile, first, state.parentEffort))}${candidateFastModeApplied(first, state.parentModel) ? theme.fg("warning", " ⚡") : ""}`
         : "",
-      fallbacks:
-        draft.candidates.length > 1
-          ? `+${draft.candidates.length - 1} fallback${draft.candidates.length === 2 ? "" : "s"}`
-          : "",
+      fallbacks: Math.max(0, draft.candidates.length - 1),
+      edited: state.editedProfiles?.has(profile) ?? false,
     };
   });
 
@@ -164,28 +170,40 @@ const PROFILE_CURSOR_WIDTH = 2;
 
 // The model is what the list is for, so it keeps its width before the reasoning label.
 const PROFILE_COLUMNS = [
-  { minWidth: 12, priority: 5 },
+  { minWidth: 10, priority: 5 },
   { minWidth: 8, priority: 4 },
-  { minWidth: 7, priority: 3 },
-  { minWidth: 11, priority: 1 },
+  { minWidth: 4, priority: 3 },
+  { minWidth: 2, priority: 1 },
 ] as const;
 
-const profileTableCells = (row: ProfileTableRow): ReadonlyArray<string> => [
-  `${row.profile} ●`,
+/** `+1 fallback` where the list has room, and `+1` where the model would otherwise clip. */
+const fallbackLabel = (count: number, compact: boolean): string =>
+  count === 0 ? "" : compact ? `+${count}` : `+${count} fallback${count === 1 ? "" : "s"}`;
+
+const profileTableCells = (
+  row: ProfileTableRow,
+  marked: boolean,
+  compact: boolean,
+): ReadonlyArray<string> => [
+  `${row.profile}${marked ? " ●" : ""}`,
   row.model,
   row.effort,
-  row.fallbacks,
+  fallbackLabel(row.fallbacks, compact),
 ];
 
 /**
  * The width the profile table needs to show every model and fallback count unclipped, measured as
  * the table lays out: each shown column at least its minimum, and empty columns not at all.
  */
-const profileTableNaturalWidth = (rows: ReadonlyArray<ProfileTableRow>): number => {
+const profileTableNaturalWidth = (
+  rows: ReadonlyArray<ProfileTableRow>,
+  compact = false,
+): number => {
+  const marked = Arr.some(rows, (row) => row.edited);
   const shown = Arr.filterMap(PROFILE_COLUMNS, (column, index) => {
     const widest = Math.max(
       0,
-      ...Arr.map(rows, (row) => visibleWidth(profileTableCells(row)[index] ?? "")),
+      ...Arr.map(rows, (row) => visibleWidth(profileTableCells(row, marked, compact)[index] ?? "")),
     );
     return widest === 0 ? Result.failVoid : Result.succeed(Math.max(column.minWidth, widest));
   });
@@ -202,9 +220,11 @@ const profileTableLines = (
   width: number,
 ): ReadonlyArray<string> => {
   const rows = profileTableRows(state, theme);
+  const marked = Arr.some(rows, (row) => row.edited);
+  const compact = profileTableNaturalWidth(rows) > width;
   // The shared table leaves out a column with no cells, such as fallbacks when there are none.
   const table = managerTable(
-    Arr.map(rows, profileTableCells),
+    Arr.map(rows, (row) => profileTableCells(row, marked, compact)),
     PROFILE_COLUMNS,
     width - PROFILE_CURSOR_WIDTH,
   );
@@ -213,12 +233,12 @@ const profileTableLines = (
       row.selected && state.pane === "profiles"
         ? focusedField(theme, row.profile)
         : theme.fg(managerTone.identity, row.profile);
-    const marker = state.editedProfiles?.has(row.profile) ? theme.fg("warning", " ●") : "";
+    const marker = row.edited ? theme.fg("warning", " ●") : "";
     return `${row.selected ? LIST_CURSOR : " "} ${table.row([
       identity + marker,
       row.model,
       row.effort,
-      theme.fg("muted", row.fallbacks),
+      theme.fg("muted", fallbackLabel(row.fallbacks, compact)),
     ])}`;
   });
 };
@@ -377,7 +397,7 @@ const compactLines = (
   if (state.pane === "profiles" && state.saveFocused)
     return [
       theme.fg(managerTone.session, "Current Session"),
-      focusedField(theme, "> Save these profiles as a set…"),
+      focusedField(theme, `${LIST_CURSOR} Save these profiles as a set…`),
     ];
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
@@ -440,44 +460,76 @@ export const profileWorkspaceHelpLines = (
     (line) => wrapTextWithAnsi(line, Math.max(1, width)),
   );
 };
+/** What Enter does on the focused field, or nothing for a fixed one. */
+const fieldEnterVerb = (
+  state: ProfileWorkspaceRenderState,
+  row: ProfileWorkspaceRow | undefined,
+): string | undefined => {
+  if (!row) return undefined;
+  if (row.field === "reset") return "Undo";
+  if (row.fixed) return undefined;
+  if (row.field === "add" || row.scope === "profile") return "Add";
+  if (row.field === "actions") return "Open";
+  if (row.field === "advanced")
+    return state.expandedCandidates.has(row.candidateIndex) ? "Collapse" : "Expand";
+  return "Change";
+};
+
+/**
+ * The editor's hint bar. Each pane names its own movement and what Enter does; pairs that don't
+ * fit the bottom border wrap into rows above it, so the exit and help stay in the border.
+ */
 const workspaceFooter = (
   state: ProfileWorkspaceRenderState,
   keybindingLabel: ProfileWorkspaceRenderOptions["keybindingLabel"],
-  width: number,
-): string => {
+  inner: number,
+): FramedKeyHints => {
   const keys = profileWorkspaceKeys(
     keybindingLabel,
     Boolean(state.pendingConfirmation) || state.busy,
   );
   // Aliases such as C-c belong in the help page, not the default hint.
   const cancel = Str.split(keys.cancel, "/")[0] ?? keys.cancel;
+  const border = (hint: string): FramedKeyHints => ({
+    border: borderKeyHint(hint, inner),
+    overflow: "",
+  });
   if (state.pendingConfirmation)
-    return joinKeyHints([keyHint(keys.confirm, "Confirm"), exitKeyHint("decision", [], cancel)]);
+    return border(
+      joinKeyHints([keyHint(keys.confirm, "Confirm"), exitKeyHint("decision", [], cancel)]),
+    );
+  const move =
+    Str.length(keys.up) === 1 && Str.length(keys.down) === 1
+      ? `${keys.up}${keys.down}`
+      : `${keys.up}/${keys.down}`;
   if (state.helpOpen)
-    return joinKeyHints([
-      keyHint("↑↓", "Scroll"),
-      exitKeyHint("nested", [], cancel),
-      helpKeyHint(true),
-    ]);
-  if (state.busy) return state.cancellableBusy ? keyHint(cancel, "Cancel loading") : "Saving…";
-  const top = state.pane === "profiles" && state.target.kind === "session";
-  const exit = exitKeyHint(top ? "top" : "nested", [], cancel);
-  const tab = keyHint(
-    "Tab",
-    state.target.kind === "session" ? "Saved profiles" : "Current Session",
+    return border(
+      joinKeyHints([keyHint(move, "Scroll"), exitKeyHint("nested", [], cancel), helpKeyHint(true)]),
+    );
+  if (state.busy)
+    return border(state.cancellableBusy ? keyHint(cancel, "Cancel loading") : "Saving…");
+  const profiles = state.pane === "profiles";
+  const exit = exitKeyHint(
+    profiles && state.target.kind === "session" ? "top" : "nested",
+    [],
+    cancel,
   );
-  return renderResponsiveManagerFooter(width, [
+  const enter = profiles
+    ? state.saveFocused
+      ? "Save"
+      : "Open"
+    : fieldEnterVerb(state, editorRows(state, selectedProfile(state))[state.fieldIndex]);
+  return framedKeyHints(
     [
-      keyHint(keys.confirm, "Open"),
-      tab,
+      moveKeyHint(move),
+      enter && keyHint(keys.confirm, enter),
+      keyHint("Tab", state.target.kind === "session" ? "Saved profiles" : "Current Session"),
       keyHint("m", "Model"),
       keyHint("a", "Manage"),
-      exit,
-      helpKeyHint(false),
     ],
-    [tab, exit, helpKeyHint(false)],
     [exit, helpKeyHint(false)],
-  ]);
+    inner,
+  );
 };
 
 export const renderProfileWorkspace = (
@@ -495,7 +547,8 @@ export const renderProfileWorkspace = (
     state.target.kind === "session"
       ? "Current Session"
       : qualifiedProfileSetLabel(state.target.set);
-  const bottom = workspaceFooter(state, options.keybindingLabel, inner);
+  const footer = workspaceFooter(state, options.keybindingLabel, inner);
+  const hints = keyHintRows(footer.overflow, inner, (row) => theme.fg("dim", row));
   return framedScreen(frame, {
     width,
     height,
@@ -503,94 +556,111 @@ export const renderProfileWorkspace = (
       state.target.kind === "session" ? managerTone.session : managerTone.saved,
       clipToWidth(` ${targetHeading(state.target)} `, inner, ""),
     ),
-    bottom: clipToWidth(bottom, inner, ""),
-    body: (bodyHeight) => {
-      if (state.helpOpen) {
-        const content = profileWorkspaceHelpLines(options.keybindingLabel, inner);
-        const limit = Math.max(1, bodyHeight - 1);
-        const start = Math.max(0, Math.min(state.helpScroll ?? 0, content.length - limit));
-        return framedFill(
-          frame,
-          [context, ...content.slice(start, start + limit)],
-          bodyHeight,
-          inner,
-          "list",
-        );
-      }
-      if (state.pendingConfirmation) {
-        const confirmation = state.pendingConfirmation;
-        return framedFill(
-          frame,
-          Arr.flatMap([context, confirmation.title, confirmation.detail], (line) =>
-            wrapTextWithAnsi(theme.fg("warning", line), inner),
-          ),
-          bodyHeight,
-          inner,
-          "list",
-        );
-      }
-      if (bodyHeight <= 4)
-        return framedFill(frame, compactLines(state, theme, inner), bodyHeight, inner, "list");
-      const notices: string[] = [];
-      if (state.target.kind === "profile-set")
-        notices.push(theme.fg(managerTone.saved, SCOPE_LABELS[state.target.set.scope]));
-      if (state.message && state.message.kind !== "success")
-        notices.push(
-          ...wrapTextWithAnsi(
-            theme.fg(managerNoticeColor(state.message.kind), state.message.text),
-            inner,
-          ).slice(0, 2),
-        );
-      const available = Math.max(0, bodyHeight - notices.length - 1);
-      let body: ReadonlyArray<string>;
-      if (managerLayoutTier(width) === "wide") {
-        const listWidth = wideListWidth(state, theme, inner);
-        const detailWidth = inner - listWidth - 1;
-        body = framedWideRows(frame, {
-          left: profileLines(state, theme, listWidth, available),
-          right: editorLines(state, theme, detailWidth, available),
-          height: available,
-          listWidth,
-          detailWidth,
-        });
-      } else if (managerLayoutTier(width) === "stacked" && available >= 6) {
-        const listHeight = Math.max(2, Math.floor(available * 0.4));
-        body = framedStackedRows(frame, {
-          list: profileLines(state, theme, inner, listHeight),
-          detail: editorLines(state, theme, inner, available - listHeight - 1),
-          height: available,
-          inner,
-        });
-      } else {
-        body = framedFill(
-          frame,
-          state.pane === "profiles"
-            ? profileLines(state, theme, inner, available)
-            : editorLines(state, theme, inner, available),
-          available,
-          inner,
-          state.pane === "profiles" ? "list" : "detail",
-        );
-      }
-      return [
-        ...framedFill(frame, notices, notices.length, inner),
-        ...body,
-        ...framedFill(
-          frame,
-          [
-            // Indented with the pane headings above it.
-            `  ${theme.fg(
-              "muted",
-              `${state.message?.kind === "success" ? "✓ Saved · " : ""}${destination(
-                state.target,
-                inner - 2 - (state.message?.kind === "success" ? 10 : 0),
-              )}`,
-            )}`,
-          ],
-          Math.min(1, bodyHeight),
-          inner,
-        ),
-      ];
-    },
+    bottom: footer.border,
+    body: (fullHeight) =>
+      framedBodyWithHints(frame, { height: fullHeight, inner, hints }, (bodyHeight) =>
+        workspaceBody(state, options, frame, { inner, width, bodyHeight, context }),
+      ),
   });
+};
+
+const workspaceBody = (
+  state: ProfileWorkspaceRenderState,
+  options: ProfileWorkspaceRenderOptions,
+  frame: ReturnType<typeof listDetailFrame>,
+  layout: {
+    readonly inner: number;
+    readonly width: number;
+    readonly bodyHeight: number;
+    readonly context: string;
+  },
+): ReadonlyArray<string> => {
+  const { theme } = options;
+  const { inner, width, bodyHeight, context } = layout;
+  if (state.helpOpen) {
+    const content = profileWorkspaceHelpLines(options.keybindingLabel, inner);
+    const limit = Math.max(1, bodyHeight - 1);
+    const start = Math.max(0, Math.min(state.helpScroll ?? 0, content.length - limit));
+    return framedFill(
+      frame,
+      [context, ...content.slice(start, start + limit)],
+      bodyHeight,
+      inner,
+      "list",
+    );
+  }
+  if (state.pendingConfirmation) {
+    const confirmation = state.pendingConfirmation;
+    return framedFill(
+      frame,
+      Arr.flatMap([context, confirmation.title, confirmation.detail], (line) =>
+        wrapTextWithAnsi(theme.fg("warning", line), inner),
+      ),
+      bodyHeight,
+      inner,
+      "list",
+    );
+  }
+  if (bodyHeight <= 4)
+    return framedFill(frame, compactLines(state, theme, inner), bodyHeight, inner, "list");
+  const notices: string[] = [];
+  if (state.target.kind === "profile-set")
+    notices.push(theme.fg(managerTone.saved, SCOPE_LABELS[state.target.set.scope]));
+  if (state.message && state.message.kind !== "success")
+    notices.push(
+      ...wrapTextWithAnsi(
+        theme.fg(managerNoticeColor(state.message.kind), state.message.text),
+        inner,
+      ).slice(0, 2),
+    );
+  const available = Math.max(0, bodyHeight - notices.length - 1);
+  let body: ReadonlyArray<string>;
+  if (managerLayoutTier(width) === "wide") {
+    const listWidth = wideListWidth(state, theme, inner);
+    const detailWidth = inner - listWidth - 1;
+    body = framedWideRows(frame, {
+      left: profileLines(state, theme, listWidth, available),
+      right: editorLines(state, theme, detailWidth, available),
+      height: available,
+      listWidth,
+      detailWidth,
+    });
+  } else if (managerLayoutTier(width) === "stacked" && available >= 6) {
+    const listHeight = Math.max(2, Math.floor(available * 0.4));
+    body = framedStackedRows(frame, {
+      list: profileLines(state, theme, inner, listHeight),
+      detail: editorLines(state, theme, inner, available - listHeight - 1),
+      height: available,
+      inner,
+    });
+  } else {
+    body = framedFill(
+      frame,
+      state.pane === "profiles"
+        ? profileLines(state, theme, inner, available)
+        : editorLines(state, theme, inner, available),
+      available,
+      inner,
+      state.pane === "profiles" ? "list" : "detail",
+    );
+  }
+  return [
+    ...framedFill(frame, notices, notices.length, inner),
+    ...body,
+    ...framedFill(
+      frame,
+      [
+        // Indented with the pane headings above it.
+        `  ${theme.fg(
+          "muted",
+          `${state.message?.kind === "success" ? "✓ Saved · " : ""}${destination(
+            state.target,
+            inner - 2 - (state.message?.kind === "success" ? 10 : 0),
+          )}`,
+        )}`,
+      ],
+      Math.min(1, bodyHeight),
+      inner,
+    ),
+  ];
 };

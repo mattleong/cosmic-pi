@@ -177,6 +177,22 @@ describe("builtin expansion states each fact once", () => {
     expect(noted).toContain("line endings changed");
   });
 
+  test("a bash command the heading shows in full isn't repeated in the body", () => {
+    const command = "git --no-pager diff --stat && node --version";
+    const harness = builtin("bash");
+    harness.call({ command }, { expanded: true });
+    harness.result(textResult("v22.22.1"), { expanded: true });
+    for (const width of [57, 120]) {
+      const text = stripAnsi(Arr.join(harness.render(width), "\n"));
+      expect(occurrences(text, command)).toBe(1);
+    }
+    // Too narrow for the heading: the body keeps the whole command.
+    const narrow = stripAnsi(Arr.join(harness.render(30), "\n"));
+    expect(occurrences(Str.replace(/\s+/gu, "")(narrow), Str.replace(/\s+/gu, "")(command))).toBe(
+      1,
+    );
+  });
+
   test("a bash failure's status is stated once while its output stays complete", () => {
     const text = expandedText(
       builtin("bash"),

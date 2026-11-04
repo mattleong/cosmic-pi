@@ -10,7 +10,8 @@ import {
   galleryFrames,
   writeGallerySection,
 } from "pi-code-previews/testing";
-import { ORIENTATION } from "../src/parent/application.ts";
+import { plainTheme } from "pi-cosmic-core/testing";
+import { ORIENTATION, orientationLine } from "../src/parent/application.ts";
 import {
   conversationText,
   failureText,
@@ -44,10 +45,17 @@ const conversation = (overrides: Partial<ParentConversation>): ParentConversatio
         {
           name: "bash",
           input: '{"command":"pnpm test --filter cart"}',
+          subject: "pnpm test --filter cart",
           outcome: "failed",
           output: "FAIL src/cart.test.ts > applies a discount",
         },
-        { name: "read", input: '{"path":"src/cart.ts"}', outcome: "done", output: "" },
+        {
+          name: "read",
+          input: '{"path":"src/cart.ts"}',
+          subject: "src/cart.ts",
+          outcome: "done",
+          output: "",
+        },
       ],
     },
     {
@@ -61,7 +69,15 @@ const conversation = (overrides: Partial<ParentConversation>): ParentConversatio
       role: "assistant",
       at: today,
       text: "The discount test fails because `applyDiscount` rounds **before** summing:\n\n- fix the rounding\n- rerun the tests",
-      tools: [{ name: "edit", input: '{"path":"src/cart.ts"}', outcome: "pending", output: "" }],
+      tools: [
+        {
+          name: "edit",
+          input: '{"path":"src/cart.ts","oldText":"round(","newText":"Math.round("}',
+          subject: "src/cart.ts",
+          outcome: "pending",
+          output: "",
+        },
+      ],
     },
   ],
   ...overrides,
@@ -115,7 +131,7 @@ const directory = galleryDirectory(process.env) ?? "";
 describe.skipIf(!directory)("presentation gallery", () => {
   beforeAll(() => initTheme("dark", false));
 
-  it.effect("renders the BTW child's parent conversation tool and orientation notices", () =>
+  it.effect("renders the BTW child's parent conversation tool and orientation line", () =>
     Effect.gen(function* () {
       const lines: string[] = [];
       for (const style of ["compact", "preview"] as const) {
@@ -146,14 +162,17 @@ describe.skipIf(!directory)("presentation gallery", () => {
           restore();
         }
       }
-      lines.push(
-        "── orientation notice · child that sees its parent",
-        ORIENTATION.sees,
-        "",
-        "── orientation notice · child of an unsaved parent",
-        ORIENTATION.blind,
-        "",
-      );
+      const orientations = [
+        ["child that sees its parent", ORIENTATION.sees],
+        ["child of an unsaved parent", ORIENTATION.blind],
+      ] as const;
+      for (const [label, message] of orientations)
+        for (const width of [100, 57])
+          lines.push(
+            `── orientation line above the editor · ${label} · ${width} cols`,
+            ...orientationLine(message, plainTheme).render(width),
+            "",
+          );
       yield* writeGallerySection(directory, "pi-rex-btw", lines);
     }),
   );

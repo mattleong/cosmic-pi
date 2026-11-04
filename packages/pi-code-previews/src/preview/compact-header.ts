@@ -59,6 +59,7 @@ export function layoutCompactHeader(
     return {
       row: clipToWidth(`${identity}${subject ? ` ${subject}` : ""}`, width),
       counter: undefined,
+      subjectComplete: !subject,
     };
   const subjectWidth = visibleWidth(subject);
   const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
@@ -76,11 +77,19 @@ export function layoutCompactHeader(
       : "";
   const target = middleElide(subject, remaining - counterWidth - visibleWidth(timingText) - 1);
   if (subject && !target)
-    return { row: clipToWidth(`${identity} ${subject}`, width), counter: undefined };
+    return {
+      row: clipToWidth(`${identity} ${subject}`, width),
+      counter: undefined,
+      subjectComplete: false,
+    };
   const row = identity + (target ? ` ${target}` : "") + counterText;
   const token = extra === undefined ? "" : `${separator}${extra}`;
   const fits =
     target === subject &&
     visibleWidth(row) + visibleWidth(timingText) + visibleWidth(token) <= width;
-  return { row: row + (fits ? token : "") + timingText, counter };
+  return {
+    row: row + (fits ? token : "") + timingText,
+    counter,
+    subjectComplete: target === subject,
+  };
 }

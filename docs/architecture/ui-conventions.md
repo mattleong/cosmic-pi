@@ -9,11 +9,13 @@ Shared helpers implement most of this. Use them instead of writing separators, h
 | Separator between inline facts | `INLINE_SEPARATOR`, `joinInline(parts)`                                                                                                                      | `pi-cosmic-ui/manager`                                                                 |
 | Status glyphs                  | `SUITE_STATUS_GLYPHS`, `managerActivityGlyph`, `managerNoticeGlyph`                                                                                          | `pi-cosmic-ui/manager`                                                                 |
 | Key hints                      | `keyHint`, `joinKeyHints`, `keyHintBar`, `exitKeyHint`, `helpKeyHint`, `moveKeyHint`, `settingAffordanceHint`, `wrapKeyHints`, `keyHintRows`, `formatKeyIds` | `pi-cosmic-ui/manager/key-labels`                                                      |
+| Hints on a framed surface      | `framedKeyHints`, `borderKeyHint`, `fittedBorderKeyHint` (border text and overflow); `framedBodyWithHints` (rows above the border)                           | `pi-cosmic-ui/manager/key-labels`, `pi-cosmic-ui/manager/list-detail-shell`            |
 | List cursor and markers        | `LIST_CURSOR`, `selectionMarker`                                                                                                                             | `pi-cosmic-ui/manager/style`                                                           |
 | Settings surface               | `openSettingsList` (string header), `settingsSurfaceHeader`, `SettingsSurfaceItem` (`kind`, `children`, `summary`), `createSettingsGroupSubmenu`             | `pi-cosmic-ui/boundary/host-settings-command`, `pi-cosmic-ui/manager/settings-surface` |
 | Settings values and rows       | `ON_OFF_SETTING_VALUES`, `settingOnOff`, `AUTO_SETTING_VALUE`, `settingInherited`, `createSettingsChoiceSubmenu`, `settingsListHint`                         | `pi-cosmic-ui/manager/settings-surface`                                                |
 | Columns                        | `managerTable`                                                                                                                                               | `pi-cosmic-ui/manager/table`                                                           |
 | Read-only text panel           | `TextPanelComponent`                                                                                                                                         | `pi-cosmic-ui/manager/panel`                                                           |
+| Bare `/<command>` help         | `registerExtensionCommand` (with `overviewNotes`), `extensionCommandOverview`                                                                                | `pi-cosmic-core/host-command`                                                          |
 | Expansion affordance           | `renderExpansionAffordance`, `toolExpandHint`                                                                                                                | `pi-cosmic-ui/tool`                                                                    |
 | Expanded tool bodies           | `expandedBody`, `expandedFields`, `expandedText`, `expandedDetails`, … ([layout](tool-presentation.md#expanded-body-layout))                                 | `pi-code-previews`                                                                     |
 | Durations, ages, sizes, counts | `formatDuration`, `formatRelativeAge`, `formatBytes`, `countLabel`                                                                                           | `pi-cosmic-core/display`                                                               |
@@ -44,7 +46,8 @@ Every surface must read well at both a desktop terminal (180×56) and a phone cl
 
 - When a bar doesn't fit, wrap it between complete `Key Verb` pairs: `wrapKeyHints(hint, width)` returns the rows, and `keyHintRows(hint, width, style)` returns them styled with the surface's one-column gutter. Never clip a pair mid-way.
 - Wrapping takes rows; it never drops essential hints. At every width, including 57 columns, the bar keeps Move or Scroll, the primary action, and the exit (`Esc Close`, `Esc Back`, or `Esc Cancel`). Only `? More` content may wait for expansion.
-- A framed surface may keep its exit and `? More` in the bottom border and wrap the remaining pairs into rows above it.
+- A framed surface puts its whole bar in the bottom border when it fits. Otherwise the border keeps the exit and `? More`, and the remaining pairs wrap into rows above it, set off by a divider: `framedKeyHints(hints, [exit, help], inner)` returns the border text and the overflow, and `framedBodyWithHints` places the wrapped overflow rows. Never choose a shorter bar by dropping pairs, and never clip the border without `…`.
+- Each pane of a multi-pane surface names its own movement and what Enter does there, such as `Enter Open` in a list and `Enter Change` on a field.
 
 ## Leaving a surface
 
@@ -138,6 +141,16 @@ Some Code Previews tool headings carry a per-tool icon, such as `📖 read`. The
 - Show every row when it fits. Don't hide one row behind a scroll indicator.
 - An inline surface ends with a blank row so its hint never touches the footer below it.
 
+## Command help
+
+A bare `/<command>` without its own handler shows one overview, built by `registerExtensionCommand` through `extensionCommandOverview`. Don't hand-write help text.
+
+- The title line reads `/<name>: <description>` at column 1. If it wraps, continuation lines hang two columns in.
+- Each subcommand gets one line: a two-column indent, then `/<name> <sub> [args]` padded to the widest entry, two spaces, and a short description, such as `  /code-previews health    Show renderer health`.
+- Every line stays within 55 columns, because Pi draws notices one column in and doesn't hang-indent its own wraps. If any aligned line would be wider, the whole list switches to a stacked form: the command on its own line, and its description on the next line indented four columns, wrapping with the same indent. Nothing wraps flush-left at 57 columns.
+- Notes such as examples (`overviewNotes`) follow the list verbatim.
+- Subcommand descriptions also serve as autocomplete text. Keep them short (about 28 columns or less), in sentence case, with no trailing period.
+
 ## Panels, tables, and long text
 
 - Read-only text uses `TextPanelComponent`. It wraps long lines with a hanging indent, scrolls when it doesn't fit, and closes with `Esc`.
@@ -155,6 +168,7 @@ Some Code Previews tool headings carry a per-tool icon, such as `📖 read`. The
 - Ages: `23s ago`.
 - Absolute times use the local short form: `10:59 PM` today, otherwise `Nov 3, 10:59 PM`.
 - Label times whose meaning isn't obvious, such as `resets 10:59 PM`, so they don't read as a clock.
+- Reset times are absolute on every surface: `resets 10:59 PM` today, `resets Nov 10, 11:03 PM` otherwise. A countdown (`resets in 6d 22h`) may follow the absolute time as an optional `· in 6d 22h` suffix, or replace it only as a narrow-width fallback where the absolute form doesn't fit, such as the footer's `↺ 2h 3m`.
 - Never show epoch numbers.
 
 ## Identity

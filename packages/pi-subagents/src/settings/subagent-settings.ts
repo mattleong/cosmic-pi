@@ -19,6 +19,7 @@ import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
+import { joinInline } from "pi-cosmic-ui/manager";
 import { settingInherited, type SettingsSurfaceItem } from "pi-cosmic-ui/manager/settings-surface";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
@@ -203,15 +204,25 @@ const SCOPE_GROUP_DESCRIPTIONS = {
     "Delegation and nesting limits for this trusted project, which win over global ones. Changes apply after /reload.",
 } as const satisfies Record<ProfileSettingsScope, string>;
 
-/** A scope's group value: the settings it sets itself, or `inherit` when it sets none. */
-const scopeGroupSummary = (values: ReadonlyArray<readonly [string, string]>): string => {
+// A group row has one line, so its summary names each value as briefly as it stays clear.
+const SCOPED_SETTING_SUMMARIES = {
+  [DELEGATION]: (value) => `${value} delegation`,
+  maxDirectChildren: (value) => `${value} children`,
+  maxDepth: (value) => `depth ${value}`,
+  maxActiveRuns: (value) => `${value} active`,
+} as const satisfies Record<typeof DELEGATION | NestingField, (value: string) => string>;
+
+/**
+ * A scope's group value: the settings it sets itself, such as `32 children · depth 3 · 16 active`,
+ * or `inherit` when it sets none.
+ */
+const scopeGroupSummary = (
+  values: ReadonlyArray<readonly [typeof DELEGATION | NestingField, string]>,
+): string => {
   const own = Arr.filter(values, ([, value]) => inheritChoice(value) !== INHERIT);
   return own.length === 0
     ? INHERIT
-    : Arr.join(
-        Arr.map(own, ([label, value]) => `${label} ${value}`),
-        ", ",
-      );
+    : joinInline(Arr.map(own, ([id, value]) => SCOPED_SETTING_SUMMARIES[id](value)));
 };
 
 export function subagentSettingsSubcommand(actions: SubagentCommandActions): ExtensionSubcommand {
@@ -398,8 +409,7 @@ function subagentSettingsCommand(
             scopeGroupSummary(
               Arr.map(
                 SCOPED_SETTING_IDS,
-                (id) =>
-                  [SCOPED_SETTING_LABELS[id], committed.get(rowId(id, scope)) ?? INHERIT] as const,
+                (id) => [id, committed.get(rowId(id, scope)) ?? INHERIT] as const,
               ),
             );
           return {

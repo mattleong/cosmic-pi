@@ -183,7 +183,7 @@ The saved file is the report: parents read it with their read tool. Model-facing
 
 ## Live activity
 
-Each tool completion carries a bounded output preview (seven lines, at most 1,000 characters) decoded from the native result and sanitized within the session-event budget. Activity details show a run's twelve most recent session events, tool states with their previews and the end of each assistant message, after its result. Pi children also report context-window fill, shown on the details' usage line.
+Each tool completion carries a bounded output preview (seven lines, at most 1,000 characters, first-line indentation kept) decoded from the native result and sanitized within the session-event budget. An owned agent tool's content is a delivery envelope for the model, so the backend instead phrases its result from the display details beside it (`tools/activity-preview.ts`): a summary such as `Read tests finished · 23k tok`, the report or reply it returned, and its IDs, routes, and report files as technical facts. Activity details show a run's twelve most recent session events, tool states with their previews or phrased results, the returned words and the end of each assistant message as Markdown, after its result; the facts appear only under Technical. A running row says what the agent does now: the open tool and its target, `waiting on <names>` during `agent_await`, its latest progress, or `thinking` between tool calls. Pi children also report context-window fill, shown on the details' usage line.
 
 ## Stalls, wait timeouts, and partial output
 

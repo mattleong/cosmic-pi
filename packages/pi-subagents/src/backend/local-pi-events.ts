@@ -1,4 +1,9 @@
 import { toolOutputPreview } from "./tool-output-preview.ts";
+import {
+  agentToolActivity,
+  decodeAgentToolResult,
+  isOwnedAgentTool,
+} from "../tools/activity-preview.ts";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
@@ -64,15 +69,25 @@ export const normalizeRpcEvent = (
         toolName: envelope.toolName,
         args: envelope.args,
       });
-    case "tool_execution_end":
+    case "tool_execution_end": {
+      // An owned agent tool's content is a delivery envelope for the model; Activity shows its
+      // phrased result instead.
+      const activity = agentToolActivity(
+        envelope.toolName,
+        decodeAgentToolResult(envelope.result),
+        envelope.isError,
+      );
       return Effect.succeed<BackendEvent>({
         type: "tool_finished",
         assignmentEpoch,
         toolCallId: envelope.toolCallId,
         toolName: envelope.toolName,
         isError: envelope.isError,
-        outputPreview: toolOutputPreview(envelope.result),
+        ...(isOwnedAgentTool(envelope.toolName)
+          ? activity && { activity }
+          : { outputPreview: toolOutputPreview(envelope.result) }),
       });
+    }
     case "extension_error":
       return Effect.succeed<BackendEvent>({
         type: "warning",

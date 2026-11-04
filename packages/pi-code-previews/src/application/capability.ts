@@ -56,7 +56,7 @@ export function rejectInactiveCodePreviewSession(operation: string): Promise<nev
   return Promise.reject(
     CodePreviewSessionUnavailable.make({
       operation,
-      message: "Code preview session is not active.",
+      message: "Code Previews session is not active.",
     }),
   );
 }

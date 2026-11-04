@@ -223,7 +223,7 @@ try {
     const previewTesting = await load("pi-code-previews/testing");
     if (protocol.COSMIC_UI_PROTOCOL_VERSION !== 2) throw new Error("missing Cosmic UI v2 protocol exports");
     if (typeof client.createCosmicFooterClient !== "function") throw new Error("missing Cosmic UI client export");
-    if (typeof manager.renderResponsiveManagerFooter !== "function") throw new Error("missing Cosmic UI manager export");
+    if (typeof manager.clipToWidth !== "function") throw new Error("missing Cosmic UI manager export");
     if (typeof fastModels.supportsFastModel !== "function") throw new Error("missing OpenAI fast-model export");
 
     // Load packed Code Previews beside independently owned builtin MCP through Pi's public SDK.

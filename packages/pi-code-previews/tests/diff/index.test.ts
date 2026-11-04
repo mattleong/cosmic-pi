@@ -52,6 +52,25 @@ test("Pi's skipped-context marker parses as a gap, not a context row", () => {
   );
 });
 
+test("skipped-context gaps count the unchanged lines they hide", () => {
+  const before = Arr.join(
+    Array.from({ length: 60 }, (_, index) => `line ${index}`),
+    "\n",
+  );
+  const after = Fn.pipe(
+    before,
+    Str.replace("line 20\n", "LINE 20\n"),
+    Str.replace("line 50\n", "LINE 50\n"),
+  );
+  const diff = generateDiffString(before, after).diff;
+  const rows = Str.split(stripAnsi(renderPlainDiff(diff, plainTheme, 1000)), "\n");
+  const gaps = Arr.filter(rows, (row) => Fn.pipe(row, Str.includes("…")));
+  const counts = Arr.map(gaps, (row) => /(\d+)/u.exec(row)?.[1]);
+  // Pi shows four context lines: lines 1–16 lead, 26–46 sit between the changes, and the
+  // trailing gap's size isn't in the diff, so it stays uncounted.
+  assert.deepEqual(counts, ["16", "21", undefined]);
+});
+
 test("plain diff escapes terminal control characters", () => {
   const escape = String.fromCharCode(27);
   const nul = String.fromCharCode(0);

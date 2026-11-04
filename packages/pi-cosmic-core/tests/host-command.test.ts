@@ -2,9 +2,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { vi } from "vitest";
-import { registerExtensionCommand, type ExtensionSubcommand } from "../src/host-command.ts";
+import {
+  extensionCommandOverview,
+  registerExtensionCommand,
+  type ExtensionSubcommand,
+} from "../src/host-command.ts";
 import { extensionApiFixture, extensionContextFixture } from "../src/testing/host.ts";
 
 type Command = Parameters<ExtensionAPI["registerCommand"]>[1];
@@ -68,4 +74,43 @@ describe("registered extension command", () => {
       expect(replacement.handler).toHaveBeenCalledWith("an otter", h.ctx);
     }),
   );
+});
+
+const PHONE_COLUMNS = 55;
+const lines = (text: string) => Str.split(text, "\n");
+const fitsPhone = (text: string) => Arr.every(lines(text), (line) => line.length <= PHONE_COLUMNS);
+
+describe("bare command overview", () => {
+  it("aligns descriptions in one column and keeps trailing notes", () => {
+    const text = extensionCommandOverview(
+      "demo",
+      "Demo extension",
+      [
+        { name: "list", description: "List things" },
+        { name: "receive", arguments: "[on|off]", description: "Allow or block" },
+      ],
+      ["An example follows:", '  "Ask the demo"'],
+    );
+    const [, first = "", second = ""] = lines(text);
+    expect(Str.indexOf("List things")(first)).toEqual(Str.indexOf("Allow or block")(second));
+    expect(Fn.pipe(text, Str.endsWith('An example follows:\n  "Ask the demo"'))).toBe(true);
+    expect(fitsPhone(text)).toBe(true);
+  });
+
+  it("moves descriptions beneath their commands when a line wouldn't fit a phone", () => {
+    const text = extensionCommandOverview(
+      "a-rather-long-command",
+      "An extension whose description alone runs well past the width of a phone client",
+      [
+        { name: "settings", description: "Configure every last aspect of how this behaves" },
+        { name: "health", description: "Short" },
+      ],
+    );
+    const body = lines(text).slice(1);
+    expect(fitsPhone(text)).toBe(true);
+    // Nothing wraps back to the left edge: every continuation is indented.
+    expect(Arr.every(body, Str.startsWith("  "))).toBe(true);
+    expect(body).toContain("  /a-rather-long-command health");
+    expect(body).toContain("    Short");
+  });
 });

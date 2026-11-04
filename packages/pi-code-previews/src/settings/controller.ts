@@ -74,7 +74,7 @@ function codePreviewSettingsCommand(
     owner,
     root: "code-previews",
     isCurrent: operationIsCurrent,
-    description: "Configure code previews and how tool calls look",
+    description: "Change how tool calls look",
     title: "Code Previews",
     scopes: [{ name: "global", description: "Save global Code Previews settings" }],
     descriptors: Arr.map(SCRIPTED_SETTINGS, (setting) => ({

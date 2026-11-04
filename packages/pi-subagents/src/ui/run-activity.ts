@@ -19,6 +19,7 @@ import {
 } from "./activity-panel.ts";
 import { runActivityDetail } from "./run-activity-detail.ts";
 import { formatRunRoute } from "./run-presentation.ts";
+import { isWaitingOnRuns, runLiveActivity, type RunNameLookup } from "./run-live-activity.ts";
 import {
   canInterruptRun,
   canRenameRun,
@@ -107,26 +108,7 @@ const runIdentity = (run: SubagentRunView): string =>
     run.writerCleanupQuarantined ?? null,
   ]);
 
-const LIVE_TARGET_WIDTH = 160;
-
-/** What a running agent is doing now, phrased: `running bash · sleep 25`, or its last progress. */
-const liveActivity = (run: SubagentRunView): string | undefined => {
-  if (run.state !== "running") return undefined;
-  const tool = Arr.findLast(
-    run.sessionEvents,
-    (event) => event.type === "tool" && event.state === "running",
-  );
-  if (Option.isSome(tool) && tool.value.type === "tool") {
-    const { toolName, target } = tool.value;
-    const shown = target && Str.trim(Str.split(Str.trim(target), "\n")[0] ?? "");
-    return shown
-      ? `running ${toolName} · ${Fn.pipe(shown, Str.slice(0, LIVE_TARGET_WIDTH))}`
-      : `running ${toolName}`;
-  }
-  return run.currentTool ? `running ${run.currentTool}` : run.progress;
-};
-
-const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
+const runSummary = (run: SubagentRunView, nameOf: RunNameLookup): Pick<ActivityItem, "summary"> => {
   const reason = run.state === "failed" ? userRunText(run).error : undefined;
   const cleanup = runCleanupAttention(run);
   const summary =
@@ -136,13 +118,17 @@ const runSummary = (run: SubagentRunView): Pick<ActivityItem, "summary"> => {
         ? "Writer admission is blocked by another run's cleanup"
         : reason
           ? Str.split(reason, "\n")[0]
-          : (liveActivity(run) ?? run.progress);
+          : (runLiveActivity(run, nameOf) ?? run.progress);
   return summary
     ? { summary: sanitizeDiagnosticContent(summary, { maximumLength: ACTIVITY_LIMITS.text }) }
     : {};
 };
 
-const runActivityItem = (run: SubagentRunView, awaited: boolean): ActivityItem => {
+const runActivityItem = (
+  run: SubagentRunView,
+  awaited: boolean,
+  nameOf: RunNameLookup,
+): ActivityItem => {
   const title = sanitizeDiagnosticContent(run.name, { maximumLength: ACTIVITY_LIMITS.title });
   return withActivityRevision(
     {
@@ -153,7 +139,7 @@ const runActivityItem = (run: SubagentRunView, awaited: boolean): ActivityItem =
       awaited,
       startedAt: run.startedAt,
       updatedAt: run.lastActivityAt,
-      ...runSummary(run),
+      ...runSummary(run, nameOf),
       actions: Object.freeze(Arr.map(runActions(run, title), (action) => Object.freeze(action))),
       route: sanitizeDiagnosticContent(formatRunRoute(run), {
         maximumLength: ACTIVITY_LIMITS.route,
@@ -180,12 +166,17 @@ interface CachedActivityItems {
 // Projections keep an unchanged run's frozen view, so its item is built once per change.
 const activityItemCache = new WeakMap<SubagentRunView, CachedActivityItems>();
 
-const cachedRunActivityItem = (run: SubagentRunView, awaited: boolean): ActivityItem => {
-  if (!Object.isFrozen(run)) return runActivityItem(run, awaited);
+const cachedRunActivityItem = (
+  run: SubagentRunView,
+  awaited: boolean,
+  nameOf: RunNameLookup,
+): ActivityItem => {
+  // A run waiting on others names them, so its item follows their names, not only its own view.
+  if (!Object.isFrozen(run) || isWaitingOnRuns(run)) return runActivityItem(run, awaited, nameOf);
   const cached = activityItemCache.get(run);
   const hit = awaited ? cached?.awaited : cached?.idle;
   if (hit) return hit;
-  const item = runActivityItem(run, awaited);
+  const item = runActivityItem(run, awaited, nameOf);
   activityItemCache.set(run, awaited ? { ...cached, awaited: item } : { ...cached, idle: item });
   return item;
 };
@@ -196,7 +187,9 @@ export function subagentActivityItems(
 ): readonly ActivityItem[] {
   const awaited = new Set(Arr.flatMap(presentation.awaits, (lease) => lease.runIds));
   const rows = projectFleetTree(projection.runs, "root").rows;
-  const runs = Arr.map(rows, ({ run }) => cachedRunActivityItem(run, awaited.has(run.id)));
+  const names = new Map(Arr.map(projection.runs, (run) => [run.id, run.name] as const));
+  const nameOf: RunNameLookup = (id) => names.get(id);
+  const runs = Arr.map(rows, ({ run }) => cachedRunActivityItem(run, awaited.has(run.id), nameOf));
   return Object.freeze(runs.slice(0, ACTIVITY_LIMITS.items));
 }
 
@@ -207,5 +200,9 @@ export function subagentActivityDetail(
   const run = Option.getOrUndefined(
     Arr.findFirst(projectFleetTree(projection.runs, "root").rows, (row) => row.run.id === id),
   )?.run;
-  return run && runActivityDetail(run);
+  if (!run) return undefined;
+  const names = new Map(
+    Arr.map(projection.runs, (candidate) => [candidate.id, candidate.name] as const),
+  );
+  return runActivityDetail(run, (runId) => names.get(runId));
 }

@@ -124,6 +124,11 @@ export class ListDetailShell {
     return window;
   }
 
+  /** Whether the detail pane rests at its first line, so the reader hasn't scrolled into it. */
+  get detailAtTop(): boolean {
+    return this.current.detailScroll >= this.detailMaxScroll;
+  }
+
   resetDetailScroll(): void {
     this.current.detailScroll = 0;
   }
@@ -233,6 +238,35 @@ export const framedStackedRows = (
   return [
     ...rows,
     ...framedFill(frame, [], Math.max(0, options.height - rows.length), options.inner, "detail"),
+  ];
+};
+
+const horizontalRule = (width: number) => Fn.pipe("─", Str.repeat(Math.max(0, width)));
+
+/**
+ * Places wrapped hint rows (`keyHintRows`) between a framed body and its bottom border, set off
+ * by a divider. A two-pane layout passes its pane widths so the divider closes the column rule.
+ * The rows give way only when the body is too short to show content beside them.
+ */
+export const framedBodyWithHints = (
+  frame: ListDetailFrame,
+  options: {
+    readonly height: number;
+    readonly inner: number;
+    readonly hints: ReadonlyArray<string>;
+    readonly columns?: { readonly listWidth: number; readonly detailWidth: number } | undefined;
+  },
+  body: (height: number) => ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const { height, inner, hints, columns } = options;
+  if (!hints.length || height <= hints.length + 4) return body(height);
+  const divider = columns
+    ? `${frame.outer("├")}${frame.outer(horizontalRule(columns.listWidth))}${frame.inner("┴")}${frame.outer(horizontalRule(columns.detailWidth))}${frame.outer("┤")}`
+    : `${frame.outer("├")}${frame.outer(horizontalRule(inner))}${frame.outer("┤")}`;
+  return [
+    ...body(height - hints.length - 1),
+    divider,
+    ...framedFill(frame, hints, hints.length, inner),
   ];
 };
 

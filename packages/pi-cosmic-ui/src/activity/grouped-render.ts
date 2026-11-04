@@ -6,21 +6,21 @@ import {
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { LIST_CURSOR, focusedField } from "../manager/style.ts";
 import {
-  renderResponsiveManagerFooter,
   clipToWidth,
   joinInline,
   managerNoticeColor,
   managerNoticeGlyph,
-  type ManagerFooterGroup,
 } from "../manager/chrome.ts";
 import {
+  borderKeyHint,
   configuredKeyLabels,
   exitKeyHint,
   exitKeyVerb,
+  fittedBorderKeyHint,
+  framedKeyHints,
   helpKeyHint,
   joinKeyHints,
   keyHint,
@@ -35,6 +35,7 @@ import {
   type DetailWindowPosition,
 } from "../manager/list-detail.ts";
 import {
+  framedBodyWithHints,
   framedFill,
   framedScreen,
   framedWideRows,
@@ -94,16 +95,19 @@ interface ActivityKeys {
   readonly move: string;
 }
 
-function confirmationFooterVariants(
+// A long action label gives way to `Confirm` so the decision keys always fit the border.
+function confirmationFooter(
   confirmation: { readonly label: string; readonly key: string | undefined },
   { confirm, cancel }: ActivityKeys,
-): ReadonlyArray<ReadonlyArray<ManagerFooterGroup>> {
+  inner: number,
+): string {
   const keys = confirmation.key ? `${confirmation.key}/${confirm}` : confirm;
   const decline = exitKeyHint("decision", [], cancel);
-  return [
-    [joinKeyHints([keyHint(keys, confirmation.label), decline])],
-    [joinKeyHints([keyHint(keys, "Confirm"), decline])],
-  ];
+  return fittedBorderKeyHint(
+    joinKeyHints([keyHint(keys, confirmation.label), decline]),
+    joinKeyHints([keyHint(keys, "Confirm"), decline]),
+    inner,
+  );
 }
 
 interface NavigationHints {
@@ -152,24 +156,17 @@ interface NavigationFooter {
 /**
  * The bottom border carries the whole bar when it fits. Otherwise it keeps exit and help, and
  * the other hints wrap between pairs into rows above it, so none is dropped at any width.
+ * Expanded help always lists everything above the border.
  */
 function navigationFooter(
   { hints, close }: NavigationHints,
   expanded: boolean,
   inner: number,
 ): NavigationFooter {
-  const help = helpKeyHint(expanded);
-  const tail = joinKeyHints([close, help]);
-  if (expanded)
-    return { bottom: renderResponsiveManagerFooter(inner, [[tail]]), overflow: undefined };
-  const full = joinKeyHints([...hints, close, help]);
-  // The border keeps a corner and a rule on each side of the bar.
-  if (visibleWidth(full) + 2 <= inner)
-    return { bottom: renderResponsiveManagerFooter(inner, [[full]]), overflow: undefined };
-  return {
-    bottom: renderResponsiveManagerFooter(inner, [[tail]]),
-    overflow: joinKeyHints(hints) || undefined,
-  };
+  const tail = [close, helpKeyHint(expanded)];
+  if (expanded) return { bottom: borderKeyHint(joinKeyHints(tail), inner), overflow: undefined };
+  const { border, overflow } = framedKeyHints(hints, tail, inner);
+  return { bottom: border, overflow: overflow || undefined };
 }
 
 /**
@@ -471,13 +468,7 @@ export function renderGroupedActivity(
     keys,
   );
   const footer = state.confirmation
-    ? {
-        bottom: renderResponsiveManagerFooter(
-          inner,
-          confirmationFooterVariants(state.confirmation, keys),
-        ),
-        overflow: undefined,
-      }
+    ? { bottom: confirmationFooter(state.confirmation, keys, inner), overflow: undefined }
     : navigationFooter(navigation, state.alternateHelp, inner);
   const bottom = footer.bottom;
   const hintText =
@@ -545,19 +536,20 @@ export function renderGroupedActivity(
       bottom,
       body: (fullHeight) => {
         // Wrapped or expanded hints take rows at the bottom so each stays readable at any width.
-        const helpRows = fullHeight > help.length + 4 ? help : [];
-        const bodyHeight = fullHeight - (helpRows.length ? helpRows.length + 1 : 0);
         const geometry =
           tier === "wide"
             ? wideListDetailGeometry(width, 38, 0.4)
             : { listWidth: inner, detailWidth: Math.max(1, inner) };
-        const content = activityBody(bodyHeight, geometry);
-        if (!helpRows.length) return content;
-        const divider =
-          tier === "wide"
-            ? `${frame.outer("├")}${frame.outer(Fn.pipe("─", Str.repeat(geometry.listWidth)))}${frame.inner("┴")}${frame.outer(Fn.pipe("─", Str.repeat(geometry.detailWidth)))}${frame.outer("┤")}`
-            : `${frame.outer("├")}${frame.outer(Fn.pipe("─", Str.repeat(inner)))}${frame.outer("┤")}`;
-        return [...content, divider, ...framedFill(frame, helpRows, helpRows.length, inner)];
+        return framedBodyWithHints(
+          frame,
+          {
+            height: fullHeight,
+            inner,
+            hints: help,
+            columns: tier === "wide" ? geometry : undefined,
+          },
+          (bodyHeight) => activityBody(bodyHeight, geometry),
+        );
       },
     }),
     (line) => clipToWidth(line, width, ""),

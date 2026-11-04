@@ -20,6 +20,7 @@ import { activityInspectionKey, activityWidgetHeight } from "../src/activity/wid
 import type { ActivityRow } from "../src/activity/model.ts";
 import type { ActivityDetail } from "../src/activity/protocol.ts";
 import { activityRow, memberRow } from "./support/activity.ts";
+import { activitySectionId } from "../src/activity/grouped-tree.ts";
 import { sharedSurfaceGalleryLines } from "./support/gallery-shared-surfaces.ts";
 
 const directory = galleryDirectory(process.env) ?? "";
@@ -468,6 +469,11 @@ const detailFrames = () => {
   capture("running task scrolled to its end · narrow · 57 cols", component.render(57));
   component.handleInput("\u001b");
   capture("list · narrow · 57 cols", component.render(57));
+  const tasks = activitySectionId("tasks");
+  for (let step = 0; step < 8 && component.shell.state.selectedId !== tasks; step++)
+    component.handleInput("k");
+  capture("group summary · 140 cols", component.render(140));
+  capture("group summary · narrow · 57 cols", component.render(57));
   return frames;
 };
 

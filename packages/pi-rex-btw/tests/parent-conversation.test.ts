@@ -95,9 +95,35 @@ describe("parent conversation", () => {
       ),
     ).not.toContain("abandoned");
     expect(conversation.items[1]?.tools).toEqual([
-      expect.objectContaining({ name: "bash", outcome: "failed", output: "FAIL cart.test.ts" }),
+      expect.objectContaining({
+        name: "bash",
+        subject: "pnpm test",
+        outcome: "failed",
+        output: "FAIL cart.test.ts",
+      }),
     ]);
     expect(conversation.earlier).toBe(false);
+  });
+
+  it("names each call by the argument a person recognizes, even when its input is clipped", () => {
+    const long = `pnpm test ${Str.repeat(300)("x")}`;
+    const call = assistant(null, [
+      {
+        type: "toolCall",
+        id: "c1",
+        name: "edit",
+        arguments: { oldText: "a", newText: "b", path: "src/cart.ts" },
+      },
+      { type: "toolCall", id: "c2", name: "bash", arguments: { command: long } },
+      { type: "toolCall", id: "c3", name: "custom", arguments: { limit: 3, topic: "deploys" } },
+      { type: "toolCall", id: "c4", name: "noargs", arguments: {} },
+    ]);
+    const tools = parentConversation(PARENT_ID, jsonl([call]), false, 15).items[0]?.tools ?? [];
+    const subjects = Arr.map(tools, (tool) => tool.subject);
+    expect(subjects[0]).toBe("src/cart.ts");
+    expect(subjects[1]).toMatch(/^pnpm test x+…$/u);
+    expect(subjects[2]).toBe("deploys");
+    expect(subjects[3]).toBe("");
   });
 
   it("reads only the latest messages and says earlier ones exist", () => {
@@ -175,6 +201,7 @@ describe("parent transcript file", () => {
 
 const child = (flags: Record<string, string | boolean | undefined>) => {
   const notify = vi.fn();
+  const setWidget = vi.fn();
   const host = recordingExtensionHost(
     {},
     { registerFlag() {}, getFlag: (name: string) => flags[name] },
@@ -185,10 +212,11 @@ const child = (flags: Record<string, string | boolean | undefined>) => {
     cwd: "/project",
     mode: "tui" as const,
     hasUI: true,
-    ui: { notify },
+    ui: { notify, setWidget },
   });
   return {
     notify,
+    setWidget,
     tools: host.tools,
     start: () => host.emit("session_start", ctx),
     shutdown: () => host.emit("session_shutdown", ctx),
@@ -207,7 +235,9 @@ describe("BTW child registration", () => {
           "rex-btw-parent-file": file,
         });
         yield* Effect.promise(h.start);
-        expect(h.notify).toHaveBeenCalledOnce();
+        // A widget, not a notice: Pi replaces a notice with the next one.
+        expect(h.setWidget).toHaveBeenCalledOnce();
+        expect(h.notify).not.toHaveBeenCalled();
         const tool = h.tools.get(PARENT_TOOL);
         expect(tool).toBeDefined();
         const result = yield* Effect.promise(() =>
@@ -233,12 +263,17 @@ describe("BTW child registration", () => {
       Effect.gen(function* () {
         const blind = child({ "rex-btw": true });
         yield* Effect.promise(blind.start);
-        expect(blind.notify).toHaveBeenCalledOnce();
+        expect(blind.setWidget).toHaveBeenCalledOnce();
         expect(blind.tools.has(PARENT_TOOL)).toBe(false);
+        yield* Effect.promise(blind.shutdown);
+        // Pi clears widgets when it replaces the session, so the next start shows the line again.
+        yield* Effect.promise(blind.start);
+        expect(blind.setWidget).toHaveBeenCalledTimes(2);
         yield* Effect.promise(blind.shutdown);
 
         const ordinary = child({});
         yield* Effect.promise(ordinary.start);
+        expect(ordinary.setWidget).not.toHaveBeenCalled();
         expect(ordinary.notify).not.toHaveBeenCalled();
         expect(ordinary.tools.has(PARENT_TOOL)).toBe(false);
         yield* Effect.promise(ordinary.shutdown);

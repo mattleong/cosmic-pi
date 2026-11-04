@@ -259,9 +259,9 @@ export function betterOpenAIWithDependencies(
       });
       replay.publish();
       cosmicUiWatch.start();
+      // The footer's ⚡ already shows fast mode at startup and restore; only a change the user
+      // makes, a toggle or a model switch, is announced.
       renderFooter(ctx);
-      const fast = MutableRef.get(fastProjection);
-      if (fast.desiredActive) notifyFastState(ctx, fast);
     },
     onDeactivated: ({ context, publicationOwner }) => {
       MutableRef.set(publicationOwner, false);
@@ -320,7 +320,7 @@ export function betterOpenAIWithDependencies(
 
   command.add({
     name: "usage",
-    description: "Show OpenAI subscription usage",
+    description: "Show subscription usage",
     handler: (_args, ctx) => {
       updateContext(ctx);
       const signal = safeHostSignal(ctx);
@@ -467,7 +467,7 @@ export function betterOpenAIWithDependencies(
       slot.captureAuthority(),
     ).catch(() => undefined);
   });
-  pi.on("model_select", (_event, ctx) => {
+  pi.on("model_select", (event, ctx) => {
     const signal = safeHostSignal(ctx);
     providerTransport.request(ctx);
     const before = MutableRef.get(fastProjection).active;
@@ -481,7 +481,7 @@ export function betterOpenAIWithDependencies(
     renderFooter(ctx);
     const fast = MutableRef.get(fastProjection);
     const active = isFastActive(ctx, fast);
-    if (active !== before)
+    if (active !== before && event.source !== "restore")
       notifyAtHostBoundary(
         ctx,
         active ? fastStateText(ctx, fast) : inactiveForModelMessage(ctx),

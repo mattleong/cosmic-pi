@@ -2,7 +2,7 @@ import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import type { BuiltinCompactTool } from "../../builtin-subject";
 import {
   hostObject,
@@ -34,6 +34,7 @@ import { createSimpleDiff } from "../../../diff/structured";
 import { summarizeDiff } from "../../../diff/summary";
 import { formatDiffPreview } from "./diff-preview";
 import { expandedSection } from "../../../preview/expanded-section";
+import { headingShowedSubject } from "../../../preview/heading-coverage";
 import { normalizeShellCommandWhitespace } from "../../shell-command";
 import { argumentsStreaming, pathPreviewLanguage, renderContentPreview } from "./preview-text";
 import { readResultBody } from "./read-result";
@@ -65,7 +66,11 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       const command = ownField(input, "command");
       if (tool === "bash" && Predicate.isString(command))
         container.addChild(
-          expandedSection(theme, undefined, commandBody(command, theme, context.invalidate)),
+          expandedSection(
+            theme,
+            undefined,
+            commandBody(command, theme, context.state, context.invalidate),
+          ),
         );
       const highlight = !argumentsStreaming(context);
       const content = ownField(input, "content");
@@ -272,16 +277,20 @@ function builtinOptionLabels(
   });
 }
 
-const HEADING_COMMAND_RESERVE = 16;
-
-function commandBody(command: string, theme: Theme, invalidate?: () => void): Component {
-  const exactInHeading = normalizeShellCommandWhitespace(command) === command;
+function commandBody(
+  command: string,
+  theme: Theme,
+  state: RendererState,
+  invalidate?: () => void,
+): Component {
+  // The heading's subject is this command exactly unless display normalization changed it.
+  const headingSubject =
+    command.length <= 4096 &&
+    escapeControlChars(normalizeShellCommandWhitespace(command)) === command;
   let highlighted: Text | undefined;
   return {
     render(width) {
-      // The heading sits two columns wider than this body and spends `✓ bash ` and at most
-      // ` · 59m 59s` of timing, so a command this short always appears there in full.
-      if (exactInHeading && visibleWidth(command) <= width - HEADING_COMMAND_RESERVE) return [];
+      if (headingSubject && headingShowedSubject(state)) return [];
       highlighted ??= new Text(
         Arr.join(renderHighlightedText(command, "bash", theme, invalidate), "\n"),
         0,

@@ -14,8 +14,13 @@ import {
   SelectList,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
-import { renderResponsiveManagerFooter, clipToWidth } from "./chrome.ts";
-import { framedFill, framedScreen, listDetailFrame } from "./list-detail-shell.ts";
+import { clipToWidth } from "./chrome.ts";
+import {
+  framedBodyWithHints,
+  framedFill,
+  framedScreen,
+  listDetailFrame,
+} from "./list-detail-shell.ts";
 import { isListMotion, nextListMotionIndex } from "./list-navigation.ts";
 import {
   FULL_SCREEN_NAVIGATION_SHORTCUTS,
@@ -25,10 +30,13 @@ import {
 } from "./keymap.ts";
 import {
   configuredKeyLabels,
+  exitKeyHint,
+  framedKeyHints,
   helpKeyHint,
   keyHint,
-  keyHintBar,
+  keyHintRows,
   TEXT_INPUT_KEY_LABELS,
+  type FramedKeyHints,
 } from "./key-labels.ts";
 import { focusedField } from "./style.ts";
 
@@ -296,42 +304,35 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     return `${this.keys().key("tui.select.cancel", "Esc")} ${verb}`;
   }
 
-  private footer(inner: number): string {
+  private footer(inner: number): FramedKeyHints {
     const { key, movement } = this.keys();
     const confirm = key("tui.select.confirm", "Enter");
     const cancel = key("tui.select.cancel", "Esc");
     const move = keyHint(movement ?? "↑↓", "Move");
     const select = keyHint(confirm, "Select");
     if (this.searchMode)
-      return renderResponsiveManagerFooter(inner, [
-        ["Type to filter", move, select, this.searchCancel()],
-        [select, this.searchCancel()],
-      ]);
+      return framedKeyHints(["Type to filter", move, select], [this.searchCancel()], inner);
     const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
-    const bar = {
-      hints: [move, select, keyHint("/", "Filter")],
-      more: [
-        keyHint("j/k", "Move"),
-        keyHint(`${pages}/C-u/C-d`, "Page"),
-        keyHint("gg/G", "Ends"),
-        keyHint("l", "Select"),
-      ],
-      exit: "nested" as const,
-      exitAliases: ["h", "q"],
-      exitKey: cancel,
-    };
-    return renderResponsiveManagerFooter(inner, [
-      [keyHintBar(bar, this.alternateHelp)],
-      [
-        keyHintBar({ hints: [select], exit: "nested", exitKey: cancel }, false),
-        helpKeyHint(this.alternateHelp),
-      ],
-    ]);
+    const expanded = this.alternateHelp;
+    const more = [
+      keyHint("j/k", "Move"),
+      keyHint(`${pages}/C-u/C-d`, "Page"),
+      keyHint("gg/G", "Ends"),
+      keyHint("l", "Select"),
+    ];
+    return framedKeyHints(
+      [move, select, keyHint("/", "Filter"), ...(expanded ? more : [])],
+      [exitKeyHint("nested", expanded ? ["h", "q"] : [], cancel), helpKeyHint(expanded)],
+      inner,
+    );
   }
 
-  private compactBody(height: number, inner: number, activeNotice: string | undefined): string[] {
+  private compactBody(
+    bodyHeight: number,
+    inner: number,
+    activeNotice: string | undefined,
+  ): string[] {
     const theme = this.options.theme;
-    const bodyHeight = Math.max(0, height - 2);
     const noticeLine = activeNotice
       ? theme.fg("warning", clipToWidth(activeNotice, inner, "…"))
       : undefined;
@@ -357,7 +358,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     return [...compactHeader, ...this.list.render(inner).slice(0, listRows)];
   }
 
-  private fullBody(height: number, inner: number, activeNotice: string | undefined): string[] {
+  private fullBody(bodyHeight: number, inner: number, activeNotice: string | undefined): string[] {
     const theme = this.options.theme;
     const limitedWrap = (value: string, maximumLines: number): ReadonlyArray<string> => {
       const lines = wrapTextWithAnsi(value, Math.max(1, inner));
@@ -366,7 +367,6 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       shown[maximumLines - 1] = clipToWidth(`${shown[maximumLines - 1] ?? ""}…`, inner, "");
       return shown;
     };
-    const bodyHeight = Math.max(0, height - 2);
     const noticeLines = activeNotice
       ? Arr.map(limitedWrap(activeNotice, 2), (line) => theme.fg("warning", line))
       : [];
@@ -399,16 +399,25 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     const title = clipToWidth(` ${this.options.breadcrumb} `, inner, "");
     const frame = listDetailFrame(this.options.theme, "list");
     const activeNotice = this.feedback ?? this.options.notice;
-    const body =
-      height < 10
-        ? this.compactBody(height, inner, activeNotice)
-        : this.fullBody(height, inner, activeNotice);
+    const footer = this.footer(inner);
+    const hints = keyHintRows(footer.overflow, inner, (row) => this.options.theme.fg("dim", row));
     return framedScreen(frame, {
       width: safeWidth,
       height,
       top: title,
-      bottom: this.footer(inner),
-      body: (bodyHeight) => framedFill(frame, body, bodyHeight, inner, "list"),
+      bottom: footer.border,
+      body: (fullHeight) =>
+        framedBodyWithHints(frame, { height: fullHeight, inner, hints }, (bodyHeight) =>
+          framedFill(
+            frame,
+            height < 10
+              ? this.compactBody(bodyHeight, inner, activeNotice)
+              : this.fullBody(bodyHeight, inner, activeNotice),
+            bodyHeight,
+            inner,
+            "list",
+          ),
+        ),
     });
   }
 

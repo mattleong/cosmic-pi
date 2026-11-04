@@ -42,9 +42,13 @@ const previewLinesEnd = (text: string): number | undefined => {
   return end;
 };
 
+/** Drops surrounding blank lines and trailing spaces but keeps the first line's indentation. */
+const trimOutput = (text: string): string =>
+  Fn.pipe(text, Str.replace(/^(?:[^\S\n]*\n)+/u, ""), Str.trimEnd);
+
 const previewText = (text: string): Option.Option<string> => {
-  const trimmed = Str.trim(text);
-  if (!trimmed) return Option.none();
+  const trimmed = trimOutput(text);
+  if (!Str.isNonEmpty(Str.trim(trimmed))) return Option.none();
   const end = previewLinesEnd(trimmed);
   const preview = end === undefined ? trimmed : Fn.pipe(trimmed, Str.slice(0, end));
   const clipped = preview.length > TOOL_PREVIEW_CHARS || end !== undefined;

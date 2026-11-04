@@ -107,7 +107,7 @@ it.effect("logs a sanitized warning and continues after a malformed settings doc
       Effect.sync(() => {
         assert.equal(loaded.readCollapsedLines, defaultCodePreviewSettings.readCollapsedLines);
         const telemetry = capturedTelemetrySnapshot(captured);
-        assert.match(telemetry, /Failed to load settings for code previews/);
+        assert.match(telemetry, /Failed to load Code Previews settings/);
         assert.equal(Fn.pipe(telemetry, Str.includes("secret/settings")), false);
         assert.equal(Fn.pipe(telemetry, Str.includes("secret malformed")), false);
       }),

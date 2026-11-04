@@ -9,7 +9,12 @@ import type {
   SubagentEffort,
   SubagentWriteIntent,
 } from "../domain/routing.ts";
-import type { RuntimeApiKey, SubagentUsage, SubagentCleanupDiagnostic } from "../run/model.ts";
+import type {
+  RuntimeApiKey,
+  SubagentCleanupDiagnostic,
+  SubagentToolActivity,
+  SubagentUsage,
+} from "../run/model.ts";
 import type {
   AgentCaller,
   AgentListResult,
@@ -114,6 +119,7 @@ export type BackendEvent =
       readonly toolName: string;
       readonly isError: boolean;
       readonly outputPreview?: string | undefined;
+      readonly activity?: SubagentToolActivity | undefined;
     }
   | {
       readonly type: "supervisor_contact";

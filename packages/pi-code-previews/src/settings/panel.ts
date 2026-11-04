@@ -125,7 +125,7 @@ export function createCodePreviewSettingsModel({
         settle(list, (_key, pendingRevision) => pendingRevision < changeRevision);
         if (codePreviewSettings.shikiTheme !== previous.shikiTheme)
           void effects.initializeSyntax(codePreviewSettings.shikiTheme).catch(() => undefined);
-        notify("Code preview settings restored to defaults", "info");
+        notify("Code Previews settings restored to defaults", "info");
         return undefined;
       });
     } else {

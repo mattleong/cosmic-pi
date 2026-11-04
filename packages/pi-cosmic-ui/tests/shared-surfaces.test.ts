@@ -11,7 +11,13 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { plainTheme } from "pi-cosmic-core/testing";
-import { joinKeyHints, keyHintBar, keyHintRows, wrapKeyHints } from "../src/manager/key-labels.ts";
+import {
+  framedKeyHints,
+  joinKeyHints,
+  keyHintBar,
+  keyHintRows,
+  wrapKeyHints,
+} from "../src/manager/key-labels.ts";
 import { TextPanelComponent } from "../src/manager/panel.ts";
 import {
   createSettingsGroupSubmenu,
@@ -279,6 +285,18 @@ describe("key hints", () => {
     const expanded = keyHintBar(bar, true);
     for (const pair of Arr.take(collapsed, 2)) expect(expanded).toContain(pair);
     expect(expanded).toContain("Esc/q");
+  });
+
+  it("keeps the exit in a framed border and every other pair above it at any width", () => {
+    const hints = ["↑↓ Move", "Enter Open", "Tab Saved profiles", "m Model", "a Manage"];
+    const tail = ["Esc Close", "? More"];
+    for (const inner of [30, 55, 178]) {
+      const { border, overflow } = framedKeyHints(hints, tail, inner);
+      expect(visibleWidth(border)).toBeLessThanOrEqual(inner);
+      const shown = `${border} ${Arr.join(keyHintRows(overflow, inner), " ")}`;
+      for (const pair of [...hints, ...tail]) expect(shown).toContain(pair);
+      for (const pair of tail) expect(border).toContain(pair);
+    }
   });
 
   it("wraps between pairs, never inside one", () => {

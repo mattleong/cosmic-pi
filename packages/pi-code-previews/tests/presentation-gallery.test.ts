@@ -6,7 +6,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
-import { extensionApiFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { registerCodePreviewsCommand } from "../src/commands/register";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
@@ -318,6 +319,12 @@ const scenarios: ReadonlyArray<
     args: { code: "// SOURCE_HEAD " + Fn.pipe("padding ", Str.repeat(250)) + " SOURCE_TAIL" },
     phase: "pending",
     narrow: true,
+  },
+  {
+    tool: "codemode",
+    title: "native program ending in a line break draws no blank row",
+    args: { code: "const total = 1 + 2;\ntext(String(total));\n" },
+    result: nativeResult("completed", [], "3"),
   },
   {
     tool: "codemode",
@@ -1120,11 +1127,64 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "edit",
+    title: "edit diff counts the unchanged lines it hides",
+    args: {
+      path: "/project/src/config.ts",
+      edits: [{ oldText: "export const option20 = 20;", newText: "export const option20 = 200;" }],
+    },
+    result: text("Successfully replaced 1 block(s) in /project/src/config.ts.", {
+      diff: generateDiffString(
+        Arr.join(
+          Arr.makeBy(40, (index) => `export const option${index} = ${index};`),
+          "\n",
+        ),
+        Arr.join(
+          Arr.makeBy(40, (index) => `export const option${index} = ${index === 20 ? 200 : index};`),
+          "\n",
+        ),
+      ).diff,
+    }),
+  },
+  {
+    tool: "edit",
     title: "edit without a diff",
     args: editArgs,
     result: text("Successfully replaced text in /project/src/a.ts."),
   },
 ];
+
+/**
+ * What a bare `/code-previews` shows, drawn as Pi draws a notice: one column in, wrapping at the
+ * terminal edge with no hanging indent, so a line that's too long shows up flush-left.
+ */
+const commandOverviewFrames = Effect.fn("Gallery.commandOverviewFrames")(function* () {
+  let run: ((args: string) => Promise<void>) | undefined;
+  const notices: string[] = [];
+  registerCodePreviewsCommand(
+    extensionApiFixture({
+      registerCommand: (_name, definition) => {
+        run = (args) =>
+          definition.handler(
+            args,
+            extensionContextFixture({
+              hasUI: true,
+              ui: { notify: (message: string) => void notices.push(message) },
+            }),
+          );
+      },
+    }),
+  );
+  const invoke = run;
+  if (invoke) yield* Effect.promise(() => invoke(""));
+  const notice = notices[0] ?? "";
+  return Arr.flatMap([180, 57], (width) => [
+    `── /code-previews help · ${width} cols`,
+    ...Arr.flatMap(Str.split(notice, "\n"), (line) =>
+      Arr.map(Arr.chunksOf(Arr.fromIterable(` ${line}`), width), Arr.join("")),
+    ),
+    "",
+  ]);
+});
 
 const directory = galleryDirectory(process.env) ?? "";
 
@@ -1168,6 +1228,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       } finally {
         setCodePreviewSettings(saved);
       }
+      lines.push(...(yield* commandOverviewFrames()));
       yield* writeGallerySection(directory, "pi-code-previews", lines);
     }),
   );

@@ -1,7 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 
@@ -130,29 +129,4 @@ export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: 
   return visibleWidth(full) <= width
     ? full
     : truncateToWidth(`  ${tabs[active] ?? ""}`, Math.max(0, width), "");
-};
-
-export type ManagerFooterGroup = string | undefined;
-
-export const renderResponsiveManagerFooter = (
-  contentWidth: number,
-  variants: ReadonlyArray<ReadonlyArray<ManagerFooterGroup>>,
-): string => {
-  const safeWidth = Math.max(0, Math.floor(contentWidth));
-  if (safeWidth === 0 || variants.length === 0) return "";
-  const lines = Arr.map(
-    variants,
-    (groups) =>
-      ` ${Arr.join(
-        Arr.filter(
-          groups,
-          (group): group is string => Predicate.isString(group) && Str.isNonEmpty(group),
-        ),
-        INLINE_SEPARATOR,
-      )} `,
-  );
-  return (
-    Option.getOrUndefined(Arr.findFirst(lines, (line) => visibleWidth(line) <= safeWidth)) ??
-    truncateToWidth(lines.at(-1) ?? "", safeWidth, "")
-  );
 };

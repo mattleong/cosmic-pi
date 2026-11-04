@@ -6,7 +6,7 @@ import { healthSubcommand } from "./health";
 export function registerCodePreviewsCommand(pi: ExtensionAPI): void {
   registerExtensionCommand(pi, {
     name: "code-previews",
-    description: "Code preview health and settings",
+    description: "Code Previews health and settings",
     subcommands: [healthSubcommand, codePreviewSettingsSubcommand()],
   });
 }

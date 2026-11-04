@@ -54,7 +54,7 @@ function healthLines(cwd: string): string[] {
   const status = getShikiStatus();
   const settings = codePreviewSettings;
   return [
-    "Code preview health",
+    "Code Previews health",
     "Syntax highlighting",
     `  Highlighting: ${formatOnOff(settings.syntaxHighlighting)} · ${settings.shikiTheme} theme`,
     `  Highlighter: ${status.initialized ? "ready" : "not started"}`,
@@ -90,7 +90,7 @@ function healthLines(cwd: string): string[] {
 
 export const healthSubcommand: ExtensionSubcommand = {
   name: "health",
-  description: "Show code preview renderer health and settings",
+  description: "Show renderer health",
   handler: (_args, ctx) => {
     const lines = healthLines(ctx.cwd);
     if (!hasCustomSurface(ctx)) {
@@ -102,7 +102,7 @@ export const healthSubcommand: ExtensionSubcommand = {
       create: ({ theme, finish, getHeight }) =>
         new TextPanelComponent({
           theme,
-          title: lines[0] ?? "Code preview health",
+          title: lines[0] ?? "Code Previews health",
           lines: lines.slice(1),
           done: () => finish(undefined),
           maxHeight: getHeight,

@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { clipText, countLabel } from "pi-cosmic-core/display";
 import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
-import { registerExtensionCommand } from "pi-cosmic-core/host-command";
+import { extensionCommandOverview, registerExtensionCommand } from "pi-cosmic-core/host-command";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
@@ -74,35 +74,30 @@ const RECEIVE_CHOICES = ["on", "off"] as const;
 const notify = (ctx: ExtensionCommandContext, message: string, level: "info" | "warning") =>
   notifyAtHostBoundary(ctx, message, level);
 
-const OVERVIEW_COMMANDS = [
-  [`/${INTERCOM_COMMAND} list`, "List them and their state"],
-  [`/${INTERCOM_COMMAND} receive [on|off]`, "Allow or block messages"],
-] as const;
+const LIST_HELP = { name: "list", description: "List other live sessions" } as const;
+const RECEIVE_HELP = {
+  name: "receive",
+  arguments: "[on|off]",
+  description: "Allow or block messages",
+} as const;
+const HOW_TO_MESSAGE = howToMessage(undefined);
 
-const commandColumn = Math.max(...Arr.map(OVERVIEW_COMMANDS, ([usage]) => usage.length));
-
-/** The shared command overview, short enough for a narrow pane, plus how to message a session. */
-export const overview = Arr.join(
-  [
-    `/${INTERCOM_COMMAND}: ${DESCRIPTION}`,
-    ...Arr.map(
-      OVERVIEW_COMMANDS,
-      ([usage, description]) => `  ${Fn.pipe(usage, Str.padEnd(commandColumn))}  ${description}`,
-    ),
-    ...howToMessage(undefined),
-  ],
-  "\n",
+/** The shared command overview, plus how to message a session. */
+export const overview = extensionCommandOverview(
+  INTERCOM_COMMAND,
+  DESCRIPTION,
+  [LIST_HELP, RECEIVE_HELP],
+  HOW_TO_MESSAGE,
 );
 
 export function registerIntercomCommand(pi: ExtensionAPI, host: IntercomCommandHost): void {
   registerExtensionCommand(pi, {
     name: INTERCOM_COMMAND,
     description: DESCRIPTION,
-    bare: { handler: (_args, ctx) => notify(ctx, overview, "info") },
+    overviewNotes: HOW_TO_MESSAGE,
     subcommands: [
       {
-        name: "list",
-        description: "List your other live sessions and their state",
+        ...LIST_HELP,
         handler: (_args, ctx) => {
           if (!host.isActive()) return notify(ctx, UNAVAILABLE, "warning");
           return host.list(ctx.signal).then(
@@ -112,9 +107,7 @@ export function registerIntercomCommand(pi: ExtensionAPI, host: IntercomCommandH
         },
       },
       {
-        name: "receive",
-        arguments: "[on|off]",
-        description: "Show or set whether other sessions can message this one",
+        ...RECEIVE_HELP,
         complete: (prefix) =>
           Arr.flatMap(RECEIVE_CHOICES, (choice) =>
             Fn.pipe(choice, Str.startsWith(Str.trim(prefix)))

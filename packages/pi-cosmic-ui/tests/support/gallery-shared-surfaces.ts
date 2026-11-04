@@ -31,6 +31,7 @@ import {
   withSettingsGroupChildren,
 } from "../../src/manager/settings-surface.ts";
 import { managerTable } from "../../src/manager/table.ts";
+import { SearchableSelectPage } from "../../src/manager/searchable-select.ts";
 import { keyHintBar, keyHintRows, moveKeyHint, keyHint } from "../../src/manager/key-labels.ts";
 import { renderExpansionAffordance } from "../../src/tool/presentation.ts";
 import type { CosmicFooterContribution } from "../../src/protocol/protocol.ts";
@@ -422,6 +423,44 @@ const panelFrames = (): string[] => {
 };
 
 /** Footer, shared settings surface, and text panel states for the presentation gallery. */
+/**
+ * The framed searchable picker: its whole bar fits the border when wide; at 57 columns the
+ * border keeps the exit and `? More`, and the other pairs wrap above it, as in search mode.
+ */
+const searchableSelectFrames = (): string[] => {
+  const choices = Arr.map(["gpt-6-luna", "gpt-6-sol", "claude-opus-5-5"], (name) => {
+    const value = `provider/${name}`;
+    return {
+      value,
+      item: { value, label: value, description: name },
+      searchText: value,
+      payload: value,
+    };
+  });
+  const picker = new SearchableSelectPage<string>({
+    theme: plainTheme,
+    breadcrumb: "/subagents profiles › reviewer › Primary › Model",
+    title: "Choose model",
+    subtitle: "Models available to this session",
+    choices,
+    current: "provider/gpt-6-luna",
+    getHeight: () => 16,
+    requestRender: () => undefined,
+    select: () => undefined,
+    cancel: () => undefined,
+  });
+  const lines = [
+    ...frame("searchable picker", (width) => picker.render(width), 100),
+    ...frame("searchable picker · narrow", (width) => picker.render(width), 57),
+  ];
+  picker.handleInput("?");
+  lines.push(...frame("searchable picker · expanded help · narrow", (w) => picker.render(w), 57));
+  picker.handleInput("?");
+  picker.handleInput("/");
+  lines.push(...frame("searchable picker · filtering · narrow", (w) => picker.render(w), 57));
+  return lines;
+};
+
 export const sharedSurfaceGalleryLines = (): string[] => {
   setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
   return [
@@ -435,5 +474,6 @@ export const sharedSurfaceGalleryLines = (): string[] => {
     ...tableFrames(),
     ...hintFrames(),
     ...affordanceFrames(),
+    ...searchableSelectFrames(),
   ];
 };

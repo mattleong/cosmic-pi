@@ -30,6 +30,12 @@ describe("tool output previews", () => {
     expect(toolOutputPreview(`${xs(2_000)}\n${lines(9)}`)).toBe(`${xs(1_000)}…`);
   });
 
+  it("keeps the first line's indentation", () => {
+    expect(toolOutputPreview("\n    1  import thing;\n    2  export thing;  \n\n")).toBe(
+      "    1  import thing;\n    2  export thing;",
+    );
+  });
+
   it("has no preview for blank or unrecognized output", () => {
     expect(toolOutputPreview(" \n ")).toBeUndefined();
     expect(toolOutputPreview({ unexpected: true })).toBeUndefined();

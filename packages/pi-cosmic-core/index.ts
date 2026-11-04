@@ -94,9 +94,11 @@ export {
 } from "./src/host-session.ts";
 export { withCapturedHostSignal } from "./src/host-invocation.ts";
 export {
+  extensionCommandOverview,
   registerExtensionCommand,
   type ExtensionCommand,
   type ExtensionSubcommand,
+  type ExtensionSubcommandHelp,
 } from "./src/host-command.ts";
 export { makeSessionCapabilityProtocol, querySessionCapability } from "./src/session-capability.ts";
 export {

@@ -14,7 +14,7 @@ import { ListDetailShell } from "../manager/list-detail-shell.ts";
 import { activityActionForKey, activityActionPages, activityShortcuts } from "./action-keys.ts";
 import { needsYou } from "./attention.ts";
 import { activityInspectionKey } from "./widget-projection.ts";
-import type { ActivityRow } from "./model.ts";
+import { isFinished, type ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
 import {
   activitySectionId,
@@ -300,15 +300,17 @@ export class ActivityComponent {
   /**
    * Keeps the shown detail current: a newly selected source loads at once, and a loaded one
    * reloads on change while it is only previewed or explicitly followed. Inspected details
-   * otherwise stay put so they can be read; `r` refreshes them.
+   * otherwise stay put so they can be read; `r` refreshes them. Work that reaches a final state
+   * won't change again, so an inspection the reader hasn't scrolled picks up its final result.
    */
   private syncDetails(row: ActivityRow | undefined): void {
     if (this.closed || this.confirmation || !row || row.retained) return;
     const current = this.requested ?? this.loaded?.request;
     const sameItem = current?.key === row.key && current.generation === row.generation;
     if (!sameItem) return this.loadDetails(row);
-    const live = this.follow || this.shell.state.pane === "list";
-    if (live && current.revision !== row.revision) this.loadDetails(row);
+    if (current.revision === row.revision) return;
+    if (this.follow || this.shell.state.pane === "list") this.loadDetails(row);
+    else if (isFinished(row) && this.shell.detailAtTop) this.loadDetails(row, true);
   }
   private settleInput(): void {
     const { selected } = this.selected();

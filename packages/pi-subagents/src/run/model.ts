@@ -42,6 +42,24 @@ export interface SubagentUsage {
   readonly contextPercent?: number | undefined;
 }
 
+/** A technical fact behind an agent tool's result, such as a started run's ID and route. */
+export interface SubagentToolActivityFact {
+  readonly label: string;
+  readonly value: string;
+}
+
+/**
+ * An owned agent tool's result as the user reads it, written from its display details rather than
+ * its model-facing content: a phrased summary, the words it returned, and its technical facts.
+ */
+export interface SubagentToolActivity {
+  /** Such as `started Read tests (scout)` or `Read tests finished · 23k tok`. */
+  readonly summary: string;
+  /** Authored words the call returned, such as a report or a reply, rendered as Markdown. */
+  readonly text?: string | undefined;
+  readonly facts?: ReadonlyArray<SubagentToolActivityFact> | undefined;
+}
+
 export type SubagentSessionEvent =
   | {
       readonly type: "assistant";
@@ -57,6 +75,9 @@ export type SubagentSessionEvent =
       readonly startedAt: number;
       readonly endedAt?: number | undefined;
       readonly outputPreview?: string | undefined;
+      readonly activity?: SubagentToolActivity | undefined;
+      /** The runs an `agent_await` call waits on, so a live row can name them. */
+      readonly awaitedRunIds?: ReadonlyArray<string> | undefined;
     }
   | {
       readonly type: "notice";

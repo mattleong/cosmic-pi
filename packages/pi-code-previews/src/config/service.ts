@@ -98,7 +98,7 @@ const decodeCommittedSettings = (settings: CodePreviewSettings, settingsPath: st
       JsonDocumentError.make({
         operation: "validate",
         path: settingsPath,
-        message: "Code preview settings are invalid.",
+        message: "Code Previews settings are invalid.",
       }),
     ),
   );
@@ -199,7 +199,7 @@ export class CodePreviewSettingsService extends Context.Service<
         const { settingsPath } = read;
         if (!read.readable)
           yield* Effect.logWarning(
-            "Failed to load settings for code previews; ignoring that document.",
+            "Failed to load Code Previews settings; ignoring that document.",
           );
         if (!read.document)
           return {
@@ -211,7 +211,7 @@ export class CodePreviewSettingsService extends Context.Service<
           return { settings: normalized.settings, problems: [] } satisfies LoadedSettingsFile;
         const paths = Arr.map(normalized.diagnostics, (diagnostic) => diagnostic.path);
         yield* Effect.logWarning(
-          `Ignored invalid code preview setting fields: ${Arr.join(paths, ", ")}.`,
+          `Ignored invalid Code Previews setting fields: ${Arr.join(paths, ", ")}.`,
         );
         const fields = Arr.flatMap(paths, (field) =>
           Fn.pipe(field, Str.startsWith("settings."))

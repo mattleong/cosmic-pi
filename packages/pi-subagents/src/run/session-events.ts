@@ -4,9 +4,10 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import type { SubagentSessionEvent } from "./model.ts";
-import { MAX_PROTOCOL_ID_CHARS } from "./limits.ts";
+import type { SubagentSessionEvent, SubagentToolActivity } from "./model.ts";
+import { MAX_PROTOCOL_ID_CHARS, MAX_TARGET_RUNS } from "./limits.ts";
 import { sanitizeDiagnosticText, sanitizeOutputText } from "./state.ts";
+import { SUBAGENT_TOOL_NAME } from "./tool-policy.ts";
 
 const MAX_SESSION_EVENTS = 120;
 const MAX_SESSION_BYTES = 192 * 1024;
@@ -14,6 +15,10 @@ const MAX_TOOL_TARGET_CHARS = 500;
 const MAX_ASSISTANT_TEXT_CHARS = 16 * 1024;
 const MAX_NOTICE_CHARS = 4 * 1024;
 const MAX_TOOL_PREVIEW_CHARS = 1_200;
+const MAX_ACTIVITY_SUMMARY_CHARS = 300;
+const MAX_ACTIVITY_TEXT_CHARS = 1_200;
+const MAX_ACTIVITY_FACTS = 8;
+const MAX_ACTIVITY_FACT_CHARS = 512;
 
 const ToolArgumentsSchema = Schema.Record(Schema.String, Schema.Unknown);
 type ToolArguments = typeof ToolArgumentsSchema.Type;
@@ -30,6 +35,36 @@ const stringField = (value: ToolArguments | undefined, key: string): string | un
 /** Drops surrounding blank lines and trailing spaces but keeps the first line's indentation. */
 const trimOutput = (text: string): string =>
   Fn.pipe(text, Str.replace(/^(?:[^\S\n]*\n)+/u, ""), Str.trimEnd);
+
+// `agent_await` names the runs it waits on, so a live row can say who it is waiting for.
+const awaitedRunIds = (
+  toolName: string,
+  input: ToolArguments | undefined,
+): ReadonlyArray<string> | undefined => {
+  const runIds = input?.runIds;
+  if (toolName !== SUBAGENT_TOOL_NAME.await || !Arr.isArray(runIds)) return undefined;
+  const ids = Fn.pipe(
+    runIds.slice(0, MAX_TARGET_RUNS),
+    Arr.filter(Predicate.isString),
+    Arr.map((id) => sanitizeDiagnosticText(Str.trim(id), MAX_PROTOCOL_ID_CHARS)),
+    Arr.filter(Str.isNonEmpty),
+  );
+  return ids.length > 0 ? ids : undefined;
+};
+
+const boundedActivity = (activity: SubagentToolActivity): SubagentToolActivity => {
+  const text =
+    activity.text && Str.trim(sanitizeOutputText(activity.text, MAX_ACTIVITY_TEXT_CHARS));
+  const facts = Arr.map((activity.facts ?? []).slice(0, MAX_ACTIVITY_FACTS), (fact) => ({
+    label: sanitizeDiagnosticText(fact.label, 80),
+    value: sanitizeDiagnosticText(fact.value, MAX_ACTIVITY_FACT_CHARS),
+  }));
+  return {
+    summary: sanitizeDiagnosticText(activity.summary, MAX_ACTIVITY_SUMMARY_CHARS),
+    ...(text && { text }),
+    ...(facts.length > 0 && { facts }),
+  };
+};
 
 const eventBytes = new WeakMap<SubagentSessionEvent, number>();
 
@@ -162,13 +197,16 @@ export function startToolSessionEvent(
     readonly startedAt: number;
   },
 ): ReadonlyArray<SubagentSessionEvent> {
-  const summary = toolTarget(input.toolName, decodeToolArguments(input.args));
+  const args = decodeToolArguments(input.args);
+  const summary = toolTarget(input.toolName, args);
   const target = summary ? sanitizeDiagnosticText(summary, MAX_TOOL_TARGET_CHARS) : undefined;
+  const awaited = awaitedRunIds(input.toolName, args);
   return appendSessionEvent(current, {
     type: "tool" as const,
     toolCallId: sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS),
     toolName: sanitizeDiagnosticText(input.toolName, 200),
     ...(target && { target }),
+    ...(awaited && { awaitedRunIds: awaited }),
     state: "running" as const,
     startedAt: input.startedAt,
   });
@@ -182,12 +220,14 @@ export function finishToolSessionEvent(
     readonly isError: boolean;
     readonly endedAt: number;
     readonly outputPreview?: string | undefined;
+    readonly activity?: SubagentToolActivity | undefined;
   },
 ): ReadonlyArray<SubagentSessionEvent> {
   const toolCallId = sanitizeDiagnosticText(input.toolCallId, MAX_PROTOCOL_ID_CHARS);
   const outputPreview =
     input.outputPreview &&
     trimOutput(sanitizeOutputText(input.outputPreview, MAX_TOOL_PREVIEW_CHARS));
+  const activity = input.activity && boundedActivity(input.activity);
   const index = Arr.findLastIndex(
     current,
     (event) => event.type === "tool" && event.toolCallId === toolCallId,
@@ -201,6 +241,7 @@ export function finishToolSessionEvent(
       startedAt: input.endedAt,
       endedAt: input.endedAt,
       ...(outputPreview && { outputPreview }),
+      ...(activity && { activity }),
     });
   return fitSessionEvents(
     Arr.map(current, (event, eventIndex) =>
@@ -210,6 +251,7 @@ export function finishToolSessionEvent(
             state: input.isError ? "failed" : "completed",
             endedAt: input.endedAt,
             ...(outputPreview && { outputPreview }),
+            ...(activity && { activity }),
           }
         : event,
     ),

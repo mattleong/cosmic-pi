@@ -26,7 +26,8 @@ import {
   statusBorderColor,
 } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
-import { renderCompactRow } from "./compact-row";
+import { layoutCompactRow } from "./compact-row";
+import { recordHeadingSubject } from "./heading-coverage";
 import { renderCompactToolCall } from "./compact-tool-call";
 import { planCompactPresentation } from "../tools/compact-presentation";
 import { compactPhase, compactPresentationInput } from "./preview-issues";
@@ -55,7 +56,7 @@ interface CompactPlan {
   readonly collapsedSummary: CompactSummary;
 }
 
-class CompactShell<TArgs, TDetails, TState> implements Component {
+class CompactShell<TArgs, TDetails, TState extends object> implements Component {
   private context: ToolRenderContext<TState, TArgs>;
   private theme: Theme;
   private callRender: ShellRenderBody<TArgs, TState> | undefined;
@@ -258,8 +259,8 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
     const { context, theme, timing } = this;
     // The expanded heading keeps the duration where the collapsed row shows it.
     const timingEnabled = codePreviewSettings.toolCallTiming;
-    return composeToolComponent((width) => [
-      renderCompactRow(
+    return composeToolComponent((width) => {
+      const { row, subjectComplete } = layoutCompactRow(
         {
           name: this.options.name,
           expanded: true,
@@ -272,8 +273,10 @@ class CompactShell<TArgs, TDetails, TState> implements Component {
         },
         theme,
         width,
-      ),
-    ]);
+      );
+      recordHeadingSubject(context.state, subjectComplete);
+      return [row];
+    });
   }
 
   private borderedDetails(

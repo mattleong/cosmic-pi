@@ -244,6 +244,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
               isError: event.isError,
               endedAt: now,
               outputPreview: event.outputPreview,
+              activity: event.activity,
             }),
           };
         });

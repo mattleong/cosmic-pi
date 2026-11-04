@@ -2,7 +2,9 @@ import {
   getAgentDir,
   type ExtensionAPI,
   type ExtensionContext,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
+import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import {
   loadCodePreviewSettings,
@@ -11,9 +13,9 @@ import {
 } from "pi-code-previews";
 import {
   captureSessionHost,
+  invokeBestEffort,
   invokeHostCallback,
   isProjectTrusted,
-  notifyAtHostBoundary,
 } from "pi-cosmic-core/host-session";
 import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
 import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
@@ -48,14 +50,28 @@ export interface ParentConversationBoundaries {
   ) => PromiseLike<CodePreviewSettings | void>;
 }
 
+const ORIENTATION_WIDGET = "pi-rex-btw.orientation";
+
+/** The orientation line as Pi's notices look: dim, one column in from the edge. */
+export const orientationLine = (message: string, theme: Theme): Component =>
+  new Text(theme.fg("dim", message), 1, 0);
+
+/**
+ * A widget above the editor rather than a notice: Pi replaces one notice with the next, so a later
+ * startup notice would hide it. Pi clears widgets when the session is replaced, so each start sets it.
+ */
 const orient = (ctx: ExtensionContext, message: string): void => {
   if (invokeHostCallback(() => ctx.hasUI && ctx.mode === "tui", false))
-    notifyAtHostBoundary(ctx, message, "info");
+    invokeBestEffort(() =>
+      ctx.ui.setWidget(ORIENTATION_WIDGET, (_tui, theme) => orientationLine(message, theme), {
+        placement: "aboveEditor",
+      }),
+    );
 };
 
 /**
- * Gives a BTW child launched with a parent reference its `parent_conversation` tool, and tells the
- * user what the side pane is when it starts. Other sessions register no tool.
+ * Gives a BTW child launched with a parent reference its `parent_conversation` tool, and keeps a
+ * line above the editor telling the user what the side pane is. Other sessions register no tool.
  */
 export function registerParentConversation(
   pi: ExtensionAPI,
@@ -94,11 +110,9 @@ export function registerParentConversation(
     },
   });
 
-  const start = (ctx: ExtensionContext, firstStart: boolean): Promise<void> => {
-    const child = isBtwChild(pi);
+  const start = (ctx: ExtensionContext): Promise<void> => {
     const parent = launchedParent(pi);
-    if (child && firstStart)
-      orient(ctx, parent === undefined ? ORIENTATION.blind : ORIENTATION.sees);
+    if (isBtwChild(pi)) orient(ctx, parent === undefined ? ORIENTATION.blind : ORIENTATION.sees);
     const host = captureSessionHost(ctx);
     if (parent === undefined || !Predicate.isTagged(host, "Captured") || host.aborted)
       return slot.shutdown();
@@ -107,9 +121,9 @@ export function registerParentConversation(
       .then(() => undefined);
   };
 
-  pi.on("session_start", (event, ctx) => {
+  pi.on("session_start", (_event, ctx) => {
     try {
-      return start(ctx, event.reason === "startup").finally(replay.finishStartup);
+      return start(ctx).finally(replay.finishStartup);
     } catch (error) {
       replay.finishStartup();
       throw error;

@@ -15,6 +15,9 @@ import {
   cleanupRecoveryText,
   workspaceOutcomeLabel,
 } from "../tools/format.ts";
+import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
+import { isOwnedAgentTool } from "../tools/activity-preview.ts";
+import { type RunNameLookup, waitingOn } from "./run-live-activity.ts";
 import { isTextFragment } from "../tools/text-fragments.ts";
 
 const RECENT_EVENTS = 12;
@@ -50,22 +53,31 @@ const problems = (run: SubagentRunView): ActivityDetailSection[] => {
   ];
 };
 
-const toolLine = (event: Extract<SubagentSessionEvent, { readonly type: "tool" }>): string =>
-  Arr.join(
+type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
+
+/**
+ * A tool call as one line: an owned agent tool's phrased result, or another tool's state and its
+ * output as printed. Agent tools' model-facing envelopes never reach this view.
+ */
+const toolLine = (event: ToolEvent, nameOf: RunNameLookup): string => {
+  const { activity } = event;
+  const outcome = activity
+    ? [event.state === "failed" ? "failed" : undefined, activity.summary]
+    : event.state === "running" && event.toolName === SUBAGENT_TOOL_NAME.await
+      ? [waitingOn(event, nameOf)]
+      : [event.state === "completed" ? "done" : event.state];
+  const output =
+    activity || event.outputPreview === undefined || isOwnedAgentTool(event.toolName)
+      ? []
+      : Arr.map(Str.split(event.outputPreview, "\n"), (line) => `  ${line}`);
+  return Arr.join(
     [
-      Arr.join(
-        Arr.filter(
-          [event.toolName, event.target, event.state === "completed" ? "done" : event.state],
-          isTextFragment,
-        ),
-        " · ",
-      ),
-      ...(event.outputPreview === undefined
-        ? []
-        : Arr.map(Str.split(event.outputPreview, "\n"), (line) => `  ${line}`)),
+      Arr.join(Arr.filter([event.toolName, event.target, ...outcome], isTextFragment), " · "),
+      ...output,
     ],
     "\n",
   );
+};
 
 // The final report is shown once, as the Result, so recent activity leaves it out.
 const isFinalReport = (run: SubagentRunView, event: SubagentSessionEvent): boolean =>
@@ -74,10 +86,10 @@ const isFinalReport = (run: SubagentRunView, event: SubagentSessionEvent): boole
   Str.trim(event.text) === Str.trim(run.finalText);
 
 /**
- * Recent events in order: tool calls and notices stay verbatim, while the agent's own messages
- * render as Markdown, the way the transcript shows assistant text.
+ * Recent events in order: tool calls and notices stay verbatim, while the agent's own messages and
+ * the words its agent tools returned render as Markdown, the way the transcript shows them.
  */
-const recentActivity = (run: SubagentRunView): ActivityDetailSection[] => {
+const recentActivity = (run: SubagentRunView, nameOf: RunNameLookup): ActivityDetailSection[] => {
   const events = Arr.filter(
     run.sessionEvents.slice(-RECENT_EVENTS),
     (event) => !isFinalReport(run, event),
@@ -89,8 +101,11 @@ const recentActivity = (run: SubagentRunView): ActivityDetailSection[] => {
     else groups.push({ markdown, lines: [text] });
   };
   for (const event of events) {
-    if (event.type === "tool") push(false, toolLine(event));
-    else if (event.type === "assistant") push(true, Fn.pipe(event.text, Str.slice(-600)));
+    if (event.type === "tool") {
+      push(false, toolLine(event, nameOf));
+      // The words an agent tool returned, such as a report or reply, read as the agent wrote them.
+      if (event.activity?.text) push(true, event.activity.text);
+    } else if (event.type === "assistant") push(true, Fn.pipe(event.text, Str.slice(-600)));
     else push(false, Fn.pipe(event.text, Str.slice(-600)));
   }
   if (run.progress && run.finalText === undefined) push(false, `Progress: ${run.progress}`);
@@ -135,6 +150,17 @@ const REPORT_STATUS = {
   missing: "missing",
 } as const satisfies Record<NonNullable<SubagentRunView["reportStatus"]>, string>;
 
+const MAX_AGENT_TOOL_FACTS = 8;
+
+// IDs, routes, and report files behind the agent tools' phrased results, newest last.
+const agentToolFacts = (run: SubagentRunView): ActivityDetailField[] =>
+  Fn.pipe(
+    run.sessionEvents.slice(-RECENT_EVENTS),
+    Arr.flatMap((event) => (event.type === "tool" ? (event.activity?.facts ?? []) : [])),
+    Arr.dedupeWith((left, right) => left.label === right.label && left.value === right.value),
+    (facts) => facts.slice(-MAX_AGENT_TOOL_FACTS),
+  );
+
 // The Activity row carries the route, override marker included, so it is left to the shell.
 const technical = (run: SubagentRunView): ActivityDetailField[] =>
   Arr.filter(
@@ -161,7 +187,10 @@ const technical = (run: SubagentRunView): ActivityDetailField[] =>
   );
 
 /** Leads with what needs the user or what the run produced; identity sits behind Technical. */
-export const runActivityDetail = (run: SubagentRunView): ActivityDetail => ({
+export const runActivityDetail = (
+  run: SubagentRunView,
+  nameOf: RunNameLookup = () => undefined,
+): ActivityDetail => ({
   sections: [
     ...section("Question for parent", run.question?.message ?? "", 1_000),
     ...problems(run),
@@ -177,10 +206,10 @@ export const runActivityDetail = (run: SubagentRunView): ActivityDetail => ({
       3_000,
     ),
     ...section("Task", run.task, 2_000),
-    ...recentActivity(run),
+    ...recentActivity(run, nameOf),
     ...section(undefined, usageLine(run), 512),
   ],
-  technical: Arr.map(technical(run), (field) => ({
+  technical: Arr.map([...technical(run), ...agentToolFacts(run)], (field) => ({
     label: field.label,
     value: bounded(field.value, 1_024),
   })),

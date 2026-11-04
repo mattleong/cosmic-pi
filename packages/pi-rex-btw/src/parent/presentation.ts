@@ -80,21 +80,39 @@ const ROLE_LABELS: Record<ConversationItem["role"], string> = {
   summary: "Summary of earlier messages",
 };
 
+// What the suite's own message types are to a person; a note of any other type is an extension's.
+const NOTE_LABELS: ReadonlyMap<string, string> = new Map([
+  ["pi-intercom-message", "Message from another session"],
+  ["pi-subagents-completed", "Agent report"],
+  ["pi-subagents-question", "Agent question"],
+  ["pi-subagents-agent-message", "Message from an agent"],
+  ["pi-subagents-stopped", "Agents stopped"],
+  ["pi-background-task-finished", "Background task finished"],
+  ["pi-ask-user-async-answer", "Questionnaire answer"],
+  ["openai-image", "Generated image"],
+]);
+
+const roleLabel = (item: ConversationItem): string =>
+  item.role === "note" && item.source !== undefined
+    ? (NOTE_LABELS.get(item.source) ?? "Extension message")
+    : ROLE_LABELS[item.role];
+
 const itemLabel = (item: ConversationItem, now: number): string =>
-  Arr.join(
-    Arr.filter(
-      [ROLE_LABELS[item.role], item.source ?? "", entryTime(item.at, now)],
-      Str.isNonEmpty,
-    ),
-    " · ",
-  );
+  Arr.join(Arr.filter([roleLabel(item), entryTime(item.at, now)], Str.isNonEmpty), " · ");
 
 const TOOL_TONES = { done: "dim", failed: "error", pending: "muted" } as const;
 
-const TOOL_STATES = { done: "", failed: " · failed", pending: " · running" } as const;
+const TOOL_STATES = { done: "finished", failed: "failed", pending: "running" } as const;
 
+/** A call as the transcript names it: `bash pnpm test · failed`. */
 const toolLine = (tool: ToolUse): ExpandedLine => ({
-  text: `${tool.name} ${tool.input}${TOOL_STATES[tool.outcome]}`,
+  text: Arr.join(
+    [
+      Str.isEmpty(tool.subject) ? tool.name : `${tool.name} ${tool.subject}`,
+      TOOL_STATES[tool.outcome],
+    ],
+    " · ",
+  ),
   tone: TOOL_TONES[tool.outcome],
 });
 

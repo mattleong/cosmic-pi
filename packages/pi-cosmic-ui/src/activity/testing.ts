@@ -62,11 +62,15 @@ interface ActivityGalleryOptions {
   readonly technical?: boolean;
   readonly open?: readonly string[];
   readonly widths?: readonly number[];
+  /** Widths for each opened item's manager frames; the default 140 stays out of the heading. */
+  readonly managerWidths?: readonly number[];
   readonly maxRows?: readonly number[];
   readonly now?: number;
 }
 
 const plain = (frame: readonly string[]) => Arr.map(frame, (line) => stripTerminalControls(line));
+
+const DEFAULT_MANAGER_WIDTH = 140;
 
 export function activityGalleryFrames(options: ActivityGalleryOptions): string[] {
   const { providerId } = options;
@@ -87,7 +91,10 @@ export function activityGalleryFrames(options: ActivityGalleryOptions): string[]
         ...plain(renderActivityWidget(rows, width, maxRows, { now, theme: plainTheme })),
         "",
       );
-  const width = 140;
+  const width = DEFAULT_MANAGER_WIDTH;
+  const managerWidths = options.managerWidths ?? [DEFAULT_MANAGER_WIDTH];
+  const atWidth = (frameWidth: number) =>
+    frameWidth === DEFAULT_MANAGER_WIDTH ? "" : ` · ${frameWidth} cols`;
   for (const itemId of options.open ?? []) {
     const presentation = freshActivityPresentation();
     for (const row of rows) presentation.expandedHistory.add(row.key);
@@ -112,18 +119,20 @@ export function activityGalleryFrames(options: ActivityGalleryOptions): string[]
       component.handleInput("j");
     const found = component.shell.state.selectedId === key;
     if (found) component.handleInput("\r");
-    lines.push(
-      `── activity manager · ${options.title} · ${itemId}${found ? "" : " (not reachable)"}`,
-      ...plain(component.render(width)),
-      "",
-    );
-    if (found && options.technical) {
-      component.handleInput("t");
+    for (const frameWidth of managerWidths)
       lines.push(
-        `── activity manager · ${options.title} · ${itemId} · technical`,
-        ...plain(component.render(width)),
+        `── activity manager · ${options.title} · ${itemId}${found ? "" : " (not reachable)"}${atWidth(frameWidth)}`,
+        ...plain(component.render(frameWidth)),
         "",
       );
+    if (found && options.technical) {
+      component.handleInput("t");
+      for (const frameWidth of managerWidths)
+        lines.push(
+          `── activity manager · ${options.title} · ${itemId} · technical${atWidth(frameWidth)}`,
+          ...plain(component.render(frameWidth)),
+          "",
+        );
     }
   }
   return lines;

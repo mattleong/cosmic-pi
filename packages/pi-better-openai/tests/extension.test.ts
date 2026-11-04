@@ -1,5 +1,9 @@
 import { getCurrentSystemPrompt, getCurrentTools } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  type ExtensionContext,
+  type ModelSelectEvent,
+} from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -10,7 +14,7 @@ import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import * as configStore from "../src/config/store.ts";
 import { extensionHarness } from "./extension-harness.ts";
-import { ownedCheckpointDetails, waitUntil } from "./helpers.ts";
+import { ownedCheckpointDetails, testModel, waitUntil } from "./helpers.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -70,6 +74,41 @@ const gateConfigCommits = Effect.gen(function* () {
 });
 
 layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
+  it.effect("announces fast mode only when the user changes it, never at startup or restore", () =>
+    Effect.gen(function* () {
+      const h = yield* extensionHarness({ config: { persistState: true, desiredActive: true } });
+      const selectModel = (ctx: ExtensionContext, source: ModelSelectEvent["source"]) =>
+        Effect.promise(() =>
+          Promise.all(
+            Arr.map(h.handlers.get("model_select"), (handler) =>
+              Promise.resolve(
+                handler(
+                  { type: "model_select", model: testModel(), previousModel: undefined, source },
+                  ctx,
+                ),
+              ),
+            ),
+          ),
+        );
+      const otherProvider = { ...h.ctx, model: testModel("claude-opus-5-5", "anthropic") };
+      yield* h.emit("session_start");
+      expect(h.notify).not.toHaveBeenCalled();
+
+      yield* selectModel(otherProvider, "set");
+      expect(h.notify).toHaveBeenCalledExactlyOnceWith(expect.any(String), "warning");
+      h.notify.mockClear();
+      yield* selectModel(h.ctx, "restore");
+      expect(h.notify).not.toHaveBeenCalled();
+      yield* selectModel(otherProvider, "cycle");
+      expect(h.notify).toHaveBeenCalledOnce();
+      h.notify.mockClear();
+
+      yield* invoke(h.commands.get("openai")?.handler("fast", h.ctx));
+      expect(h.notify).toHaveBeenCalledOnce();
+      yield* h.emit("session_shutdown");
+    }),
+  );
+
   it.effect(
     "shutdown revokes publication and notifications from an admitted fast.enabled commit",
     () =>

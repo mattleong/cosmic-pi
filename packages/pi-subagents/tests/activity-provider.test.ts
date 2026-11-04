@@ -15,12 +15,36 @@ import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-act
 import { subagentProjectionBridge } from "../src/boundary/host-ui.ts";
 import { finishToolSessionEvent, startToolSessionEvent } from "../src/run/session-events.ts";
 import { view } from "./fixtures/run-view.ts";
+import { normalizeRpcEvent } from "../src/backend/local-pi-events.ts";
+import { awaitDetails, startDetails } from "../src/tools/details.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 
 const question = { requestId: "q", message: "Question" };
+const envelope = (text: string) => [{ type: "text", text }];
+interface ChildToolResult {
+  readonly content: ReadonlyArray<{ readonly type: string; readonly text: string }>;
+  readonly details?: object;
+}
+
+/** A child's finished tool call, normalized by the backend as it would arrive over RPC. */
+const childToolEvent = (
+  events: SubagentRunView["sessionEvents"],
+  toolCallId: string,
+  toolName: string,
+  result: ChildToolResult,
+): SubagentRunView["sessionEvents"] => {
+  const event = Effect.runSync(
+    normalizeRpcEvent(
+      { type: "tool_execution_end", toolCallId, toolName, result, isError: false },
+      1,
+    ),
+  );
+  assert(event?.type === "tool_finished");
+  return finishToolSessionEvent(events, { ...event, endedAt: 3 });
+};
 
 const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () => true) => {
   const transport = fakeActivityHost();
@@ -258,6 +282,121 @@ describe("subagent activity provider", () => {
       outputPreview: "\n     1\tfirst\n     2\tsecond  \n\n",
     });
     expect(finished[0]).toMatchObject({ outputPreview: "     1\tfirst\n     2\tsecond" });
+  });
+
+  it("keeps the first output line's indentation from the child's event to Activity", () => {
+    const started = startToolSessionEvent([], {
+      toolCallId: "t",
+      toolName: "read",
+      args: { path: "src/thing.ts" },
+      startedAt: 1,
+    });
+    const finished = childToolEvent(started, "t", "read", {
+      content: [{ type: "text", text: "\n    1  import thing;\n    2  export thing;\n" }],
+    });
+    const run = view({ id: "run", state: "running", sessionEvents: finished });
+    const body = Arr.join(
+      Arr.map(
+        subagentActivityDetail({ revision: 1, runs: [run] }, "run")?.sections ?? [],
+        (section) => section.body,
+      ),
+      "\n",
+    );
+    expect(body).toContain("      1  import thing;\n      2  export thing;");
+  });
+
+  it("phrases agent tools from their details and keeps envelopes, IDs, and report files technical", () => {
+    const reportPath = "/home/me/.pi/agent/subagents/reports/session/agent-child-1.md";
+    const child = view({
+      id: "agent-child",
+      name: "Read tests",
+      profile: "scout",
+      parentRunId: "agent-parent",
+      state: "completed",
+      reportGeneration: 1,
+      finalText: "Tests in **cart**: `subtotal`",
+      reportArchive: { path: reportPath, chars: 30, lines: 1, complete: true },
+    });
+    const launched = childToolEvent(
+      startToolSessionEvent([], {
+        toolCallId: "s",
+        toolName: "agent_start",
+        args: { agents: [{ name: "Read tests", task: "List tests" }] },
+        startedAt: 1,
+      }),
+      "s",
+      "agent_start",
+      {
+        content: envelope(`${child.id} Read tests · scout · openai-codex/gpt-6-luna:high`),
+        details: startDetails({
+          startEntries: [
+            {
+              index: 0,
+              name: "Read tests",
+              profile: "scout",
+              status: "started",
+              routeStatus: "selected",
+              model: "openai-codex/gpt-6-luna",
+              effort: "high",
+              openaiFastMode: false,
+              runId: child.id,
+            },
+          ],
+        }),
+      },
+    );
+    const waiting = startToolSessionEvent(launched, {
+      toolCallId: "a",
+      toolName: "agent_await",
+      args: { runIds: [child.id] },
+      startedAt: 2,
+    });
+    const parent = view({
+      id: "agent-parent",
+      name: "Review cart",
+      state: "running",
+      sessionEvents: waiting,
+    });
+    const live = { revision: 1, runs: [parent, { ...child, state: "running" as const }] };
+    expect(subagentActivityItems(live)[0]?.summary).toContain("Read tests");
+    expect(subagentActivityItems(live)[0]?.summary).not.toContain("agent_await");
+
+    const settled = childToolEvent(waiting, "a", "agent_await", {
+      content: envelope(`${child.id} Read tests · finished\nRead the full report: ${reportPath}`),
+      details: awaitDetails({ runs: [child], awaitUntil: "all_finished" }),
+    });
+    const projection = { revision: 2, runs: [{ ...parent, sessionEvents: settled }, child] };
+    const detail = subagentActivityDetail(projection, "agent-parent");
+    const shown = Arr.join(
+      Arr.map(detail?.sections ?? [], (section) => section.body),
+      "\n",
+    );
+    expect(shown).toContain("Read tests");
+    expect(shown).not.toContain(child.id);
+    expect(shown).not.toContain(reportPath);
+    expect(shown).not.toContain("openai-codex");
+    const markdown = Arr.filter(detail?.sections ?? [], (section) => section.format === "markdown");
+    expect(Arr.some(markdown, (section) => Str.includes("**cart**")(section.body))).toBe(true);
+    const technical = JSON.stringify(detail?.technical);
+    expect(technical).toContain(child.id);
+    expect(technical).toContain(reportPath);
+    expect(technical).toContain("openai-codex/gpt-6-luna");
+  });
+
+  it("says a running agent is thinking between tool calls", () => {
+    const finished = childToolEvent(
+      startToolSessionEvent([], {
+        toolCallId: "t",
+        toolName: "bash",
+        args: { command: "ls" },
+        startedAt: 1,
+      }),
+      "t",
+      "bash",
+      { content: [{ type: "text", text: "a" }] },
+    );
+    const run = view({ id: "run", state: "running", sessionEvents: finished });
+    expect(subagentActivityItems({ revision: 1, runs: [run] })[0]?.summary).toBeTruthy();
   });
 
   it("keeps terminal transitions discoverable and redacts producer payloads", () => {

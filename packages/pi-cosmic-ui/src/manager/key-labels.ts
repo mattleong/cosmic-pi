@@ -216,6 +216,45 @@ export const keyHintRows = (
   );
 };
 
+// A bar in the border keeps a corner and a rule on each side of it.
+const fitsBorder = (hint: string, inner: number): boolean => visibleWidth(hint) + 2 <= inner;
+
+/**
+ * ` hint ` for a framed surface's bottom border. It is clipped with `…` only when even the
+ * border's own pairs cannot fit; surfaces with more hints use `framedKeyHints`.
+ */
+export const borderKeyHint = (hint: string, inner: number): string => {
+  const safeWidth = Math.max(0, Math.floor(inner));
+  if (safeWidth === 0 || !hint) return "";
+  return clipToWidth(` ${hint} `, safeWidth, "…");
+};
+
+/** Short and long forms of a bar: the border shows the long one when it fits. */
+export const fittedBorderKeyHint = (long: string, short: string, inner: number): string =>
+  borderKeyHint(fitsBorder(long, inner) ? long : short, inner);
+
+export interface FramedKeyHints {
+  /** Text for the bottom border. */
+  readonly border: string;
+  /** Pairs that didn't fit the border; wrap them into rows above it with `keyHintRows`. */
+  readonly overflow: string;
+}
+
+/**
+ * Lays out a framed surface's hint bar. The whole bar sits in the bottom border when it fits.
+ * Otherwise the border keeps `tail`, normally the exit and `? More`, and the other pairs wrap
+ * into rows above it, so no hint is dropped at any width.
+ */
+export const framedKeyHints = (
+  hints: ReadonlyArray<KeyHintPart>,
+  tail: ReadonlyArray<KeyHintPart>,
+  inner: number,
+): FramedKeyHints => {
+  const full = joinKeyHints([...hints, ...tail]);
+  if (fitsBorder(full, inner)) return { border: borderKeyHint(full, inner), overflow: "" };
+  return { border: borderKeyHint(joinKeyHints(tail), inner), overflow: joinKeyHints(hints) };
+};
+
 export const configuredKeyLabels = (
   keybindingLabel: ((id: FullScreenSelectionKeybindingId, fallback: string) => string) | undefined,
   reserved: ReadonlySet<string>,

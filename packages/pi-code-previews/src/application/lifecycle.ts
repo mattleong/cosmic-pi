@@ -116,7 +116,7 @@ export function codePreviewsWithDependencies(
       },
       catch: () =>
         CodePreviewRendererRegistrationError.make({
-          message: "Code preview renderer registration failed.",
+          message: "Code Previews renderer registration failed.",
         }),
     });
     return scheduler;

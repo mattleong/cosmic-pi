@@ -30,6 +30,8 @@ interface ExtensionCommandOptions {
   readonly description: string;
   readonly bare?: ExtensionCommandBare | undefined;
   readonly subcommands?: ReadonlyArray<ExtensionSubcommand> | undefined;
+  /** Lines after the subcommands in the bare overview, such as an example. */
+  readonly overviewNotes?: ReadonlyArray<string> | undefined;
 }
 
 export interface ExtensionCommand {
@@ -62,22 +64,62 @@ export const completeExtensionCommand = (
   );
 };
 
-const extensionCommandOverview = (
+/** The part of a subcommand its overview line shows. */
+export type ExtensionSubcommandHelp = Pick<
+  ExtensionSubcommand,
+  "name" | "arguments" | "description"
+>;
+
+// Notifications wrap at the terminal edge without a hanging indent and draw one column in, so the
+// overview keeps every line short enough for a 57-column phone client.
+const OVERVIEW_COLUMNS = 55;
+
+/** Wraps between words, indenting continuation rows; a single overlong word keeps its own row. */
+const wrapWords = (text: string, first: string, rest: string): string[] =>
+  Arr.reduce(Str.split(Str.trim(text), /\s+/u), [first], (rows, word) => {
+    const last = Option.getOrElse(Arr.last(rows), () => "");
+    const blank = last === first || last === rest;
+    const joined = blank ? `${last}${word}` : `${last} ${word}`;
+    return joined.length <= OVERVIEW_COLUMNS || blank
+      ? [...rows.slice(0, -1), joined]
+      : [...rows, `${rest}${word}`];
+  });
+
+/**
+ * The shared overview a bare `/<name>` shows: a title, then one line per subcommand with its
+ * description in a padded column. When any line wouldn't fit a phone, every description moves
+ * to its own indented line beneath its command instead. `notes` follow as written.
+ */
+export const extensionCommandOverview = (
   name: string,
   description: string,
-  subcommands: ReadonlyArray<ExtensionSubcommand>,
-): string =>
-  Arr.join(
+  subcommands: ReadonlyArray<ExtensionSubcommandHelp>,
+  notes: ReadonlyArray<string> = [],
+): string => {
+  const usages = Arr.map(
+    subcommands,
+    (entry) => `/${name} ${entry.name}${entry.arguments ? ` ${entry.arguments}` : ""}`,
+  );
+  const column = Math.max(0, ...Arr.map(usages, (usage) => usage.length));
+  const aligned = Arr.map(
+    subcommands,
+    (entry, index) => `  ${Fn.pipe(usages[index] ?? "", Str.padEnd(column))}  ${entry.description}`,
+  );
+  const fits = Arr.every(aligned, (line) => line.length <= OVERVIEW_COLUMNS);
+  return Arr.join(
     [
-      `/${name}: ${description}`,
-      ...Arr.map(
-        subcommands,
-        (entry) =>
-          `  /${name} ${entry.name}${entry.arguments ? ` ${entry.arguments}` : ""}  ${entry.description}`,
-      ),
+      ...wrapWords(`/${name}: ${description}`, "", "  "),
+      ...(fits
+        ? aligned
+        : Arr.flatMap(subcommands, (entry, index) => [
+            `  ${usages[index] ?? ""}`,
+            ...wrapWords(entry.description, "    ", "    "),
+          ])),
+      ...notes,
     ],
     "\n",
   );
+};
 
 const extensionCommandUsage = (
   name: string,
@@ -108,7 +150,7 @@ export function registerExtensionCommand(
   const subcommands = new Map<string, ExtensionSubcommand>();
   for (const subcommand of options.subcommands ?? []) subcommands.set(subcommand.name, subcommand);
   const list = () => [...subcommands.values()];
-  const { name, description, bare } = options;
+  const { name, description, bare, overviewNotes } = options;
   pi.registerCommand(name, {
     description,
     getArgumentCompletions: (prefix) => completeExtensionCommand(prefix, list()),
@@ -121,7 +163,7 @@ export function registerExtensionCommand(
       if (!trimmed)
         return bare
           ? settle(() => bare.handler("", ctx))
-          : notify(extensionCommandOverview(name, description, list()), "info");
+          : notify(extensionCommandOverview(name, description, list(), overviewNotes), "info");
       const [head = "", rest = ""] = /^(\S+)\s*([\s\S]*)$/u.exec(trimmed)?.slice(1) ?? [];
       const subcommand = subcommands.get(head);
       if (subcommand) return settle(() => subcommand.handler(rest, ctx));

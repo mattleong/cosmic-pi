@@ -169,7 +169,8 @@ const receiptStatus = (
       `Launching ${started.length + failed} of ${entries.length}`,
       spinnerFrameAt(synchronousNow()),
     );
-  if (started.length === 0) return undefined;
+  // The heading already names every launch when all of them started.
+  if (started.length === 0 || failed === 0) return undefined;
   return `${theme.fg("success", managerStateGlyph("done"))} ${theme.fg("muted", "Started")} ${theme.fg(
     "toolTitle",
     Arr.join(
@@ -180,7 +181,8 @@ const receiptStatus = (
 };
 
 /**
- * A start's receipt: which launches started, as one line, or live progress while they launch.
+ * A start's receipt: which launches started, as one line when some couldn't, or live progress
+ * while they launch.
  * Launch failures are the call's issues; expansion adds each launch's route and run ID, and the
  * raw failure of each that couldn't start.
  */

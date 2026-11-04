@@ -31,6 +31,7 @@ import {
   shortRunId,
 } from "./run-presentation.ts";
 import { projectFleetTree, runTreeBranch, type FleetTreeRow } from "./run-tree-rows.ts";
+import { runLiveActivity } from "./run-live-activity.ts";
 import { runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
 
 export type SubagentActivityAwaitMode = "all_finished" | "any_finished";
@@ -84,6 +85,8 @@ export interface SubagentActivityPanelProjection {
   readonly trackedRunIds: ReadonlySet<string>;
   readonly awaitedRunIds: ReadonlySet<string>;
   readonly awaitedRuns: ReadonlyArray<SubagentRunView>;
+  /** Display names by run ID, for rows that name the runs they wait on. */
+  readonly runNames: ReadonlyMap<string, string>;
   /** Message counts and latest previews for included runs that sent or received any. */
   readonly messages: ReadonlyMap<string, RunMessageSummary>;
   readonly presentation: SubagentActivityPresentationSnapshot;
@@ -169,6 +172,7 @@ export const projectSubagentActivityPanel = (
     trackedRunIds: new Set(Arr.map(trackedRuns, (run) => run.id)),
     awaitedRunIds,
     awaitedRuns: Arr.filter(projection.runs, (run) => awaitedRunIds.has(run.id)),
+    runNames: new Map(Arr.map(projection.runs, (run) => [run.id, run.name] as const)),
     messages: projectRunMessages(includedRuns, runsById),
     presentation,
   };
@@ -206,22 +210,9 @@ const runElapsed = (run: SubagentRunView, now: number): string =>
   formatSessionAge(run.endedAt ?? now, run.startedAt);
 
 /** What a run is doing, phrased as the shared Activity row phrases it: `running bash · sleep 25`. */
-const runActivity = (run: SubagentRunView): string => {
+const runActivity = (run: SubagentRunView, panel: SubagentActivityPanelProjection): string => {
   if (run.state === "waiting_for_parent" || run.state === "paused") return runStateLabel(run.state);
-  if (run.state !== "running") return "";
-  const tool = Arr.findLast(
-    run.sessionEvents,
-    (event) => event.type === "tool" && event.state === "running",
-  );
-  if (Option.isSome(tool) && tool.value.type === "tool") {
-    const target = Str.trim(Str.split(Str.trim(tool.value.target ?? ""), "\n")[0] ?? "");
-    return sanitizeTerminalLine(
-      target ? `running ${tool.value.toolName} · ${target}` : `running ${tool.value.toolName}`,
-    );
-  }
-  return sanitizeTerminalLine(
-    run.currentTool ? `running ${run.currentTool}` : (run.progress ?? ""),
-  );
+  return sanitizeTerminalLine(runLiveActivity(run, (id) => panel.runNames.get(id)) ?? "");
 };
 
 interface HeaderPart {
@@ -361,9 +352,13 @@ const messageActivity = (message: RunMessagePreview): string =>
 
 interface ActivityMetadataVariant {
   readonly parts: ReadonlyArray<string>;
+  /** Right-aligned elapsed time, as the shared Activity widget shows it. */
+  readonly elapsed?: string | undefined;
   /** A lone message preview may be clipped to fit the row. */
   readonly clippable?: boolean | undefined;
 }
+
+const ELAPSED_GAP = 2;
 
 const activityMetadataVariants = (
   run: FleetTreeRow["run"],
@@ -381,7 +376,7 @@ const activityMetadataVariants = (
       ? messageActivity(message)
       : ancestorOnly
         ? ""
-        : runActivity(run);
+        : runActivity(run, panel);
   const tone =
     stall !== undefined
       ? "warning"
@@ -390,20 +385,23 @@ const activityMetadataVariants = (
         : "accent";
   const themedActivity = activity ? theme.fg(tone, activity) : "";
   const elapsed = ancestorOnly ? "" : runElapsed(run, now);
-  const themedElapsed = elapsed ? theme.fg("dim", elapsed) : "";
+  const themedElapsed = elapsed ? theme.fg("dim", elapsed) : undefined;
   const messageCount = ancestorOnly ? 0 : runMessageCount(panel, run.id);
   const messages = messageCount > 0 ? theme.fg("muted", countLabel(messageCount, "message")) : "";
   const variants: ActivityMetadataVariant[] = [
-    { parts: [route, themedActivity, messages, themedElapsed] },
-    { parts: [route, themedActivity, themedElapsed] },
+    { parts: [route, themedActivity, messages], elapsed: themedElapsed },
+    { parts: [route, themedActivity], elapsed: themedElapsed },
     { parts: [route, themedActivity] },
     // A stall warning or recent message outranks the route when the row is too narrow for both.
     ...(stall
-      ? [{ parts: [themedActivity, themedElapsed] }, { parts: [themedActivity] }]
+      ? [{ parts: [themedActivity], elapsed: themedElapsed }, { parts: [themedActivity] }]
       : message
-        ? [{ parts: [themedActivity], clippable: true }]
+        ? [
+            { parts: [themedActivity], elapsed: themedElapsed, clippable: true },
+            { parts: [themedActivity], clippable: true },
+          ]
         : []),
-    { parts: [route, themedElapsed] },
+    { parts: [route], elapsed: themedElapsed },
     { parts: [route] },
   ];
   return Arr.flatMap(variants, (variant) => {
@@ -420,10 +418,16 @@ const fitActivityMetadata = (
 ): string | undefined => {
   const metadata = Arr.join(variant.parts, separator);
   const prefix = `${identity}${separator}`;
-  if (visibleWidth(prefix + metadata) <= width) return prefix + metadata;
-  const available = width - visibleWidth(prefix);
+  const elapsedWidth = variant.elapsed ? visibleWidth(variant.elapsed) + ELAPSED_GAP : 0;
+  const rightAligned = (left: string): string =>
+    variant.elapsed
+      ? `${left}${Str.repeat(Math.max(ELAPSED_GAP, width - visibleWidth(left) - visibleWidth(variant.elapsed)))(" ")}${variant.elapsed}`
+      : left;
+  if (visibleWidth(prefix + metadata) + elapsedWidth <= width)
+    return rightAligned(prefix + metadata);
+  const available = width - visibleWidth(prefix) - elapsedWidth;
   return variant.clippable && available >= MIN_CLIPPED_MESSAGE_WIDTH
-    ? `${prefix}${clipToWidth(metadata, available)}`
+    ? rightAligned(`${prefix}${clipToWidth(metadata, available)}`)
     : undefined;
 };
 

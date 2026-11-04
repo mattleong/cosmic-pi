@@ -18,7 +18,8 @@ saves no child sessions, and never closes panes.
   marker flags and the parent file and sets or clears its system-prompt section.
 - [Parent conversation](src/parent/application.ts) runs in the child too. A child launched with a
   parent reference gets a session runtime and the `parent_conversation` tool; every BTW child
-  shows a one-line orientation notice at startup. The [reader](src/parent/reader.ts) opens the
+  keeps a one-line orientation widget above the editor, which a later notice can't replace. The
+  [reader](src/parent/reader.ts) opens the
   parent file without following a final link and reads at most its last 16 MiB; the pure
   [transcript](src/parent/transcript.ts) decodes each JSONL entry with Schema, skips what doesn't
   decode, and follows the newest entry's branch back to the session's start, a compaction, the

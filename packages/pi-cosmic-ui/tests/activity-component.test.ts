@@ -1,11 +1,31 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import type { ActivityRow } from "../src/activity/model.ts";
-import { activityRow, memberRow, mountActivity } from "./support/activity.ts";
+import { activityRow, memberRow, mountActivity, withStatus } from "./support/activity.ts";
 import { activitySectionId } from "../src/activity/grouped-tree.ts";
 import type { ActivityActionRequest } from "../src/activity/service.ts";
 import { freshActivityPresentation } from "../src/activity/component.ts";
 import { hiddenWidgetFailures } from "../src/activity/widget-projection.ts";
+
+/** Inspects a running command whose detail has `lines` lines, then lets its row advance. */
+const inspectRunning = (lines: number) => {
+  let row = activityRow("work", "running", undefined, { kind: "command" });
+  const mounted = mountActivity(() => [row], { height: 16 });
+  mounted.component.render(120);
+  mounted.component.handleInput("\r");
+  mounted.loads.at(-1)!.deliver(
+    Arr.join(
+      Arr.makeBy(lines, (index) => `line ${index}`),
+      "\n",
+    ),
+  );
+  mounted.component.render(120);
+  const advance = (next: ActivityRow) => {
+    row = next;
+    mounted.component.update();
+  };
+  return { ...mounted, advance, row: () => row };
+};
 
 describe("activity presentation", () => {
   it("accepts only the latest detail refresh even for the same revision", () => {
@@ -80,6 +100,24 @@ describe("activity presentation", () => {
     expect(run("1")).toBe("export");
     expect(run("2")).toBe("pin");
     expect(run("3")).toBeUndefined();
+  });
+  it("keeps inspected running details still but picks up the final result unless scrolled", () => {
+    const short = inspectRunning(2);
+    const before = short.loads.length;
+    short.advance({ ...short.row(), revision: "2" });
+    expect(short.loads.length).toBe(before);
+    short.advance(withStatus(short.row(), "done", { revision: "3", endedAt: 2 }));
+    expect(short.loads.at(-1)?.request.revision).toBe("3");
+    short.loads.at(-1)!.deliver("final result");
+    expect(Arr.join(short.component.render(120), "\n")).toContain("final result");
+
+    const scrolled = inspectRunning(60);
+    scrolled.component.handleInput("j");
+    scrolled.component.render(120);
+    expect(scrolled.component.shell.detailAtTop).toBe(false);
+    const loaded = scrolled.loads.length;
+    scrolled.advance(withStatus(scrolled.row(), "done", { revision: "2", endedAt: 2 }));
+    expect(scrolled.loads.length).toBe(loaded);
   });
   it("records a failure as inspected only once its detail has been on screen", () => {
     const presentation = freshActivityPresentation();

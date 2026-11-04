@@ -104,7 +104,7 @@ function compactRowSubject({ expanded, summary }: CompactRowInput): string {
 }
 
 export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: number) {
-  if (width <= 0) return { row: "", issueShown: false };
+  if (width <= 0) return { row: "", issueShown: false, subjectComplete: false };
   const { summary } = input;
   const duration = compactRowDuration(input);
   const timing = duration ? theme.fg("dim", duration) : undefined;
@@ -114,7 +114,7 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
           theme.fg("muted", text),
         )
       : [];
-  const { row, counter } = layoutCompactHeader(
+  const { row, counter, subjectComplete } = layoutCompactHeader(
     compactRowPrefix(input, theme),
     compactRowSubject(input),
     input.issueLabel ? [input.issueLabel] : muted(summary.counters),
@@ -123,7 +123,11 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
     theme.fg("dim", " · "),
     summary.showTiming ? timing : undefined,
   );
-  return { row, issueShown: input.issueLabel !== undefined && counter === input.issueLabel };
+  return {
+    row,
+    issueShown: input.issueLabel !== undefined && counter === input.issueLabel,
+    subjectComplete,
+  };
 }
 
 export function compactPlainText(text: string): string {

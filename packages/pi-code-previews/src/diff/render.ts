@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { countLabel } from "pi-cosmic-core/display";
 import { codePreviewSettings } from "../config/state";
 import type { DiffWordEmphasis } from "../config/schema";
 import { expandPreviewTabs } from "../shared/helpers";
@@ -77,16 +78,52 @@ function renderDiff(diff: string, options: DiffRenderOptions): string {
             lineNumberWidth,
             emphasis.get(index),
           )
-        : renderSeparator(line, options.theme);
+        : renderSeparator(
+            line,
+            options.theme,
+            () => hiddenLineCount(parsedLines[index - 1], parsedLines[index + 1]),
+            lineNumberWidth,
+          );
     }),
     "\n",
   );
 }
 
-function renderSeparator(line: string, theme: Theme): string {
+const contextLineNumber = (line: ParsedDiffLine | null | undefined): number | undefined =>
+  line?.kind === " " && line.lineNumber !== "" ? Number(Str.trim(line.lineNumber)) : undefined;
+
+/**
+ * How many unchanged lines a `...` separator stands for, from the context lines around it: both
+ * share one numbering, and a leading separator hides everything before the first shown line.
+ */
+function hiddenLineCount(
+  before: ParsedDiffLine | null | undefined,
+  after: ParsedDiffLine | null | undefined,
+): number | undefined {
+  const next = contextLineNumber(after);
+  if (next === undefined || !Number.isInteger(next)) return undefined;
+  const previous = before === undefined ? 0 : contextLineNumber(before);
+  if (previous === undefined || !Number.isInteger(previous) || next - previous < 2)
+    return undefined;
+  return next - previous - 1;
+}
+
+function renderSeparator(
+  line: string,
+  theme: Theme,
+  hidden: () => number | undefined,
+  lineNumberWidth: number,
+): string {
   const safeLine = escapeControlChars(line);
   const trimmed = Str.trim(safeLine);
-  if (trimmed === "...") return theme.fg("muted", "      --- unchanged lines hidden ---");
+  if (trimmed === "...") {
+    const count = hidden();
+    // The ellipsis sits in the gutter's `│` column.
+    return theme.fg(
+      "muted",
+      `${Fn.pipe(" ", Str.repeat(lineNumberWidth + 2))}… ${count === undefined ? "unchanged lines" : countLabel(count, "unchanged line")}`,
+    );
+  }
   if (Fn.pipe(trimmed, Str.startsWith("@@"))) return theme.fg("accent", theme.bold(safeLine));
   if (/^(?:---|\+\+\+|diff |index )/u.test(trimmed)) return theme.fg("muted", safeLine);
   return theme.fg("toolDiffContext", safeLine);

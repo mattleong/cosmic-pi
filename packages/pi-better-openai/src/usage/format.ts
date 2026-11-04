@@ -234,7 +234,7 @@ export function formatUsageSnapshot(
 
 /**
  * The one-line status Pi shows when Cosmic UI's footer is inactive:
- * `OpenAI 5h 50% left · 7d 90% left · 7d resets in 6d 1h`.
+ * `OpenAI 5h 50% left · 7d 90% left · 7d resets Nov 9, 10:59 PM`.
  */
 export function formatUsageStatus(
   snapshot: UsageSnapshot,
@@ -253,7 +253,7 @@ export function formatUsageStatus(
           remainingResetSeconds(window.resetInSeconds, snapshot.capturedAt, now),
           now,
         );
-        return moment === undefined ? null : `${window.label} resets in ${moment.countdown}`;
+        return moment === undefined ? null : `${window.label} resets ${moment.at}`;
       })
     : [];
   return `OpenAI ${Arr.join([...windows, ...resets], " · ")}`;
@@ -263,12 +263,12 @@ function windowDetail(window: UsageWindowView, capturedAt: number, now: number):
   if (window.leftPercent === null) return "not reported";
   const moment = resetMoment(remainingResetSeconds(window.resetInSeconds, capturedAt, now), now);
   const left = `${formatPercent(window.leftPercent)} left`;
-  return moment === undefined ? left : `${left} · resets in ${moment.countdown}`;
+  return moment === undefined ? left : `${left} · resets ${moment.at}`;
 }
 
 /**
- * What `/openai usage` shows: when usage was read, then each window and its reset countdown.
- * Lines stay short so a narrow pane doesn't wrap them; the footer shows the local reset time.
+ * What `/openai usage` shows: when usage was read, then each window and its local reset time, the
+ * same absolute form the footer uses. Lines stay short so a narrow pane doesn't wrap them.
  */
 export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string {
   const windows = usageWindows(snapshot);
