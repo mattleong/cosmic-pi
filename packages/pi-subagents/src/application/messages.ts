@@ -21,6 +21,7 @@ import { STOPPED_RUNS_MESSAGE_TYPE } from "../boundary/host-stopped-runs.ts";
 import { presentAgentMessage } from "../ui/agent-message.ts";
 import { presentSubagentNotification } from "../ui/notification.ts";
 import type { WorkspaceSwept } from "../workspace/model.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 export const renderSubagentMessage: MessageRenderer = withCodePreviewMessageShell(
   presentSubagentNotification,
@@ -93,7 +94,7 @@ export function orphanSweepNotice(swept: ReadonlyArray<WorkspaceSwept>): string 
   const listed = Arr.map(
     swept.slice(0, MAX_LISTED_SWEPT),
     (entry) =>
-      `- ${entry.workspaceId} (${countLabel(entry.changedPathCount, "changed file")}): ${sanitizeTerminalLine(entry.patchPath)}`,
+      `- ${entry.workspaceId} (${countLabel(entry.changedPathCount, "changed file")}): ${sanitizeTerminalLine(homeDisplayPath(entry.patchPath))}`,
   );
   return Arr.join(
     [

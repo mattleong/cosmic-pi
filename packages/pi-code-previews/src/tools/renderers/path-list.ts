@@ -53,7 +53,7 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
       return previewHeadingText(() => text);
     },
 
-    renderResult: (result, { expanded, isPartial }, theme, { isError, state }) => {
+    renderResult: (result, { expanded, isPartial }, theme, { args, isError, state }) => {
       const output = trimSingleTrailingNewline(getTextContent(result.content));
       const prelude = renderResultPrelude({
         isPartial,
@@ -96,7 +96,14 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
       );
       const shown = expanded
         ? text
-        : withCollapsedLimit(text, theme, tool, hostObject(result.details), notice);
+        : withCollapsedLimit(
+            text,
+            theme,
+            tool,
+            hostObject(result.details),
+            hostObject(args),
+            notice,
+          );
       return withAgentNotes(new Text(shown, 0, 0), theme, notes);
     },
   };

@@ -53,6 +53,7 @@ import {
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
 import { capturePiParentContext } from "./host-child-pi.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 export interface SubagentProfileStartSpec {
   readonly task: string;
@@ -304,19 +305,23 @@ const modelOverrideUnavailable = (
   override: SubagentModelOverride,
   skipped: ReadonlyArray<SkippedProfileCandidate>,
   agent?: CustomAgent,
-): InvalidSubagentRequestError =>
-  InvalidSubagentRequestError.make({
+): InvalidSubagentRequestError => {
+  // The user's copy gives each reason without the code the model's copy keeps.
+  const account = (coded: boolean) =>
+    `Model override ${modelOverrideLabel(override)} is unavailable\n\nAn override never falls back to the profile route.${Arr.join(
+      Arr.map(skipped, (skip) => ` ${coded ? `[${skip.code}] ` : ""}${skip.reason}`),
+      "",
+    )}`;
+  return InvalidSubagentRequestError.make({
     code: "model_override_unavailable",
     ...failureFields(
       withGuidance(
-        `Model override ${modelOverrideLabel(override)} is unavailable\n\nAn override never falls back to the profile route.${Arr.join(
-          Arr.map(skipped, (skip) => ` [${skip.code}] ${skip.reason}`),
-          "",
-        )}`,
+        { message: account(true), userMessage: account(false) },
         `Fix the override, or omit it to use ${routeSubject(definition, agent)}'s route.`,
       ),
     ),
   });
+};
 
 /**
  * Static override checks share the configuration's selector grammar and cross-field policy. An
@@ -357,16 +362,21 @@ const exhaustedRoute = (
     ),
     ", ",
   );
+  const reasons =
+    exhausted.length > 0
+      ? ` ${Arr.join(
+          Arr.map(exhausted, (candidate) => candidate.reason),
+          " ",
+        )}`
+      : "";
+  const subject = `${planSubject(input.definition, input.agent)} has no eligible candidate after pre-start checks.`;
   return InvalidSubagentRequestError.make({
     code: "profile_no_eligible_model",
-    message: `${planSubject(input.definition, input.agent)} has no eligible candidate after pre-start checks.${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${
-      exhausted.length > 0
-        ? ` ${Arr.join(
-            Arr.map(exhausted, (candidate) => candidate.reason),
-            " ",
-          )}`
-        : ""
-    }`,
+    // The user's copy leaves out the skip codes.
+    ...failureFields({
+      message: `${subject}${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${reasons}`,
+      userMessage: `${subject}${reasons}`,
+    }),
   });
 };
 
@@ -596,7 +606,7 @@ const launchedAgent = (
     lookup.kind === "invalid"
       ? InvalidSubagentRequestError.make({
           code: "agent_invalid",
-          message: `Agent ${name} is invalid and fails closed\n\nRepair its entry under agents in ${lookup.scope === "project" ? config.projectConfigPath : config.globalConfigPath}, then reload. /subagents doctor lists the invalid fields.`,
+          message: `Agent ${name} is invalid and fails closed\n\nRepair its entry under agents in ${homeDisplayPath(lookup.scope === "project" ? config.projectConfigPath : config.globalConfigPath)}, then reload. /subagents doctor lists the invalid fields.`,
         })
       : InvalidSubagentRequestError.make({
           code: "agent_unknown",

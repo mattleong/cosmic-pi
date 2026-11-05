@@ -11,6 +11,7 @@ import {
 import { ensurePrivateDirectory } from "pi-cosmic-core/platform/private-file";
 import { nodeFsPromises as fs, nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { SUBAGENT_STATE_ROOT, WRITER_LEASE_ROOT } from "./private-state.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 const MAX_FILESYSTEM_IDENTITY_CHARS = 256;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/;
@@ -110,7 +111,7 @@ const recoveryMessage = (slot: string | undefined): string =>
   `Writer ownership of this directory needs manual recovery, so writer startup was denied.\n${
     slot === undefined
       ? "Its writer lock is damaged or was left by a Pi session that ended while a writer ran."
-      : `Its lock at ${slot} is damaged or was left by a Pi session that ended while a writer ran. Remove that lock directory only after confirming that no writer from an earlier session is still running: its owner.json names the owner's process id.`
+      : `Its lock at ${homeDisplayPath(slot)} is damaged or was left by a Pi session that ended while a writer ran. Remove that lock directory only after confirming that no writer from an earlier session is still running: its owner.json names the owner's process id.`
   }`;
 
 const makeWriterLease = (

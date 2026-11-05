@@ -1554,6 +1554,30 @@ const scenarios: ReadonlyArray<
     ),
   },
   {
+    tool: "grep",
+    title: "grep with context lines names the hidden lines where they are hidden",
+    args: { pattern: "TODO", path: "/project/src", context: 1 },
+    result: text(
+      Arr.join(
+        Arr.flatMap(Arr.range(1, 8), (index) => [
+          `file-${index}.ts-${index * 10 - 1}- const before = ${index};`,
+          `file-${index}.ts:${index * 10}: // TODO item ${index}`,
+          `file-${index}.ts-${index * 10 + 1}- const after = ${index};`,
+        ]),
+        "\n",
+      ),
+    ),
+  },
+  {
+    tool: "grep",
+    title: "grep reaching its default limit states the number",
+    args: { pattern: "TODO", path: "/project/src" },
+    result: text(
+      "a.ts:3: // TODO fix the retry\nb.ts:9: // TODO remove after launch\n\n[100 matches limit reached. Use limit=200 for more, or refine pattern]",
+      { matchLimitReached: 100 },
+    ),
+  },
+  {
     tool: "find",
     title: "find longer than the preview names the hidden paths where they are hidden",
     args: { pattern: "*.ts", path: "/project/src" },

@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import type {
   AgentToolResult,
   Theme,
@@ -9,6 +8,7 @@ import { Container, Text, type Component, type TuiMouseEvent } from "@earendil-w
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { rowPerState, withSelfBackground } from "../preview/self-background";
 import { fallbackArguments } from "../tools/data/args";
+import { argumentLines } from "../preview/expanded-section";
 import { hostValue } from "../shared/untrusted-value";
 import { getFallbackResultText } from "../tools/data/results";
 import { escapeControlChars } from "../shared/terminal-text";
@@ -49,14 +49,9 @@ function nativeBackground(name: string, downstream: ToolRenderers | undefined): 
   const call: NonNullable<ToolRenderers["renderCall"]> =
     downstream?.renderCall ??
     ((args, theme) =>
-      new Text(
-        Arr.join(
-          [theme.fg("toolTitle", theme.bold(name)), ...fallbackArguments(hostValue(args))],
-          "\n",
-        ),
-        0,
-        0,
-      ));
+      argumentLines(theme, fallbackArguments(hostValue(args)), undefined, [
+        theme.fg("toolTitle", theme.bold(name)),
+      ]));
   const result: NonNullable<ToolRenderers["renderResult"]> =
     downstream?.renderResult ??
     ((value, _options, theme, context) => {

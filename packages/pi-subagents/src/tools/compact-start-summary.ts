@@ -5,8 +5,9 @@ import { compactIssueSeverity } from "pi-code-previews";
 import type { CompactIssue, CompactPhase, CompactSummary } from "pi-code-previews";
 import { QUOTED_TEXT_LIMIT, quoted } from "./compact-run-issues.ts";
 import type { SubagentCardFailure, SubagentStartDetails } from "./details-schema.ts";
-import { isUncertainToolFailure } from "./outcome.ts";
-import { failureMessage } from "pi-cosmic-core/message-text";
+import { isUncertainToolFailure, MODEL_ROUTE_FAILURE_CODES, ROUTE_RECOVERY } from "./outcome.ts";
+import { failureMessage, restatesText } from "pi-cosmic-core/message-text";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import { nextCandidateFact, savedFileFact } from "../ui/notice-facts.ts";
 
 type AdmittedRun = NonNullable<
@@ -22,18 +23,44 @@ const admittedRunMessage = ({ cleanupDisposition, nextCandidate }: AdmittedRun):
         ? "its route has no other model"
         : "its route has another model to try";
 
+/**
+ * What a launch failure's detail adds to its issue: the failure after the first line the issue
+ * already quotes whole, or all of it otherwise, then the route's next step when its model or
+ * sign-in failed.
+ */
+const launchFailureDetail = (failure: SubagentCardFailure, quote: string | undefined): string => {
+  const text = Str.trim(failure.message);
+  const lineEnd = indexOfFrom(text, "\n", 0);
+  const [first, rest] =
+    lineEnd === -1
+      ? [text, ""]
+      : [Fn.pipe(text, Str.slice(0, lineEnd)), Fn.pipe(text, Str.slice(lineEnd + 1), Str.trim)];
+  const account = quote !== undefined && restatesText(first, quote) ? rest : text;
+  const recovery =
+    MODEL_ROUTE_FAILURE_CODES.includes(failure.code ?? "") &&
+    !Fn.pipe(account, Str.includes("/subagents doctor"))
+      ? ROUTE_RECOVERY
+      : "";
+  return Arr.join(Arr.filter([account, recovery], Str.isNonEmpty), "\n\n");
+};
+
 const launchFailureIssue = (
   failure: SubagentCardFailure,
   label: string,
   uncertain: boolean,
-): CompactIssue => ({
-  severity: uncertain ? "warning" : "error",
-  code: `launch:${failure.index}:start-failed`,
-  message: uncertain
-    ? `${label} may have started`
-    : `${label} couldn't start: ${failureMessage(failure.message, "startup failed", QUOTED_TEXT_LIMIT)}`,
-  detail: `${failure.code ? `[${failure.code}] ` : ""}${failure.message}`,
-});
+): CompactIssue => {
+  const quote = uncertain
+    ? undefined
+    : failureMessage(failure.message, "startup failed", QUOTED_TEXT_LIMIT);
+  const detail = launchFailureDetail(failure, quote);
+  return {
+    severity: uncertain ? "warning" : "error",
+    code: `launch:${failure.index}:start-failed`,
+    message:
+      quote === undefined ? `${label} may have started` : `${label} couldn't start: ${quote}`,
+    ...(detail && { detail }),
+  };
+};
 
 const startedCounter = (started: number, total: number, subject: string): string =>
   started === 1 && total === 1 && Str.trim(subject) ? "started" : `${started}/${total} started`;

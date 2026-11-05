@@ -1,5 +1,6 @@
 import type { CompactIssue } from "pi-code-previews";
 import { formatBytes, formatDuration } from "pi-cosmic-core/display";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
@@ -13,6 +14,10 @@ export const decodeBackgroundTaskFailure = Schema.decodeUnknownOption(
 );
 
 type Failure = BackgroundTaskFailureDetails["failure"];
+
+/** A working directory as the user reads it: home-relative (`~/web`), never absolute under home. */
+export const displayDirectory = (cwd: string): string =>
+  sanitizeTerminalLine(formatDisplayPath(cwd, ""));
 
 const joined = (parts: ReadonlyArray<string | undefined>): string =>
   Arr.join(
@@ -87,7 +92,7 @@ export function failureFactLines(failure: Failure): string[] {
   return Arr.filter(
     [
       joined([task, cursors]),
-      failure.cwd === undefined ? "" : sanitizeTerminalLine(failure.cwd),
+      failure.cwd === undefined ? "" : displayDirectory(failure.cwd),
       failure.limit === undefined ? "" : `limit ${failure.limit} running`,
     ],
     (line) => line !== "",
@@ -97,7 +102,7 @@ export function failureFactLines(failure: Failure): string[] {
 const taskFacts = (task: BackgroundTaskSnapshot): string =>
   joined([
     sanitizeTerminalLine(task.id),
-    sanitizeTerminalLine(task.cwd),
+    displayDirectory(task.cwd),
     task.pid === undefined ? undefined : `pid ${task.pid}`,
   ]);
 

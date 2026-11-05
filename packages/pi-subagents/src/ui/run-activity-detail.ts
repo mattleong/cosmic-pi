@@ -20,6 +20,7 @@ import { isOwnedAgentTool } from "../tools/activity-preview.ts";
 import { type RunNameLookup, waitingOn } from "./run-live-activity.ts";
 import { isTextFragment } from "../tools/text-fragments.ts";
 import { WRITER_WORKSPACE_LABELS } from "./run-facts.ts";
+import { homeDisplayPath } from "./display-path.ts";
 
 const RECENT_EVENTS = 12;
 
@@ -165,14 +166,14 @@ const technical = (run: SubagentRunView): ActivityDetailField[] =>
       // A first assignment is the only one; later ones say which they are, as run cards do.
       { label: "Assignment", value: run.reportGeneration > 1 ? String(run.reportGeneration) : "" },
       { label: "Report", value: run.reportStatus ? REPORT_STATUS[run.reportStatus] : "" },
-      { label: "Directory", value: run.cwd },
+      { label: "Directory", value: homeDisplayPath(run.cwd) },
       { label: "PID", value: run.pid === undefined ? "none" : String(run.pid) },
       { label: "Writes", value: run.writeIntent },
       {
         label: "Workspace",
         value: `${WRITER_WORKSPACE_LABELS[run.writerWorkspaceMode ?? "shared-checkout"]}${run.workspaceId ? ` · ${run.workspaceId}` : ""}`,
       },
-      { label: "Session", value: run.sessionFile ?? "" },
+      { label: "Session", value: run.sessionFile ? homeDisplayPath(run.sessionFile) : "" },
       {
         label: "Error detail",
         value:

@@ -23,7 +23,7 @@ import {
 import type { EditorKeyLabels } from "./key-hints.ts";
 import { SELECTION_MARKER } from "./viewport.ts";
 import { clipToWidth, managerNoticeColor, managerNoticeGlyph } from "pi-cosmic-ui/manager";
-import { keyHint, keyHintBar, moveKeyHint } from "pi-cosmic-ui/manager/key-labels";
+import { keyHint, keyHintBar, keyRangeLabel, moveKeyHint } from "pi-cosmic-ui/manager/key-labels";
 import { LIST_CURSOR, selectionMarker } from "pi-cosmic-ui/manager/style";
 
 export interface DialogInputMode {
@@ -376,7 +376,7 @@ function questionHints(model: QuestionnaireRenderModel, question: AskUserQuestio
         ? []
         : [
             keyHint(
-              `1–${choices}`,
+              keyRangeLabel(1, choices),
               question.mode === "multiple" ? "Toggle" : single ? "Choose & Submit" : "Choose",
             ),
             keyHint("j/k", "Move"),

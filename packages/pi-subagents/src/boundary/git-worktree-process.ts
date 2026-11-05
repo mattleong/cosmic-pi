@@ -12,6 +12,7 @@ import { WorkspaceError } from "../workspace/model.ts";
 import { gitInstallation } from "./git-installation.ts";
 import { withoutGitLocalEnvironment } from "./git-local-environment.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 export const workspaceFailure = (operation: string, message: string) =>
   WorkspaceError.make({ operation, message });
@@ -36,7 +37,9 @@ export const workspaceRefusal = (
     message,
     detail: Arr.join(
       [
-        ...(reason.path === undefined ? [] : [`Path: ${JSON.stringify(reason.path)}`]),
+        ...(reason.path === undefined
+          ? []
+          : [`Path: ${JSON.stringify(homeDisplayPath(reason.path))}`]),
         `Rule: ${reason.rule}`,
         ...(reason.agentRemedy === true ? [] : [`Remedy: ${reason.remedy}`]),
       ],

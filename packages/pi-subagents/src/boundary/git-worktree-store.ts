@@ -26,6 +26,7 @@ import {
   workspaceIOIfPresent,
   writeWorkspaceFile,
 } from "./git-worktree-process.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 const MAX_RECORD_BYTES = 64 * 1024 * 1024;
 const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema));
@@ -198,8 +199,8 @@ const lockFailure = (error: CrossProcessLockError, directory: string) =>
         : "The workspace lock for this checkout couldn't be prepared.",
     detail:
       error.reason === "recovery-required"
-        ? `Lock: ${error.slot ?? directory}\nIts owner evidence is damaged or its directory permissions are unsafe. Remove that lock directory only after confirming no Pi session is changing workspaces for this checkout.`
-        : `Lock directory: ${directory}\nIt must be a private directory owned by the current user.`,
+        ? `Lock: ${homeDisplayPath(error.slot ?? directory)}\nIts owner evidence is damaged or its directory permissions are unsafe. Remove that lock directory only after confirming no Pi session is changing workspaces for this checkout.`
+        : `Lock directory: ${homeDisplayPath(directory)}\nIt must be a private directory owned by the current user.`,
   });
 
 // A session's own operations queue behind its operation gate before taking the lock, so a holder

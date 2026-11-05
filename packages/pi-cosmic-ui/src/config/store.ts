@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -88,17 +89,19 @@ export type FooterPatch = Partial<Pick<ResolvedCosmicUiConfig["footer"], "enable
 const noAfterCommit: CosmicUiConfigAfterCommit = () => Effect.void;
 
 const modifyFooterConfig = Effect.fn("pi-cosmic-ui.config.modify-footer")(function* (
-  cwd: string,
-  agentDir: string,
-  update: (footer: JsonObject, config: ResolvedCosmicUiConfig) => JsonObject,
-  projectTrusted: boolean,
+  fresh: ResolvedCosmicUiConfig,
+  update: (footer: JsonObject) => JsonObject,
   afterCommit: CosmicUiConfigAfterCommit,
 ) {
-  const fresh = yield* resolveConfig(cwd, agentDir, projectTrusted);
   return yield* commitPreferredScope(
     store,
     fresh,
-    (raw) => ({ ...raw, footer: update(isJsonObject(raw.footer) ? raw.footer : {}, fresh) }),
+    (raw) => {
+      const footer = update(isJsonObject(raw.footer) ? raw.footer : {});
+      return Rec.isEmptyRecord(footer)
+        ? Rec.filter(raw, (_value, key) => key !== "footer")
+        : { ...raw, footer };
+    },
     afterCommit,
     { fallbackWarning: "Unable to read a Cosmic UI configuration document." },
   ).pipe(Effect.mapError(store.errorFactory("update", fresh.configPath)));
@@ -112,15 +115,13 @@ export const updateFooterConfig = Effect.fn("pi-cosmic-ui.config.update-footer")
   afterCommit: CosmicUiConfigAfterCommit = noAfterCommit,
 ) {
   return yield* modifyFooterConfig(
-    cwd,
-    agentDir,
+    yield* resolveConfig(cwd, agentDir, projectTrusted),
     (footer) => {
       const updated: JsonObject = { ...footer };
       if (patch.enabled !== undefined) updated.enabled = patch.enabled;
       if (patch.density !== undefined) updated.density = patch.density;
       return updated;
     },
-    projectTrusted,
     afterCommit,
   );
 });
@@ -133,16 +134,24 @@ export const setFooterVisibility = Effect.fn("pi-cosmic-ui.config.set-visibility
   projectTrusted: boolean = false,
   afterCommit: CosmicUiConfigAfterCommit = noAfterCommit,
 ) {
+  const fresh = yield* resolveConfig(cwd, agentDir, projectTrusted);
+  // A project document's list replaces the global one, so an empty list there still matters
+  // while the global document hides something.
+  const inherited =
+    fresh.configPath === fresh.projectConfigPath
+      ? (yield* resolveConfig(cwd, agentDir, false)).footer.hidden
+      : DEFAULT_CONFIG.footer.hidden;
   return yield* modifyFooterConfig(
-    cwd,
-    agentDir,
-    (footer, fresh) => {
+    fresh,
+    (footer) => {
       const hidden = new Set(decodeStrings(footer.hidden) ?? fresh.footer.hidden);
       if (visible) hidden.delete(id);
       else hidden.add(id);
-      return { ...footer, hidden: [...hidden] };
+      // Nothing hidden and nothing to override: leave the key out rather than save `[]`.
+      return hidden.size > 0 || inherited.length > 0
+        ? { ...footer, hidden: [...hidden] }
+        : Rec.filter(footer, (_value, key) => key !== "hidden");
     },
-    projectTrusted,
     afterCommit,
   );
 });

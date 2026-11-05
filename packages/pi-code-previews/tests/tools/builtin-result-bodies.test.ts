@@ -49,6 +49,8 @@ describe("read results", () => {
       const collapsed = render("read", style, args, value, false);
       expect(collapsed).not.toContain("sed -n");
       expect(collapsed).not.toMatch(/^\s*40\s*│/mu);
+      // Expansion reveals only the issue's detail, never file content or output.
+      expect(collapsed, style).toMatch(/▸ details/u);
       const expanded = render("read", style, args, value, true);
       // Pi's notice is shown once, not as both the issue's detail and agent notes.
       expect(Str.split(expanded, instruction), style).toHaveLength(2);
@@ -131,6 +133,12 @@ describe("grep calls", () => {
   });
 });
 
+const limitRows = (text: string) =>
+  Arr.filter(
+    Str.split(text, "\n"),
+    (row) => /limit reached/iu.test(row) && !/Use limit/u.test(row),
+  );
+
 describe("listing limits", () => {
   const args = { pattern: "TODO", path: "/project/src", limit: 2 };
   const value = textResult(
@@ -140,10 +148,22 @@ describe("listing limits", () => {
 
   test("a collapsed preview grep states the limit it reached and offers the agent notes", () => {
     const collapsed = render("grep", "preview", args, value, false);
-    expect(collapsed).toMatch(/limit reached: 2/iu);
+    expect(limitRows(collapsed)).toHaveLength(1);
     expect(collapsed).toContain("▸ ");
     expect(collapsed).not.toContain("Use limit=4");
     expect(render("grep", "preview", args, value, true)).toContain("Use limit=4");
+  });
+
+  test("an expanded preview grep states the limit as its collapsed row does", () => {
+    for (const shown of [args, { pattern: "TODO", path: "/project/src" }]) {
+      const collapsed = limitRows(render("grep", "preview", shown, value, false));
+      const expanded = limitRows(render("grep", "preview", shown, value, true));
+      expect(Arr.map(expanded, Str.trim)).toEqual(Arr.map(collapsed, Str.trim));
+    }
+    // A limit the heading doesn't show keeps its number.
+    expect(
+      limitRows(render("grep", "preview", { pattern: "TODO", path: "/project/src" }, value, false)),
+    ).toEqual([expect.stringContaining("2")]);
   });
 
   test("an expanded compact grep states its limit once, in the heading's counter", () => {

@@ -26,6 +26,7 @@ import { getEditDiff, getTextContent } from "../../data/results";
 import { codePreviewSettings } from "../../../config/state";
 import { renderHighlightedText } from "../../../syntax/render";
 import {
+  limitReachedLine,
   oversizedReadNotice,
   splitListingNotice,
   splitShellNotice,
@@ -144,12 +145,43 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
           ? RESULT_LABELS[tool]
           : undefined;
       const container = new Container();
-      container.addChild(expandedSection(theme, label, body));
+      container.addChild(
+        expandedSection(theme, label, withPreviewLimit(tool, body, result, theme, context)),
+      );
       if (raw !== undefined)
         container.addChild(
           expandedSection(theme, "Raw result", new Text(escapeControlChars(raw), 0, 0)),
         );
       return withAgentNotes(container, theme, notice);
+    },
+  };
+}
+
+/**
+ * A listing body, then the `Limit reached` line its collapsed preview row states, where the
+ * heading is the tool's own preview call. A compact heading states the limit as its counter.
+ */
+function withPreviewLimit(
+  tool: BuiltinCompactTool,
+  body: Component,
+  result: AgentToolResult<unknown>,
+  theme: Theme,
+  context: Pick<ToolRenderContext<RendererState, unknown>, "args" | "state">,
+): Component {
+  if (tool !== "grep" && tool !== "find" && tool !== "ls") return body;
+  const stated = limitReachedLine(tool, hostObject(result.details), hostObject(context.args));
+  if (stated === undefined) return body;
+  const line = new Text(theme.fg("muted", stated), 0, 0);
+  const { state } = context;
+  return {
+    render: (width) => [
+      ...body.render(width),
+      ...(headingIsOwnCall(state) ? line.render(width) : []),
+    ],
+    handleMouse: (event) => body.handleMouse?.(event),
+    invalidate: () => {
+      body.invalidate();
+      line.invalidate();
     },
   };
 }

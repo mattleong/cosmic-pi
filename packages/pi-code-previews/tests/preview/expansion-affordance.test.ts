@@ -270,3 +270,39 @@ test("a wrapped heading keeps a fact with a path whole when it fits on a row", (
     expect(rows).toContain("· openai-codex/gpt-5.6-sol:high");
   }
 });
+
+test.each([
+  ["Startup is faster because the parser loads lazily, and bundles are smaller.", 0],
+  ["Nothing about the answer here", 1],
+] as const)(
+  "an expanded preview row keeps a cut fact its body doesn't state whole, with body %j",
+  (whole, lines) => {
+    applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+    const cut = "“Startup is faster because the parser loads…”";
+    const harness = createToolPresentationHarness(
+      withCodePreviewShell(
+        {
+          ...createReadToolDefinition("/project"),
+          renderCall: () => new Text("Demo call", 0, 0),
+          renderResult: () => new Text(`Summary: ${cut}`, 0, 0),
+        },
+        {
+          compactSummary: ({ phase }) => ({
+            subject: "Summary",
+            metadata: [cut],
+            ...(phase === "settled" && { outcome: "success" }),
+          }),
+          expandedContent: {
+            renderCall: () => new Container(),
+            renderResult: () => new Text(`Summary: ${whole}`, 0, 0),
+          },
+        },
+      ),
+    );
+    harness.call({ path: "a.ts" }, { expanded: true });
+    harness.result(textResult(whole), { expanded: true });
+    // At 57 columns the whole answer wraps across rows, which still state the cut words.
+    const rows = Str.split(stripAnsi(Arr.join(harness.render(57), "\n")), "\n");
+    expect(Arr.filter(rows, (row) => Str.includes(cut)(row))).toHaveLength(lines);
+  },
+);

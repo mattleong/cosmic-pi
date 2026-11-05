@@ -9,6 +9,7 @@ import { formatBytes, formatClockTime } from "pi-cosmic-core/display";
 import { joinInline } from "pi-cosmic-ui/manager";
 import { exitStatusMeaning } from "pi-code-previews";
 import { safeTextSuffix } from "pi-cosmic-core/text";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
@@ -190,7 +191,8 @@ export function backgroundTaskActivityDetail(
       ...(task.endedAt === undefined
         ? []
         : [{ label: "Ended", value: clockTime(task.endedAt, now) }]),
-      { label: "Directory", value: bounded(task.cwd, 1_000) },
+      // A working directory reads home-relative, never absolute under home.
+      { label: "Directory", value: bounded(formatDisplayPath(task.cwd, ""), 1_000) },
       { label: "Log cursor", value: String(task.logCursor) },
       ...(task.droppedLogBytes > 0
         ? [{ label: "Dropped", value: formatBytes(task.droppedLogBytes) }]

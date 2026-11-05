@@ -1,3 +1,7 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
+import { stripTerminalControls } from "pi-cosmic-core/security";
+
 /**
  * Whether a row's expanded heading showed its whole subject when it last drew. The heading draws
  * before the row's body in the same pass, so a body can leave out input the heading already shows
@@ -5,8 +9,19 @@
  */
 const subjectShown = new WeakMap<WeakKey, boolean>();
 
-export const recordHeadingSubject = (state: WeakKey, complete: boolean): void => {
-  subjectShown.set(state, complete);
+const endsClipped = (row: string): boolean =>
+  Str.endsWith("…")(Str.trimEnd(stripTerminalControls(row)));
+
+/**
+ * Records the heading rows just drawn. A row that ends in `…` clipped something, so a heading that
+ * draws one never reports its subject complete, whatever its layout claimed.
+ */
+export const recordHeadingSubject = (
+  state: WeakKey,
+  complete: boolean,
+  rows: readonly string[],
+): void => {
+  subjectShown.set(state, complete && !Arr.some(rows, endsClipped));
 };
 
 /** False until a heading has drawn, so a body never drops input on a guess. */

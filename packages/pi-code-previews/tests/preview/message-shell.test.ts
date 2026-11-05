@@ -133,7 +133,7 @@ describe("message shell", () => {
       },
     ));
 
-  it("lets an expanded body leave out a subject only its compact heading showed whole", () => {
+  it("lets an expanded body leave out a subject only its heading showed whole", () => {
     const long = Arr.join(Arr.replicate("word", 60), " ");
     const repeats = (style: "compact" | "preview", subject: string) =>
       Str.includes("SUBJECT AGAIN")(
@@ -144,7 +144,9 @@ describe("message shell", () => {
     expect(repeats("compact", "A short subject")).toBe(false);
     // A subject too long for the heading's rows is shortened there, so the body keeps it.
     expect(repeats("compact", long)).toBe(true);
-    expect(repeats("preview", "A short subject")).toBe(true);
+    // An expanded preview heading wraps its subject whole, unless it is too long to show.
+    expect(repeats("preview", "A short subject")).toBe(false);
+    expect(repeats("preview", long)).toBe(true);
   });
 
   it("falls back to the message's text when a presenter or body throws", () => {

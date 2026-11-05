@@ -24,7 +24,10 @@ import type { ActivityRow } from "../src/activity/model.ts";
 import type { ActivityDetail } from "../src/activity/protocol.ts";
 import { activityRow, memberRow } from "./support/activity.ts";
 import { activitySectionId } from "../src/activity/grouped-tree.ts";
-import { settingsCommandGalleryLines } from "./support/gallery-settings-command.ts";
+import {
+  settingsCommandGalleryLines,
+  settingsCompletionGalleryLines,
+} from "./support/gallery-settings-command.ts";
 import { sharedSurfaceGalleryLines } from "./support/gallery-shared-surfaces.ts";
 
 const directory = galleryDirectory(process.env) ?? "";
@@ -824,7 +827,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       lines.push(...detailFrames(), ...liveFrames(), ...attentionFrames(), ...edgeFrames());
       lines.push(...workingFrames());
       lines.push(...sharedSurfaceGalleryLines());
-      lines.push(...(yield* settingsCommandGalleryLines()));
+      lines.push(...(yield* settingsCommandGalleryLines()), ...settingsCompletionGalleryLines());
       yield* writeGallerySection(
         directory,
         "pi-cosmic-ui",

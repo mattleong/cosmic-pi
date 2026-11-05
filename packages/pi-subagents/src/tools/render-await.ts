@@ -210,7 +210,7 @@ export const renderAwaitProgressComponent = (
     const frame = spinnerFrameAt(synchronousNow());
     const counters = formatAwaitCounters(cards, hierarchy, until);
     return [
-      ...factRowLines([[counters, "muted"]], safeWidth, theme, expanded),
+      ...factRowLines([[counters, "muted"]], safeWidth, theme, expanded, { wholeFacts: true }),
       ...(hierarchy.contextOmitted
         ? [clipToWidth(theme.fg("dim", DESCENDANTS_OMITTED), safeWidth)]
         : []),

@@ -158,15 +158,16 @@ function headingRows(
   width: number,
 ): string[] {
   const rows = own?.heading(width);
-  // A preview heading wraps rather than clips, so it shows the whole subject.
+  // A preview heading wraps rather than clips, so it shows the whole subject unless it was cut.
   recordOwnCallHeading(state, rows !== undefined);
   if (rows) {
-    recordHeadingSubject(state, true);
+    recordHeadingSubject(state, true, rows);
     return rows;
   }
   const { text, subjectComplete } = layoutPreviewHeading(title, summary, true, theme);
-  recordHeadingSubject(state, subjectComplete);
-  return new Text(text, 0, 0).render(width);
+  const built = new Text(text, 0, 0).render(width);
+  recordHeadingSubject(state, subjectComplete, built);
+  return built;
 }
 
 /** Runs a capture outside the row's border slot, so its expand hint labels no border. */
@@ -216,18 +217,29 @@ const plainText = (rows: readonly string[]): string =>
   Str.toLowerCase(Str.replace(/\s+/gu, " ")(stripTerminalControls(Arr.join(rows, " "))));
 const escapeRegExp = Str.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 
+// A wrapped row may break after these without a space, which joining the rows then adds.
+const BREAK_AFTER = /(?<=[/\\_.-])/u;
+
+/** A piece of a fact as a pattern that also matches it broken across a wrap. */
+const piecePattern = (piece: string): string =>
+  Arr.join(Arr.map(Str.split(piece, BREAK_AFTER), escapeRegExp), " ?");
+
 /**
- * Whether rows state the fact as whole words, even across a wrap, regardless of case and of quotes
- * around it, as an answer listed in a body states the quoted answer.
+ * Whether rows state the fact as whole words, regardless of case and of quotes around it, as an
+ * answer listed in a body states the quoted answer. The rows are matched as the text they wrap, so
+ * a fact still matches across a wrap, even one after a path separator. A fact cut with `…` states
+ * only the words it keeps, so whole text that continues past the cut states it too.
  */
 function statesFact(rows: readonly string[], fact: string): boolean {
-  const said = Str.toLowerCase(Str.replace(/^["'“‘«]+|["'”’»]+$/gu, "")(Str.trim(fact)));
-  return (
-    said !== "" &&
-    new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeRegExp(said)}(?:$|[^\\p{L}\\p{N}])`, "u").test(
-      plainText(rows),
-    )
+  const said = Str.toLowerCase(
+    Str.replace(/\s+/gu, " ")(Str.replace(/^["'“‘«]+|["'”’»]+$/gu, "")(Str.trim(fact))),
   );
+  const pieces = Arr.filter(Arr.map(Str.split(said, "…"), Str.trim), Str.isNonEmpty);
+  if (pieces.length === 0) return false;
+  const start = Str.startsWith("…")(said) ? "" : "(?:^|[^\\p{L}\\p{N}])";
+  const end = Str.endsWith("…")(said) ? "" : "(?:$|[^\\p{L}\\p{N}])";
+  const body = Arr.join(Arr.map(pieces, piecePattern), ".*?");
+  return new RegExp(`${start}${body}${end}`, "u").test(plainText(rows));
 }
 
 /**

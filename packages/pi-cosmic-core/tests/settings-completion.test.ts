@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import type { JsonObject } from "../src/platform/json-document.ts";
 import {
   BooleanFromJsonSchema,
+  completeSettingsArguments,
   decodeSettingUpdate,
   FiniteNumberFromJsonSchema,
 } from "../src/settings-completion.ts";
@@ -24,4 +25,35 @@ describe("decodeSettingUpdate", () => {
       });
     }),
   );
+});
+
+describe("completeSettingsArguments", () => {
+  const descriptors = [
+    {
+      id: "maxRunning",
+      label: "Running at once",
+      description: "How many tasks may run at the same time; later ones wait their turn.",
+      values: ["8", "16"],
+    },
+  ];
+
+  it("describes ids and values with the setting's label, not its description", () => {
+    expect(completeSettingsArguments("max", descriptors)).toEqual([
+      { value: "maxRunning", label: "maxRunning", description: "Running at once" },
+    ]);
+    expect(
+      completeSettingsArguments(
+        "project maxRunning 1",
+        descriptors,
+        [],
+        [{ value: "project", label: "project", description: "This project" }],
+      ),
+    ).toEqual([
+      {
+        value: "project maxRunning 16",
+        label: "project maxRunning 16",
+        description: "Running at once",
+      },
+    ]);
+  });
 });

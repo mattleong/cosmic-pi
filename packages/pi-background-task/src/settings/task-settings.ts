@@ -15,6 +15,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import {
@@ -254,7 +255,7 @@ function createTaskSettingsSubcommand(
     descriptors: TASK_SETTING_DESCRIPTORS,
     examples: [
       "maxRunning 16",
-      "logBufferBytesPerTask 1MiB",
+      "logBufferBytesPerTask 1MB",
       "project maxWaitSeconds 1m",
       `project maxRunning ${INHERIT}`,
     ],
@@ -324,7 +325,7 @@ function createTaskSettingsSubcommand(
             if (!isConfigError(cause)) throw cause;
             return {
               scope,
-              problem: `${sanitizeTerminalLine(cause.path)} can't be read or isn't a JSON object`,
+              problem: `${sanitizeTerminalLine(formatDisplayPath(cause.path, ctx.cwd))} can't be read or isn't a JSON object`,
             };
           },
         );

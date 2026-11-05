@@ -9,6 +9,7 @@ import { isAffordanceRow } from "../../../preview/affordance-row";
 import { expandedSection } from "../../../preview/expanded-section";
 import { ownField, ownObject, type HostObject } from "../../../shared/untrusted-value";
 import { escapeControlChars } from "../../../shared/terminal-text";
+import { numericArg } from "../../data/args";
 
 type SplitOutput = { readonly lines: string[]; readonly notice: string | undefined };
 
@@ -56,20 +57,37 @@ export function withAgentNotes(body: Component, theme: Theme, notes: string | un
 }
 
 /**
- * A collapsed listing's rows, then, when its limit was reached, the limit as a compact heading's
- * counter states it and, unless the rows already offer expansion, the agent notes expansion adds.
+ * A listing's `Limit reached` line when its limit was reached. A preview heading that states the
+ * limit (`· limit 2`) gives the number, so the line adds it only for a limit the call didn't set.
+ */
+export function limitReachedLine(
+  tool: "grep" | "find" | "ls",
+  details: HostObject | undefined,
+  args: HostObject | undefined,
+): string | undefined {
+  const [counter] = outputLimitProjection(tool, details).counters;
+  if (counter === undefined) return undefined;
+  const requested = numericArg(args, "limit");
+  return requested !== undefined && counter === `limit reached: ${requested}`
+    ? "Limit reached"
+    : `${Str.toUpperCase(Str.slice(0, 1)(counter))}${Str.slice(1)(counter)}`;
+}
+
+/**
+ * A collapsed listing's rows, then, when its limit was reached, its `Limit reached` line and,
+ * unless the rows already offer expansion, the agent notes expansion adds.
  */
 export function withCollapsedLimit(
   text: string,
   theme: Theme,
   tool: "grep" | "find" | "ls",
   details: HostObject | undefined,
+  args: HostObject | undefined,
   notice: string | undefined,
 ): string {
-  const [limit] = outputLimitProjection(tool, details).counters;
-  if (limit === undefined) return text;
+  const stated = limitReachedLine(tool, details, args);
+  if (stated === undefined) return text;
   const offered = Arr.some(Str.split(text, "\n"), isAffordanceRow);
-  const stated = `${Str.toUpperCase(Str.slice(0, 1)(limit))}${Str.slice(1)(limit)}`;
   return Arr.join(
     [
       text,

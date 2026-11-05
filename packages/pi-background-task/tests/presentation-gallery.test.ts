@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
@@ -256,6 +257,12 @@ const scenarios: ReadonlyArray<Scenario> = [
       cwd: "packages/pi-background-task",
     },
     service: { start: started("task-0000000011", 48612) },
+  },
+  {
+    // A working directory reads home-relative, as `~/web`.
+    title: "started a task in a folder under home",
+    input: { action: "start", command: "pnpm dev", name: "web", cwd: `${homedir()}/web` },
+    service: { start: started("task-0000000016", 48650) },
   },
   {
     title: "start in a missing directory",
@@ -670,6 +677,9 @@ const noticeScenarios: ReadonlyArray<GalleryMessageScenario> = [
   notice("task timed out", timedOut, [out("Applying migration 0042_add_sessions...")]),
   notice("task stopped by the user", stoppedServer, serverLog),
   notice("task killed without output", killed, []),
+  notice("task in a folder under home", { ...finished, cwd: `${homedir()}/web` }, [
+    out("Found 0 errors in 212 files."),
+  ]),
   {
     title: "notice whose details could not be read",
     message: {

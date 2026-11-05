@@ -54,6 +54,8 @@ const args = { prompt, action: "generate" };
 // The compact heading shows a prompt on one line, so its Prompt section keeps the line breaks.
 const TWO_LINE_PROMPT =
   "A watercolor otter reading a newspaper.\nSoft morning light on the riverbank.";
+const LONG_PROMPT =
+  "A watercolor otter reading a newspaper on a riverbank at dawn, with herons wading in the reeds, mist over the water, and a small wooden boat tied to a willow";
 const details = (status: string, request = prompt): CodexImageDetails => ({
   id: "ig_0a1b2c3d",
   status,
@@ -84,6 +86,25 @@ const toolScenarios: ReadonlyArray<GalleryScenario> = [
   {
     title: "requesting an image",
     args,
+    phase: "running",
+    result: {
+      content: text("Requesting OpenAI image_generation via gpt-6.1-sol…"),
+      details: undefined,
+    },
+  },
+  {
+    title: "requesting an image with options",
+    args: { ...args, save: "project", outputFormat: "webp" },
+    phase: "running",
+    result: {
+      content: text("Requesting OpenAI image_generation via gpt-6.1-sol…"),
+      details: undefined,
+    },
+  },
+  {
+    // Past the heading's limit, so the heading shortens it and expansion shows it whole.
+    title: "requesting an image with a long prompt",
+    args: { prompt: LONG_PROMPT, action: "generate" },
     phase: "running",
     result: {
       content: text("Requesting OpenAI image_generation via gpt-6.1-sol…"),

@@ -7,12 +7,15 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import {
+  endElide,
   getTextContent,
   type CompactIssue,
   type CompactSummary,
   type CompactSummaryProvider,
+  type ToolCallCollapsedStyle,
 } from "pi-code-previews";
 import { failureMessage } from "pi-cosmic-core/message-text";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import {
   CodexImageDetailsSchema,
   IMAGE_ACTIONS,
@@ -23,8 +26,25 @@ import {
 
 const ACTIONS: ReadonlySet<string> = new Set(IMAGE_ACTIONS);
 
+/** The most of a prompt a heading names; expansion shows a longer prompt whole. */
+const IMAGE_PROMPT_SUBJECT_LIMIT = 100;
+
+const onOneLine = (prompt: string): string => Fn.pipe(prompt, Str.replace(/\s+/g, " "), Str.trim);
+
+/** The prompt as headings name it: on one line and, past the limit, cut at a word with `…`. */
 export const imagePromptSubject = (prompt: string): string =>
-  Fn.pipe(prompt, Str.replace(/\s+/g, " "), Str.trim, Str.slice(0, 100));
+  endElide(onOneLine(prompt), IMAGE_PROMPT_SUBJECT_LIMIT);
+
+/** The subject as a preview heading draws it; preview headings wrap, so it shows whole. */
+export const imageHeadingPrompt = (prompt: string): string =>
+  sanitizeTerminalLine(imagePromptSubject(prompt));
+
+/**
+ * Whether a heading that showed its whole subject showed the prompt exactly, in either collapsed
+ * style, so an expanded body can leave the prompt out. A prompt with line breaks never qualifies.
+ */
+export const imageHeadingsShowPrompt = (prompt: string): boolean =>
+  imagePromptSubject(prompt) === prompt && imageHeadingPrompt(prompt) === prompt;
 
 const ImageRecordSchema = Schema.Struct({
   ...CodexImageDetailsSchema.fields,
@@ -155,38 +175,61 @@ const textOnlyFailure = (result: AgentToolResult<unknown> | undefined): string |
  * Expanded, a row always shows the complete prompt and its options; once settled, also the
  * image's facts or the failure's recovery step. The streamed progress text never shows.
  */
-const REQUEST_LABEL = "prompt";
-const SETTLED_LABEL = "details";
+const PROMPT_LABEL = "prompt";
+const DETAILS_LABEL = "details";
+const OPTIONS_LABEL = "options";
 
-export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
-  phase,
-  args,
-  result,
-  context,
-}) => {
-  const action = args.action ?? "auto";
-  if (!ACTIONS.has(action) || !Predicate.isString(args.prompt)) return undefined;
-  const subject = imagePromptSubject(args.prompt);
-  if (phase !== "settled") return { action, subject, expandLabel: REQUEST_LABEL };
-  const record = imageRecord(result?.details);
+/** Whether the request names anything besides its prompt and action, which expansion lists. */
+const hasOptions = (args: Partial<ToolParams>): boolean =>
+  Arr.some(
+    Rec.toEntries<string, unknown>(args),
+    ([key, value]) => key !== "prompt" && key !== "action" && value !== undefined,
+  );
 
-  if (context.isError && record?.status !== "cancelled") {
-    const text = textOnlyFailure(result);
-    return text === undefined
-      ? undefined
-      : {
-          action,
-          subject,
-          outcome: "error",
-          issues: [imageFailureIssue(text)],
-          expandLabel: SETTLED_LABEL,
-        };
-  }
-
-  if (!record) return undefined;
-  const summary = imageRecordSummary(record, {
-    hasImage: result !== undefined && Arr.some(result.content, (part) => part.type === "image"),
-    prompt: args.prompt,
-  });
-  return summary && { ...summary, expandLabel: SETTLED_LABEL };
+/**
+ * What expanding a pending request reveals: its options, and the prompt wherever the collapsed
+ * heading may cut it. A compact heading may cut it at any width; a preview heading wraps, so it
+ * hides only a prompt it can't name exactly.
+ */
+const requestLabel = (
+  args: Partial<ToolParams>,
+  prompt: string,
+  style: ToolCallCollapsedStyle,
+): string | false => {
+  const options = hasOptions(args);
+  if (style === "compact" || !imageHeadingsShowPrompt(prompt))
+    return options ? DETAILS_LABEL : PROMPT_LABEL;
+  return options && OPTIONS_LABEL;
 };
+
+/** The image tool's summary for rows drawn in `style`, read when the shell wraps the tool. */
+export const imageCompactSummaryFor =
+  (style: ToolCallCollapsedStyle): CompactSummaryProvider<ToolParams> =>
+  ({ phase, args, result, context }) => {
+    const action = args.action ?? "auto";
+    if (!ACTIONS.has(action) || !Predicate.isString(args.prompt)) return undefined;
+    const subject = imagePromptSubject(args.prompt);
+    if (phase !== "settled")
+      return { action, subject, expandLabel: requestLabel(args, args.prompt, style) };
+    const record = imageRecord(result?.details);
+
+    if (context.isError && record?.status !== "cancelled") {
+      const text = textOnlyFailure(result);
+      return text === undefined
+        ? undefined
+        : {
+            action,
+            subject,
+            outcome: "error",
+            issues: [imageFailureIssue(text)],
+            expandLabel: DETAILS_LABEL,
+          };
+    }
+
+    if (!record) return undefined;
+    const summary = imageRecordSummary(record, {
+      hasImage: result !== undefined && Arr.some(result.content, (part) => part.type === "image"),
+      prompt: args.prompt,
+    });
+    return summary && { ...summary, expandLabel: DETAILS_LABEL };
+  };

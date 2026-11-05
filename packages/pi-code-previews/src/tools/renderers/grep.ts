@@ -3,7 +3,7 @@ import * as Str from "effect/String";
 
 import { Text } from "@earendil-works/pi-tui";
 import { captureCodePreviewSessionCapability } from "../../application/capability";
-import { renderGrepOutputLines } from "../../tools/grep-render";
+import { parseGrepOutputLine, renderGrepOutputLines } from "../../tools/grep-render";
 import { renderDisplayPath } from "../../paths/display";
 import { metadata, previewFooter, trimSingleTrailingNewline } from "../../preview/format";
 import { codePreviewSettings } from "../../config/state";
@@ -58,24 +58,30 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
       const collapsedLines = codePreviewSettings.grepCollapsedLines;
       const limit = expanded ? rawLines.length : collapsedLines;
       const skipHighlight = shouldSkipHighlight(output);
+      // Hidden rows are matches, unless context lines are shown among them.
+      const hidden = Arr.some(rawLines, (line) => parseGrepOutputLine(line)?.kind === "context")
+        ? { singular: "line" }
+        : { singular: "match", plural: "matches" };
       const { args, invalidate } = renderContext;
       const render = (active: boolean) => {
-        let text = renderSelectedOutputLines(
-          rawLines,
-          limit,
-          theme,
-          { singular: "output line" },
-          (chunk) =>
-            renderGrepOutputLines(
-              Arr.join(chunk, "\n"),
-              theme,
-              hostObject(args),
-              invalidate,
-              active && !skipHighlight,
-            ),
+        let text = renderSelectedOutputLines(rawLines, limit, theme, hidden, (chunk) =>
+          renderGrepOutputLines(
+            Arr.join(chunk, "\n"),
+            theme,
+            hostObject(args),
+            invalidate,
+            active && !skipHighlight,
+          ),
         );
         if (!expanded)
-          text = withCollapsedLimit(text, theme, "grep", hostObject(result.details), notice);
+          text = withCollapsedLimit(
+            text,
+            theme,
+            "grep",
+            hostObject(result.details),
+            hostObject(args),
+            notice,
+          );
         if (skipHighlight)
           text += previewFooter(theme, "Syntax highlighting skipped for large grep output");
         return new Text(text, 0, 0);

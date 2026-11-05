@@ -26,6 +26,7 @@ import {
   type SubagentSelectionSource,
 } from "./model.ts";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 interface ParentProfileModel {
   readonly model: string;
@@ -280,7 +281,7 @@ export function resolveProfilePlan(
     const source = config.profileSources[profile];
     const profileMessage =
       source === "global-invalid" || source === "project-invalid"
-        ? `Profile ${profile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath}.`
+        ? `Profile ${profile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${homeDisplayPath(source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath)}.`
         : source === "session"
           ? `Profile ${profile} is temporarily disabled by a session override; clear it in /subagents profiles to reveal the loaded persistent route.`
           : `Profile ${profile} is disabled and has no eligible candidate.`;

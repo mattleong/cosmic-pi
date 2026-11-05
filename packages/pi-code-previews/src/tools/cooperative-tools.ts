@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { fallbackArguments } from "./data/args";
+import { argumentLines } from "../preview/expanded-section";
 import { hostValue, type HostValue } from "../shared/untrusted-value";
 import { getFallbackResultText } from "./data/results";
 import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
@@ -138,11 +139,9 @@ function renderFallbackToolCall(
   theme: Theme,
   expandedArgs: HostValue | undefined,
 ): Component {
-  const lines = [
+  return argumentLines(theme, fallbackArguments(expandedArgs), "muted", [
     theme.fg("toolTitle", theme.bold(nonEmptyText(tool.label) ?? tool.name)),
-    ...Arr.map(fallbackArguments(expandedArgs), (line) => theme.fg("muted", line)),
-  ];
-  return new Text(Arr.join(lines, "\n"), 0, 0);
+  ]);
 }
 
 function renderFallbackToolResult<TArgs, TDetails, TState>(

@@ -6,6 +6,7 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CompactSummary } from "../tools/compact-summary";
 import { elideSubject } from "./compact-header";
+import { wrapPreviewHeading } from "./heading-wrap";
 import { compactSingleLine } from "./compact-row";
 
 // renderToolHeader clips a longer subtitle.
@@ -46,6 +47,46 @@ export function layoutPreviewHeading(
   };
 }
 
+const factTail = (facts: readonly string[], count: number): string =>
+  count === 0 ? "" : ` · ${Arr.join(Arr.take(facts, count), " · ")}`;
+
+const headingSubtitle = (
+  action: string,
+  subject: string,
+  facts: readonly string[],
+  count: number,
+): string =>
+  `${Arr.join(Arr.filter([action, subject], Str.isNonEmpty), " ")}${factTail(facts, count)}`;
+
+/** A heading drawn on as many rows as it needs, and whether it shows the whole subject. */
+export interface WrappedPreviewHeading {
+  readonly rows: string[];
+  readonly subjectComplete: boolean;
+}
+
+/**
+ * An expanded message's preview heading: the collapsed row's title, action, subject, first counter,
+ * and metadata, wrapped rather than cut, and whether it shows the whole subject.
+ */
+export function wrappedPreviewHeading(
+  title: string,
+  summary: CompactSummary,
+  theme: Pick<Theme, "fg" | "bold">,
+  width: number,
+): WrappedPreviewHeading {
+  const facts = headingFacts(summary);
+  const subtitle = headingSubtitle(
+    compactSingleLine(summary.action ?? ""),
+    compactSingleLine(summary.subject),
+    facts,
+    facts.length,
+  );
+  return {
+    rows: wrapPreviewHeading(renderToolHeader({ title, subtitle }, theme), width),
+    subjectComplete: visibleWidth(subtitle) <= SUBTITLE_LIMIT,
+  };
+}
+
 // The least room a cut subject keeps before a counter gives way to it, as compact headings keep.
 const SUBJECT_MINIMUM = 12;
 
@@ -68,19 +109,12 @@ export function previewHeadingRow(
     expanded ? summary.subject : (summary.compactSubject ?? summary.subject),
   );
   const facts = headingFacts(summary);
-  const tail = (count: number) =>
-    count === 0 ? "" : ` · ${Arr.join(Arr.take(facts, count), " · ")}`;
+  const tail = (count: number) => factTail(facts, count);
   const room =
     width - visibleWidth(compactSingleLine(title)) - 1 - (action ? visibleWidth(action) + 1 : 0);
   const draw = (shown: string, count: number) =>
     clipToWidth(
-      renderToolHeader(
-        {
-          title,
-          subtitle: `${Arr.join(Arr.filter([action, shown], Str.isNonEmpty), " ")}${tail(count)}`,
-        },
-        theme,
-      ),
+      renderToolHeader({ title, subtitle: headingSubtitle(action, shown, facts, count) }, theme),
       width,
     );
   for (let count = facts.length; count >= 0; count--)

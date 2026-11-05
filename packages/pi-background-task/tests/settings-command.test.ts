@@ -423,13 +423,16 @@ describe("/tasks settings", () => {
       yield* macrotask;
       expect(h.isOpen()).toBe(true);
       expect(h.notify).not.toHaveBeenCalled();
-      // The Global group, then the Project scope its broken file leaves unavailable.
+      // The Global group, then the Project scope its broken file leaves unavailable, naming the
+      // file as a display path rather than an absolute one.
       h.input("j");
+      const shown = ".pi/extensions/pi-background-task.json";
       const reason = Fn.pipe(
-        Arr.findFirst(Str.split(h.screen(), "\n"), (line) => Fn.pipe(line, Str.includes(path))),
+        Arr.findFirst(Str.split(h.screen(), "\n"), (line) => Fn.pipe(line, Str.includes(shown))),
         Option.map(Str.trim),
         Option.getOrElse(() => ""),
       );
+      expect(reason).not.toContain(path);
       expect(issueMessageStyleProblems(reason, { maxLength: 200 })).toEqual([]);
       h.input("\r");
       yield* macrotask;

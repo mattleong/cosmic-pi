@@ -13,6 +13,7 @@ import {
   type ExpandedField,
 } from "pi-code-previews";
 import { formatDuration } from "pi-cosmic-core/display";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
@@ -145,7 +146,8 @@ export interface BackgroundTaskRequestView {
 function requestRows(args: RequestArguments): ReadonlyArray<LabeledRow> {
   const rows: LabeledRow[] = args.action === "start" ? startRows(args) : [];
   const cwd = textValue(args.cwd);
-  if (cwd !== undefined) rows.push(row("Directory", visibleText(cwd)));
+  // An absolute working directory reads home-relative; a relative one reads as the agent wrote it.
+  if (cwd !== undefined) rows.push(row("Directory", visibleText(formatDisplayPath(cwd, ""))));
   const timeout = numberValue(args.timeoutSeconds);
   if (timeout !== undefined)
     rows.push(row("Time limit", timeout > 0 ? secondsText(timeout) : "none"));

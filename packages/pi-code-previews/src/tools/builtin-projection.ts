@@ -93,7 +93,11 @@ export function projectBuiltinCompactSummary(
 
 /** What a builtin row's expansion shows when it isn't the tool's plain output. */
 function builtinExpandLabel(tool: BuiltinCompactTool, summary: CompactSummary): string | undefined {
-  if (tool === "read") return "content";
+  // An oversized first line returns no content; expanding shows only the issue's detail.
+  if (tool === "read")
+    return Arr.some(summary.issues ?? [], (issue) => issue.code === "oversized-first-line")
+      ? "details"
+      : "content";
   if (tool === "edit") return "diff";
   if (tool !== "write") return undefined;
   const [counter] = summary.counters ?? [];

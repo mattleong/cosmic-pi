@@ -18,7 +18,7 @@ import { layoutExpandedCompactHeading, renderCompactRow } from "./compact-row";
 import { renderCompactAffordance } from "./compact-quote";
 import { showsAffordance } from "./expand-affordance";
 import { recordHeadingSubject } from "./heading-coverage";
-import { previewHeadingRow } from "./preview-heading";
+import { previewHeadingRow, wrappedPreviewHeading } from "./preview-heading";
 import { statusBackground } from "./self-background";
 
 /** A custom message presented like a settled tool row: its heading, then what someone wrote. */
@@ -170,9 +170,13 @@ class MessageShell implements Component {
     const status = compactStatus("settled", summary);
     const compact = policy.toolCallCollapsedStyle === "compact";
     const headingRows = (width: number): string[] => {
+      const title = message.label ?? message.name;
+      if (!compact && !expanded) return [previewHeadingRow(title, summary, false, theme, width)];
+      // An expanded preview heading wraps rather than clips, so the body may leave out its subject.
       if (!compact) {
-        recordHeadingSubject(this.headingState, false);
-        return [previewHeadingRow(message.label ?? message.name, summary, expanded, theme, width)];
+        const { rows, subjectComplete } = wrappedPreviewHeading(title, summary, theme, width);
+        recordHeadingSubject(this.headingState, subjectComplete, rows);
+        return rows;
       }
       if (!expanded)
         return [renderCompactRow({ name: message.name, phase: "settled", summary }, theme, width)];
@@ -187,7 +191,7 @@ class MessageShell implements Component {
         theme,
         width,
       );
-      recordHeadingSubject(this.headingState, subjectComplete);
+      recordHeadingSubject(this.headingState, subjectComplete, rows);
       return rows;
     };
     const heading = composeToolComponent((width) => [

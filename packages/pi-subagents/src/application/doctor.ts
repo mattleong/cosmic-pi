@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { SafeFile } from "pi-cosmic-core";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import { nodeExecutableProblem } from "../boundary/node-executable.ts";
@@ -146,7 +147,9 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
           "failed",
           `version ${VERSION}; subagents need ${Arr.join(Arr.map(MINIMUM_PI_VERSION, String), ".")} or later`,
         ),
-    nodeProblem ? check("Node", "failed", nodeProblem) : check("Node", "ok", process.execPath),
+    nodeProblem
+      ? check("Node", "failed", nodeProblem)
+      : check("Node", "ok", formatDisplayPath(process.execPath, input.ctx.cwd)),
   ];
 
   const snapshot = yield* profiles.capture;
@@ -222,10 +225,11 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
     Effect.as(true),
     Effect.orElseSucceed(() => false),
   );
+  const agentDirectory = formatDisplayPath(input.agentDirectory, input.ctx.cwd);
   checks.push(
     writable
-      ? check("Private state", "ok", input.agentDirectory)
-      : check("Private state", "failed", `${input.agentDirectory} is not writable`),
+      ? check("Private state", "ok", agentDirectory)
+      : check("Private state", "failed", `${agentDirectory} is not writable`),
   );
   for (const event of WORKTREE_HOOK_EVENTS) {
     const hooks = config.hooks[event];
@@ -251,7 +255,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
     );
   }
   checks.push(yield* worktreeIncludeCheck(input.ctx.cwd));
-  checks.push(yield* gitCheck);
+  checks.push(yield* gitCheck(input.ctx.cwd));
   if (input.activityViewAvailable !== undefined)
     checks.push(
       input.activityViewAvailable
@@ -283,18 +287,23 @@ const worktreeIncludeCheck = (cwd: string): Effect.Effect<DoctorCheck, never, Sa
   );
 
 // Isolated (worktree) writers need Git; shared-checkout writers don't, so problems are warnings.
-const gitCheck: Effect.Effect<DoctorCheck> = gitInstallation.pipe(
-  Effect.map((installation) =>
-    gitVersionSupported(installation.version)
-      ? check("Git", "ok", `${installation.version} at ${installation.executable}`)
-      : check(
-          "Git",
-          "warning",
-          `${installation.version} at ${installation.executable}; isolated writers need ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later`,
-        ),
-  ),
-  Effect.catch((error) => Effect.succeed(check("Git", "warning", errorLine(error)))),
-);
+const gitCheck = (cwd: string): Effect.Effect<DoctorCheck> =>
+  gitInstallation.pipe(
+    Effect.map((installation) =>
+      gitVersionSupported(installation.version)
+        ? check(
+            "Git",
+            "ok",
+            `${installation.version} at ${formatDisplayPath(installation.executable, cwd)}`,
+          )
+        : check(
+            "Git",
+            "warning",
+            `${installation.version} at ${formatDisplayPath(installation.executable, cwd)}; isolated writers need ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later`,
+          ),
+    ),
+    Effect.catch((error) => Effect.succeed(check("Git", "warning", errorLine(error)))),
+  );
 
 // Readiness runs the same preflight a launch does, bounded so a hung check can't stall the report.
 const readinessFailure = (

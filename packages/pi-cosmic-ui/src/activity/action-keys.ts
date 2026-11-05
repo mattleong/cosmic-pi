@@ -1,7 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
-import * as Str from "effect/String";
+import { joinKeyHints, keyHint, keyRangeLabel } from "../manager/key-labels.ts";
 import type { ActivityRow } from "./model.ts";
 
 type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
@@ -100,12 +99,6 @@ export interface ActivityActionHints {
   readonly primary: string | undefined;
 }
 
-const join = (parts: ReadonlyArray<string | undefined>) =>
-  Arr.join(
-    Arr.filter(parts, (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part)),
-    " · ",
-  ) || undefined;
-
 export function activityActionHints(
   row: ActivityRow | undefined,
   page: number,
@@ -113,16 +106,18 @@ export function activityActionHints(
   const keys = activityActionKeys(row && !row.retained ? row.actions : [], page);
   const only = keys.numbered.length === 1 ? keys.numbered[0] : undefined;
   const last = keys.numbered.at(-1);
+  const first = keys.numbered[0];
   const numbered = only
-    ? `${only.key} ${only.action.label}`
-    : last
-      ? `1-${last.key} Actions`
+    ? keyHint(only.key, only.action.label)
+    : first && last
+      ? keyHint(keyRangeLabel(first.key, last.key), "Actions")
       : undefined;
   return {
-    primary: join([
-      ...Arr.map(keys.lettered, ({ key, action }) => `${key} ${action.label}`),
-      numbered,
-      keys.pages > 1 ? "a More actions" : undefined,
-    ]),
+    primary:
+      joinKeyHints([
+        ...Arr.map(keys.lettered, ({ key, action }) => keyHint(key, action.label)),
+        numbered,
+        keys.pages > 1 && keyHint("a", "More actions"),
+      ]) || undefined,
   };
 }

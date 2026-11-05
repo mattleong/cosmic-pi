@@ -69,7 +69,13 @@ export const presentImageMessage =
       expanded: (headingState) => {
         const shown = new Container();
         if (prompt)
-          shown.addChild(renderImageRequest({ prompt }, theme, { ...IMAGE_REQUEST, headingState }));
+          shown.addChild(
+            renderImageRequest({ prompt }, theme, {
+              ...IMAGE_REQUEST,
+              cwd: view.cwd,
+              headingState,
+            }),
+          );
         shown.addChild(body());
         return shown;
       },
@@ -88,7 +94,8 @@ export const presentImageMessage =
     };
   };
 
-// Expanded, the message adds the complete prompt, the revised prompt, and where the file was saved.
+// Expanded, the message adds the revised prompt, where the file was saved, and the complete prompt
+// when its heading shortened it.
 const EXPAND_LABEL = "details";
-// The heading's subject is a shortened prompt, so expansion shows all of it.
+// The Prompt section draws unless the heading showed the whole prompt exactly.
 const IMAGE_REQUEST = { prompt: false, action: true } as const;

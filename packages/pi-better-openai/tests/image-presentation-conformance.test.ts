@@ -10,6 +10,7 @@ import {
   probeAnimationOwnership,
 } from "pi-code-previews/testing";
 import { Image } from "@earendil-works/pi-tui";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { presentImageMessage } from "../src/image/message.ts";
@@ -80,6 +81,37 @@ describe("registered image presentation", () => {
     expect(Str.split(once, "A short otter prompt").length - 1).toBe(1);
     const lines = Str.split(expanded("First line\nSecond line"), "\n");
     expect(Arr.some(lines, (line) => Str.trim(line) === "Second line")).toBe(true);
+  });
+
+  // A body may leave the prompt out only when the heading drawn in the same style showed it whole.
+  it.each(
+    Arr.flatMap(styles, (style) =>
+      Arr.flatMap([57, 180], (width) =>
+        Arr.map(["running", "completed", "failed", "cancelled", "no image"] as const, (state) => ({
+          style,
+          width,
+          state,
+        })),
+      ),
+    ),
+  )("shows a $state $style row's whole prompt once when expanded at $width columns", (input) => {
+    const prompt = "A watercolor otter reading a newspaper on a riverbank at dawn";
+    const { tool } = register(input.style);
+    const status = input.state === "no image" ? "completed" : input.state;
+    const result =
+      input.state === "running"
+        ? undefined
+        : {
+            details: { ...details, prompt, status },
+            content: input.state === "no image" ? [text("Generated image")] : [image],
+          };
+    const harness = createToolPresentationHarness(tool, { theme, width: input.width });
+    const shown = Arr.findFirst(
+      harness.cycle({ prompt }, result, { states: [false, true] }),
+      (frame) => frame.expanded,
+    );
+    const words = Str.replace(/\s+/gu, " ")(stripTerminalControls(Option.getOrThrow(shown).text));
+    expect(Str.split(words, prompt).length - 1).toBe(1);
   });
 
   it("uses the registering owner's scheduler and releases it after settlement", () => {

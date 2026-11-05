@@ -59,11 +59,15 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
         );
       }
 
+      // The oversized-line issue's detail states Pi's notice, so the body adds nothing, and
+      // expanding reveals only that detail.
+      if (body.kind === "oversized")
+        return expanded
+          ? new Container()
+          : renderHiddenPreviewExpandHint(renderContext.state, theme, "details");
+
       if (!expanded && !codePreviewSettings.readContentPreview)
         return renderHiddenPreviewExpandHint(renderContext.state, theme, "content");
-
-      // The oversized-line issue's detail states Pi's notice, so the body adds nothing.
-      if (body.kind === "oversized") return new Container();
 
       const { content, firstLine } = body;
       const path = getPathArg(input);

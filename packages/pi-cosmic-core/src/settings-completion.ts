@@ -8,7 +8,8 @@ import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-d
 
 interface SettingsCompletionDescriptor {
   readonly id: string;
-  readonly description: string;
+  /** The setting's short name; completions describe each id with it, never the full description. */
+  readonly label: string;
   readonly values?: ReadonlyArray<string> | undefined;
 }
 
@@ -32,7 +33,7 @@ const completeSettingIds = (
     ...Arr.map(descriptors, (descriptor) => ({
       value: descriptor.id,
       label: descriptor.id,
-      description: descriptor.description,
+      description: descriptor.label,
     })),
     ...scopes,
     ...extras,
@@ -60,7 +61,7 @@ const completeSettingValues = (
       Arr.map((value) => ({
         value: `${descriptor.id} ${value}`,
         label: `${descriptor.id} ${value}`,
-        description: descriptor.description,
+        description: descriptor.label,
       })),
     ),
   );

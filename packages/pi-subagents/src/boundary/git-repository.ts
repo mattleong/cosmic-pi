@@ -16,6 +16,7 @@ import {
   workspaceIO,
   workspaceRefusal,
 } from "./git-worktree-process.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 const SHARED_CHECKOUT_REMEDY = "or use the shared-checkout writer workspace";
 
@@ -124,7 +125,7 @@ export const inspectSource = Effect.fn("GitRepository.inspectSource")(function* 
       "The session directory isn't inside its Git checkout.",
       {
         path: sourceCwd,
-        rule: `the session directory must be inside the checkout at ${sourceRoot}`,
+        rule: `the session directory must be inside the checkout at ${homeDisplayPath(sourceRoot)}`,
         remedy: `Start Pi inside the checkout, ${SHARED_CHECKOUT_REMEDY}.`,
       },
     );

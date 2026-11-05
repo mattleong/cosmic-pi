@@ -84,10 +84,11 @@ export interface SettingsCommandOptions<Config> {
   readonly title: string;
   readonly isCurrent: () => boolean;
   readonly descriptors: ReadonlyArray<
-    Pick<SettingsOptionDescriptor<Config>, "id" | "description" | "values" | "currentValue"> & {
+    Pick<
+      SettingsOptionDescriptor<Config>,
+      "id" | "label" | "description" | "values" | "currentValue"
+    > & {
       readonly openValues?: boolean | undefined;
-      /** The row's human name, used in help, status, and confirmations; falls back to the id. */
-      readonly label?: string | undefined;
     }
   >;
   readonly examples: ReadonlyArray<string>;

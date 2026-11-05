@@ -2,7 +2,7 @@ import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Box, Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
-import * as Arr from "effect/Array";
+import { argumentLines } from "./expanded-section";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
@@ -27,7 +27,11 @@ import {
 } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
 import { layoutExpandedCompactHeading } from "./compact-row";
-import { recordHeadingCounter, recordHeadingSubject } from "./heading-coverage";
+import {
+  recordHeadingCounter,
+  recordHeadingSubject,
+  recordOwnCallHeading,
+} from "./heading-coverage";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import { renderCompactToolCall } from "./compact-tool-call";
 import { compactExpandLabel } from "./expand-affordance";
@@ -288,7 +292,9 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
         theme,
         width,
       );
-      recordHeadingSubject(context.state, subjectComplete);
+      recordHeadingSubject(context.state, subjectComplete, rows);
+      // A compact heading is never the tool's own preview call, even after a style change.
+      recordOwnCallHeading(context.state, false);
       recordHeadingCounter(
         context.state,
         counter === undefined ? undefined : stripTerminalControls(counter),
@@ -331,13 +337,9 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
       const color = context.isError ? "error" : "toolOutput";
       return new Text(this.theme.fg(color, escapeControlChars(this.fallbackResultText())), 0, 0);
     }
-    const lines = [
+    return argumentLines(this.theme, fallbackArguments(hostValue(context.args)), "muted", [
       this.theme.fg("toolTitle", escapeControlChars(this.options.name)),
-      ...Arr.map(fallbackArguments(hostValue(context.args)), (line) =>
-        this.theme.fg("muted", line),
-      ),
-    ];
-    return new Text(Arr.join(lines, "\n"), 0, 0);
+    ]);
   }
 
   private fallbackResultText(): string {

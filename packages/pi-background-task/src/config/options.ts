@@ -73,7 +73,7 @@ export interface BackgroundTaskSettingDescriptor<Id extends BackgroundTaskSettin
   readonly kind: BackgroundTaskSettingKind;
   /** Values the settings list offers, as they read there. */
   readonly values: readonly string[];
-  /** The same values as one-word command arguments, such as `256KiB` for `256 KB`. */
+  /** The same values as one-word command arguments, such as `256KB` for `256 KB`. */
   readonly commandValues: readonly string[];
   readonly openValues: boolean;
   readonly parse: (value: string) => BackgroundTaskSettingValue<Id> | undefined;
@@ -157,13 +157,13 @@ export const parseDuration = (value: string, unit: number): number => {
 /** A one-word command argument for a preset, which reads back to the same value. */
 const commandValue = (kind: BackgroundTaskSettingKind, value: number): string => {
   if (kind === "bytes")
-    return value % 1024 ** 2 === 0 ? `${value / 1024 ** 2}MiB` : `${value / 1024}KiB`;
+    return value % 1024 ** 2 === 0 ? `${value / 1024 ** 2}MB` : `${value / 1024}KB`;
   return Str.replaceAll(" ", "")(formatSettingValue(kind, value));
 };
 
 const NUMBER_INPUT = {
   count: { parse: parseWholeNumber, expected: "a whole number" },
-  bytes: { parse: parseByteSize, expected: "a size such as 256KiB or 1MiB," },
+  bytes: { parse: parseByteSize, expected: "a size such as 256KB or 1MB," },
   milliseconds: {
     parse: (value: string) => parseDuration(value, 1),
     expected: "a duration such as 500ms or 2s,",
@@ -260,7 +260,7 @@ const SETTING_DESCRIPTORS = {
     id: "shellPath",
     label: "Shell",
     description:
-      "The shell tasks run in, instead of Pi's shell and command prefix; empty uses Pi's.",
+      "The shell tasks run in, instead of Pi's shell and command prefix; default uses Pi's.",
     kind: "text",
     values: [],
     commandValues: [],

@@ -4,6 +4,7 @@ import * as Str from "effect/String";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
   Markdown,
+  visibleWidth,
   wrapTextWithAnsi,
   type Component,
   type MarkdownTheme,
@@ -15,6 +16,7 @@ import {
   expandedSection,
 } from "pi-code-previews";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import { clipToWidth, wrapFacts, type ManagerStatusColor } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 
@@ -261,7 +263,56 @@ export interface FactRowOptions {
   readonly indent?: number | undefined;
   /** Columns continuation rows start beyond `indent`; two by default. */
   readonly hang?: number | undefined;
+  /**
+   * Whether a collapsed row of facts alone keeps whole facts, ending `· …`, rather than clipping
+   * inside the last one, as a row ending in free text such as a task does.
+   */
+  readonly wholeFacts?: boolean | undefined;
 }
+
+const FACT_SEPARATOR = " · ";
+const CLIPPED_FACTS = `${FACT_SEPARATOR}…`;
+
+/** The color of the span holding `offset`. */
+const colorAt = (spans: ReadonlyArray<FactSpan>, offset: number): ThemeColor | undefined => {
+  let end = 0;
+  for (const [text, color] of spans) {
+    end += text.length;
+    if (offset < end) return color;
+  }
+  return undefined;
+};
+
+/**
+ * One collapsed row of facts within `width`. With `wholeFacts`, a row too wide keeps the whole facts
+ * that fit and ends `· …`, as settings values do, so it never cuts inside a fact; only a first fact
+ * too wide on its own is clipped.
+ */
+const clippedFactRow = (
+  spans: ReadonlyArray<FactSpan>,
+  width: number,
+  theme: FactTheme,
+  { indent = 0, wholeFacts = false }: FactRowOptions,
+): string => {
+  const lead = pad(indent);
+  const text = Arr.join(
+    Arr.map(spans, ([part]) => part),
+    "",
+  );
+  const room = width - indent;
+  let kept = -1;
+  if (wholeFacts && visibleWidth(text) > room)
+    for (
+      let at = indexOfFrom(text, FACT_SEPARATOR, 1);
+      at !== -1 && visibleWidth(`${Fn.pipe(text, Str.slice(0, at))}${CLIPPED_FACTS}`) <= room;
+      at = indexOfFrom(text, FACT_SEPARATOR, at + FACT_SEPARATOR.length)
+    )
+      kept = at;
+  if (kept === -1)
+    return clipToWidth(`${lead}${paintRange(spans, 0, Number.POSITIVE_INFINITY, theme)}`, width);
+  const color = colorAt(spans, kept);
+  return `${lead}${paintRange(spans, 0, kept, theme)}${color === undefined ? CLIPPED_FACTS : theme.fg(color, CLIPPED_FACTS)}`;
+};
 
 /**
  * A row of facts: expanded, wrapped by {@link hangingLines} so every fact shows; collapsed, one row
@@ -276,12 +327,7 @@ export const factRowLines = (
 ): string[] =>
   expanded
     ? hangingLines(spans, width, theme, options)
-    : [
-        clipToWidth(
-          `${pad(options.indent ?? 0)}${paintRange(spans, 0, Number.POSITIVE_INFINITY, theme)}`,
-          width,
-        ),
-      ];
+    : [clippedFactRow(spans, width, theme, options)];
 
 /** One agent in a block list: its name and state, then the words it wrote or a short note. */
 export interface AgentTextBlock {

@@ -22,7 +22,7 @@ import {
   renderToolHeader,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
-import { agentTextLines, expandedRowsBody, indentedLines } from "../ui/agent-text.ts";
+import { agentTextLines, expandedRowsBody, factRowLines } from "../ui/agent-text.ts";
 import { agentFactLines, runRoleLabel, runRouteFact } from "../ui/run-facts.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import type { SubagentStartFailure } from "./model.ts";
@@ -110,7 +110,7 @@ export const renderSubagentStartCall = (
         return [
           clipToWidth(name, safeWidth),
           ...agentTextLines(agent.task, safeWidth, theme, { expanded: true }),
-          ...indentedLines(theme.fg("dim", requestRoute(agent)), safeWidth),
+          ...factRowLines([[requestRoute(agent), "dim"]], safeWidth, theme, true, { indent: 2 }),
         ];
       }),
       ...(hidden > 0

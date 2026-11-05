@@ -21,7 +21,7 @@ import {
   type CompactSubagentToolDetails,
 } from "./details-schema.ts";
 import { SUBAGENT_TOOL_NAME, type SubagentToolName } from "../run/tool-policy.ts";
-import { decodeSubagentOutcomeDetails, hasSubagentToolFailure } from "./outcome.ts";
+import { decodeSubagentOutcomeDetails, hasSubagentToolFailure, ROUTE_RECOVERY } from "./outcome.ts";
 import { actionFailureIssues } from "./compact-action-failures.ts";
 import {
   applyArgumentLanes,
@@ -290,9 +290,6 @@ function runIssues(
   }
   actionFailureIssues(details.action, details.actionFailures ?? [], details.cards, summary, issues);
 }
-
-const ROUTE_RECOVERY =
-  "Run /subagents doctor to check sign-in, or /subagents profiles to change the route.";
 
 /**
  * An unavailable route's detail: each skipped candidate on its line with its reason, then the

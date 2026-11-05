@@ -39,6 +39,7 @@ const harness = (
       descriptors: [
         {
           id: "mode",
+          label: "Mode",
           description: "Demo mode.",
           values: ["on", "off"],
           currentValue: (cfg: DemoConfig) => cfg.mode,
@@ -84,6 +85,7 @@ describe("provider settings command shell", () => {
           {
             descriptors: Arr.map(["mode", "other"], (id) => ({
               id,
+              label: id,
               description: id,
               values: ["on", "off"],
               currentValue: () => "off",
@@ -317,7 +319,7 @@ describe("provider settings command shell", () => {
         ],
         examples: ["project logBufferBytesPerTask 1MiB"],
         notes: () => [
-          "Scope defaults to global; inherit removes a scope's own value, and changes take effect after /reload.",
+          "Scope defaults to global; inherit removes a scope's own value, and changes apply after /reload.",
         ],
         config: () => ({ mode: "on" }),
         status: undefined,

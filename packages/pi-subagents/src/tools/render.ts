@@ -55,6 +55,7 @@ import {
 } from "../ui/agent-text.ts";
 import { renderStartReceiptComponent } from "./render-start.ts";
 import { isTextFragment } from "./text-fragments.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 type ToolTextContent = ReadonlyArray<{ readonly type: string; readonly text?: string }>;
 
@@ -248,7 +249,7 @@ const renderAwaitResult = (
   const rows = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
     return [
-      ...factRowLines([[counters, "muted"]], safeWidth, theme, expanded),
+      ...factRowLines([[counters, "muted"]], safeWidth, theme, expanded, { wholeFacts: true }),
       ...cardBlockLines(targets, safeWidth, theme, expanded),
       // Details too large for their reports keep the rest; the agent still received every report.
       ...(details.contentOmitted ? [clipToWidth(theme.fg("dim", OMITTED_NOTE), safeWidth)] : []),
@@ -330,7 +331,7 @@ const listEntryFact = (entry: NonNullable<WorkspaceToolDetails["entries"]>[numbe
         `${entry.workspaceId}: ${entry.status}`,
         entry.orphan && ORPHAN_LABELS[entry.orphan],
         entry.revisionId && `revision ${entry.revisionId}`,
-        entry.sourceCwd,
+        entry.sourceCwd && homeDisplayPath(entry.sourceCwd),
       ],
       isTextFragment,
     ),
@@ -358,7 +359,7 @@ const workspaceView = (
         receipt.revisionId && `Revision ${receipt.revisionId}`,
         receipt.preparationId && `Preparation ${receipt.preparationId}`,
         receipt.preparedCwd
-          ? `Test cwd: ${receipt.preparedCwd}`
+          ? `Test cwd: ${homeDisplayPath(receipt.preparedCwd)}`
           : receipt.operation === "prepare"
             ? marked
             : undefined,

@@ -14,6 +14,7 @@ import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
 import { profileLayerFor } from "./run/fixtures/service-harness.ts";
 import { git } from "../src/boundary/git-worktree-process.ts";
 import { nodePath as path } from "./support/node-builtins.ts";
+import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 import { temporaryDirectory, writeFile } from "./workspace/fixtures/repository.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -98,6 +99,26 @@ describe("subagents doctor", () => {
       expect(byLabel.get("Activity view")?.status).toBe("warning");
       expect(byLabel.get("WorktreeCreate hooks")?.detail).toBe("none");
       expect(byLabel.get("WorktreeRemove hooks")?.detail).toBe("none");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("names private state home-relative while checking the real directory", () =>
+    Effect.gen(function* () {
+      const missing = `.pi-subagents-doctor-missing-${process.pid}`;
+      const checks = yield* doctor({
+        pi: extensionApiFixture(),
+        ctx: doctorContext(),
+        agentDirectory: path.join(nodeDisplayHomeDirectory(), missing),
+        activityViewAvailable: undefined,
+        projectTrusted: true,
+      }).pipe(Effect.provide(Layer.merge(profileLayerFor(config), registry([]))));
+      const privateState = Option.getOrUndefined(
+        Arr.findFirst(checks, (item) => item.label === "Private state"),
+      );
+      expect(privateState).toMatchObject({
+        status: "failed",
+        detail: `~/${missing} is not writable`,
+      });
     }).pipe(Effect.scoped),
   );
 

@@ -19,7 +19,12 @@ import {
   provideBuiltLayer,
 } from "pi-cosmic-core/testing";
 import { DEFAULT_CONFIG } from "../src/config/schema.ts";
-import { configPaths, resolveConfig, updateFooterConfig } from "../src/config/store.ts";
+import {
+  configPaths,
+  resolveConfig,
+  setFooterVisibility,
+  updateFooterConfig,
+} from "../src/config/store.ts";
 
 const withTempConfig = <A, E>(
   run: (values: {
@@ -135,6 +140,41 @@ describe("Cosmic UI config", () => {
       }).pipe(provideBuiltLayer(Layer.merge(memory.layer, Path.layer)));
     },
   );
+
+  it.effect("hiding and showing an item again restores the document it started from", () => {
+    const memory = makeInMemoryDocuments();
+    return Effect.gen(function* () {
+      const paths = yield* configPaths("/project", "/agent");
+      memory.documents.set(paths.global, { footer: { density: "auto" } });
+      yield* setFooterVisibility("/project", "/agent", "extensions", false);
+      expect(memory.documents.get(paths.global)).toEqual({
+        footer: { density: "auto", hidden: ["extensions"] },
+      });
+      const shown = yield* setFooterVisibility("/project", "/agent", "extensions", true);
+      expect(shown.footer.hidden).toEqual([]);
+      expect(memory.documents.get(paths.global)).toEqual({ footer: { density: "auto" } });
+
+      memory.documents.set(paths.global, { custom: 1 });
+      yield* setFooterVisibility("/project", "/agent", "metrics", false);
+      yield* setFooterVisibility("/project", "/agent", "metrics", true);
+      expect(memory.documents.get(paths.global)).toEqual({ custom: 1 });
+    }).pipe(provideBuiltLayer(Layer.merge(memory.layer, Path.layer)));
+  });
+
+  it.effect("a project document keeps an empty list that overrides globally hidden items", () => {
+    const memory = makeInMemoryDocuments();
+    return Effect.gen(function* () {
+      const paths = yield* configPaths("/project", "/agent");
+      memory.documents.set(paths.global, { footer: { hidden: ["metrics"] } });
+      memory.documents.set(paths.project, { footer: { density: "compact" } });
+      const shown = yield* setFooterVisibility("/project", "/agent", "metrics", true, true);
+      expect(shown.footer.hidden).toEqual([]);
+      expect(memory.documents.get(paths.project)).toEqual({
+        footer: { density: "compact", hidden: [] },
+      });
+      expect((yield* resolveConfig("/project", "/agent", true)).footer.hidden).toEqual([]);
+    }).pipe(provideBuiltLayer(Layer.merge(memory.layer, Path.layer)));
+  });
 
   it.effect("logs a safe diagnostic when an existing config cannot be read", () => {
     const captured = makeCapturedLogger();

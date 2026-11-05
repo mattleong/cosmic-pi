@@ -152,6 +152,7 @@ const routeRowLines = (row: RouteRow, width: number, theme: Theme, expanded: boo
     width,
     theme,
     expanded,
+    { wholeFacts: true },
   );
 
 const eligibleCount = (candidates: ReadonlyArray<SubagentProfileCandidateCard>): string =>

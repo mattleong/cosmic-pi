@@ -8,6 +8,7 @@ import type * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import {
+  captureCodePreviewPresentationPolicy,
   withCodePreviewMessageShell,
   withCodePreviewShell,
   type CompactAnimationScheduler,
@@ -17,7 +18,11 @@ import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-se
 import { registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
 import { type ExtensionCommand } from "pi-cosmic-core/host-command";
 import { containCommandFailure, safeHostSignal } from "../boundary/host-ui.ts";
-import { imageCompactSummary, imageGenerationCause, isSignInFailure } from "./compact-summary.ts";
+import {
+  imageCompactSummaryFor,
+  imageGenerationCause,
+  isSignInFailure,
+} from "./compact-summary.ts";
 import { presentImageMessage } from "./message.ts";
 import {
   renderImageCall,
@@ -184,12 +189,16 @@ export function registerOpenAIImage(
   });
   pi.registerTool(
     shell(tool, {
-      compactSummary: imageCompactSummary,
+      // Read when the shell is, so the summary names what that style's collapsed row hides.
+      compactSummary: imageCompactSummaryFor(
+        captureCodePreviewPresentationPolicy().toolCallCollapsedStyle,
+      ),
       expandedContent: {
         renderCall: (args, theme, context) =>
           renderImageRequest(args, theme, {
             prompt: false,
             action: true,
+            cwd: context.cwd,
             headingState: context.state,
           }),
         renderResult: renderImageContent,

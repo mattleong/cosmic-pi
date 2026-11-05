@@ -12,7 +12,6 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import {
   compactPlainText,
-  endElide,
   expandedBody,
   expandedDetails,
   expandedFields,
@@ -21,6 +20,7 @@ import {
   headingShowedSubject,
   middleElide,
   previewIssuesSlot,
+  wrapPreviewHeading,
   type ExpandedField,
 } from "pi-code-previews";
 import { formatBytes } from "pi-cosmic-core/display";
@@ -34,7 +34,12 @@ import {
   toolRunningLine,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
-import { imageFailureIssue, imagePromptSubject, imageRecord } from "./compact-summary.ts";
+import {
+  imageFailureIssue,
+  imageHeadingPrompt,
+  imageHeadingsShowPrompt,
+  imageRecord,
+} from "./compact-summary.ts";
 import { imageResultText } from "./result-text.ts";
 import type { CodexImageDetails, ToolParams } from "./types.ts";
 
@@ -75,27 +80,12 @@ export const imageViewOf = <Details>(result: AgentToolResult<Details>, cwd: stri
   };
 };
 
-const HEADING_PROMPT_LIMIT = 160;
-
-const promptRoom = (width: number): number =>
-  Math.max(1, Math.min(HEADING_PROMPT_LIMIT, width - visibleWidth(IMAGE_TITLE) - 1));
-
-export const renderImageHeading = (prompt: string, theme: Theme, width: number): string =>
-  clipToWidth(
-    renderToolHeader(
-      {
-        title: IMAGE_TITLE,
-        // Shortened at a word boundary, as a collapsed compact row shortens its subject.
-        subtitle: endElide(sanitizeTerminalLine(prompt), promptRoom(width)),
-      },
-      theme,
-    ),
+/** A preview heading wraps rather than clips, as every preview heading does. */
+export const renderImageHeading = (prompt: string, theme: Theme, width: number): string[] =>
+  wrapPreviewHeading(
+    renderToolHeader({ title: IMAGE_TITLE, subtitle: imageHeadingPrompt(prompt) }, theme),
     width,
-    "",
   );
-
-export const headingShowsPrompt = (prompt: string, width: number): boolean =>
-  sanitizeTerminalLine(prompt) === prompt && visibleWidth(prompt) <= promptRoom(width);
 
 const OPTION_LABELS: ReadonlyMap<string, string> = new Map([
   ["action", "Action"],
@@ -110,12 +100,16 @@ const OPTION_LABELS: ReadonlyMap<string, string> = new Map([
 export interface ImageRequestOptions {
   readonly prompt: boolean;
   readonly action: boolean;
+  /** The session directory input and save paths read against. */
+  readonly cwd: string;
   /**
-   * The row's renderer state when a compact heading names the prompt; the Prompt section then
-   * draws only while that heading shortened it.
+   * The row's renderer state when its heading names the prompt; the Prompt section then draws
+   * unless that heading showed the prompt exactly.
    */
   readonly headingState?: WeakKey | undefined;
 }
+
+const PATH_OPTIONS: ReadonlySet<string> = new Set(["images", "saveDir"]);
 
 const optionFields = (args: Partial<ToolParams>, shown: ImageRequestOptions): ExpandedField[] =>
   Arr.flatMap(Rec.toEntries<string, unknown>(args), ([key, value]) => {
@@ -126,7 +120,9 @@ const optionFields = (args: Partial<ToolParams>, shown: ImageRequestOptions): Ex
         label: OPTION_LABELS.get(key) ?? key,
         lines: Arr.map(entries, (entry) => {
           const encoded: string | undefined = Predicate.isString(entry)
-            ? entry
+            ? PATH_OPTIONS.has(key)
+              ? formatDisplayPath(entry, shown.cwd)
+              : entry
             : JSON.stringify(entry);
           return compactPlainText(encoded ?? "undefined");
         }),
@@ -149,8 +145,7 @@ export function renderImageRequest(
 
 function promptSection(theme: Theme, prompt: string, headingState: WeakKey | undefined): Component {
   const section = expandedText(theme, "Prompt", [compactPlainText(prompt)]);
-  // The heading's subject is the prompt on one line; only a prompt it shows exactly can be left out.
-  if (headingState === undefined || imagePromptSubject(prompt) !== prompt) return section;
+  if (headingState === undefined || !imageHeadingsShowPrompt(prompt)) return section;
   return {
     render: (width) => (headingShowedSubject(headingState) ? [] : section.render(width)),
     invalidate: () => section.invalidate(),
@@ -160,19 +155,20 @@ function promptSection(theme: Theme, prompt: string, headingState: WeakKey | und
 export function renderImageCall(
   args: Partial<ToolParams>,
   theme: Theme,
-  context: { readonly expanded: boolean; readonly state: object },
+  context: { readonly expanded: boolean; readonly state: object; readonly cwd: string },
 ): Component {
   const prompt = Predicate.isString(args.prompt) ? args.prompt : "";
   const issues = previewIssuesSlot(context);
-  const { expanded } = context;
+  const { expanded, cwd } = context;
   return composeToolComponent((width) => {
     if (width <= 0) return [];
-    const lines = [renderImageHeading(prompt, theme, width), ...issues.render(width)];
+    const lines = [...renderImageHeading(prompt, theme, width), ...issues.render(width)];
     if (expanded)
       lines.push(
         ...renderImageRequest(args, theme, {
-          prompt: headingShowsPrompt(prompt, width),
+          prompt: imageHeadingsShowPrompt(prompt),
           action: false,
+          cwd,
         }).render(width),
       );
     return lines;

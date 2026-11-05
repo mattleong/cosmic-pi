@@ -1,8 +1,11 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { compactIssueSeverity } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
-import { imageCompactSummary } from "../src/image/compact-summary.ts";
+import { imageCompactSummaryFor } from "../src/image/compact-summary.ts";
+
+const imageCompactSummary = imageCompactSummaryFor("compact");
 import type { CodexImageDetails } from "../src/image/types.ts";
 import { pngPart } from "./image-fixtures.ts";
 
@@ -90,6 +93,19 @@ describe("image expansion", () => {
   it.each(["pending", "running"] as const)("offers the prompt while %s", (phase) => {
     const summary = imageCompactSummary({ ...input(), phase, result: undefined });
     expect(summary?.expandLabel).toEqual(expect.any(String));
+  });
+
+  // A preview heading wraps, so it already shows a short prompt whole.
+  it("offers a pending preview row's expansion only for what its heading leaves out", () => {
+    const preview = imageCompactSummaryFor("preview");
+    const pending = (args: Input["args"]) =>
+      preview({ ...input(), phase: "running", args, result: undefined })?.expandLabel;
+    expect(pending({ prompt: "An otter", action: "generate" })).toBe(false);
+    expect(pending({ prompt: "An otter", action: "generate", save: "none" })).toEqual(
+      expect.any(String),
+    );
+    expect(pending({ prompt: "An otter\nat dawn" })).toEqual(expect.any(String));
+    expect(pending({ prompt: Str.repeat(30)("otter ") })).toEqual(expect.any(String));
   });
 
   it("offers expansion for settled images and failures", () => {

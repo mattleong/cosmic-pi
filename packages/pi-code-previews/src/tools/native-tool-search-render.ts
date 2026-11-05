@@ -6,7 +6,7 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
 import { compactPlainText } from "../preview/compact-row";
-import { expandedSection } from "../preview/expanded-section";
+import { expandedArguments, expandedSection } from "../preview/expanded-section";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { hostContainer, hostValue, type HostValue } from "../shared/untrusted-value";
 import { withCodePreviewRenderers } from "./cooperative-tools";
@@ -36,7 +36,7 @@ export function createNativeToolSearchRenderers(
   appearance: CodePreviewRendererAppearance,
 ): ToolRenderers {
   const renderArguments = (args: HostValue | undefined, theme: Theme): Component =>
-    section(theme, "Arguments", argumentsText(args));
+    safeContent(() => expandedArguments(theme, args), `Arguments\n${argumentsText(args)}`);
   const renderOutput: RenderResult<unknown, unknown, RendererState> = (
     result,
     _options,

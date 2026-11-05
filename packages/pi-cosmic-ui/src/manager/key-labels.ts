@@ -118,6 +118,7 @@ export const TEXT_INPUT_KEY_LABELS: ReadonlySet<string> = new Set([
  * - `Esc` backs out one level: `Esc Back` when nested, `Esc Close` at the top level, and
  *   `Esc Cancel` for a pending decision. `q`/`h` aliases appear only in expanded help.
  * - Settings rows say what Enter does: `Enter Toggle`, `Enter Change`, or `Enter Open`.
+ * - A run of digit keys reads as one range with an en dash, `1–9 Actions` (`keyRangeLabel`).
  */
 
 export const KEY_HINT_SEPARATOR = " · ";
@@ -355,6 +356,10 @@ export const framedKeyHintBar = (
   const { hints, tail } = keyHintBarParts(bar, expanded);
   return framedKeyHints(hints, tail, inner);
 };
+
+/** A run of consecutive keys, joined by an en dash: `1–9`, or `1` when the run is one key. */
+export const keyRangeLabel = (first: string | number, last: string | number): string =>
+  String(first) === String(last) ? String(first) : `${first}–${last}`;
 
 /** `↑↓` when both keys are one glyph, `C-p/C-n` otherwise; never `↑/↓`. */
 export const movementKeyLabel = (up: string, down: string): string =>

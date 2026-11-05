@@ -22,6 +22,7 @@ import {
 import { TaskNoticeDetailsSchema, type TaskNoticeDetails } from "../task/notice.ts";
 import { taskNoticeSummary } from "./compact-summary.ts";
 import { taskOutputLine } from "./output-lines.ts";
+import { displayDirectory } from "./result-facts.ts";
 
 const Envelope = Schema.Struct({
   content: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
@@ -67,7 +68,7 @@ const expandedNotice = (
       ...(output ? [] : [{ label: "Output", lines: ["none"] }]),
     ]),
     expandedText(theme, "Output", output ? Arr.map(Str.split(output, "\n"), taskOutputLine) : []),
-    expandedDetails(theme, [Arr.join([task.id, sanitizeTerminalLine(task.cwd)], " · ")]),
+    expandedDetails(theme, [Arr.join([task.id, displayDirectory(task.cwd)], " · ")]),
   );
 };
 

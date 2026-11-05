@@ -119,6 +119,7 @@ import {
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
 import { eventLoopTurn, settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
+import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
 import type { DoctorCheck } from "../src/application/doctor.ts";
 import { showDoctorReport } from "../src/settings/doctor-report.ts";
@@ -156,6 +157,10 @@ const runtime: SubagentToolRuntime = {
     isLiveHierarchyAvailable: () => false,
   },
 };
+
+/** A file in private state, under the real home directory, so its display reads `~/.pi/agent/…`. */
+const privateStatePath = (relative: string) =>
+  nodePath.join(nodeDisplayHomeDirectory(), ".pi/agent", relative);
 
 const now = synchronousNow();
 const timing = (startedMinutesAgo: number, endedMinutesAgo?: number) => ({
@@ -590,7 +595,7 @@ const awaitScenarios = Effect.gen(function* () {
                   originalLines: 3_172,
                 },
                 reportArchive: {
-                  path: "/home/me/.pi/agent/subagents/reports/session-1/agent-1-1-4f1c.md",
+                  path: privateStatePath("subagents/reports/session-1/agent-1-1-4f1c.md"),
                   chars: 152_310,
                   lines: 3_172,
                   complete: true,
@@ -1600,7 +1605,7 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
               cleanupDisposition: "confirmed",
               nextCandidate: "none",
               failureFile: {
-                path: "/home/me/.pi/agent/subagent-reports/session-1/agent-1-1-failure.md",
+                path: privateStatePath("subagent-reports/session-1/agent-1-1-failure.md"),
                 chars: 420,
                 lines: 1,
                 complete: true,
@@ -1705,7 +1710,7 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
     runs: [
       completion(docsSweep, {
         reportArchive: {
-          path: "/home/me/.pi/agent/subagents/reports/session-1/agent-2-1-9b2e.md",
+          path: privateStatePath("subagents/reports/session-1/agent-2-1-9b2e.md"),
           chars: docsSweep.finalText?.length ?? 0,
           lines: 5,
           complete: true,
@@ -2648,7 +2653,8 @@ const unresolvedWorkspaceLines = Effect.fn("SubagentGallery.unresolvedWorkspaceL
 
 const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = [
   { label: "Pi", status: "ok", detail: "version 1.5.0" },
-  { label: "Node", status: "ok", detail: "/opt/homebrew/Cellar/node@22/22.22.1_1/bin/node" },
+  // Doctor shows paths as the user reads them, home-relative.
+  { label: "Node", status: "ok", detail: "~/.vite-plus/js_runtime/node/26.13.0/bin/node" },
   {
     label: "Configuration",
     status: "ok",
@@ -2667,6 +2673,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = [
     status: "ok",
     detail: "none; isolated trees get no ignored or credential files",
   },
+  { label: "Private state", status: "ok", detail: "~/.pi/agent" },
   {
     label: "Git",
     status: "warning",
