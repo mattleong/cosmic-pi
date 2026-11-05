@@ -9,6 +9,9 @@ import { lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 const BRAILLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const STARTING_SPINNER_FRAMES = ["◌", "◔", "◑", "◕"] as const;
 
+/** Every frame of the running spinner, by which a reader recognizes a running row's glyph. */
+export const RUNNING_SPINNER_FRAMES: ReadonlyArray<string> = BRAILLE_SPINNER_FRAMES;
+
 const frameAt = (frames: ReadonlyArray<string>, frame: number, fallback: string): string =>
   frames[Math.abs(Math.floor(frame)) % frames.length] ?? fallback;
 

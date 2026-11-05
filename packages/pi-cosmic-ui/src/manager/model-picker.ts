@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { keyHint } from "./key-labels.ts";
 import { managerTone } from "./style.ts";
 import {
   SearchableSelectPage,
@@ -159,7 +160,13 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
   private scopeSubtitle(): string {
     if (!this.canScope) return this.options.subtitle ?? "";
     const base = this.options.subtitle ? `${this.options.subtitle} · ` : "";
-    return `${base}${this.scope === "scoped" ? "Scoped models" : "All authenticated models"} · Tab switch`;
+    return `${base}${this.scope === "scoped" ? "Scoped models" : "All authenticated models"}`;
+  }
+
+  // Tab names the scope it switches to.
+  private scopeHint(): string | undefined {
+    if (!this.canScope) return undefined;
+    return keyHint("Tab", this.scope === "scoped" ? "All models" : "Scoped models");
   }
 
   private buildPage(
@@ -179,6 +186,7 @@ export class ModelPickerPage<M extends ModelPickerModel> implements Component, F
       initialQuery: search?.query,
       initialSearchMode: search?.active ?? this.options.initialSearchMode,
       cancelBehavior: this.options.initialSearchMode ? "close" : "clear-search",
+      hints: [this.scopeHint()],
       getHeight: this.options.getHeight,
       requestRender: this.options.requestRender,
       matchesKeybinding: this.options.matchesKeybinding,

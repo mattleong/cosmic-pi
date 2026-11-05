@@ -289,7 +289,8 @@ export const nativeCodemodeSummary =
       ...(label && { action: label }),
       showTiming: true as const,
       showShortTiming: true as const,
-      expandLabel: "details",
+      // Until it settles, expansion reveals the program the collapsed row hides.
+      expandLabel: phase === "settled" ? "details" : "program",
     };
     if (!result) return phase === "settled" ? undefined : heading;
     const evidence = nativeCodemodeEvidence(hostContainer(result.details));

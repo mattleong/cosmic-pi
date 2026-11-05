@@ -55,7 +55,7 @@ const readWarning = (reason: DirectoryModelStoreError["reason"], identified: Dir
     ),
   );
 const THINKING_LEVEL_WARNING =
-  "The thinking level saved for this directory is invalid, so Pi kept its current level\nChoose a thinking level to replace it";
+  "The thinking level saved for this directory is invalid, so Pi kept its current level\nPick one with /thinking to replace it";
 const IDENTIFY_WARNING =
   "Couldn't resolve this directory's path, so its model isn't remembered in this session";
 export const WRITE_WARNING = "Couldn't save the model for this directory";

@@ -13,11 +13,15 @@ import type { GroupedActivityRow } from "./grouped-tree.ts";
 import { workStateLabels, type GroupSummary } from "./group-summary.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 import type { ActivityDetail, ActivityDetailField } from "./protocol.ts";
-import { activityAgentIdentity, activityElapsed } from "./row-line.ts";
+import { activityAgentIdentity, activityElapsed, activitySpan } from "./row-line.ts";
 
-/** Detail content before wrapping: verbatim text, or agent-authored Markdown. */
+/**
+ * Detail content before wrapping: verbatim text, agent-authored Markdown, or a muted line of
+ * `·`-joined facts that wraps only between whole facts.
+ */
 export type ActivityDetailBlock =
   | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "facts"; readonly text: string }
   | { readonly kind: "markdown"; readonly text: string };
 
 const text = (value: string): ActivityDetailBlock => ({ kind: "text", text: value });
@@ -68,9 +72,10 @@ export function groupedDetail(options: GroupedDetailOptions): readonly ActivityD
 
 const ageLabel = (row: ActivityRow, now: number | undefined): string => {
   if (now === undefined) return "";
-  if (isFinished(row) && row.endedAt !== undefined)
-    return `ended ${formatRelativeAge(now - row.endedAt)}`;
-  return row.updatedAt === undefined ? "" : `updated ${formatRelativeAge(now - row.updatedAt)}`;
+  const ended = isFinished(row) && row.endedAt !== undefined;
+  const at = ended ? row.endedAt : row.updatedAt;
+  const age = at === undefined ? undefined : activitySpan(now, at);
+  return age === undefined ? "" : `${ended ? "ended" : "updated"} ${formatRelativeAge(age)}`;
 };
 
 const statusLine = (options: GroupedDetailOptions, row: ActivityRow): string => {
@@ -168,7 +173,7 @@ function sourceDetail(
       : [];
   return [
     text(heading(theme, Arr.join(entry.breadcrumbs, " › "), options.focused)),
-    text(theme.fg("muted", statusLine(options, row))),
+    { kind: "facts", text: statusLine(options, row) },
     ...(summary ? [text(summary)] : []),
     ...(body.length ? [spacer, ...body] : []),
     ...(row.omittedChildren

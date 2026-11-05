@@ -65,7 +65,9 @@ const cardBlock = (card: SubagentRunCard, expanded: boolean): AgentTextBlock => 
     glyph: runStateSnapshotGlyph(card.state),
     tone: runStateColor(card.state),
     name: card.name,
-    ...(card.state !== "completed" && { status: asking ? "asks" : runStateLabel(card.state) }),
+    ...(card.state !== "completed" && {
+      status: runStateLabel(asking ? "waiting_for_parent" : card.state),
+    }),
     ...(words !== undefined && { text: words, verbatim: words === card.error }),
     notes: [
       ...(!isTerminalRunState(card.state) && words === undefined && card.progress
@@ -117,7 +119,7 @@ export const cardFactLines = (card: SubagentRunCard): ReadonlyArray<string> =>
 const GROUP_VERBS: Readonly<Record<SubagentRunState, string>> = {
   starting: "Starting",
   running: "Still running",
-  waiting_for_parent: "Waiting for a reply",
+  waiting_for_parent: "Waiting for reply",
   paused: "Paused",
   completed: "Already finished",
   failed: "Already failed",

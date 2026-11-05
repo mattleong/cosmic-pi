@@ -22,7 +22,7 @@ import type { SettingsOptionDescriptor } from "pi-cosmic-core";
 import { focusedField, LIST_CURSOR, managerTone, selectionMarker } from "./style.ts";
 import { FullScreenKeymap, type FullScreenKeymapOptions } from "./keymap.ts";
 import { clipToWidth, INLINE_SEPARATOR } from "./chrome.ts";
-import { keyHint, keyHintBar, moveKeyHint } from "./key-labels.ts";
+import { keyHint, keyHintBar, moveKeyHint, piSelectHintKeys } from "./key-labels.ts";
 import {
   moveSettingsList,
   settingRowAffordance,
@@ -188,9 +188,10 @@ class SettingsChoiceSubmenu implements Component {
   }
 
   settingsHint(expanded: boolean): string {
+    const keys = piSelectHintKeys();
     return keyHintBar(
       {
-        hints: [moveKeyHint(), keyHint("Enter", "Select")],
+        hints: [moveKeyHint(keys.move), keyHint(keys.confirm, "Select")],
         more: [
           keyHint("j/k", "Move"),
           keyHint("gg/G", "Ends"),
@@ -198,7 +199,8 @@ class SettingsChoiceSubmenu implements Component {
           keyHint("Space/l", "Select"),
         ],
         exit: "nested",
-        exitAliases: ["h", "q"],
+        exitKey: keys.cancel,
+        exitAliases: [...keys.cancelAliases, "h", "q"],
       },
       expanded,
     );

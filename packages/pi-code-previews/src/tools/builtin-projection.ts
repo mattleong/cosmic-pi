@@ -77,7 +77,13 @@ export function projectBuiltinCompactSummary(
 ): CompactSummary | undefined {
   const summary = projectSummary(tool, input);
   if (!summary) return undefined;
-  const expandLabel = summary.outcome === "error" ? undefined : builtinExpandLabel(tool, summary);
+  // A failed shell command's expansion shows its output; other failures show their error.
+  const expandLabel =
+    summary.outcome === "error"
+      ? tool === "bash"
+        ? "output"
+        : undefined
+      : builtinExpandLabel(tool, summary);
   return {
     ...summary,
     ...(builtinSubjectIsPath(tool) && { pathSubject: true }),

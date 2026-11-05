@@ -4,7 +4,7 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import { withCodePreviewShell } from "pi-code-previews";
+import { captureCodePreviewPresentationPolicy, withCodePreviewShell } from "pi-code-previews";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import type { IntercomRegistry, IntercomRegistryError } from "../registry/store.ts";
 import type { IntercomSession } from "../session/service.ts";
@@ -128,7 +128,12 @@ export function registerSessionTools(
         renderResult: renderSessionResult(SESSION_TOOL.list),
       }),
       {
-        compactSummary: sessionToolCompactSummary(SESSION_TOOL.list),
+        // Read when the shell is, so the summary names what that style's collapsed row hides.
+        compactSummary: sessionToolCompactSummary(
+          SESSION_TOOL.list,
+          undefined,
+          captureCodePreviewPresentationPolicy().toolCallCollapsedStyle,
+        ),
         expandedContent: sessionExpandedContent(SESSION_TOOL.list),
       },
     ),

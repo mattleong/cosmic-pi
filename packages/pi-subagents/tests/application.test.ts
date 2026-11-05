@@ -191,11 +191,11 @@ describe("subagent Pi registration", () => {
       expect(rejected?.actionAccepted).toBe(false);
       expect(sendMessage).not.toHaveBeenCalled();
       const questionnaireFailure = yield* retired
-        .questionnaireHandler(pickQuestionnaire, {
-          runId: "retired",
-          assignmentEpoch: 1,
-          requestId: "questionnaire",
-        })
+        .questionnaireHandler(
+          pickQuestionnaire,
+          { runId: "retired", assignmentEpoch: 1, requestId: "questionnaire" },
+          () => undefined,
+        )
         .pipe(Effect.flip, Effect.orDie);
       expect(questionnaireFailure).toMatchObject({ code: "proxy_caller_disconnected" });
       const pending = view({

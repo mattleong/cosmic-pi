@@ -251,6 +251,19 @@ describe("subagent activity provider", () => {
     expect(status("paused")?.status).toBe("paused");
   });
 
+  it("leaves out times a run never recorded, so Activity shows no elapsed span for them", () => {
+    const [unrecorded, recorded] = subagentActivityItems({
+      revision: 1,
+      runs: [
+        view({ id: "unrecorded", startedAt: 0, lastActivityAt: 0 }),
+        view({ id: "recorded", startedAt: 1_000, lastActivityAt: 2_000, endedAt: 3_000 }),
+      ],
+    });
+    expect(unrecorded?.startedAt).toBeUndefined();
+    expect(unrecorded?.updatedAt).toBeUndefined();
+    expect(recorded).toMatchObject({ startedAt: 1_000, updatedAt: 2_000, endedAt: 3_000 });
+  });
+
   it("keeps a parent's stop confirmation current as its subtree finishes", () => {
     const parent = Object.freeze(view({ id: "parent", state: "running" }));
     const twoActive = stopConfirmation([

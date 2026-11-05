@@ -10,6 +10,8 @@ import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Str from "effect/String";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import {
   AskUserAsyncError,
   AskUserHostError,
@@ -17,7 +19,11 @@ import {
   AskUserValidationError,
   asyncBusy,
 } from "./errors.ts";
-import { MAX_RETAINED_REQUESTS, type AsyncQuestionnaireSnapshot } from "./async-model.ts";
+import {
+  MAX_RETAINED_REQUESTS,
+  type AsyncQuestionnaireSnapshot,
+  type PendingPresentation,
+} from "./async-model.ts";
 import {
   MAX_WORK_DESCRIPTION_LENGTH,
   type AskUserAsyncControl,
@@ -41,6 +47,19 @@ interface Entry {
   readonly deliveryAttempts: number;
 }
 
+export type PresentationObserver = (presentation: PendingPresentation) => Effect.Effect<void>;
+
+/** Where a pending questionnaire stands for the user; opening and settled ones report nothing. */
+const pendingPresentationOf = (
+  snapshot: AsyncQuestionnaireSnapshot | undefined,
+): PendingPresentation | undefined => {
+  if (snapshot?.status !== "pending") return undefined;
+  const { presentation } = snapshot;
+  return presentation === "open" || presentation === "hidden" || presentation === "queued"
+    ? presentation
+    : undefined;
+};
+
 const findEntry = (entries: ReadonlyArray<Entry>, id: string): Entry | undefined =>
   Option.getOrUndefined(Arr.findFirst(entries, (item) => item.snapshot.requestId === id));
 
@@ -60,7 +79,8 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
 ) {
   const parentScope = yield* Effect.scope;
   const scope = yield* Scope.fork(parentScope, "sequential");
-  const state = yield* Ref.make<ReadonlyArray<Entry>>([]);
+  // Subscribable, so an await can follow its questionnaire's presentation.
+  const state = yield* SubscriptionRef.make<ReadonlyArray<Entry>>([]);
   const counter = yield* Ref.make(0);
   const admission = yield* Semaphore.make(1);
   const closed = yield* Ref.make(false);
@@ -75,7 +95,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
         const error = AskUserRuntimeClosedError.make({
           message: "The questionnaire session closed before this questionnaire finished.",
         });
-        for (const entry of yield* Ref.get(state)) {
+        for (const entry of yield* SubscriptionRef.get(state)) {
           yield* Deferred.fail(entry.opened, error);
           yield* Deferred.fail(entry.completed, error);
         }
@@ -84,14 +104,14 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
   );
 
   const get = (id: string) =>
-    Ref.get(state).pipe(
+    SubscriptionRef.get(state).pipe(
       Effect.flatMap((entries) => {
         const entry = findEntry(entries, id);
         return entry ? Effect.succeed(entry) : Effect.fail(notFound());
       }),
     );
   const update = (id: string, f: (entry: Entry) => Entry) =>
-    Ref.update(state, (entries) =>
+    SubscriptionRef.update(state, (entries) =>
       Arr.map(entries, (entry) => (entry.snapshot.requestId === id ? f(entry) : entry)),
     );
   const patch = (
@@ -107,7 +127,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
     id: string,
   ): Effect.fn.Return<void> {
     if (!delivery || (yield* Ref.get(closed))) return;
-    const claimed = yield* Ref.modify(state, (entries) => {
+    const claimed = yield* SubscriptionRef.modify(state, (entries) => {
       const entry = findEntry(entries, id);
       if (
         !entry ||
@@ -238,7 +258,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
             cancel: yield* Deferred.make<void>(),
             deliveryAttempts: 0,
           };
-          const admitted = yield* Ref.modify(state, (entries) => {
+          const admitted = yield* SubscriptionRef.modify(state, (entries) => {
             const evict =
               entries.length >= MAX_RETAINED_REQUESTS
                 ? Option.getOrUndefined(
@@ -282,12 +302,21 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
     return admittedRequest.snapshot;
   });
 
-  const wait = (id: string, cancel: boolean) =>
+  // Each change in where the questionnaire stands for the user, while it is still pending.
+  const followPresentation = (id: string, observe: PresentationObserver) =>
+    SubscriptionRef.changes(state).pipe(
+      Stream.map((entries) => pendingPresentationOf(findEntry(entries, id)?.snapshot)),
+      Stream.filter(Predicate.isNotUndefined),
+      Stream.changes,
+      Stream.runForEach(observe),
+    );
+
+  const wait = (id: string, cancel: boolean, observe?: PresentationObserver) =>
     Effect.suspend(() => {
       const owner = Symbol();
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
-          const claimed = yield* Ref.modify(
+          const claimed = yield* SubscriptionRef.modify(
             state,
             (entries): readonly [Entry | "busy" | "missing", ReadonlyArray<Entry>] => {
               const entry = findEntry(entries, id);
@@ -307,7 +336,15 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
           }
           if (claimed === "missing") return yield* notFound();
           if (cancel) yield* Deferred.succeed(claimed.cancel, undefined);
-          yield* restore(Deferred.await(claimed.completed));
+          const completed = Deferred.await(claimed.completed);
+          yield* restore(
+            observe && !cancel
+              ? Effect.raceFirst(
+                  completed,
+                  followPresentation(id, observe).pipe(Effect.andThen(Effect.never)),
+                )
+              : completed,
+          );
           const { snapshot } = yield* get(id);
           const acknowledge = ["pending", "failed", "none"].includes(snapshot.delivery);
           return {
@@ -339,12 +376,16 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
       );
     });
 
-  const control = Effect.fn("AskUserService.controlAsync")(function* (input: AskUserAsyncControl) {
+  /** `observe` follows an await's questionnaire: open, hidden, or queued behind others. */
+  const control = Effect.fn("AskUserService.controlAsync")(function* (
+    input: AskUserAsyncControl,
+    observe?: PresentationObserver,
+  ) {
     if (input.action === "status") {
       return {
         requests: input.requestId
           ? [(yield* get(input.requestId)).snapshot]
-          : Arr.map(yield* Ref.get(state), (entry): AsyncQuestionnaireSnapshot => {
+          : Arr.map(yield* SubscriptionRef.get(state), (entry): AsyncQuestionnaireSnapshot => {
               const { outcome: _outcome, ...summary } = entry.snapshot;
               return summary;
             }),
@@ -355,7 +396,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
         reason: "invalid-control",
         message: "await and cancel require a requestId.",
       });
-    return yield* wait(input.requestId, input.action === "cancel");
+    return yield* wait(input.requestId, input.action === "cancel", observe);
   });
   return { start, control };
 });

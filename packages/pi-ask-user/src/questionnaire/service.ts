@@ -108,7 +108,8 @@ const makeService = Effect.fn("AskUserService.make")(function* (
     /** `shown` runs as the questionnaire opens, after any earlier ones in the queue close. */
     ask: (request: AskUserRequest, shown?: Effect.Effect<void>) =>
       askRequest(request, undefined, shown),
-    askOwned: (request: AskUserRequest, owner: QuestionnaireOwner) => askRequest(request, owner),
+    askOwned: (request: AskUserRequest, owner: QuestionnaireOwner, shown?: Effect.Effect<void>) =>
+      askRequest(request, owner, shown),
     startAsync: async.start,
     controlAsync: async.control,
   };

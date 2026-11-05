@@ -12,14 +12,14 @@ import {
 const relayFailure = (message: string) => AskUserHostError.make({ operation: "relay", message });
 
 /**
- * Asks in this session, or through the root's relay in a child. `shown` runs once a local
- * questionnaire opens; a relayed one opens in the root, which doesn't report it.
+ * Asks in this session, or through the root's relay in a child. `shown` runs once the
+ * questionnaire opens on screen: here, or in the root when the relay reports it.
  */
 export const askAtQuestionnaireBoundary = (
   events: QuestionnaireEvents,
   sessionId: string,
   request: AskUserRequest,
-  shown?: Effect.Effect<void>,
+  shown: () => void = () => undefined,
 ) =>
   Effect.suspend(() => {
     const relay = queryQuestionnaireRelay(events, sessionId);
@@ -30,9 +30,20 @@ export const askAtQuestionnaireBoundary = (
               "The root questionnaire relay is unavailable. Do not fall back to a child-local dialog.",
             ),
           )
-        : AskUserService.use((service) => service.ask(request, shown));
+        : AskUserService.use((service) => service.ask(request, Effect.sync(shown)));
     return Effect.tryPromise({
-      try: (signal) => Promise.resolve<unknown>(relay.ask(request, signal)),
+      try: (signal) => {
+        // The relay may report late or twice; only the first report of a pending ask counts.
+        let reported = false;
+        const relayShown = () => {
+          if (reported || signal.aborted) return;
+          reported = true;
+          shown();
+        };
+        return Promise.resolve<unknown>(relay.ask(request, signal, relayShown)).finally(() => {
+          reported = true;
+        });
+      },
       catch: () => relayFailure("The root questionnaire relay failed or was revoked."),
     }).pipe(
       Effect.flatMap((input) => {

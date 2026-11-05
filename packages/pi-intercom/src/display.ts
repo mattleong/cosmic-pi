@@ -12,19 +12,21 @@ export const sessionText = (text: string): string => stripTerminalControls(text)
 
 /**
  * Text a session wrote, rendered as markdown the way Pi renders assistant text. Collapsed, it shows
- * about ten wrapped rows and says how many more expansion shows.
+ * about ten wrapped rows and says how many more expansion shows. `indent` sets it beneath a
+ * heading, as a collapsed preview message's body sits two columns in.
  */
 export const textBody = (
   text: string,
   theme: Pick<Theme, "fg" | "bold">,
   expanded: boolean,
+  indent = 0,
 ): Component => {
   let cached: { readonly width: number; readonly rows: string[] } | undefined;
   return {
     render(width) {
       if (!Number.isFinite(width) || width < 1) return [];
       if (cached?.width === width) return cached.rows;
-      const rows = authoredTextLines(sessionText(text), width, theme, { expanded, indent: 0 });
+      const rows = authoredTextLines(sessionText(text), width, theme, { expanded, indent });
       cached = { width, rows };
       return rows;
     },
@@ -33,6 +35,9 @@ export const textBody = (
     },
   };
 };
+
+/** How far a collapsed preview message's body indents beneath its heading. */
+export const PREVIEW_BODY_INDENT = 2;
 
 /** A muted status line, such as how a recipient will read a message. */
 export const statusLine = (text: string, theme: Pick<Theme, "fg">): Component =>

@@ -17,6 +17,7 @@ import { pathPreviewLanguage, renderContentPreview } from "./shared/preview-text
 import { readResultBody } from "./shared/read-result";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
+import { previewHeadingText } from "../../preview/heading-wrap";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { hostObject } from "../../shared/untrusted-value";
 
@@ -30,7 +31,7 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
       let text = `${renderCodePreviewToolTitle("read", theme)} ${renderDisplayPath(path, cwd, theme)}`;
       if (range) text += theme.fg("warning", range);
       text += metadata(theme, [lang ? normalizePreviewLanguageAlias(lang) : undefined]);
-      return new Text(text, 0, 0);
+      return previewHeadingText(() => text);
     },
 
     renderResult: (result, { expanded, isPartial }, theme, renderContext) => {

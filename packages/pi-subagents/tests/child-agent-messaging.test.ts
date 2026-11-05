@@ -1,5 +1,6 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import {
+  createEventBus,
   defineTool,
   SessionManager,
   type ExtensionAPI,
@@ -13,10 +14,16 @@ import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import {
+  deferredPromise,
   extensionContextFixture,
   recordingExtensionHost,
   temporaryDirectory,
 } from "pi-cosmic-core/testing";
+import {
+  queryQuestionnaireRelay,
+  type AskUserOutcome,
+  type QuestionnaireOwner,
+} from "pi-ask-user/protocol";
 import { vi } from "vitest";
 import type { BackendDriver, BackendEvent } from "../src/backend/model.ts";
 import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
@@ -28,8 +35,12 @@ import { encodeSubagentProxyInput, withSubagentProxyParent } from "../src/tools/
 import type { AgentToolInput } from "../src/tools/schema.ts";
 import { activateRoot, proxyIpcChannel } from "./fixtures/proxy-parent.ts";
 import { fakeWriterLeaseLayer, profileLayerFor, request } from "./run/fixtures/service-harness.ts";
-import { step } from "./support/effect-test.ts";
+import { eventLoopTurn, step } from "./support/effect-test.ts";
+import { answerCapabilityQueries, pickQuestionnaire } from "./support/questionnaire.ts";
 import * as Arr from "effect/Array";
+
+// A few event-loop turns: long enough for a stray notice to cross the channel.
+const eventLoopTurns = () => eventLoopTurn().then(eventLoopTurn).then(eventLoopTurn);
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -97,8 +108,12 @@ const backendFixture = () => {
 const openRoot = (ctx: ExtensionContext, directory: string) =>
   Effect.gen(function* () {
     const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-    const host = recordingExtensionHost({}, { getActiveTools: () => ["read"], sendMessage });
-    return { activation: yield* activateRoot(host, ctx, directory), sendMessage };
+    const events = createEventBus();
+    const host = recordingExtensionHost(
+      {},
+      { getActiveTools: () => ["read"], sendMessage, events },
+    );
+    return { activation: yield* activateRoot(host, ctx, directory), sendMessage, events };
   });
 
 // A child bridge whose IPC requests reach the root through its run's authenticated channel.
@@ -111,9 +126,11 @@ const openChild = (
     const ctx = contextFor(session);
     const tools = new Map<string, ToolDefinition>();
     let active = [...activeTools];
+    const events = createEventBus();
     const host = recordingExtensionHost(
       {},
       {
+        events,
         getActiveTools: () => [...active],
         setActiveTools: (names: ReadonlyArray<string>) => {
           active = [...names];
@@ -168,7 +185,7 @@ const openChild = (
           ),
         ),
       );
-    return { activeTools: () => [...active], call, refusal };
+    return { activeTools: () => [...active], call, events, refusal };
   });
 
 describe("Pi child agent messaging through the root coordinator", () => {
@@ -312,6 +329,89 @@ describe("Pi child agent messaging through the root coordinator", () => {
         expect(listed.structuredContent).toMatchObject({
           agents: [{ id: victim.id, self: false }],
         });
+        return undefined;
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+});
+
+describe("Pi child questionnaires through the root coordinator", () => {
+  it.live("shows a relayed questionnaire as waiting only once the root has it on screen", () =>
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory("pi-child-questionnaire-");
+      const root = SessionManager.create(directory, directory);
+      const { activation, events } = yield* openRoot(contextFor(root), directory);
+      // The root's questionnaire: the test decides when each request reaches the screen.
+      const asked: Array<{
+        readonly owner: QuestionnaireOwner;
+        readonly shown: () => void;
+        readonly answer: (outcome: AskUserOutcome) => void;
+      }> = [];
+      answerCapabilityQueries(events, () => ({
+        version: 1,
+        sessionId: root.getSessionId(),
+        generation: "root",
+        cancel: () => Promise.resolve(),
+        ask: (_request, owner, _signal, shown) => {
+          const reply = deferredPromise<AskUserOutcome>();
+          asked.push({ owner, shown: shown ?? (() => undefined), answer: reply.resolve });
+          return reply.promise;
+        },
+      }));
+      const backend = backendFixture();
+      const layer = SubagentService.layer({
+        proxyHandler: activation.proxyHandler,
+        questionnaireHandler: activation.questionnaireHandler,
+      }).pipe(
+        Layer.provideMerge(backend.layer),
+        Layer.provideMerge(profileLayerFor({})),
+        Layer.provide(fakeWriterLeaseLayer()),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* SubagentService;
+        const run = yield* service.start(request({ cwd: directory, name: "asker" }));
+        const [control] = backend.controls;
+        if (!control) return yield* Effect.die("Run did not launch");
+        const session = SessionManager.inMemory(directory);
+        const child = yield* openChild(control, session, ["read"]);
+        const relay = queryQuestionnaireRelay(child.events, session.getSessionId());
+        assert(relay !== undefined);
+        // Both of the child's asks wait in the root's queue until it opens them.
+        const shown: string[] = [];
+        const ask = (key: string) =>
+          Promise.resolve<unknown>(
+            relay.ask(
+              { questions: [{ ...pickQuestionnaire.questions[0]!, key }] },
+              new AbortController().signal,
+              () => void shown.push(key),
+            ),
+          );
+        const first = ask("first");
+        const second = ask("second");
+        yield* step(() => vi.waitFor(() => expect(asked).toHaveLength(2)));
+        const [opened, queued] = asked;
+        assert(opened !== undefined && queued !== undefined);
+        expect(opened.owner.runId).toBe(run.id);
+        yield* step(eventLoopTurns);
+        expect(shown).toEqual([]);
+
+        // Opening one reports it once, however often the root repeats itself.
+        opened.shown();
+        opened.shown();
+        yield* step(() => vi.waitFor(() => expect(shown).toEqual(["first"])));
+        yield* step(eventLoopTurns);
+        expect(shown).toEqual(["first"]);
+
+        // A report after the answer arrives too late to change anything.
+        const answer: AskUserOutcome = { outcome: "cancelled", answers: [] };
+        opened.answer(answer);
+        expect(yield* step(() => first)).toEqual(answer);
+        queued.answer(answer);
+        expect(yield* step(() => second)).toEqual(answer);
+        opened.shown();
+        queued.shown();
+        yield* step(eventLoopTurns);
+        expect(shown).toEqual(["first"]);
         return undefined;
       }).pipe(Effect.provide(layer));
     }),

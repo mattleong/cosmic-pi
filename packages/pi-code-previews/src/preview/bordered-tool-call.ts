@@ -105,10 +105,19 @@ export function frameBorderShell(
 
 const RESET_ANSI = "\x1b[0m";
 
+/**
+ * Whether a collapsed frame without a hint of its own offers expansion, given the rows its call and
+ * result slots drew.
+ */
+export type BorderExpandFallback = (call: readonly string[], result: readonly string[]) => boolean;
+
 export class BorderedToolCall implements Component {
   private readonly body = new Container();
+  private call: Component | undefined;
+  private result: Component | undefined;
   private borderColorKey: BorderColorKey = "borderMuted";
   private expandLabel: string | undefined;
+  private expandFallback: BorderExpandFallback | undefined;
   private timingLabel: string | undefined;
   private cache: { width: number; rows: string[] } | undefined;
   private readonly theme: Theme;
@@ -127,10 +136,18 @@ export class BorderedToolCall implements Component {
     this.body.clear();
     if (call) this.body.addChild(call);
     if (result) this.body.addChild(result);
+    this.call = call;
+    this.result = result;
     this.borderColorKey = color;
     this.expandLabel =
       state.codePreviewBorderResultExpandLabel ?? state.codePreviewBorderCallExpandLabel;
     this.timingLabel = timingLabel;
+    this.cache = undefined;
+  }
+
+  /** Labels the frame's corner with the expand hint when no slot labeled it and this says so. */
+  setExpandFallback(fallback: BorderExpandFallback | undefined): void {
+    this.expandFallback = fallback;
     this.cache = undefined;
   }
 
@@ -159,10 +176,15 @@ export class BorderedToolCall implements Component {
     const innerWidth = width - 4;
     const border = (value: string) => this.theme.fg(this.borderColorKey, value);
     const timing = this.timingLabel ? ` ${this.theme.fg("muted", this.timingLabel)} ` : "";
-    const expand = this.expandLabel ? ` ${this.expandLabel} ` : "";
+    const call = this.call?.render(innerWidth) ?? [];
+    const result = this.result?.render(innerWidth) ?? [];
+    const label =
+      this.expandLabel ??
+      (this.expandFallback?.(call, result) ? this.theme.fg("muted", toolExpandHint()) : undefined);
+    const expand = label ? ` ${label} ` : "";
     return [
       renderBorder(width, border, "╭", "╮", timing),
-      ...Arr.map(this.body.render(innerWidth), (line) => this.frameLine(line, innerWidth, border)),
+      ...Arr.map([...call, ...result], (line) => this.frameLine(line, innerWidth, border)),
       renderBorder(width, border, "╰", "╯", expand),
     ];
   }

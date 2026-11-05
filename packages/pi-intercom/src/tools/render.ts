@@ -3,7 +3,7 @@ import type {
   Theme,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -15,11 +15,11 @@ import {
   expandedText,
   getTextContent,
   previewIssuesSlot,
+  expandedSection,
   type ExpandedField,
-  type ExpandedLine,
 } from "pi-code-previews";
 import { countLabel, formatBytes } from "pi-cosmic-core/display";
-import { clipToWidth } from "pi-cosmic-ui/manager";
+import { clipToWidth, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderExpansionAffordance,
@@ -27,7 +27,14 @@ import {
   toolRunningLine,
   type ToolHeader,
 } from "pi-cosmic-ui/tool";
-import { displayDirectory, sessionDetails, sessionText, statusLine, textBody } from "../display.ts";
+import {
+  displayDirectory,
+  PREVIEW_BODY_INDENT,
+  sessionDetails,
+  sessionText,
+  statusLine,
+  textBody,
+} from "../display.ts";
 import { MAX_READ_BYTES } from "../transport/protocol.ts";
 import {
   SESSION_TOOL,
@@ -47,7 +54,7 @@ import {
   sessionSubject,
   type SessionNames,
 } from "../identity.ts";
-import { sessionToolDetails } from "./summary.ts";
+import { NO_OTHER_SESSIONS, sessionToolDetails } from "./summary.ts";
 
 /** What a settled result tells the call heading, which renders before it is known. */
 export interface SessionRenderState {
@@ -84,7 +91,7 @@ const callBody = (args: SessionToolArgs, theme: Theme, expanded: boolean): Compo
   if (!Str.isNonEmpty(message)) return new Container();
   return expanded
     ? expandedAuthoredText(theme, "Message", sessionText(message))
-    : textBody(message, theme, false);
+    : textBody(message, theme, false, PREVIEW_BODY_INDENT);
 };
 
 /**
@@ -123,50 +130,73 @@ const STATE_COLORS = {
   unreachable: "warning",
 } as const satisfies Record<ListedSession["state"], "muted" | "accent" | "warning">;
 
+/**
+ * Each listed session's status glyph: idle is done with its turn, busy was working when the list
+ * was taken, unavailable and not answering couldn't confirm their state, and unreachable failed.
+ */
+const STATE_GLYPHS = {
+  idle: { glyph: SUITE_STATUS_GLYPHS.succeeded, color: "success" },
+  busy: { glyph: SUITE_STATUS_GLYPHS.neutral, color: "accent" },
+  unavailable: { glyph: SUITE_STATUS_GLYPHS.uncertain, color: "warning" },
+  unresponsive: { glyph: SUITE_STATUS_GLYPHS.uncertain, color: "warning" },
+  unreachable: { glyph: SUITE_STATUS_GLYPHS.failed, color: "error" },
+} as const satisfies Record<
+  ListedSession["state"],
+  { readonly glyph: string; readonly color: "success" | "accent" | "warning" | "error" }
+>;
+
 type ListDetails = Extract<SessionToolDetails, { readonly tool: "session_list" }>;
 
-const stateWords = (session: ListedSession): ReadonlyArray<string> => [
-  SESSION_STATE_LABELS[session.state],
-  ...(session.duplicate ? ["duplicate id"] : []),
-];
-
-/** A collapsed preview row: a session's label and state. */
-const listedRow = (session: ListedSession, label: string, theme: Theme): string =>
-  Arr.join(
+/**
+ * A listed session: its status glyph, label, and state, then its `~` directory when expanded.
+ * Columns after the glyph hang beneath the label when the row wraps.
+ */
+const listedRow = (session: ListedSession, label: string, theme: Theme, expanded: boolean) => {
+  const { glyph, color } = STATE_GLYPHS[session.state];
+  return `${theme.fg(color, glyph)} ${Arr.join(
     [
       theme.fg("toolOutput", label),
       theme.fg(STATE_COLORS[session.state], SESSION_STATE_LABELS[session.state]),
       ...(session.duplicate ? [theme.fg("warning", "duplicate id")] : []),
+      ...(expanded ? [theme.fg("muted", displayDirectory(session.cwd))] : []),
     ],
     theme.fg("dim", " · "),
-  );
+  )}`;
+};
 
-/** Expanded, each session is a labeled row of its state and `~` directory; full ids come last. */
-const listExpanded = (details: ListDetails, theme: Theme): Component => {
+const LISTED_ROW_HANG = 2;
+
+const NO_SESSIONS = Str.capitalize(NO_OTHER_SESSIONS);
+
+/**
+ * Expanded, every session on its own wrapped row; full ids close in `Details`. A compact heading
+ * already says when there are none.
+ */
+const listExpanded = (details: ListDetails, theme: Theme, compact: boolean): Component => {
   if (details.sessions.length === 0)
-    return expandedText(theme, undefined, [{ text: "No other live sessions", tone: "muted" }]);
+    return compact
+      ? new Container()
+      : expandedText(theme, undefined, [{ text: NO_SESSIONS, tone: "muted" }]);
   const labels = distinctSessionLabels(details.sessions);
   const label = (index: number) => labels[index] ?? "";
-  const fields = Arr.map(
-    details.sessions,
-    (session, index): ExpandedField => ({
-      label: label(index),
-      lines: [
-        {
-          text: Arr.join([...stateWords(session), displayDirectory(session.cwd)], " · "),
-          tone:
-            session.duplicate || STATE_COLORS[session.state] === "warning"
-              ? "warning"
-              : "toolOutput",
-        },
-      ],
-    }),
-  );
-  const omitted: ReadonlyArray<ExpandedLine> =
-    details.omitted > 0 ? [{ text: `and ${details.omitted} more`, tone: "muted" }] : [];
+  const rows = composeToolComponent((width) => {
+    if (!Number.isFinite(width) || width < 1) return [];
+    const hang = Fn.pipe(" ", Str.repeat(Math.min(LISTED_ROW_HANG, width - 1)));
+    return [
+      ...Arr.flatMap(details.sessions, (session, index) =>
+        Arr.map(
+          wrapTextWithAnsi(
+            listedRow(session, label(index), theme, true),
+            Math.max(1, width - LISTED_ROW_HANG),
+          ),
+          (row, line) => (line === 0 ? row : `${hang}${row}`),
+        ),
+      ),
+      ...(details.omitted > 0 ? [theme.fg("muted", `and ${details.omitted} more`)] : []),
+    ];
+  });
   return expandedBody(
-    expandedFields(theme, fields),
-    expandedText(theme, undefined, omitted),
+    expandedSection(theme, undefined, rows),
     expandedDetails(
       theme,
       Arr.map(details.sessions, (session, index) => `${label(index)} · ${session.sessionId}`),
@@ -175,14 +205,17 @@ const listExpanded = (details: ListDetails, theme: Theme): Component => {
 };
 
 const listBody = (details: ListDetails, theme: Theme): Component => {
-  if (details.sessions.length === 0) return statusLine("No other live sessions", theme);
+  if (details.sessions.length === 0) return statusLine(NO_SESSIONS, theme);
   const labels = distinctSessionLabels(details.sessions);
   const shown = details.sessions.slice(0, MAX_COLLAPSED_SESSIONS);
   const hidden = details.sessions.length - shown.length + details.omitted;
   return composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
     const rows = Arr.map(shown, (session, index) =>
-      clipToWidth(listedRow(session, labels[index] ?? sessionSubject(session), theme), width),
+      clipToWidth(
+        listedRow(session, labels[index] ?? sessionSubject(session), theme, false),
+        width,
+      ),
     );
     if (hidden > 0)
       rows.push(
@@ -247,7 +280,7 @@ const readCollapsed = (details: ReadOutcome, theme: Theme): ReadonlyArray<Compon
   const status = readStatus(details);
   const reply = replyText(details);
   return [
-    ...(reply === undefined ? [] : [textBody(reply, theme, false)]),
+    ...(reply === undefined ? [] : [textBody(reply, theme, false, PREVIEW_BODY_INDENT)]),
     ...(status.length > 0 ? [statusLine(Arr.join(status, " · "), theme)] : []),
   ];
 };
@@ -293,7 +326,7 @@ const expandedContent = (
   theme: Theme,
   compact: boolean,
 ): Component => {
-  if (details.tool === SESSION_TOOL.list) return listExpanded(details, theme);
+  if (details.tool === SESSION_TOOL.list) return listExpanded(details, theme, compact);
   if (details.tool === SESSION_TOOL.send) return sendExpanded(details, args.to, theme);
   return readExpanded(details, args.to, theme, compact);
 };

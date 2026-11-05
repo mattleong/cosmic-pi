@@ -29,7 +29,11 @@ import {
   type BackgroundTaskSettingId,
   type BackgroundTaskSettingValue,
 } from "../config/schema.ts";
-import { settingInherited, type SettingsSurfaceItem } from "pi-cosmic-ui/manager/settings-surface";
+import {
+  settingInherited,
+  settingOnOff,
+  type SettingsSurfaceItem,
+} from "pi-cosmic-ui/manager/settings-surface";
 import { joinInline } from "pi-cosmic-ui/manager";
 import { BackgroundTaskConfigError, type BackgroundTaskSettingsLocation } from "../config/store.ts";
 import {
@@ -74,7 +78,7 @@ const SCOPE_DESCRIPTIONS = {
 
 // A group row has one line, so its summary names each value as briefly as it stays clear.
 const SETTING_SUMMARIES = {
-  enabled: (value) => `tasks ${value}`,
+  enabled: (value) => value,
   maxRunning: (value) => `${value} running`,
   maxRetained: (value) => `${value} kept`,
   logBufferBytesPerTask: (value) => `${value} per task`,
@@ -84,6 +88,20 @@ const SETTING_SUMMARIES = {
   showFooterStatus: (value) => `footer ${value}`,
   shellPath: (value) => value,
 } as const satisfies Record<BackgroundTaskSettingId, (value: string) => string>;
+
+// Every summary leads with these values in effect; a scope's own other values follow them.
+const SUMMARY_LEAD: ReadonlyArray<BackgroundTaskSettingId> = [
+  "enabled",
+  "maxRunning",
+  "logBufferBytesPerTask",
+];
+
+/** How a setting row's description names the value this session started with. */
+const sessionValueSentence = (setting: BackgroundTaskSetting, value: string) =>
+  setting.kind === "switch"
+    ? `${Str.capitalize(value)} in this session.`
+    : // A no-break space keeps a value such as `1 MB` on one line when the description wraps.
+      `This session uses ${Str.replaceAll(" ", "\u00a0")(value)}.`;
 
 const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): SettingItem => ({
   id: rowKey(scope, "file"),
@@ -157,21 +175,41 @@ function createTaskSettingsSubcommand(
       return {
         id: rowKey(scope, setting.id),
         label: setting.label,
-        // A no-break space keeps a value such as `1 MB` on one line when the description wraps.
-        description: `${setting.description} This session uses ${Str.replaceAll(" ", "\u00a0")(sessionValue(config, setting))}. Applies after /reload.`,
+        description: `${setting.description} ${sessionValueSentence(setting, sessionValue(config, setting))} Applies after /reload.`,
         currentValue,
         values: values.includes(currentValue) ? values : [currentValue, ...values],
       };
     };
-    // A scope's value: the settings it sets itself, such as `16 running · 1 MB per task`.
+    // The value in effect for a scope: its own, else the global one for a project, else the default.
+    const effectiveValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting): string => {
+      const own = known.get(rowKey(scope, setting.id));
+      if (own !== undefined && inheritChoice(own) !== INHERIT) return own;
+      return scope === "project"
+        ? effectiveValue("global", setting)
+        : settingDisplayValue(setting, DEFAULT_BACKGROUND_TASK_CONFIG[setting.id]);
+    };
+    const ownsValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting) =>
+      inheritChoice(known.get(rowKey(scope, setting.id)) ?? INHERIT) !== INHERIT;
+    // A scope's value: the values in effect that matter most, then the others it sets itself, such
+    // as `on · 16 running · 1 MB per task · 5s grace`.
     const summary = (scope: TaskSettingsScope) => () => {
-      const own = Arr.filterMap(listed, (setting) => {
-        const value = known.get(rowKey(scope, setting.id)) ?? INHERIT;
-        return inheritChoice(value) === INHERIT
-          ? Result.failVoid
-          : Result.succeed(SETTING_SUMMARIES[setting.id](value));
-      });
-      return own.length === 0 ? INHERIT : joinInline(own);
+      // Descriptor order matches the lead's order, so the lead values come first.
+      const leads = (setting: BackgroundTaskSetting) => Arr.contains(SUMMARY_LEAD, setting.id);
+      const shown = [
+        ...Arr.filter(listed, leads),
+        ...Arr.filter(listed, (setting) => !leads(setting) && ownsValue(scope, setting)),
+      ];
+      const values = Arr.map(shown, (setting) => ({
+        id: setting.id,
+        value: effectiveValue(scope, setting),
+      }));
+      // A disabled scope reads just `off`: no other value matters while tasks can't start.
+      const disabled = Arr.findFirst(
+        values,
+        (entry) => entry.id === "enabled" && entry.value === settingOnOff(false),
+      );
+      if (Option.isSome(disabled)) return disabled.value.value;
+      return joinInline(Arr.map(values, (entry) => SETTING_SUMMARIES[entry.id](entry.value)));
     };
     // Each scope is one group row, so the list reads by scope instead of repeating it.
     return Arr.map(files, (file): SettingsSurfaceItem => {

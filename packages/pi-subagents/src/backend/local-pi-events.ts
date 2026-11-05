@@ -159,6 +159,12 @@ export const normalizeParentContact = (
             ok,
             payloadJson,
           }),
+        questionnaireShown: () =>
+          child.sendContactControl({
+            channel: "pi-subagents",
+            type: "proxy_questionnaire_shown",
+            requestId: contact.requestId,
+          }),
       };
     case "proxy_cancel":
       return { type: "proxy_cancel", requestId: contact.requestId };

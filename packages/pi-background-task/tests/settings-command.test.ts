@@ -259,6 +259,29 @@ describe("/tasks settings", () => {
     }),
   );
 
+  it.effect("a scope's summary resolves the values it inherits", () =>
+    Effect.gen(function* () {
+      const h = pickerHarness(true, (location) =>
+        Promise.resolve(location.scope === "global" ? { maxRunning: 16 } : {}),
+      );
+      yield* macrotask;
+      expect(h.isOpen()).toBe(true);
+      const row = (label: string) =>
+        Fn.pipe(
+          Arr.findFirst(Str.split(h.screen(), "\n"), (line) =>
+            Fn.pipe(Str.trim(Str.replace(/^›/u, "")(line)), Str.startsWith(label)),
+          ),
+          Option.getOrElse(() => ""),
+        );
+      // The project sets nothing, so it reads the global count rather than a bare `inherit`.
+      expect(row("Project")).toContain("16");
+      expect(row("Project")).not.toMatch(/\binherit\b/u);
+      expect(row("Global")).toContain("16");
+      h.close();
+      yield* Effect.promise(() => h.opened);
+    }),
+  );
+
   it.effect("opens the readable scopes and keeps a broken file's scope unavailable", () =>
     Effect.gen(function* () {
       const path = "/project/.pi/extensions/pi-background-task.json";

@@ -57,7 +57,7 @@ const status = (text: string): string =>
 const runStatus = (run: SubagentRunView, now: number): string | undefined => {
   const attention = runAttention(run);
   if (attention?.kind === "question" || attention?.kind === "question-unavailable")
-    return "asks a question";
+    return "waiting for reply";
   if (attention?.kind === "paused") return "paused";
   if (run.workspaceId !== undefined && (isTerminalRunState(run.state) || run.workspaceOutcome))
     return workspaceNote(run.workspaceOutcome);

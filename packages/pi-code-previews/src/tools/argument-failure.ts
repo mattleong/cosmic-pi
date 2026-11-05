@@ -45,6 +45,18 @@ export function argumentFailureIssue(text: string): CompactIssue | undefined {
   return { severity: "error", code: "invalid-arguments", message, ...(detail && { detail }) };
 }
 
+/**
+ * The arguments Pi echoed with its argument validation failure, which is all the failure's text
+ * adds beyond its issue and detail; empty without an echo, and undefined for any other text.
+ */
+export function receivedArguments(text: string): string | undefined {
+  if (!MALFORMED.test(text) && !MISMATCHED.test(text)) return undefined;
+  return Option.match(Fn.pipe(text, Str.indexOf(RECEIVED)), {
+    onNone: () => "",
+    onSome: (start) => Str.trim(Fn.pipe(text, Str.slice(start + RECEIVED.length))),
+  });
+}
+
 type CallRenderEvidence = Pick<
   Parameters<NonNullable<ToolRenderers["renderCall"]>>[2],
   "args" | "isError" | "durationMs"

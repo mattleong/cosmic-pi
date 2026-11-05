@@ -191,7 +191,14 @@ export const executeModelsAction = Effect.fn("SubagentTools.models")(function* (
         ),
       },
     ],
-    details: modelDetails({ profiles, agents, invalidAgents, fallbackProfile }),
+    details: modelDetails({
+      profiles,
+      agents,
+      invalidAgents,
+      fallbackProfile,
+      parentModel: environment.parentModel?.model,
+      parentEffort: environment.parentEffort,
+    }),
     structuredContent: encodeSubagentContract(
       modelsContract(profiles, fallbackProfile, agents, invalidAgents),
     ),

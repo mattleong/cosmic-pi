@@ -6,11 +6,13 @@ import {
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { LIST_CURSOR, focusedField } from "../manager/style.ts";
 import {
   clipToWidth,
+  INLINE_SEPARATOR,
   joinInline,
   managerNoticeColor,
   managerNoticeGlyph,
@@ -334,15 +336,56 @@ const wrapVerbatim = (text: string, width: number): string[] =>
     return Arr.map(wrapped, (part, index) => (index === 0 ? part : `${hanging}${part}`));
   });
 
+const FACT_ARROW = " → ";
+
+/**
+ * Wraps `·`-joined facts between whole facts, so no `·` or `→` ends a line. A fact too wide for
+ * a line breaks before its `→`, which then leads the continuation (`→ provider/model`).
+ */
+const wrapFacts = (facts: string, width: number): string[] => {
+  const hanging = width > 8 ? HANGING_INDENT : "";
+  const room = Math.max(1, width - hanging.length);
+  const pieces = Arr.flatMap(Str.split(facts, INLINE_SEPARATOR), (fact) => {
+    if (visibleWidth(fact) <= room) return [{ text: fact, join: INLINE_SEPARATOR }];
+    const [first, ...rest] = Str.split(fact, FACT_ARROW);
+    return [
+      { text: first, join: INLINE_SEPARATOR },
+      ...Arr.map(rest, (part) => ({ text: `→ ${part}`, join: " " })),
+    ];
+  });
+  const lines: string[] = [];
+  let current = "";
+  for (const piece of pieces) {
+    const candidate = current ? `${current}${piece.join}${piece.text}` : piece.text;
+    if (current && visibleWidth(candidate) > (lines.length === 0 ? width : room)) {
+      lines.push(current);
+      current = piece.text;
+    } else current = candidate;
+  }
+  if (current) lines.push(current);
+  return Arr.flatMap(lines, (line, index) =>
+    index === 0
+      ? wrapTextWithAnsi(line, width)
+      : Arr.map(wrapTextWithAnsi(line, room), (part) => `${hanging}${part}`),
+  );
+};
+
 const renderBlocks = (
   blocks: readonly ActivityDetailBlock[],
   width: number,
   theme: BodyTheme,
 ): string[] =>
   Arr.flatMap(blocks, (block) =>
-    block.kind === "markdown"
-      ? new Markdown(block.text, 0, 0, markdownTheme(theme)).render(width)
-      : wrapVerbatim(block.text, width),
+    Match.value(block.kind).pipe(
+      Match.when("markdown", () =>
+        new Markdown(block.text, 0, 0, markdownTheme(theme)).render(width),
+      ),
+      Match.when("facts", () =>
+        Arr.map(wrapFacts(block.text, width), (line) => theme.fg("muted", line)),
+      ),
+      Match.when("text", () => wrapVerbatim(block.text, width)),
+      Match.exhaustive,
+    ),
   );
 
 interface WrappedDetail {
@@ -452,9 +495,6 @@ const activityTitle = (
   );
 };
 
-const movementLabel = (up: string, down: string): string =>
-  Str.length(up) === 1 && Str.length(down) === 1 ? `${up}${down}` : `${up}/${down}`;
-
 export function renderGroupedActivity(
   options: ActivityComponentOptions,
   state: GroupedActivityState,
@@ -471,13 +511,13 @@ export function renderGroupedActivity(
   const urgent = needsYou(rows);
   const counts = summarizeGroup(rows).attention;
   const startup = activityStartupGlyph(rows, options.starting?.() ?? 0, options.now?.());
-  const { key: hint } = configuredKeyLabels(options.keybindingLabel, activityShortcuts);
-  const [cancel, ...cancelAliases] = Str.split(hint("tui.select.cancel", "Esc"), "/");
+  const labels = configuredKeyLabels(options.keybindingLabel, activityShortcuts);
+  const cancel = labels.binding("tui.select.cancel", "Esc");
   const keys: ActivityKeys = {
-    confirm: hint("tui.select.confirm", "Enter"),
-    cancel,
-    cancelAliases,
-    move: movementLabel(hint("tui.select.up", "↑"), hint("tui.select.down", "↓")),
+    confirm: labels.primary("tui.select.confirm", "Enter"),
+    cancel: cancel.key,
+    cancelAliases: cancel.aliases,
+    move: labels.movement ?? "↑↓",
   };
   const listFocused = shell.state.pane === "list";
   const row = groupedActivitySource(selected);

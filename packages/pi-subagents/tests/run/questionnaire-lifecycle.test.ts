@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -46,6 +47,55 @@ const blockingQuestionnaire = (release: Deferred.Deferred<void>) => {
 };
 
 describe("assignment-owned questionnaire proxy", () => {
+  it.effect(
+    "tells the child once that the root opened its questionnaire, never after it settles",
+    () =>
+      Effect.gen(function* () {
+        const fake = fakeChildLayer();
+        const reports: Array<() => void> = [];
+        const answers = new Map<string, Deferred.Deferred<void>>();
+        const handler = (_request: AskUserRequest, owner: QuestionnaireOwner, shown: () => void) =>
+          Effect.gen(function* () {
+            const answered = yield* Deferred.make<void>();
+            answers.set(owner.requestId, answered);
+            reports.push(shown);
+            yield* Deferred.await(answered);
+            return { content: [], details: { outcome: "cancelled", answers: [] } };
+          });
+        const layer = serviceLayer({ questionnaireHandler: handler }).pipe(
+          Layer.provide(fake.layer),
+        );
+        yield* withService(layer, function* (service) {
+          yield* service.start(request({ name: "asker" }));
+          const child = fake.controls[0]!;
+          const notices = () =>
+            Arr.filter(child.ipc, (message) => message.type === "proxy_questionnaire_shown");
+          askUser(child, "q-open");
+          askUser(child, "q-queued");
+          yield* yieldUntil(() => reports.length === 2);
+          const [open, queued] = reports;
+          open!();
+          open!();
+          yield* yieldUntil(() => notices().length > 0);
+          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          expect(notices()).toEqual([
+            { channel: "pi-subagents", type: "proxy_questionnaire_shown", requestId: "q-open" },
+          ]);
+          yield* Deferred.succeed(answers.get("q-queued")!, undefined);
+          yield* yieldUntil(() =>
+            Arr.some(
+              child.ipc,
+              (message) => message.type === "proxy_response" && message.requestId === "q-queued",
+            ),
+          );
+          queued!();
+          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          expect(notices()).toHaveLength(1);
+          yield* Deferred.succeed(answers.get("q-open")!, undefined);
+        });
+      }),
+  );
+
   it.effect("drains an outstanding questionnaire before launch compensation releases", () =>
     Effect.gen(function* () {
       const promptGate = yield* Deferred.make<void>();

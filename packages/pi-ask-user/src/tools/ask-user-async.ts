@@ -1,6 +1,10 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
+import {
+  captureCodePreviewPresentationPolicy,
+  withCodePreviewShell,
+  type CompactAnimationScheduler,
+} from "pi-code-previews";
 import {
   defineTool,
   type ExtensionAPI,
@@ -17,12 +21,13 @@ import {
 import type {
   AsyncQuestionnaireSnapshot,
   AsyncQuestionnaireResult,
+  PendingPresentation,
 } from "../questionnaire/async-model.ts";
 import { formatAsyncSnapshot } from "../questionnaire/format.ts";
-import { asyncAskUserCompactSummary } from "../ui/compact-summary.ts";
+import { asyncAskUserCompactSummaryFor } from "../ui/compact-summary.ts";
 import { ASYNC_MESSAGE_TYPE } from "../boundary/host-delivery.ts";
 import { pendingRequest, type QuestionnaireArgs, type RenderContext } from "../ui/tool-body.ts";
-import { requestArguments } from "../ui/tool-render-projection.ts";
+import { presentationProgress, requestArguments } from "../ui/tool-render-projection.ts";
 import {
   renderAsyncCall,
   renderAsyncResult,
@@ -52,12 +57,19 @@ export function registerAsyncAskUserMessageRenderer(pi: ExtensionAPI): void {
 export function registerAsyncAskUserTools(
   pi: ExtensionAPI,
   start: (input: AskUserAsyncRequest, signal?: AbortSignal) => Promise<AsyncQuestionnaireSnapshot>,
-  control: (input: AskUserAsyncControl, signal?: AbortSignal) => Promise<AsyncQuestionnaireResult>,
+  control: (
+    input: AskUserAsyncControl,
+    signal: AbortSignal | undefined,
+    observe: (presentation: PendingPresentation) => void,
+  ) => Promise<AsyncQuestionnaireResult>,
   scheduleAnimation?: CompactAnimationScheduler,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
   const presentation = {
-    compactSummary: asyncAskUserCompactSummary,
+    // Read when the shell is, so the summary names what that style's collapsed row hides.
+    compactSummary: asyncAskUserCompactSummaryFor(
+      captureCodePreviewPresentationPolicy().toolCallCollapsedStyle,
+    ),
     expandedContent: {
       renderCall: (
         args: QuestionnaireArgs,
@@ -128,8 +140,11 @@ export function registerAsyncAskUserTools(
         ),
         outputSchema: outputSchema(AskUserAsyncControlContractSchema),
         executionMode: "sequential",
-        execute(_id, input, signal) {
-          return control(input, signal).then((result) =>
+        execute(_id, input, signal, onUpdate) {
+          // Progress tells an await's row whether its questionnaire is on screen, hidden, or queued.
+          const observe = (pending: PendingPresentation) =>
+            onUpdate?.({ content: [], details: presentationProgress(pending) });
+          return control(input, signal, observe).then((result) =>
             questionnaireToolResult(
               result.requests.length
                 ? Arr.join(Arr.map(result.requests, formatAsyncSnapshot), "\n\n")

@@ -168,7 +168,10 @@ function outputIssues(
 
 const MAX_ERROR_TEXT = 8192;
 
-function errorIssue(identity: NativeMcpIdentity, result: AgentToolResult<unknown>): CompactIssue {
+export function nativeMcpErrorIssue(
+  identity: NativeMcpIdentity,
+  result: AgentToolResult<unknown>,
+): CompactIssue {
   const text = Fn.pipe(
     Arr.join(
       Arr.flatMap(result.content, (part) =>
@@ -226,7 +229,12 @@ export const nativeMcpSummary =
     const heading = { ...nativeMcpHeading(identity, args, owned), showTiming: true as const };
     const output = owned ? outputIssues(result, owned) : [];
     if (context.isError)
-      return { ...heading, outcome: "error", issues: [errorIssue(identity, result), ...output] };
+      return {
+        ...heading,
+        outcome: "error",
+        expandLabel: "error",
+        issues: [nativeMcpErrorIssue(identity, result), ...output],
+      };
     if (!owned) return undefined;
     const summary: CompactSummary = { ...heading, outcome: "returned", issues: output };
     if (identity.kind === "tool" || identity.name === "read_mcp_resource")

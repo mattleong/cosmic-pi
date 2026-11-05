@@ -5,7 +5,7 @@ Remembers the provider, model, and thinking level you use in each working direct
 ## Features
 
 - **Per-directory preferences** restored for fresh sessions and `/new`.
-- **Automatic updates** whenever you change model or thinking level with `/model`, model cycling, or the thinking-level controls.
+- **Automatic updates** whenever you change model or thinking level with `/model`, `/thinking`, model cycling, or the thinking-level keybinding.
 - **One-off overrides:** `--model` or `--thinking` on the command line skips restoring for that session and isn't saved.
 - **Symlink-aware:** aliases of the same directory share one preference.
 

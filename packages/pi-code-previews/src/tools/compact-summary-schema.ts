@@ -29,6 +29,7 @@ const Summary = Schema.Struct({
   subject: Schema.String,
   outcome: Schema.optionalKey(CompactOutcomeSchema),
   waiting: Schema.optionalKey(Schema.Literal(true)),
+  queued: Schema.optionalKey(Schema.Literal(true)),
   messageIcon: Schema.optionalKey(Schema.Literals(["sent", "received"])),
   quote: Schema.optionalKey(Schema.String),
   expandLabel: Schema.optionalKey(Schema.Union([Schema.String, Schema.Literal(false)])),

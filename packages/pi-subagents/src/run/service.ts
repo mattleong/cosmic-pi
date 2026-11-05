@@ -99,9 +99,11 @@ export interface SubagentServiceOptions {
   readonly archiveReport?: ReportArchive | undefined;
   /** Reaches the root session's main agent for `agent_*` messages; without it `main` is unavailable. */
   readonly agentMain?: AgentMainCapabilities | undefined;
+  /** `shown` reports, once, that the questionnaire opened on the user's screen. */
   readonly questionnaireHandler?: (
     request: AskUserRequest,
     owner: QuestionnaireOwner,
+    shown: () => void,
   ) => Effect.Effect<BackendProxyResult, SubagentError>;
   readonly proxyHandler?:
     | ((
@@ -444,8 +446,10 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         ),
     }),
     ...(questionnaireHandler && {
-      executeQuestionnaire: (record, requestId, request) =>
-        questionnaires.own(record, requestId, (owner) => questionnaireHandler(request, owner)),
+      executeQuestionnaire: (record, requestId, request, shown) =>
+        questionnaires.own(record, requestId, (owner) =>
+          questionnaireHandler(request, owner, shown),
+        ),
     }),
   });
 

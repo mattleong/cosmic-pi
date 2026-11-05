@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
-import * as Str from "effect/String";
 import {
   Input,
   Key,
@@ -17,7 +16,13 @@ import type { ProfileSetSaveDestination } from "./profile-set-actions.ts";
 import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import { framedKeyHintBar, keyHint, wrapKeyHints } from "pi-cosmic-ui/manager/key-labels";
+import {
+  configuredKeyLabels,
+  framedKeyHintBar,
+  keyHint,
+  TEXT_INPUT_KEY_LABELS,
+  wrapKeyHints,
+} from "pi-cosmic-ui/manager/key-labels";
 import { FRAME_GUTTER } from "pi-cosmic-ui/manager/list-detail-shell";
 
 type DialogOptions = SearchableSelectHostOptions & {
@@ -136,17 +141,20 @@ export class ProfileDashboardDialog implements Component, Focusable {
           `Destination: ${this.scope === "project" ? "Project · For this project" : "Global · For all projects"}${destination.projectTrusted ? "" : this.options.theme.fg("dim", " (Project requires trust)")}`,
         ]
       : [];
-    const cancel = label("tui.select.cancel", "Esc");
+    // A name dialog types into its input, so a configured key that types text never labels a hint.
+    const keys = configuredKeyLabels(label, TEXT_INPUT_KEY_LABELS);
+    const cancel = keys.primary("tui.select.cancel", "Esc");
     const hints = (scrolls: boolean) => {
       const { border, overflow } = framedKeyHintBar(
         {
           hints: [
             scrolls && keyHint("↑↓", "Scroll"),
             destination && destination.projectTrusted && keyHint("↑↓", "Destination"),
-            keyHint(label("tui.select.confirm", "Enter"), "Confirm"),
+            keyHint(keys.primary("tui.select.confirm", "Enter"), "Confirm"),
           ],
           exit: "decision",
-          exitKey: Str.split(cancel, "/")[0] ?? cancel,
+          // `?` types into the name, so the dialog has no expanded help to list aliases in.
+          exitKey: cancel,
         },
         false,
         width + 2 * FRAME_GUTTER,

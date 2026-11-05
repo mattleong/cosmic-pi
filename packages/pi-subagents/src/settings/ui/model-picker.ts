@@ -15,6 +15,7 @@ import {
 import type { SubagentEffort } from "../../domain/routing.ts";
 import type { ProjectedPiModel } from "../profile-model-catalog.ts";
 import { profileRouteOptionLabel } from "../profile-route-editor.ts";
+import { candidateModelLabel } from "./profile-workspace-model.ts";
 import { profileBreadcrumb, selectHost } from "./profile-workspace-selectors.ts";
 
 export interface ProfileModelOption extends ModelPickerModel {
@@ -40,11 +41,15 @@ export function createPiModelOptions(input: {
   return [
     {
       ...pseudoModel("parent"),
-      label: `Current Pi model${canonical ? ` → ${boundedMiddle(sanitizeTerminalLine(canonical), 72)}` : ""}`,
+      // The same name the editor gives an inherited model: `inherit (provider/model)`.
+      label: candidateModelLabel(
+        { model: "parent" },
+        canonical === undefined ? undefined : boundedMiddle(sanitizeTerminalLine(canonical), 72),
+      ),
       description: parent
         ? `${parent.name ? `${boundedMiddle(sanitizeTerminalLine(parent.name), 48)} · ` : ""}${parent.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${Arr.join(parent.supportedEfforts, ", ") || "none"}`
-        : "Use the current Pi model when this run starts",
-      searchText: `parent ${canonical ?? "active model"} ${parent?.name ?? ""}`,
+        : "Inherit the current Pi model when this run starts",
+      searchText: `inherit parent ${canonical ?? "active model"} ${parent?.name ?? ""}`,
       supportedEfforts: parent?.supportedEfforts,
       fastModeAvailable: canonical ? supportsSubagentFastMode(canonical) : false,
     },

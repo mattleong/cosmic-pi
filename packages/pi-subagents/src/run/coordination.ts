@@ -21,6 +21,14 @@ const ownershipSummary = (record: RunRecord): string =>
       : "shared-checkout writer"
     : "read-only";
 
+/** A run's role as people read it, as its facts name it elsewhere: `shared checkout writer`. */
+const ownershipLabel = (record: RunRecord): string =>
+  record.view.writeIntent === "writer"
+    ? record.view.workspaceId !== undefined
+      ? "worktree writer"
+      : "shared checkout writer"
+    : "read-only";
+
 /** The run itself and the other active runs sharing its working directory, in record order. */
 const workspacePeers = (source: Iterable<RunRecord>, selfId: string) => {
   const records = [...source];
@@ -72,11 +80,11 @@ export const peerNoticeDetails = (
   return {
     version: 1,
     kind: "peers",
-    ...(self && { ownership: ownershipSummary(self) }),
+    ...(self && { ownership: ownershipLabel(self) }),
     peers: Arr.map(peers.slice(0, MAX_NOTICE_PEERS), (record) => ({
       id: record.view.id,
       name: noticeName(record.launch.name),
-      ownership: ownershipSummary(record),
+      ownership: ownershipLabel(record),
       state: runStateLabel(record.view.state),
       ...(Str.trim(record.view.task) && {
         task: noticeFact(safeTextPrefix(record.view.task, 160)),

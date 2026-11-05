@@ -72,6 +72,14 @@ export const proxyIpcChannel = (offer: (event: BackendEvent) => void): LocalPiCh
                 payloadJson,
               });
             }),
+          questionnaireShown: () =>
+            Effect.sync(() => {
+              listener?.onControl({
+                channel: "pi-subagents",
+                type: "proxy_questionnaire_shown",
+                requestId: contact.requestId,
+              });
+            }),
         });
       }),
   };

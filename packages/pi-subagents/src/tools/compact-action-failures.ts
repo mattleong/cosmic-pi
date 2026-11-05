@@ -15,7 +15,7 @@ type Phrase = (subject: string) => string;
 const FAILURE_PHRASES: ReadonlyArray<readonly [ReadonlyArray<string>, Phrase]> = [
   [["caller_not_registered"], () => "The calling agent is no longer registered"],
   [["notfound", "not_found"], () => "A requested subagent was not found"],
-  [["parent_question_missing"], (subject) => `${subject} has no question waiting for a reply`],
+  [["parent_question_missing"], (subject) => `${subject} has no open question`],
   [["question_ownership_mismatch"], (subject) => `${subject}'s question is no longer waiting`],
   [["question_transport_closed"], (subject) => `${subject}'s question was cancelled`],
   [["reply_send_failed"], (subject) => `${subject} didn't receive the reply`],

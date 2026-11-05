@@ -30,7 +30,7 @@ Keys:
 
 Behavior:
 
-- Pickers distinguish profile-default reasoning from a pinned level and keep unavailable configured models on cancellation, which is silent and changes nothing.
+- An unpinned value reads as the value it inherits on every surface: `inherit (anthropic/claude-opus-5-5)` for the parent's model (the profile table drops the provider) and `inherit (low)` for the profile's default reasoning, as a picker row too, beside the pinned levels. Pickers keep unavailable configured models on cancellation, which is silent and changes nothing.
 - Edits auto-save serially. Conflicts refresh without retrying, and a failed refresh blocks edits until reopening. Catalog cancellation, disposal, and activation replacement suppress late continuations.
 
 ### Undo during an editor visit

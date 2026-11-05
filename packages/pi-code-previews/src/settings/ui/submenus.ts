@@ -17,7 +17,7 @@ import {
   toolToggleId,
   type CodePreviewToolName,
 } from "../../tools/names";
-import { formatToolsSettingValue, type ToolPreviewSetting } from "../../tools/policy";
+import type { ToolPreviewSetting } from "../../tools/policy";
 import { SETTING_ITEM_DEFINITIONS } from "./registry";
 import {
   formatToolOwner,
@@ -34,8 +34,7 @@ export function createToolPreviewSettingsSubmenu(
 ): Component {
   const selected = new Set(tools);
   const statuses = getCodePreviewToolStatuses();
-  const summary = () =>
-    formatToolsSettingValue(Arr.filter(ALL_CODE_PREVIEW_TOOLS, (tool) => selected.has(tool)));
+  const summary = () => enabledToolsSummary(selected, statuses, required);
   return createSettingsGroupSubmenu({
     title: ENABLED_TOOLS_LABEL,
     description: "Changes take effect after /reload.",
@@ -53,6 +52,30 @@ export function createToolPreviewSettingsSubmenu(
 }
 
 export const ENABLED_TOOLS_LABEL = "Enabled tools";
+
+/** Whether a tool's preview is in effect: owned elsewhere it's off, and needed by a setting it's on. */
+function toolPreviewInEffect(
+  tool: CodePreviewToolName,
+  enabledTools: ReadonlySet<CodePreviewToolName>,
+  statuses: ReadonlyMap<CodePreviewToolName, CodePreviewToolStatus>,
+  required: ReadonlyMap<CodePreviewToolName, ToolPreviewSetting>,
+): boolean {
+  if (statuses.get(tool)?.state === "skipped-conflict") return false;
+  return required.has(tool) || enabledTools.has(tool);
+}
+
+/** The `Enabled tools` value: how many tool previews are in effect, as the list shows them. */
+export function enabledToolsSummary(
+  enabledTools: ReadonlySet<CodePreviewToolName>,
+  statuses: ReadonlyMap<CodePreviewToolName, CodePreviewToolStatus>,
+  required: ReadonlyMap<CodePreviewToolName, ToolPreviewSetting>,
+): string {
+  const total = ALL_CODE_PREVIEW_TOOLS.length;
+  const count = Arr.filter(ALL_CODE_PREVIEW_TOOLS, (tool) =>
+    toolPreviewInEffect(tool, enabledTools, statuses, required),
+  ).length;
+  return count === 0 ? "none" : count === total ? "all" : `${count} of ${total}`;
+}
 
 function createToolToggleItems(
   enabledTools: ReadonlySet<CodePreviewToolName>,

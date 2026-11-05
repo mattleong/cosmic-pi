@@ -139,8 +139,8 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Sess
           notifyAtHostBoundary(
             ctx,
             ignored.length === 1 && ignored[0]
-              ? `Subagent ${displayName(ignored[0].name)} is waiting for a reply`
-              : `${ignored.length} subagents are waiting for replies`,
+              ? `Subagent ${displayName(ignored[0].name)} is waiting for reply`
+              : `${ignored.length} subagents are waiting for reply`,
             "warning",
           );
         }

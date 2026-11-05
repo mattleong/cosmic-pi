@@ -142,8 +142,9 @@ describe("session tool rows", () => {
     harness.call({ to: web.sessionId, message });
     harness.result(result(sendText(delivered), delivered));
     const woken = harness.render(100);
-    expect(woken).toContain("Can you rerun the web tests?");
-    expect(woken).toContain("The endpoint moved to /v2/items.");
+    // Each line of the message keeps its own row, wherever the body indents it.
+    expect(Arr.map(woken, Str.trim)).toContain("Can you rerun the web tests?");
+    expect(Arr.map(woken, Str.trim)).toContain("The endpoint moved to /v2/items.");
     expect(woken).not.toContain(web.sessionId);
 
     const held = { ...delivered, disposition: "held" } as const;

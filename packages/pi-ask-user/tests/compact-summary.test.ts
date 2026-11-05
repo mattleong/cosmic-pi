@@ -46,6 +46,9 @@ const live = (
   result?: SummaryInput["result"],
 ) => provider({ phase: "running", args, result, context: renderContextFixture({}) });
 
+/** The progress a live call reports about where its questions stand. */
+const progress = (questionnaire: string) => ({ content: [], details: { questionnaire } });
+
 const pairedAnswers = (label: string) => ({
   outcome: "submitted",
   answers: [
@@ -141,14 +144,41 @@ describe("questionnaire compact outcome projection", () => {
         ?.outcome,
     ).toBe("attention");
   });
-  it("waits on the user once a call's questions are shown, or while it awaits answers", () => {
+  it("waits on the user only once a call's questions are on screen", () => {
     const args = { questions: [{ key: "library", title: "Library", prompt: "Which?" }] };
-    const shown = { content: [], details: { questionnaire: "open" } };
     expect(live(askUserCompactSummary, args)?.waiting).toBeUndefined();
-    expect(live(askUserCompactSummary, args, shown)?.waiting).toBe(true);
+    expect(live(askUserCompactSummary, args, progress("open"))?.waiting).toBe(true);
     const awaiting = { action: "await", requestId: "request-1" };
-    expect(live(asyncAskUserCompactSummary, awaiting)?.waiting).toBe(true);
+    // An await reads the state its questionnaire reports, not the call's own wait.
+    expect(live(asyncAskUserCompactSummary, awaiting)?.waiting).toBeUndefined();
+    expect(live(asyncAskUserCompactSummary, awaiting, progress("open"))?.waiting).toBe(true);
+    const queued = live(asyncAskUserCompactSummary, awaiting, progress("queued"));
+    expect(queued?.waiting).toBeUndefined();
+    expect(queued?.queued).toBe(true);
+    const hidden = live(asyncAskUserCompactSummary, awaiting, progress("hidden"));
+    expect(hidden?.queued).toBeUndefined();
+    // A hidden questionnaire says, even collapsed, that the user can bring it back.
+    expect(hidden?.issues).toEqual([
+      expect.objectContaining({ severity: "attention", code: "questionnaire-hidden" }),
+    ]);
     expect(live(asyncAskUserCompactSummary, args)?.waiting).toBeUndefined();
+  });
+  it("tells the user how to resume hidden questionnaires in a status list", () => {
+    const pending = { status: "pending", outcome: undefined, delivery: "pending" } as const;
+    const hidden = row({ ...pending, presentation: "hidden" });
+    const queued = row({ ...pending, requestId: "request-2", presentation: "queued" });
+    const summary = summarize(
+      asyncAskUserCompactSummary,
+      { requests: [hidden, queued] },
+      { args: { action: "status" } },
+    );
+    expect(summary?.outcome).toBe("attention");
+    expect(Arr.map(summary?.issues ?? [], (issue) => [issue.severity, issue.code])).toEqual([
+      ["attention", "questionnaire-hidden"],
+      ["info", "questionnaire-queued"],
+    ]);
+    for (const issue of summary?.issues ?? [])
+      expect(issueMessageStyleProblems(issue.message)).toEqual([]);
   });
   it("names a control call's questions by their stored titles, falling back without them", () => {
     const args = { action: "await", requestId: "request-1" };

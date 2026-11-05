@@ -29,3 +29,13 @@ export const taskStatePresentation = (state: BackgroundTaskView["state"]) => ({
   color: managerActivityColor(STATE_KINDS[state]),
   label: taskStateLabel(state),
 });
+
+const EMPTY_TASK_LISTS = {
+  active: "no active tasks",
+  completed: "no completed tasks",
+  all: "no tasks",
+} as const;
+
+/** What an empty listing of `state` tasks says, in a heading and a body alike. */
+export const emptyTaskListLabel = (state: string | undefined): string =>
+  EMPTY_TASK_LISTS[state === "active" || state === "completed" ? state : "all"];

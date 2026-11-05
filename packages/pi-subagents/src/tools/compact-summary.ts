@@ -74,6 +74,21 @@ const TOOL_ACTIONS: Readonly<Record<SubagentToolName, string>> = {
   [SUBAGENT_TOOL_NAME.workspace]: "workspace",
 };
 
+/**
+ * What expanding a receipt reveals in both collapsed styles: a review's diff, or otherwise each
+ * run's full words and its `Details`. A clipped body already ends with its own affordance.
+ */
+const receiptExpandLabel = (summary: CompactSummary, operation: string): CompactSummary =>
+  summary.expandLabel === undefined
+    ? { ...summary, expandLabel: operation === "review" ? "diff" : "details" }
+    : summary;
+
+/** A launch not yet answered: its row shows each task's first line, and expansion all of it. */
+const pendingExpandLabel = (lanes: CompactSummary, input: SummaryArguments, action: string) =>
+  action === "start" && Arr.isArray(input.agents)
+    ? { ...lanes, expandLabel: input.agents.length === 1 ? "task" : "tasks" }
+    : lanes;
+
 export function createSubagentCompactSummary(toolName: SubagentToolName): CompactSummaryProvider {
   const action = TOOL_ACTIONS[toolName];
   return ({ phase, args, result, context }) => {
@@ -81,9 +96,14 @@ export function createSubagentCompactSummary(toolName: SubagentToolName): Compac
     const input: SummaryArguments = args;
     const operation = Predicate.isString(input.action) ? input.action : action;
     const lanes = argumentSummary(input, action, operation);
-    if (!result) return context.isError || phase === "settled" ? undefined : lanes;
-    if (action === "workspace" && !context.isError)
-      return compactWorkspaceSummary(result, operation);
+    if (!result)
+      return context.isError || phase === "settled"
+        ? undefined
+        : pendingExpandLabel(lanes, input, action);
+    if (action === "workspace" && !context.isError) {
+      const summary = compactWorkspaceSummary(result, operation);
+      return summary && receiptExpandLabel(summary, operation);
+    }
     const details =
       action === "workspace" ? undefined : decodeSubagentOutcomeDetails(operation, result);
     if (!details)
@@ -91,7 +111,8 @@ export function createSubagentCompactSummary(toolName: SubagentToolName): Compac
         ? rejectedCall(input, action, operation, lanes, result)
         : undefined;
     if (context.isError && !hasSubagentToolFailure(details)) return undefined;
-    return summarizeReceipt(details, input, phase, lanes);
+    const summary = summarizeReceipt(details, input, phase, lanes);
+    return summary && receiptExpandLabel(summary, operation);
   };
 }
 
@@ -329,7 +350,7 @@ function summarizeModels(
   // One requested profile reads as the model its launch would take.
   const counters = [
     only && details.profiles.length === 1
-      ? profileRow(only).route
+      ? profileRow(only, details).route
       : countLabel(details.profiles.length, "profile"),
   ];
   if (disabled) counters.push(`${disabled} disabled`);

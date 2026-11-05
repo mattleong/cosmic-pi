@@ -16,6 +16,7 @@ import { renderNativeCodemodeProgram } from "./native-codemode-source";
 import { escapeControlChars } from "../shared/terminal-text";
 import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
 import type { CompactSummary } from "./compact-summary";
+import { previewBodiesShowContent } from "../preview/expand-affordance";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText, getTextContent } from "./data/results";
 import type {
@@ -330,7 +331,7 @@ export function createNativeCodemodeRenderers(
     },
     {
       ...appearance,
-      compactSummary: summary,
+      compactSummary: previewBodiesShowContent(summary, previewStyle ? "preview" : "compact"),
       animateProgress: true,
       showShortTiming: true,
       expandedContent: {

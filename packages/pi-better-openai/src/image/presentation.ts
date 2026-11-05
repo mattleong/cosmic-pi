@@ -17,6 +17,7 @@ import {
   expandedFields,
   expandedText,
   getTextContent,
+  middleElide,
   previewIssuesSlot,
   type ExpandedField,
 } from "pi-code-previews";
@@ -27,7 +28,6 @@ import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
-  renderExpansionAffordance,
   renderToolHeader,
   toolRunningLine,
   toolStatusLine,
@@ -192,17 +192,39 @@ const imageFormat = (record: CodexImageDetails, view: ImageView): string =>
 const savedPath = (record: CodexImageDetails, view: ImageView): string =>
   record.savedPath ? compactPlainText(formatDisplayPath(record.savedPath, view.cwd)) : "";
 
+const SAVED_TO = "Saved to";
+
+/**
+ * Collapsed, the saved file stays on one line: its path when that fits, otherwise its file name,
+ * shortened in the middle if even that is too wide. Expanded Details shows the whole path.
+ */
+const fittedSavedPath = (saved: string, room: number): string => {
+  if (visibleWidth(saved) <= room) return saved;
+  const name = Option.getOrElse(Arr.last(Str.split(saved, "/")), () => saved);
+  return middleElide(name || saved, room);
+};
+
 /** A collapsed preview's facts: one muted summary line and where the image was saved. */
 const collapsedFacts = (record: CodexImageDetails, view: ImageView, theme: Theme): Component[] => {
   const summary = Arr.filter(
     [imageFormat(record, view), imageModels(record, false)],
     Str.isNonEmpty,
   );
-  const saved = savedPath(record, view);
+  const saved = sanitizeTerminalLine(savedPath(record, view));
   return [
     new Text(theme.fg("muted", sanitizeTerminalLine(Arr.join(summary, " · "))), 0, 0),
     ...(saved
-      ? [new Text(`${theme.fg("muted", "Saved to")} ${theme.fg("toolOutput", saved)}`, 0, 0)]
+      ? [
+          composeToolComponent((width) => [
+            clipToWidth(
+              `${theme.fg("muted", SAVED_TO)} ${theme.fg(
+                "toolOutput",
+                fittedSavedPath(saved, Math.max(1, width - visibleWidth(SAVED_TO) - 1)),
+              )}`,
+              width,
+            ),
+          ]),
+        ]
       : []),
   ];
 };
@@ -219,7 +241,7 @@ const technicalDetails = (record: CodexImageDetails, view: ImageView, theme: The
   const saved = savedPath(record, view);
   return expandedDetails(theme, [
     sanitizeTerminalLine(imageModels(record, true)),
-    saved ? `Saved to ${sanitizeTerminalLine(saved)}` : "",
+    saved ? `${SAVED_TO} ${sanitizeTerminalLine(saved)}` : "",
   ]);
 };
 
@@ -247,8 +269,12 @@ const expandedExtras = (
       : undefined,
   );
 
-const hasHiddenDetails = (record: CodexImageDetails | undefined, raw: string, error: boolean) =>
-  Boolean(record?.revisedPrompt) || (raw !== "" && !restatesIssue(raw, error));
+/**
+ * Whether expanding a delivered image's message reveals more than its collapsed frame: the prompt
+ * and the image's facts whenever there is a record, or the result's own text.
+ */
+export const imageMessageRevealsMore = (view: ImageView): boolean =>
+  view.record !== undefined || rawText(view) !== "";
 
 export function renderImageBody(
   view: ImageView,
@@ -271,9 +297,8 @@ export function renderImageBody(
     );
   const container = new Container();
   if (cancelled) container.addChild(cancelled);
+  // The shell draws the expansion affordance the row or message declares.
   if (record) for (const fact of collapsedFacts(record, view, theme)) container.addChild(fact);
-  if (hasHiddenDetails(record, raw, error))
-    container.addChild(new Text(renderExpansionAffordance("details", false, theme), 0, 0));
   return container;
 }
 

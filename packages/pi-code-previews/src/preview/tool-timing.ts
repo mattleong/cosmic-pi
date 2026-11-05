@@ -8,6 +8,7 @@ import * as Arr from "effect/Array";
 import { captureCodePreviewSessionCapability } from "../application/capability";
 import type { CompactAnimationScheduler } from "../tools/compact-summary";
 import { codePreviewSettings } from "../config/state";
+import { isAffordanceRow } from "./affordance-row";
 import { clipToWidth, SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 
 type ToolTimingUpdateContext = {
@@ -70,14 +71,19 @@ export function renderTimedResultFooter<TContext extends ToolTimingRenderContext
   theme: Theme,
   render: (context: TContext) => Component,
   timingLabel: string | undefined,
+  closing?: (rows: readonly string[], width: number) => readonly string[],
 ): Component {
   const handles = timingState(context)?.handles;
   const resultComponent = render(
     withLastComponent(context, handles?.resultComponent ?? context.lastComponent),
   );
   if (handles) handles.resultComponent = resultComponent;
-  if (!timingLabel) return resultComponent;
-  return new ToolTimingFooter(resultComponent, theme.fg("muted", timingLabel));
+  if (!timingLabel && !closing) return resultComponent;
+  return new ToolTimingFooter(
+    resultComponent,
+    timingLabel ? theme.fg("muted", timingLabel) : undefined,
+    closing,
+  );
 }
 
 type ToolCallTimingOptions = {
@@ -250,20 +256,41 @@ function clearToolCallTimingInterval(state: TimingState): void {
   state.handles.cancel = undefined;
 }
 
+/**
+ * A collapsed result body followed by its timing and then whatever closes the row, such as the
+ * shell's expansion affordance. An affordance the body ends with moves below the timing, so an
+ * affordance always closes the row.
+ */
 class ToolTimingFooter implements Component {
   private readonly component: Component;
-  private readonly footer: string;
+  private readonly footer: string | undefined;
+  private readonly closing:
+    | ((rows: readonly string[], width: number) => readonly string[])
+    | undefined;
   private bounds: { width: number; height: number } | undefined;
 
-  constructor(component: Component, footer: string) {
+  constructor(
+    component: Component,
+    footer: string | undefined,
+    closing: ((rows: readonly string[], width: number) => readonly string[]) | undefined,
+  ) {
     this.component = component;
     this.footer = footer;
+    this.closing = closing;
   }
 
   render(width: number): string[] {
     const rows = this.component.render(width);
-    this.bounds = { width, height: rows.length };
-    return [...rows, clipToWidth(this.footer, width, "")];
+    const last = rows.length - 1;
+    const trailing = this.footer !== undefined && last >= 0 && isAffordanceRow(rows[last] ?? "");
+    const body = trailing ? rows.slice(0, last) : rows;
+    this.bounds = { width, height: body.length };
+    return [
+      ...body,
+      ...(this.footer === undefined ? [] : [clipToWidth(this.footer, width, "")]),
+      ...(trailing ? rows.slice(last) : []),
+      ...(this.closing?.(rows, width) ?? []),
+    ];
   }
 
   handleMouse(event: TuiMouseEvent) {

@@ -3,14 +3,12 @@ import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Box, Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
-import * as Rec from "effect/Record";
-import * as Str from "effect/String";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 import { fallbackArguments } from "../tools/data/args";
-import { hostObject, hostValue, type HostObject } from "../shared/untrusted-value";
+import { hostObject, hostValue } from "../shared/untrusted-value";
 import { getFallbackResultText } from "../tools/data/results";
 import {
   compactStatus,
@@ -31,6 +29,7 @@ import { renderCompactIssues } from "./compact-issues";
 import { layoutCompactRow } from "./compact-row";
 import { recordHeadingSubject } from "./heading-coverage";
 import { renderCompactToolCall } from "./compact-tool-call";
+import { compactExpandLabel } from "./expand-affordance";
 import { planCompactPresentation } from "../tools/compact-presentation";
 import { compactPhase, compactPresentationInput } from "./preview-issues";
 import { resultStandIn, rowPerState, statusBackground } from "./self-background";
@@ -183,6 +182,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
           animationFrame: frame,
           expandLabel: compactExpandLabel(
             plan.collapsedSummary,
+            plan.phase,
             result,
             hostObject(this.context.args),
           ),
@@ -346,28 +346,6 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
     this.forget();
     this.slots.invalidate();
   }
-}
-
-/**
- * What expanding a collapsed row reveals that it doesn't show: the result's content, issues kept for
- * expansion, or, before a result, the call's arguments. Undefined when expansion adds nothing.
- */
-const visiblePart = (part: AgentToolResult<unknown>["content"][number]) =>
-  part.type === "image" || Str.isNonEmpty(Str.trim(part.text));
-
-function compactExpandLabel(
-  summary: CompactSummary,
-  result: AgentToolResult<unknown> | undefined,
-  input: HostObject | undefined,
-): string | undefined {
-  if (summary.expandLabel === false) return undefined;
-  if (result && Arr.some(result.content, visiblePart)) return summary.expandLabel ?? "output";
-  const detailed = Arr.some(
-    summary.issues ?? [],
-    (issue) => issue.severity === "info" || issue.detail !== undefined,
-  );
-  const pendingInput = result === undefined && input !== undefined && Rec.keys(input).length > 0;
-  return detailed || pendingInput ? (summary.expandLabel ?? "details") : undefined;
 }
 
 export function createCompactToolShell<TArgs, TDetails, TState extends object>(

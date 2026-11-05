@@ -156,11 +156,8 @@ export function askUserWithDependencies(
         pi,
         (request, signal, shown) =>
           runCurrent(
-            askAtQuestionnaireBoundary(
-              pi.events,
-              sessionId,
-              request,
-              Effect.sync(() => invokeHostCallback(shown, undefined)),
+            askAtQuestionnaireBoundary(pi.events, sessionId, request, () =>
+              invokeHostCallback(shown, undefined),
             ),
             signal,
           ),
@@ -177,9 +174,13 @@ export function askUserWithDependencies(
                   AskUserService.use((service) => service.startAsync(request)),
                   signal,
                 ),
-          (control, signal) =>
+          (control, signal, observe) =>
             runCurrent(
-              AskUserService.use((service) => service.controlAsync(control)),
+              AskUserService.use((service) =>
+                service.controlAsync(control, (presence) =>
+                  Effect.sync(() => invokeHostCallback(() => observe(presence), undefined)),
+                ),
+              ),
               signal,
             ),
           scheduleAnimation,
@@ -201,9 +202,9 @@ export function askUserWithDependencies(
   });
 
   pi.registerCommand("ask-user", {
-    description: "Resume the active hidden questionnaire",
+    description: "Resume a hidden questionnaire",
     handler: (_args, ctx) => {
-      if (!bridge.resume()) notifyAtHostBoundary(ctx, "No hidden questionnaire is active.", "info");
+      if (!bridge.resume()) notifyAtHostBoundary(ctx, "No hidden questionnaire to resume", "info");
       return Promise.resolve();
     },
   });

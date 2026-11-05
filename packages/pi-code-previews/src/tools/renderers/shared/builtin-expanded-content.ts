@@ -1,6 +1,8 @@
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Rec from "effect/Record";
+import { receivedArguments } from "../../argument-failure";
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import type { BuiltinCompactTool } from "../../builtin-subject";
@@ -34,6 +36,7 @@ import { createSimpleDiff } from "../../../diff/structured";
 import { summarizeDiff } from "../../../diff/summary";
 import { formatDiffPreview } from "./diff-preview";
 import { expandedSection } from "../../../preview/expanded-section";
+import { expandedFields, type ExpandedField } from "../../../preview/expanded-body";
 import { headingShowedSubject } from "../../../preview/heading-coverage";
 import { normalizeShellCommandWhitespace } from "../../shell-command";
 import { argumentsStreaming, pathPreviewLanguage, renderContentPreview } from "./preview-text";
@@ -56,15 +59,8 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       const operations = tool === "edit" ? getEditOperations(input) : [];
       const completeEdits =
         tool === "edit" && operations.length === editOperationInputs(input).length;
-      const options = builtinOptionLabels(tool, hostValue(args), completeEdits);
-      if (options.length)
-        container.addChild(
-          expandedSection(
-            theme,
-            undefined,
-            new Text(theme.fg("muted", Arr.join(options, " · ")), 0, 0),
-          ),
-        );
+      const options = builtinOptionFields(tool, hostValue(args), completeEdits);
+      if (options.length) container.addChild(optionFields(theme, options, context.state));
       const command = ownField(input, "command");
       if (tool === "bash" && Predicate.isString(command))
         container.addChild(
@@ -110,6 +106,16 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       if (tool === "edit") context.state[CALL_SHOWN_BY_RESULT] = editDiffShown(result, context);
       if (context.isError) {
         const text = getTextContent(result.content);
+        // The issue and its detail state Pi's rejection; only arguments the call doesn't show remain.
+        const received = receivedArguments(text);
+        if (received !== undefined)
+          return received && !hasArguments(hostObject(context.args))
+            ? expandedSection(
+                theme,
+                "Received arguments",
+                new Text(theme.fg("error", escapeControlChars(received)), 0, 0),
+              )
+            : new Container();
         // The issue already states a shell's exit status, as the preview style does.
         const shown =
           tool === "bash"
@@ -299,11 +305,54 @@ function headingShowsExactly(value: string): boolean {
   );
 }
 
-function builtinOptionLabels(
+const hasArguments = (input: HostObject | undefined): boolean =>
+  input !== undefined && Rec.keys(input).length > 0;
+
+/** An argument's name as a field label: `file_path` and `ignoreCase` read `File path`, `Ignore case`. */
+function fieldLabel(key: string): string {
+  const words = Str.toLowerCase(
+    Str.trim(Str.replace(/[_\s]+/gu, " ")(Str.replace(/(?<=\p{Ll})(?=\p{Lu})/gu, " ")(key))),
+  );
+  return `${Str.toUpperCase(Str.slice(0, 1)(words))}${Str.slice(1)(words)}`;
+}
+
+interface OptionField extends ExpandedField {
+  /** The call's target, which a heading that shows its whole subject already states. */
+  readonly target: boolean;
+}
+
+/** Labeled argument fields, without the target once the heading has shown the whole subject. */
+function optionFields(
+  theme: Theme,
+  fields: readonly OptionField[],
+  state: RendererState,
+): Component {
+  let drawn: { readonly targets: boolean; readonly body: Component } | undefined;
+  return {
+    render(width) {
+      const targets = !headingShowedSubject(state);
+      if (drawn?.targets !== targets)
+        drawn = {
+          targets,
+          body: expandedFields(
+            theme,
+            Arr.filter(fields, (field) => targets || !field.target),
+          ),
+        };
+      return drawn.body.render(width);
+    },
+    invalidate: () => {
+      drawn = undefined;
+    },
+  };
+}
+
+/** Arguments the heading and bodies don't show, as labeled fields. */
+function builtinOptionFields(
   tool: BuiltinCompactTool,
   args: HostValue | undefined,
   completeEdits: boolean,
-): string[] {
+): OptionField[] {
   const shown = new Set<string>();
   if (tool === "bash") shown.add("command");
   if (tool === "write") shown.add("content");
@@ -315,15 +364,17 @@ function builtinOptionLabels(
     ...(tool === "grep" || tool === "find" ? ["pattern"] : []),
   ]);
   // @effect-diagnostics-next-line preferEffectRecord:off -- args is an untyped host value that need not be a record.
-  return Arr.flatMap(Object.entries(args ?? {}), ([key, value]) => {
+  return Arr.flatMap(Object.entries(args ?? {}), ([key, value]): OptionField[] => {
     if (shown.has(key) || value === undefined || value === false || value === null) return [];
-    if (target.has(key) && Predicate.isString(value) && headingShowsExactly(value)) return [];
-    if (value === true) return [key];
+    const isTarget = target.has(key) && Predicate.isString(value);
+    if (isTarget && headingShowsExactly(value)) return [];
     const text =
-      Predicate.isNumber(value) || (Predicate.isString(value) && headingShowsExactly(value))
-        ? String(value)
-        : (JSON.stringify(value) ?? "");
-    return [`${key} ${escapeControlChars(text)}`];
+      value === true
+        ? "yes"
+        : Predicate.isString(value) || Predicate.isNumber(value)
+          ? String(value)
+          : (JSON.stringify(value) ?? "");
+    return [{ label: fieldLabel(key), lines: [text], target: isTarget }];
   });
 }
 

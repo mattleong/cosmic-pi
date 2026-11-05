@@ -11,10 +11,13 @@ type Tone = Parameters<Theme["fg"]>[0];
 
 export interface ActivityStatusPart {
   readonly text: string;
+  /** Higher numbers give way first when the status column is cramped. */
   readonly drop?: number;
   readonly clip?: number;
+  /** Shown before `text` only when another part precedes it, such as `· ` before an elapsed time. */
+  readonly lead?: string;
 }
-export const STATUS_DROP = { state: 1, progress: 2, elapsed: 3 } as const;
+export const STATUS_DROP = { state: 1, progress: 2, elapsed: 3, waitWord: 4 } as const;
 
 // A title keeps at least this many columns, ellipsis included, before an identity moves below it.
 const TITLE_FLOOR = 12;
@@ -92,7 +95,7 @@ const fitStatus = (
   const kept = Arr.filter(parts, (part) => part.text.length > 0);
   const text = () =>
     Arr.join(
-      Arr.map(kept, (part) => part.text),
+      Arr.map(kept, (part, index) => (index === 0 ? part.text : `${part.lead ?? ""}${part.text}`)),
       separator,
     );
   while (visibleWidth(text()) > budget) {
@@ -101,7 +104,7 @@ const fitStatus = (
     const { index, part } = found;
     const room = budget - (visibleWidth(text()) - visibleWidth(part.text));
     if (part.clip !== undefined && room >= part.clip) {
-      kept[index] = { text: clipToWidth(part.text, room, "…") };
+      kept[index] = { ...part, text: clipToWidth(part.text, room, "…") };
       break;
     }
     kept.splice(index, 1);

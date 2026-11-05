@@ -184,6 +184,7 @@ interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
   readonly current: ProfileId;
   readonly initialQuery?: string | undefined;
   readonly target: ProfileWorkspaceTarget;
+  readonly parentModel?: string | undefined;
   readonly select: (profile: ProfileId) => void;
   readonly cancel: () => void;
 }
@@ -197,7 +198,12 @@ export const profileSearchSelector = (
     title: "Search profiles",
     subtitle: targetLabel(options.target),
     choices: Arr.map(PROFILE_IDS, (profile) => {
-      const summary = targetProfilePrimarySummary(options.inspection, options.target, profile);
+      const summary = targetProfilePrimarySummary(
+        options.inspection,
+        options.target,
+        profile,
+        options.parentModel,
+      );
       return selectChoice(
         profile,
         `${profile}${profile === "generalist" ? " · used when no profile is chosen" : ""}`,

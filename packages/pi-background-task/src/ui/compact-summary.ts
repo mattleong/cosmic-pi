@@ -28,7 +28,7 @@ import { BACKGROUND_TASK_STATES, BackgroundTaskDetailsSchema } from "../task/sch
 import type { BackgroundTaskFailureDetails, BackgroundTaskToolDetails } from "../tools/command.ts";
 import type { BackgroundTaskToolInput } from "../tools/schema.ts";
 import { decodeBackgroundTaskFailure, failureIssue } from "./result-facts.ts";
-import { taskDisplayName, taskStateLabel } from "./task-state.ts";
+import { emptyTaskListLabel, taskDisplayName, taskStateLabel } from "./task-state.ts";
 
 export const decodeBackgroundTaskDetails = Schema.decodeUnknownOption(BackgroundTaskDetailsSchema);
 
@@ -417,9 +417,20 @@ const LISTED_PROBLEMS: ReadonlyArray<CompactOutcome> = ["error", "warning", "unc
 
 function aggregateSummary(
   details: DetailsFor<"list" | "stop_all">,
+  args: Partial<BackgroundTaskToolInput>,
   action: string,
   subject: string,
 ): CompactSummary {
+  // An empty listing says so in its heading, as its body does, and expanding adds nothing.
+  if (details.tasks.length === 0)
+    return {
+      action,
+      subject,
+      counters: [emptyTaskListLabel(details.action === "stop_all" ? "active" : args.state)],
+      issues: [],
+      outcome: "returned",
+      expandLabel: false,
+    };
   const tasks = Arr.map(details.tasks, taskSummary);
   const labels = taskLabels(details.tasks);
   // Labels are already sanitized display names; tidying the composed text would strip a task
@@ -598,8 +609,32 @@ export const projectBackgroundTaskCompactSummary = ({
   if (isError) return failureSummary(decodeBackgroundTaskFailure(result?.details), action, subject);
   const decoded = decodeBackgroundTaskDetails(result?.details);
   if (Option.isNone(decoded) || decoded.value.action !== args.action) return undefined;
-  return settledSummary(decoded.value, args, action, subject);
+  const summary = settledSummary(decoded.value, args, action, subject);
+  return summary && { expandLabel: settledExpandLabel(decoded.value), ...summary };
 };
+
+/**
+ * What expanding a settled row reveals that its heading and collapsed body don't: a task's command
+ * and identity, its output, or every listed task. A summary may set its own label first.
+ */
+function settledExpandLabel(details: DecodedTaskDetails): string | false {
+  switch (details.action) {
+    case "start":
+    case "status":
+    case "stop":
+      return "details";
+    case "wait":
+      return details.wait.tail ? "output" : "details";
+    case "logs":
+      return "output";
+    case "list":
+    case "stop_all":
+      return "tasks";
+    case "clear":
+      return false;
+  }
+  return false;
+}
 
 // An expected failure names itself; any other error leaves the shell to show the host's text.
 function failureSummary(
@@ -616,6 +651,8 @@ function failureSummary(
         subject,
         outcome: reported.severity === "error" ? "error" : "uncertain",
         issues: [reported],
+        // The request's arguments and the failure's facts.
+        expandLabel: "details",
       };
     },
   });
@@ -644,7 +681,7 @@ function settledSummary(
       };
     case "list":
     case "stop_all":
-      return aggregateSummary(details, action, subject);
+      return aggregateSummary(details, args, action, subject);
     case "wait":
       return waitSummary(details, args, action);
     case "logs":

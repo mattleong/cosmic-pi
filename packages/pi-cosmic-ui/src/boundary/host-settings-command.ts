@@ -83,6 +83,8 @@ export interface SettingsCommandOptions<Config> {
   readonly descriptors: ReadonlyArray<
     Pick<SettingsOptionDescriptor<Config>, "id" | "description" | "values" | "currentValue"> & {
       readonly openValues?: boolean | undefined;
+      /** The row's human name, used when confirming a change; falls back to the id. */
+      readonly label?: string | undefined;
     }
   >;
   readonly examples: ReadonlyArray<string>;
@@ -272,7 +274,7 @@ export function settingsSubcommand<Config>(
             else
               notify(
                 ctx,
-                `${scopes.length > 0 && scope ? `${scope} ` : ""}${id} = ${current}`,
+                `${scopes.length > 0 && scope ? `${Str.capitalize(scope)} · ` : ""}${descriptor?.label ?? id}: ${current}`,
                 "info",
               );
             if (isCurrent())

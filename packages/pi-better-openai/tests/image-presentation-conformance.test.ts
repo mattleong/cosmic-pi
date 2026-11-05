@@ -12,6 +12,7 @@ import {
 import { Image } from "@earendil-works/pi-tui";
 import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
+import { presentImageMessage } from "../src/image/message.ts";
 import { pngPart as image, registerImagePresentation, textPart as text } from "./image-fixtures.ts";
 
 const styles = ["compact", "preview"] as const;
@@ -117,6 +118,30 @@ describe("registered image presentation", () => {
         if (expanded) expect(shown).toContain("PROMPT_END");
       }
       expect(message).toEqual(before);
+    },
+  );
+
+  it.each(styles)(
+    "offers expansion on a collapsed %s image message only when it adds facts",
+    (style) => {
+      const present = presentImageMessage(() => "/project");
+      const shown = (content: ReturnType<typeof text>[], withDetails: boolean) =>
+        present(
+          {
+            role: "custom",
+            customType: "openai-image",
+            content,
+            display: true,
+            details: withDetails ? details : undefined,
+            timestamp: 0,
+          },
+          { ...keybindingHintsFixture, expanded: false, outputPad: 1, collapsedStyle: style },
+          theme,
+        );
+      expect(shown([text("Model-facing image text")], true).expandLabel).toEqual(
+        expect.any(String),
+      );
+      expect(shown([], false).expandLabel).toBeUndefined();
     },
   );
 });

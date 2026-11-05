@@ -127,7 +127,7 @@ const savedSetMenuPage = (
 ): SearchableSelectPage<ProfileSetPickerAction> =>
   new SearchableSelectPage({
     ...host,
-    breadcrumb: "/subagents profiles › Profile sets › More",
+    breadcrumb: "Saved profiles › More",
     title:
       entry.kind === "set"
         ? qualifiedProfileSetLabel(entry.ref)

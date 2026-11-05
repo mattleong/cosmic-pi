@@ -24,12 +24,14 @@ import {
 import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
 import { compactPlainText } from "../preview/compact-row";
 import { expandedSection } from "../preview/expanded-section";
+import { repeatsIssueMessage } from "../preview/compact-issues";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
-import { hostContainer, type HostContainer } from "../shared/untrusted-value";
+import { hostContainer, hostObject, type HostContainer } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import { getFallbackResultText } from "./data/results";
+import { receivedArguments } from "./argument-failure";
 import type {
   RenderCall,
   RendererState,
@@ -41,6 +43,7 @@ import {
   nativeMcpEvidence,
   nativeMcpHasRecoverableClipping,
   nativeMcpProgress,
+  nativeMcpErrorIssue,
   nativeMcpReceipt,
   nativeMcpSummary,
   type NativeMcpEvidence,
@@ -89,8 +92,14 @@ function renderOutput(
   _options: ToolRenderResultOptions,
   theme: Theme,
   context: Context,
+  issue?: string,
 ): Component {
-  const raw = getFallbackResultText(result.content, context.showImages);
+  const text = getFallbackResultText(result.content, context.showImages);
+  // Pi's argument rejection is stated by the issue; only arguments the call doesn't show remain.
+  const received = issue === undefined ? undefined : receivedArguments(text);
+  const shownArguments = Rec.keys(hostObject(context.args) ?? {}).length > 0;
+  const raw =
+    received === undefined ? withoutRestatedIssue(text, issue) : shownArguments ? "" : received;
   const path = nativeMcpEvidence(hostContainer(result.details))?.fullOutputPath;
   const saved =
     path && !Fn.pipe(raw, Str.includes(path)) ? sanitizeDiagnosticContent(path) : undefined;
@@ -104,7 +113,13 @@ function renderOutput(
         body.addChild(
           expandedSection(
             theme,
-            context.isPartial ? "Progress" : context.isError ? "Error" : "Output",
+            received !== undefined
+              ? "Received arguments"
+              : context.isPartial
+                ? "Progress"
+                : context.isError
+                  ? "Error"
+                  : "Output",
             textBlock(theme, raw, context.isError ? "error" : "toolOutput"),
           ),
         );
@@ -112,6 +127,13 @@ function renderOutput(
     },
     Arr.join(Arr.filter([recovery, raw], Str.isNonEmpty), "\n"),
   );
+}
+
+/** Error text without a first line that only restates the issue shown above it. */
+function withoutRestatedIssue(text: string, issue: string | undefined): string {
+  if (issue === undefined) return text;
+  const [first, ...rest] = Str.split(Str.trimStart(text), "\n");
+  return repeatsIssueMessage(first, [{ message: issue }]) ? Str.trim(Arr.join(rest, "\n")) : text;
 }
 
 function renderProgress(
@@ -254,7 +276,9 @@ export function createNativeMcpRenderers(
     context,
   ) => {
     recordReceipt(result, context);
-    return renderOutput(result, options, theme, context);
+    // The expanded row shows the failure's issue above its error text.
+    const issue = context.isError ? nativeMcpErrorIssue(identity, result).message : undefined;
+    return renderOutput(result, options, theme, context, issue);
   };
   const renderResult: RenderResult<unknown, unknown, RendererState> = (
     result,

@@ -317,3 +317,81 @@ it.effect("caller cancellation reaches a relayed questionnaire", () =>
     off();
   }),
 );
+
+const keyed = (key: string) => ({ questions: [{ ...request.questions[0]!, key }] });
+
+it.effect("an owned questionnaire reports shown once it opens, not while it is queued", () =>
+  Effect.gen(function* () {
+    const bus = createEventBus();
+    const firstOpen = yield* Deferred.make<void>();
+    const firstAnswer = yield* Deferred.make<AskUserOutcome>();
+    const runtime = ManagedRuntime.make(
+      AskUserService.layer((input) =>
+        input.questions[0]!.key === "first"
+          ? Deferred.succeed(firstOpen, undefined).pipe(Effect.andThen(Deferred.await(firstAnswer)))
+          : Effect.succeed(answer),
+      ),
+    );
+    const dispose = registerQuestionnaireCapability({
+      events: bus,
+      sessionId: "root",
+      generation: "one",
+      isCurrent: () => true,
+      run: (effect, signal) => runtime.runPromise(effect, { signal }),
+    });
+    const capability = queryQuestionnaireCapability(bus, "root")!;
+    const shown: string[] = [];
+    const signal = yield* Effect.abortSignal;
+    const first = Promise.resolve<unknown>(
+      capability.ask(keyed("first"), { ...owner, requestId: "first" }, signal, () =>
+        shown.push("first"),
+      ),
+    );
+    const second = Promise.resolve<unknown>(
+      capability.ask(keyed("second"), { ...owner, requestId: "second" }, signal, () => {
+        shown.push("second");
+        // A throwing callback can't fail the questionnaire.
+        throw new Error("hostile callback");
+      }),
+    );
+    yield* Deferred.await(firstOpen);
+    expect(shown).toEqual(["first"]);
+    yield* Deferred.succeed(firstAnswer, answer);
+    expect(yield* Effect.promise(() => Promise.all([first, second]))).toEqual([answer, answer]);
+    expect(shown).toEqual(["first", "second"]);
+    dispose();
+    yield* Effect.promise(() => runtime.dispose());
+  }),
+);
+
+it.effect("a relayed questionnaire reports shown once, when the root says it opened", () =>
+  Effect.gen(function* () {
+    const bus = createEventBus();
+    const reply = deferredPromise<AskUserOutcome>();
+    let report: (() => void) | undefined;
+    const off = attachRelay(bus, {
+      version: 1,
+      sessionId: "child",
+      ask: (_input, _signal, shown) => {
+        report = shown;
+        return reply.promise;
+      },
+    });
+    let shown = 0;
+    const asking = yield* Effect.forkChild(
+      askAtQuestionnaireBoundary(bus, "child", request, () => {
+        shown++;
+      }).pipe(Effect.provide(AskUserService.layer(() => Effect.succeed(answer)))),
+      { startImmediately: true },
+    );
+    expect(shown).toBe(0);
+    report?.();
+    report?.();
+    expect(shown).toBe(1);
+    reply.resolve(answer);
+    expect(yield* Fiber.join(asking)).toEqual(answer);
+    report?.();
+    expect(shown).toBe(1);
+    off();
+  }),
+);

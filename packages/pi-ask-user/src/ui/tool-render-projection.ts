@@ -7,7 +7,7 @@ import { countLabel } from "pi-cosmic-core/display";
 import { joinInline } from "pi-cosmic-ui/manager";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
+import { MAX_RETAINED_REQUESTS, type PendingPresentation } from "../questionnaire/async-model.ts";
 import {
   MAX_CHOICES,
   MAX_KEY_LENGTH,
@@ -42,11 +42,24 @@ export const answerOutcome = Schema.Union([
 ]);
 export type ReplayedOutcome = typeof answerOutcome.Type;
 
-/** The progress a blocking questionnaire reports once its questions are on screen. */
-export const QUESTIONS_SHOWN = { questionnaire: "open" } as const;
-const QuestionsShownSchema = Schema.Struct({ questionnaire: Schema.Literal("open") });
-export type QuestionsShown = typeof QuestionsShownSchema.Type;
-export const questionsShown = Schema.is(QuestionsShownSchema);
+/**
+ * The progress a live call reports about its questions: on screen, hidden, or queued behind
+ * others. A blocking questionnaire reports only that it opened.
+ */
+const PresentationProgressSchema = Schema.Struct({
+  questionnaire: Schema.Literals(["open", "hidden", "queued"]),
+});
+export type PresentationProgress = typeof PresentationProgressSchema.Type;
+export const presentationProgress = (presentation: PendingPresentation): PresentationProgress => ({
+  questionnaire: presentation,
+});
+export const QUESTIONS_SHOWN = presentationProgress("open");
+const decodePresentationProgress = decodeUnknownOrUndefined(PresentationProgressSchema);
+/** The presentation a live call's progress `details` report, if any. */
+export const decodePresentation = Fn.flow(
+  decodePresentationProgress,
+  (progress): PendingPresentation | undefined => progress?.questionnaire,
+);
 export type ReplayedAnswer = Extract<ReplayedOutcome, { outcome: "submitted" }>["answers"][number];
 export const decodeOutcome = decodeUnknownOrUndefined(answerOutcome);
 
@@ -239,17 +252,26 @@ export const contentText = Fn.flow(replayContent, (decoded) =>
   Predicate.isString(decoded) ? stripTerminalControls(decoded) : partsText(decoded),
 );
 
-export type QuestionnaireState = "waiting" | "queued" | "answered" | "cancelled" | "failed";
+/** `waiting` is on screen; `hidden` is open but hidden until the user resumes it. */
+export type QuestionnaireState =
+  | "waiting"
+  | "hidden"
+  | "queued"
+  | "answered"
+  | "cancelled"
+  | "failed";
 
-/** Waiting and queued questionnaires still need the user's answers. */
+/** Waiting, hidden, and queued questionnaires still need the user's answers. */
 export const isPendingState = (state: QuestionnaireState): boolean =>
-  state === "waiting" || state === "queued";
+  state === "waiting" || state === "hidden" || state === "queued";
 
 type StateRow = Pick<ReplayedSnapshot, "status" | "delivery" | "presentation" | "outcome">;
 
 function pendingState(row: StateRow): QuestionnaireState | undefined {
   if (row.outcome || row.delivery !== "pending" || row.presentation === "settled") return undefined;
-  return row.presentation === "queued" ? "queued" : "waiting";
+  return row.presentation === "queued" || row.presentation === "hidden"
+    ? row.presentation
+    : "waiting";
 }
 
 function finishedState(
@@ -278,6 +300,7 @@ export function questionnaireState(row: StateRow): QuestionnaireState | undefine
 const STATE_WORDS = {
   waiting: (count) =>
     count === 1 ? ["needs your input", "needs input"] : ["need your input", "need input"],
+  hidden: () => ["hidden", "hidden"],
   queued: () => ["queued", "queued"],
   answered: () => ["answered", "answered"],
   cancelled: () => ["cancelled", "cancelled"],
@@ -288,6 +311,7 @@ const STATE_WORDS = {
 const STATE_ORDER: readonly QuestionnaireState[] = [
   "failed",
   "waiting",
+  "hidden",
   "queued",
   "answered",
   "cancelled",

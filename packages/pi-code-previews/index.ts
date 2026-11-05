@@ -58,6 +58,7 @@ export {
 
 export { selectCompactChildren, renderCompactChildren } from "./src/preview/compact-children";
 export { compactPlainText, renderCompactRow } from "./src/preview/compact-row";
+export { middleElide } from "./src/preview/compact-header";
 export { expandedArguments, expandedSection } from "./src/preview/expanded-section";
 export {
   expandedAuthoredText,

@@ -25,14 +25,51 @@ type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: 
 type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;
 type AgentRouteCard = NonNullable<ModelsToolDetails["agents"]>[number];
 
-/** A candidate's model and effort; one that runs on the parent's model reads `inherit`. */
-const candidateRoute = (candidate: SubagentProfileCandidateCard): string =>
-  candidate.model === "parent"
-    ? `inherit${candidate.effort === "default" ? "" : ` (${sanitizeTerminalLine(candidate.effort)} effort)`}`
-    : formatRunRoute({
-        ...candidate,
-        openaiFastMode: candidate.openaiFastMode && candidate.status === "eligible",
-      });
+/** What a route inherits from the caller: its model, and the effort an unpinned candidate takes. */
+interface InheritedRoute {
+  readonly model?: string | undefined;
+  readonly effort?: string | undefined;
+}
+
+/** The caller's route, and the effort a profile's unpinned candidates take from it. */
+const inheritedRoute = (
+  details: Pick<ModelsToolDetails, "parentModel" | "parentEffort">,
+  defaultEffort?: string,
+): InheritedRoute => ({
+  model: details.parentModel,
+  effort: defaultEffort ?? details.parentEffort,
+});
+
+/**
+ * A candidate's model and effort. One that runs on the caller's model reads as the model it
+ * inherits, `inherit (provider/model)`, with the effort it pins, as other routes read.
+ */
+const candidateRoute = (
+  candidate: SubagentProfileCandidateCard,
+  inherited: InheritedRoute,
+): string => {
+  const pinned = candidate.effort === "default" ? undefined : candidate.effort;
+  if (candidate.model === "parent") {
+    const model =
+      inherited.model === undefined
+        ? "inherit"
+        : `inherit (${sanitizeTerminalLine(inherited.model)})`;
+    return pinned === undefined ? model : `${model}:${sanitizeTerminalLine(pinned)}`;
+  }
+  const effort = pinned ?? inherited.effort;
+  const openaiFastMode = candidate.openaiFastMode && candidate.status === "eligible";
+  return effort === undefined
+    ? `${sanitizeTerminalLine(candidate.model)}${openaiFastMode ? " ⚡" : ""}`
+    : formatRunRoute({ ...candidate, effort, openaiFastMode });
+};
+
+/** An effort a route doesn't pin reads as the one it inherits, `effort inherit (high)`. */
+const effortFact = (effort: string | undefined, inherited: string | undefined): string =>
+  effort !== undefined
+    ? `effort ${effort}`
+    : inherited === undefined
+      ? "effort inherit"
+      : `effort inherit (${inherited})`;
 
 const PROFILE_SOURCE_LABELS = {
   session: "session override",
@@ -56,12 +93,13 @@ interface RouteRow {
 const effectiveRoute = (
   candidates: ReadonlyArray<SubagentProfileCandidateCard>,
   invalid: boolean,
+  inherited: InheritedRoute,
 ): Pick<RouteRow, "route" | "attention"> & { readonly writeIntent?: string } => {
   if (invalid) return { route: "invalid settings", attention: true };
   const eligible = Arr.findFirst(candidates, (candidate) => candidate.status === "eligible");
   if (Option.isSome(eligible))
     return {
-      route: candidateRoute(eligible.value),
+      route: candidateRoute(eligible.value, inherited),
       writeIntent: eligible.value.writeIntent,
       attention: false,
     };
@@ -70,9 +108,16 @@ const effectiveRoute = (
     : { route: "unavailable", attention: true };
 };
 
-export const profileRow = (profile: SubagentProfileRouteCard): RouteRow => {
+export const profileRow = (
+  profile: SubagentProfileRouteCard,
+  details: Pick<ModelsToolDetails, "parentModel" | "parentEffort">,
+): RouteRow => {
   const invalid = Fn.pipe(profile.source, Str.endsWith("-invalid"));
-  const { writeIntent, ...effective } = effectiveRoute(profile.candidates, invalid);
+  const { writeIntent, ...effective } = effectiveRoute(
+    profile.candidates,
+    invalid,
+    inheritedRoute(details, profile.defaultEffort),
+  );
   return {
     name: profile.id,
     ...effective,
@@ -81,8 +126,12 @@ export const profileRow = (profile: SubagentProfileRouteCard): RouteRow => {
   };
 };
 
-const agentRow = (agent: AgentRouteCard): RouteRow => {
-  const { writeIntent, ...effective } = effectiveRoute(agent.candidates, false);
+const agentRow = (agent: AgentRouteCard, details: ModelsToolDetails): RouteRow => {
+  const { writeIntent, ...effective } = effectiveRoute(
+    agent.candidates,
+    false,
+    inheritedRoute(details, agentDefaultEffort(agent, details)),
+  );
   return {
     name: agent.name,
     ...effective,
@@ -106,38 +155,55 @@ const eligibleCount = (candidates: ReadonlyArray<SubagentProfileCandidateCard>):
 /** Each candidate in route order; a skipped one gives its reason. */
 const candidateFacts = (
   candidates: ReadonlyArray<SubagentProfileCandidateCard>,
+  inherited: InheritedRoute,
 ): ReadonlyArray<string> =>
   Arr.map(
     candidates,
     (candidate, index) =>
-      `  ${index + 1}. ${candidateRoute(candidate)} · ${candidate.context} · ${candidate.writeIntent}${candidate.status === "skipped" ? ` · skipped: ${candidate.reason}` : ""}`,
+      `  ${index + 1}. ${candidateRoute(candidate, inherited)} · ${candidate.context} · ${candidate.writeIntent}${candidate.status === "skipped" ? ` · skipped: ${candidate.reason}` : ""}`,
   );
 
-const profileFacts = (profile: SubagentProfileRouteCard): ReadonlyArray<string> => [
-  `${profile.id}: ${eligibleCount(profile.candidates)} · defaults ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${profile.defaultEffort ?? "inherited"} effort`,
-  ...candidateFacts(profile.candidates),
-];
+/** The effort an agent's profile gives its unpinned candidates, where the details list it. */
+const agentDefaultEffort = (
+  agent: AgentRouteCard,
+  details: ModelsToolDetails,
+): string | undefined =>
+  agent.effort ??
+  Option.getOrUndefined(Arr.findFirst(details.profiles, (profile) => profile.id === agent.profile))
+    ?.defaultEffort;
 
-const agentFacts = (agent: AgentRouteCard): ReadonlyArray<string> => [
-  `${agent.name}: profile ${agent.profile} · ${eligibleCount(agent.candidates)}${Arr.join(
-    Arr.map(
-      Arr.filter(
-        [
-          agent.context,
-          agent.effort && `${agent.effort} effort`,
-          agent.isolation && `isolation ${agent.isolation}`,
-          agent.allowedToolCount !== undefined &&
-            countLabel(agent.allowedToolCount, "allowed tool"),
-          agent.deniedToolCount !== undefined && countLabel(agent.deniedToolCount, "denied tool"),
-        ],
-        Predicate.isString,
+const profileFacts =
+  (details: ModelsToolDetails) =>
+  (profile: SubagentProfileRouteCard): ReadonlyArray<string> => [
+    `${profile.id}: ${eligibleCount(profile.candidates)} · defaults ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${effortFact(profile.defaultEffort, details.parentEffort)}`,
+    ...candidateFacts(profile.candidates, inheritedRoute(details, profile.defaultEffort)),
+  ];
+
+const agentFacts =
+  (details: ModelsToolDetails) =>
+  (agent: AgentRouteCard): ReadonlyArray<string> => [
+    `${agent.name}: profile ${agent.profile} · ${eligibleCount(agent.candidates)}${Arr.join(
+      Arr.map(
+        Arr.filter(
+          [
+            agent.context,
+            agent.effort && `effort ${agent.effort}`,
+            agent.isolation && `isolation ${agent.isolation}`,
+            agent.allowedToolCount !== undefined &&
+              countLabel(agent.allowedToolCount, "allowed tool"),
+            agent.deniedToolCount !== undefined && countLabel(agent.deniedToolCount, "denied tool"),
+          ],
+          Predicate.isString,
+        ),
+        (fact) => ` · ${fact}`,
       ),
-      (fact) => ` · ${fact}`,
+      "",
+    )}`,
+    ...candidateFacts(
+      agent.candidates,
+      inheritedRoute(details, agentDefaultEffort(agent, details)),
     ),
-    "",
-  )}`,
-  ...candidateFacts(agent.candidates),
-];
+  ];
 
 /**
  * Profile routes as the user reads them: one line per profile and custom agent with the model a
@@ -150,7 +216,10 @@ export const renderProfileRoutesComponent = (
   theme: Theme,
 ): Component => {
   const agents = details.agents ?? [];
-  const rows = [...Arr.map(details.profiles, profileRow), ...Arr.map(agents, agentRow)];
+  const rows = [
+    ...Arr.map(details.profiles, (profile) => profileRow(profile, details)),
+    ...Arr.map(agents, (agent) => agentRow(agent, details)),
+  ];
   const lines = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
     const shown =
@@ -177,8 +246,8 @@ export const renderProfileRoutesComponent = (
   if (!expanded) return renderComponent(lines);
   return expandedRowsBody(theme, lines, [
     `Fallback profile: ${details.fallbackProfile}`,
-    ...Arr.flatMap(details.profiles, profileFacts),
-    ...Arr.flatMap(agents, agentFacts),
+    ...Arr.flatMap(details.profiles, profileFacts(details)),
+    ...Arr.flatMap(agents, agentFacts(details)),
     ...Arr.map(
       details.invalidAgents ?? [],
       (agent) => `Invalid ${agent.scope} agent${agent.name ? `: ${agent.name}` : ""}`,

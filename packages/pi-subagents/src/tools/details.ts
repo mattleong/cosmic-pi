@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Order from "effect/Order";
+import type { SubagentEffort } from "../domain/routing.ts";
 import type { ProfileId } from "../profiles/model.ts";
 import type { AgentMessageArrivals } from "../run/message-watches.ts";
 import type { SubagentRunView } from "../run/model.ts";
@@ -26,6 +27,7 @@ import {
   projectAgentMessages,
   projectFailure,
   projectInvalidAgents,
+  projectParentModel,
   projectStartEntry,
   projectSubagentAgentRoutes,
   projectSubagentProfileRoutes,
@@ -65,6 +67,8 @@ interface ModelDetailsInput {
   readonly agents?: ReadonlyArray<SubagentAgentView> | undefined;
   readonly invalidAgents?: ReadonlyArray<SubagentInvalidAgentView> | undefined;
   readonly fallbackProfile: ProfileId;
+  readonly parentModel?: string | undefined;
+  readonly parentEffort?: SubagentEffort | undefined;
 }
 
 interface RunDetailsInput {
@@ -238,6 +242,7 @@ const modelDetailsCandidate = (input: ModelDetailsInput, stage: FitStage): Model
   const profiles = projectSubagentProfileRoutes(input.profiles);
   const agents = projectSubagentAgentRoutes(input.agents ?? []);
   const invalidAgents = projectInvalidAgents(input.invalidAgents ?? []);
+  const parentModel = projectParentModel(input.parentModel);
   const base: ModelDetails = {
     version: SUBAGENT_CARD_DETAILS_VERSION,
     action: "models",
@@ -247,6 +252,8 @@ const modelDetailsCandidate = (input: ModelDetailsInput, stage: FitStage): Model
     }),
     ...(invalidAgents.length > 0 && { invalidAgents }),
     fallbackProfile: input.fallbackProfile,
+    ...(parentModel !== undefined && { parentModel }),
+    ...(input.parentEffort !== undefined && { parentEffort: input.parentEffort }),
   };
   return stage === "condensed" ? { ...base, contentOmitted: true as const } : base;
 };

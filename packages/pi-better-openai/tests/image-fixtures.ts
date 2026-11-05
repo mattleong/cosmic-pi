@@ -11,8 +11,13 @@ import {
 export const pngPart = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
 export const textPart = (text: string) => ({ type: "text" as const, text });
 
-export function registerImagePresentation(scheduleAnimation?: CompactAnimationScheduler) {
+/** `cwd`, when given, is the session directory the message renderer shows saved paths against. */
+export function registerImagePresentation(
+  scheduleAnimation?: CompactAnimationScheduler,
+  cwd?: string,
+) {
   const messageRenderer = createOpenAIImageMessageRenderer();
+  if (cwd !== undefined) messageRenderer.noteCwd({ cwd });
   const { tools, messageRenderers } = captureRegistrations((pi) => {
     const noteCwd = registerOpenAIImageMessageRenderer(pi, messageRenderer);
     registerOpenAIImage(

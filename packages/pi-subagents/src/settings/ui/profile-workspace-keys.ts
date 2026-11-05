@@ -32,15 +32,20 @@ const navigationKeys = new Set([
 ]);
 const confirmationKeys = new Set(["q", "Q"]);
 
+/**
+ * The editor's configured select keys as its hints name them: primary keys for the default bar,
+ * and the cancel key's aliases, such as `C-c`, for expanded help.
+ */
 export const profileWorkspaceKeys = (
   labels: SearchableSelectHostOptions["keybindingLabel"],
   confirmation = false,
 ) => {
-  const { key } = configuredKeyLabels(labels, confirmation ? confirmationKeys : navigationKeys);
+  const keys = configuredKeyLabels(labels, confirmation ? confirmationKeys : navigationKeys);
+  const cancel = keys.binding("tui.select.cancel", "Esc");
   return {
-    up: key("tui.select.up", "↑"),
-    down: key("tui.select.down", "↓"),
-    confirm: key("tui.select.confirm", "Enter"),
-    cancel: key("tui.select.cancel", "Esc"),
+    move: keys.movement ?? "↑↓",
+    confirm: keys.primary("tui.select.confirm", "Enter"),
+    cancel: cancel.key,
+    cancelAliases: cancel.aliases,
   };
 };

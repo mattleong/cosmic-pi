@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  getKeybindings,
   KeybindingsManager as TuiKeybindingsManager,
   setKeybindings,
   TUI_KEYBINDINGS,
@@ -32,7 +33,14 @@ import {
 } from "../../src/manager/settings-surface.ts";
 import { managerTable } from "../../src/manager/table.ts";
 import { SearchableSelectPage } from "../../src/manager/searchable-select.ts";
-import { keyHintBar, keyHintRows, moveKeyHint, keyHint } from "../../src/manager/key-labels.ts";
+import { ModelPickerPage, type ModelPickerModel } from "../../src/manager/model-picker.ts";
+import {
+  fullScreenKeybindingOptions,
+  keyHintBar,
+  keyHintRows,
+  moveKeyHint,
+  keyHint,
+} from "../../src/manager/key-labels.ts";
 import { renderExpansionAffordance } from "../../src/tool/presentation.ts";
 import type { CosmicFooterContribution } from "../../src/protocol/protocol.ts";
 import { cosmicUiSettingsItems } from "../../src/settings/controller.ts";
@@ -117,6 +125,9 @@ const footerFrames = (density: FooterDensity): string[] => {
 
 const listTheme = managerSettingsTheme(plainTheme);
 
+// Pi hands pickers its configured select keys, such as `escape`/`ctrl+c` for cancel.
+const piKeybindings = () => fullScreenKeybindingOptions(getKeybindings());
+
 const settingsSurface = (items: SettingsSurfaceItem[], title: string) => {
   const created = createSettingsListSurface({
     header: settingsSurfaceHeader(plainTheme, title),
@@ -176,39 +187,33 @@ const cosmicUiSettingsFrames = (): string[] => {
   return lines;
 };
 
-const scopeGroup = (name: string, own: boolean): SettingsSurfaceItem => ({
-  kind: "group",
-  id: `group:${name}`,
-  label: name,
-  description: `Delegation and nesting limits for the ${Str.toLowerCase(name)} scope.`,
-  currentValue: own ? "normal · 32 children · depth 3 · 16 active" : "inherit all",
-  children: [
-    {
-      id: `${name}:delegation`,
-      label: "Delegation",
-      currentValue: own ? "normal" : "inherit (normal)",
-      values: ["inherit", "normal", "eager", "off"],
-    },
-    {
-      id: `${name}:maxChildren`,
-      label: "Max children",
-      currentValue: own ? "32" : "inherit (32)",
-      values: ["inherit", "8", "16", "32"],
-    },
-    {
-      id: `${name}:maxDepth`,
-      label: "Max depth",
-      currentValue: own ? "3" : "inherit (3)",
-      values: ["inherit", "1", "2", "3"],
-    },
-    {
-      id: `${name}:maxActive`,
-      label: "Max active",
-      currentValue: own ? "16" : "inherit (16)",
-      values: ["inherit", "4", "8", "16"],
-    },
-  ],
-});
+// As /subagents settings shows them: inherited rows read `inherit (value)`, choice lists offer
+// that same label, and a group's summary names the values in effect, inherited or not.
+const scopeGroup = (name: string, own: boolean): SettingsSurfaceItem => {
+  const field = (id: string, label: string, values: readonly [string, string, ...string[]]) => {
+    const [ownValue, inheritedValue, ...presets] = values;
+    const inherited = `inherit (${inheritedValue})`;
+    return {
+      id: `${name}:${id}`,
+      label,
+      currentValue: own ? ownValue : inherited,
+      values: [inherited, ...presets],
+    };
+  };
+  return {
+    kind: "group",
+    id: `group:${name}`,
+    label: name,
+    description: `Delegation and nesting limits for the ${Str.toLowerCase(name)} scope.`,
+    currentValue: own ? "eager · 32 children · depth 3" : "normal · depth 2",
+    children: [
+      field("delegation", "Delegation", ["eager", "normal", "normal", "eager", "off"]),
+      field("maxChildren", "Max children", ["32", "16", "8", "16", "32"]),
+      field("maxDepth", "Max depth", ["3", "2", "1", "2", "3"]),
+      field("maxActive", "Max active", ["16", "8", "4", "8", "16"]),
+    ],
+  };
+};
 
 const scopedSettingsFrames = (): string[] => {
   const surface = settingsSurface(
@@ -218,8 +223,8 @@ const scopedSettingsFrames = (): string[] => {
           id: "workspace",
           label: "Writer workspace",
           description: "Default for writers that don't set isolation.",
-          currentValue: "shared-checkout",
-          values: ["shared-checkout", "worktree"],
+          currentValue: "Shared checkout",
+          values: ["Shared checkout", "Worktree"],
         },
         scopeGroup("Session", false),
         scopeGroup("Global", true),
@@ -235,8 +240,13 @@ const scopedSettingsFrames = (): string[] => {
   lines.push(...frame("Settings · rows grouped by scope", render, 57));
   surface.handleInput?.(DOWN);
   surface.handleInput?.(DOWN);
+  surface.handleInput?.(DOWN);
   surface.handleInput?.("\r");
-  lines.push(...frame("Settings · inside a scope group", render, 57));
+  lines.push(...frame("Settings · inside an inheriting scope group", render, 57));
+  lines.push(...frame("Settings · inside an inheriting scope group", render, 100));
+  surface.handleInput?.("\r");
+  lines.push(...frame("Settings · inherited choice reads inherit (value)", render, 57));
+  lines.push(...frame("Settings · inherited choice reads inherit (value)", render, 100));
   return lines;
 };
 
@@ -475,8 +485,9 @@ const searchableSelectFrames = (): string[] => {
     };
   });
   const picker = new SearchableSelectPage<string>({
+    ...piKeybindings(),
     theme: plainTheme,
-    breadcrumb: "/subagents profiles › reviewer › Primary › Model",
+    breadcrumb: "Current session › reviewer › Primary › Model",
     title: "Choose model",
     subtitle: "Models available to this session",
     choices,
@@ -497,13 +508,58 @@ const searchableSelectFrames = (): string[] => {
   picker.handleInput("?");
   picker.handleInput("/");
   lines.push(...frame("searchable picker · filtering · narrow", (w) => picker.render(w), 57));
-  return [...lines, ...fieldPickerFrames()];
+  return [...lines, ...fieldPickerFrames(), ...modelPickerFrames()];
+};
+
+const model = (provider: string, id: string): ModelPickerModel => ({
+  provider,
+  id,
+  reasoning: true,
+  supportedEfforts: ["low", "medium", "high"],
+});
+
+/** The model picker names its scope in the subtitle and the scope Tab switches to in its bar. */
+const modelPickerFrames = (): string[] => {
+  const scoped = [model("openai-codex", "gpt-6-luna"), model("claude-bridge", "claude-opus-5-5")];
+  const picker = new ModelPickerPage({
+    ...piKeybindings(),
+    theme: plainTheme,
+    breadcrumb: "Current session › reviewer › Primary › Model",
+    scopedModels: scoped,
+    allModels: [...scoped, model("opencode", "gpt-6.1-sol")],
+    current: "openai-codex/gpt-6-luna",
+    getHeight: () => 14,
+    requestRender: () => undefined,
+    select: () => undefined,
+    cancel: () => undefined,
+  });
+  const lines = [
+    ...frame("model picker · scoped models", (w) => picker.render(w), 180),
+    ...frame("model picker · scoped models · narrow", (w) => picker.render(w), 57),
+  ];
+  picker.handleInput("\t");
+  lines.push(
+    ...frame("model picker · all models", (w) => picker.render(w), 180),
+    ...frame("model picker · all models · narrow", (w) => picker.render(w), 57),
+  );
+  picker.handleInput("?");
+  lines.push(
+    ...frame("model picker · expanded help", (w) => picker.render(w), 180),
+    ...frame("model picker · expanded help · narrow", (w) => picker.render(w), 57),
+  );
+  picker.handleInput("?");
+  picker.handleInput("/");
+  lines.push(
+    ...frame("model picker · filtering", (w) => picker.render(w), 180),
+    ...frame("model picker · filtering · narrow", (w) => picker.render(w), 57),
+  );
+  return lines;
 };
 
 /** A profile field picker: the current value reads `(•)` while the cursor moves. */
 const fieldPickerFrames = (): string[] => {
   const efforts = [
-    ["inherit", "Use the parent session's level (high)"],
+    ["inherit (high)", "Use the parent session's level"],
     ["off", "No extended reasoning"],
     ["minimal", "Fastest; least reasoning"],
     ["low", "Light reasoning"],
@@ -519,6 +575,7 @@ const fieldPickerFrames = (): string[] => {
   }));
   const fieldPicker = (height: number) =>
     new SearchableSelectPage<string>({
+      ...piKeybindings(),
       theme: plainTheme,
       breadcrumb: "Current session › reviewer › Primary › Reasoning",
       title: "Choose reasoning",

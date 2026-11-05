@@ -14,6 +14,7 @@ import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
+import { previewHeadingText } from "../../preview/heading-wrap";
 import { PATH_LIST_EMPTY_OUTPUT } from "../builtin-result-detail";
 import { hostObject } from "../../shared/untrusted-value";
 
@@ -45,11 +46,8 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
         tool === "find"
           ? `${theme.fg("accent", escapeControlChars(pattern || "*"))} ${theme.fg("muted", "in")} `
           : "";
-      return new Text(
-        `${renderCodePreviewToolTitle(tool, theme)} ${search}${renderDisplayPath(path, cwd, theme)}`,
-        0,
-        0,
-      );
+      const text = `${renderCodePreviewToolTitle(tool, theme)} ${search}${renderDisplayPath(path, cwd, theme)}`;
+      return previewHeadingText(() => text);
     },
 
     renderResult: (result, { expanded, isPartial }, theme, { isError, state }) => {

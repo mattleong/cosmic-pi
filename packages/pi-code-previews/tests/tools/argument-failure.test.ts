@@ -165,7 +165,7 @@ describe("Pi argument rejections", () => {
     }
   });
 
-  test("collapsed rows hide the raw rejection while expansion keeps all of it", () => {
+  test("collapsed rows hide the raw rejection while expansion keeps its diagnostic and arguments", () => {
     const fallback = withCodePreviewShell(
       {
         name: "owned",
@@ -205,8 +205,11 @@ describe("Pi argument rejections", () => {
         );
         expect(collapsed).not.toContain(`Invalid arguments for tool "${name}"`);
         expect(collapsed).not.toContain(MALFORMED_JSON);
-        for (const line of Arr.filter(Str.split(value, "\n"), Str.isNonEmpty))
-          expect(expanded).toContain(line);
+        // The issue restates the rejection in words; Pi's diagnostic and the echoed arguments stay.
+        const [rejection, echoed = ""] = Str.split(value, "\n\nReceived arguments:\n");
+        const diagnostic = Str.replace(/^Invalid arguments for tool "[^"]*": /u, "")(rejection);
+        for (const line of Arr.filter(Str.split(`${diagnostic}\n${echoed}`, "\n"), Str.isNonEmpty))
+          expect(expanded).toContain(Str.trim(line));
       }
     }
   });

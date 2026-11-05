@@ -28,16 +28,23 @@ export interface QuestionnaireCapability {
   readonly sessionId: string;
   readonly generation: string;
   readonly cancel: (owner: QuestionnaireOwner) => Promise<void>;
+  /** `shown` runs once the questionnaire opens on screen, never while it is queued. */
   readonly ask: (
     request: AskUserRequest,
     owner: QuestionnaireOwner,
     signal: AbortSignal,
+    shown?: () => void,
   ) => Promise<AskUserOutcome>;
 }
 export interface QuestionnaireRelay {
   readonly version: 1;
   readonly sessionId: string;
-  readonly ask: (request: AskUserRequest, signal: AbortSignal) => Promise<AskUserOutcome>;
+  /** Call `shown` once the root reports that the questionnaire opened on screen. */
+  readonly ask: (
+    request: AskUserRequest,
+    signal: AbortSignal,
+    shown?: () => void,
+  ) => Promise<AskUserOutcome>;
 }
 
 const questionFields = { key: text(32), title: text(MAX_TITLE_LENGTH), prompt: text(500) };
@@ -191,14 +198,16 @@ export const decodeQuestionnaireOutcome = Fn.flow(decodeUnknownOrUndefined(RawOu
 const DiscoveredRelaySchema = Schema.Struct({
   version: Schema.Literal(1),
   sessionId: Schema.String,
-  ask: ForeignCallable<[request: AskUserRequest, signal: AbortSignal]>(),
+  ask: ForeignCallable<[request: AskUserRequest, signal: AbortSignal, shown?: () => void]>(),
 });
 const DiscoveredCapabilitySchema = Schema.Struct({
   version: Schema.Literal(1),
   sessionId: Schema.String,
   generation: Schema.String,
   cancel: ForeignCallable<[owner: QuestionnaireOwner]>(),
-  ask: ForeignCallable<[request: AskUserRequest, owner: QuestionnaireOwner, signal: AbortSignal]>(),
+  ask: ForeignCallable<
+    [request: AskUserRequest, owner: QuestionnaireOwner, signal: AbortSignal, shown?: () => void]
+  >(),
 });
 type DiscoveredQuestionnaireRelay = typeof DiscoveredRelaySchema.Type;
 type DiscoveredQuestionnaireCapability = typeof DiscoveredCapabilitySchema.Type;

@@ -109,6 +109,8 @@ import { tmpdir } from "node:os";
 import { piArgumentRejection } from "pi-cosmic-core/testing/sdk";
 import { view } from "./fixtures/run-view.ts";
 import { workspaceHarness, workspaceInspection } from "./fixtures/profile-workspace.ts";
+import { createPiModelOptions } from "../src/settings/ui/model-picker.ts";
+import type { ProjectedPiModel } from "../src/settings/profile-model-catalog.ts";
 import {
   INVALID_ROUTE,
   profileSettingsInspection,
@@ -134,7 +136,8 @@ import {
 } from "./tools/fixtures/tool-harness.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import { CURSOR_MARKER } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, getKeybindings } from "@earendil-works/pi-tui";
+import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 
@@ -251,6 +254,7 @@ const apiWriter = view({
   profile: "worker",
   writeIntent: "writer",
   state: "stopped",
+  ...timing(12, 8),
 });
 
 const fleet = new Map(
@@ -1591,7 +1595,7 @@ const parentScenarios: ReadonlyArray<ToolScenario> = [
     result: textResult("Parent received progress."),
   }),
   contact("warning", "warning", warningNote, { result: textResult("Parent received warning.") }),
-  contact("question waiting for a reply", "question", questionNote, { phase: "running" }),
+  contact("question waiting for reply", "question", questionNote, { phase: "running" }),
   contact("question answered", "question", questionNote, {
     result: textResult("Parent reply: No backfill; leave existing rows null."),
   }),
@@ -1753,9 +1757,10 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
         [
           "Your current ownership summary: read-only.",
           "",
-          "You share this working directory with 1 other active subagent:",
+          "You share this working directory with 2 other active subagents:",
           "",
           "- db-migration (agent-6): shared-checkout writer; running; task: Implement the 0007 migration",
+          "- schema-check (agent-4): read-only; running; task: Compare every migration in db/ against schema.prisma and list the columns that drifted",
           "",
           "Shared-checkout writers coordinate by task scope: never edit files that belong to a peer's task. Before work that could overlap a running peer's task, agree on it with that peer through agent_send, and tell peers about changes they depend on. Ask the parent if you can't agree.",
         ],
@@ -1769,12 +1774,19 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
           {
             id: dbMigration.id,
             name: dbMigration.name,
-            ownership: "shared-checkout writer",
+            ownership: "shared checkout writer",
             state: "running",
             task: dbMigration.task,
           },
+          {
+            id: "agent-4",
+            name: "schema-check",
+            ownership: "read-only",
+            state: "running",
+            task: "Compare every migration in db/ against schema.prisma and list the columns that drifted",
+          },
         ],
-        total: 1,
+        total: 2,
       },
     },
   },
@@ -2250,10 +2262,13 @@ const widgetLines = (): ReadonlyArray<string> => [
  * with its field pane focused, whose hints name that pane's own movement and Enter action.
  */
 const profileEditorLines = (): ReadonlyArray<string> => {
-  const { component } = workspaceHarness({ parentModel: "anthropic/claude-opus-5-5" }, [
-    profileCandidate("claude-bridge/claude-opus-5-5"),
-    profileCandidate("openai-codex/gpt-6-luna"),
-  ]);
+  const { component } = workspaceHarness(
+    { ...piKeybindings(), parentModel: "anthropic/claude-opus-5-5" },
+    [
+      profileCandidate("claude-bridge/claude-opus-5-5"),
+      profileCandidate("openai-codex/gpt-6-luna"),
+    ],
+  );
   const frames = (title: string, widths: ReadonlyArray<number>) =>
     Arr.flatMap(widths, (width) => [
       `── profiles editor · ${title} · ${width} cols`,
@@ -2272,6 +2287,61 @@ const profileEditorLines = (): ReadonlyArray<string> => {
   component.handleInput("\r");
   return [...profiles, ...fields, ...expanded, ...frames("reasoning choice list", [180, 57])];
 };
+
+/** Pi's own select keybindings, as the live editor and dashboard read them. */
+const piKeybindings = () => fullScreenKeybindingOptions(getKeybindings());
+
+const PICKER_MODELS = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5",
+    reasoning: true,
+    supportedEfforts: ["low", "medium", "high"],
+  },
+  {
+    provider: "openai-codex",
+    id: "gpt-6-luna",
+    name: "GPT-6 Luna",
+    reasoning: true,
+    supportedEfforts: ["low", "medium", "high", "xhigh"],
+  },
+] as const satisfies ReadonlyArray<ProjectedPiModel>;
+
+/**
+ * A profile that inherits both its model and its reasoning: the field pane, the reasoning choice
+ * list, and the model picker each name the inherited value `inherit (value)`.
+ */
+const inheritedProfileLines = Effect.fn("SubagentGallery.inheritedProfileLines")(function* () {
+  const { component } = workspaceHarness({
+    ...piKeybindings(),
+    parentModel: "anthropic/claude-opus-5-5",
+    initialProfile: "scout",
+    loadModelPicker: (profile, candidateIndex, routeCandidate) =>
+      Promise.resolve({
+        choices: createPiModelOptions({ models: PICKER_MODELS, parentModel: PICKER_MODELS[0] }),
+        current: routeCandidate.model,
+        context: { profile, candidateIndex },
+      }),
+  });
+  const frames = (title: string, widths: ReadonlyArray<number>) =>
+    Arr.flatMap(widths, (width) => [
+      `── profiles editor · ${title} · ${width} cols`,
+      ...Arr.map(component.render(width), (line) =>
+        Str.trimEnd(Fn.pipe(withoutCursorMarkers(line), Str.replaceAll("\u001b[0m", ""))),
+      ),
+      "",
+    ]);
+  component.handleInput("\r");
+  const fields = frames("inherited model and reasoning · field pane", [180, 57]);
+  component.handleInput("\x1b[B");
+  component.handleInput("\r");
+  const reasoning = frames("inherited reasoning · choice list", [180, 57]);
+  component.handleInput("\x1b");
+  component.handleInput("m");
+  yield* step(eventLoopTurn);
+  return [...fields, ...reasoning, ...frames("inherited model · model picker", [180, 57])];
+});
 
 /** The profiles editor and its dashboard when every profile names its own model and no fallback. */
 const profileDashboardLines = (): ReadonlyArray<string> => {
@@ -2297,6 +2367,7 @@ const profileDashboardLines = (): ReadonlyArray<string> => {
       awaitDialog: () => Effect.runPromise(Effect.never),
       workspace: {
         theme: plainTheme,
+        ...piKeybindings(),
         inspection,
         target: { kind: "session" },
         initialProfile: "scout",
@@ -2356,6 +2427,7 @@ const profileSaveDialogLines = Effect.fn("SubagentGallery.profileSaveDialogLines
       awaitDialog: openGalleryDialog,
       workspace: {
         theme: plainTheme,
+        ...piKeybindings(),
         inspection,
         target: { kind: "session" },
         initialProfile: "scout",
@@ -2462,7 +2534,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = [
   {
     label: "Profile oracle",
     status: "failed",
-    detail: "No API key for openai-codex; run /login, then try again [auth_missing]",
+    detail: "No API key for openai-codex; run /login, then try again",
   },
   {
     label: ".worktreeinclude",
@@ -2539,6 +2611,7 @@ const profileSetPickerLines = (): ReadonlyArray<string> => {
       awaitDialog: () => Effect.runPromise(Effect.never),
       workspace: {
         theme: plainTheme,
+        ...piKeybindings(),
         inspection,
         target: { kind: "session" },
         initialProfile: "scout",
@@ -2679,6 +2752,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...activityLines(),
         ...widgetLines(),
         ...profileEditorLines(),
+        ...(yield* inheritedProfileLines()),
         ...profileDashboardLines(),
         ...profileSetPickerLines(),
         ...(yield* profileSaveDialogLines()),

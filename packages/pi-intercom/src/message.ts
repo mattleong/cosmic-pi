@@ -13,7 +13,7 @@ import {
   type CodePreviewMessagePresenter,
 } from "pi-code-previews";
 import { INTERCOM_MESSAGE_TYPE } from "./delivery.ts";
-import { sessionDetails, sessionText, textBody } from "./display.ts";
+import { PREVIEW_BODY_INDENT, sessionDetails, sessionText, textBody } from "./display.ts";
 import { sessionSubject } from "./identity.ts";
 import { MAX_MESSAGE_CHARS, SenderSchema } from "./transport/protocol.ts";
 
@@ -51,7 +51,7 @@ const contentText = (content: string | ReadonlyArray<unknown> | undefined): stri
  * message without display text shows its sender, and its stored content only expanded; one without
  * a sender names another session.
  */
-export const presentIntercomMessage: CodePreviewMessagePresenter = (message, _options, theme) => {
+export const presentIntercomMessage: CodePreviewMessagePresenter = (message, options, theme) => {
   const envelope = Option.getOrUndefined(decodeEnvelope(message));
   const from = Option.getOrUndefined(decodeSender(envelope?.details))?.from;
   const text = Option.getOrUndefined(decodeText(envelope?.details))?.text;
@@ -79,7 +79,10 @@ export const presentIntercomMessage: CodePreviewMessagePresenter = (message, _op
     };
   return {
     ...presentation,
-    collapsed: () => textBody(text, theme, false),
+    // The sender's session id and directory; a clipped message also names its hidden lines.
+    expandLabel: "details",
+    collapsed: () =>
+      textBody(text, theme, false, options.collapsedStyle === "preview" ? PREVIEW_BODY_INDENT : 0),
     expanded: () =>
       expandedBody(expandedAuthoredText(theme, "Message", sessionText(text)), details()),
   };

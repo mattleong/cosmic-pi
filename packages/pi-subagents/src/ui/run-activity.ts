@@ -139,6 +139,9 @@ const runModelFields = (run: SubagentRunView): Pick<ActivityItem, "model" | "mod
   return { model: cleanModelText(model), ...(detail && { modelDetail: cleanModelText(detail) }) };
 };
 
+const isRecordedTime = (at: number | undefined): at is number =>
+  at !== undefined && Number.isFinite(at) && at > 0;
+
 const runActivityItem = (
   run: SubagentRunView,
   awaited: boolean,
@@ -153,15 +156,16 @@ const runActivityItem = (
       title,
       ...activityAttention(run),
       awaited,
-      startedAt: run.startedAt,
-      updatedAt: run.lastActivityAt,
+      // A missing or zero time has no elapsed span worth showing, so Activity omits it.
+      ...(isRecordedTime(run.startedAt) && { startedAt: run.startedAt }),
+      ...(isRecordedTime(run.lastActivityAt) && { updatedAt: run.lastActivityAt }),
       ...runSummary(run, nameOf),
       actions: Object.freeze(
         Arr.map(runActions(run, title, activeDescendants), (action) => Object.freeze(action)),
       ),
       ...runModelFields(run),
       ...(run.profile !== undefined && { profile: run.profile }),
-      ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
+      ...(isRecordedTime(run.endedAt) && { endedAt: run.endedAt }),
       ...(run.parentRunId &&
         run.parentRunId !== "root" && {
           parent: Object.freeze({

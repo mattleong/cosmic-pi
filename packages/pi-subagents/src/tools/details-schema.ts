@@ -476,6 +476,9 @@ export const SubagentModelsDetailsSchema = Schema.Struct({
     boundedArray(InvalidAgentCardSchema, MAX_INVALID_AGENT_ENTRIES),
   ),
   fallbackProfile: ProfileIdSchema,
+  /** The caller's model and effort, which `parent` candidates and unpinned efforts inherit. */
+  parentModel: Schema.optionalKey(NonEmptyText(MAX_PROFILE_MODEL_SELECTOR_CHARS)),
+  parentEffort: Schema.optionalKey(EffortSchema),
   contentOmitted: Schema.optionalKey(Schema.Literal(true)),
 });
 

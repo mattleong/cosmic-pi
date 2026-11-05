@@ -84,3 +84,24 @@ describe("image result notes", () => {
     expect(styleProblems(summary)).toEqual([]);
   });
 });
+
+describe("image expansion", () => {
+  // Expansion always shows the complete prompt; settled rows add the image's facts or recovery.
+  it.each(["pending", "running"] as const)("offers the prompt while %s", (phase) => {
+    const summary = imageCompactSummary({ ...input(), phase, result: undefined });
+    expect(summary?.expandLabel).toEqual(expect.any(String));
+  });
+
+  it("offers expansion for settled images and failures", () => {
+    const failed = imageCompactSummary({
+      ...input(),
+      context: renderContextFixture({ isError: true }),
+      result: {
+        content: [{ type: "text", text: "Invalid OpenAI image parameters." }],
+        details: {},
+      },
+    });
+    for (const summary of [imageCompactSummary(input()), failed])
+      expect(summary?.expandLabel).toEqual(expect.any(String));
+  });
+});

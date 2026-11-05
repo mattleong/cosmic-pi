@@ -444,12 +444,34 @@ describe.skipIf(!directory)("presentation gallery", () => {
         controlled("questionnaire hidden by the user", { action: "status", requestId: "ask-1" }, [
           { ...open, presentation: "hidden" },
         ]),
+        controlled("hidden and queued questionnaires", { action: "status" }, [
+          { ...open, presentation: "hidden" },
+          queued,
+        ]),
         live("ask_user_async_control", "awaiting answers", { action: "await", requestId: "ask-1" }),
         live(
           "ask_user_async_control",
           "awaiting answers with a partial update",
           { action: "await", requestId: "ask-1" },
           { content: [], details: undefined },
+        ),
+        live(
+          "ask_user_async_control",
+          "awaiting answers on screen",
+          { action: "await", requestId: "ask-1" },
+          { content: [], details: { questionnaire: "open" } },
+        ),
+        live(
+          "ask_user_async_control",
+          "awaiting a hidden questionnaire",
+          { action: "await", requestId: "ask-1" },
+          { content: [], details: { questionnaire: "hidden" } },
+        ),
+        live(
+          "ask_user_async_control",
+          "awaiting a queued questionnaire",
+          { action: "await", requestId: "ask-2" },
+          { content: [], details: { questionnaire: "queued" } },
         ),
         controlled("answers awaited", { action: "await", requestId: "ask-1" }, [
           answered("waiter"),

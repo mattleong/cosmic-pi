@@ -17,6 +17,7 @@ import {
   agentTextLines,
   bodyIndent,
   expandedRowsBody,
+  hangingLines,
   indentedBody,
   indentedLines,
 } from "./agent-text.ts";
@@ -210,6 +211,11 @@ interface NoticeBody {
   readonly rows: (width: number) => string[];
   /** Technical facts shown only expanded, in the `Details` section. */
   readonly facts: ReadonlyArray<string>;
+  /**
+   * What expansion reveals beyond the collapsed rows, which clip agents' words with their own
+   * affordance; undefined when it adds nothing.
+   */
+  readonly expandLabel?: string | undefined;
 }
 
 const completedBody = (
@@ -247,6 +253,7 @@ const completedBody = (
             expanded,
           ),
     facts: Arr.flatMap(runs, (run) => savedAgentFactLines(run.name, run.facts ?? [run.id])),
+    expandLabel: "details",
   };
 };
 
@@ -282,25 +289,29 @@ const stoppedBody = (
           ]
         : note(width),
     facts: Arr.flatMap(stopped, (run) => agentFactLines(run.name, [run.id])),
+    ...(stopped.length > 0 && { expandLabel: countLabel(details.total, "stopped run") }),
   };
 };
 
 const peersBody = (details: PeerDetails, theme: Theme, expanded: boolean, indent: number) => {
   const pad = Str.repeat(indent)(" ");
   return {
+    // Collapsed, each peer keeps one clipped row; expanded, its whole task wraps beneath it.
     rows: (width: number) => {
-      const rows = Arr.map(details.peers, (peer) =>
-        clipToWidth(
-          `${pad}${theme.fg("toolTitle", sanitizeTerminalLine(peer.name))}${theme.fg("muted", ` · ${sanitizeTerminalLine(peer.ownership)} · ${sanitizeTerminalLine(peer.state)}${peer.task ? ` · ${sanitizeTerminalLine(peer.task)}` : ""}`)}`,
-          width,
-        ),
-      );
-      return expanded ? rows : rows.slice(0, 3);
+      const row = (peer: PeerDetails["peers"][number]) =>
+        `${theme.fg("toolTitle", sanitizeTerminalLine(peer.name))}${theme.fg("muted", ` · ${sanitizeTerminalLine(peer.ownership)} · ${sanitizeTerminalLine(peer.state)}${peer.task ? ` · ${sanitizeTerminalLine(peer.task)}` : ""}`)}`;
+      return expanded
+        ? Arr.flatMap(details.peers, (peer) => hangingLines(row(peer), width, indent))
+        : Arr.map(details.peers.slice(0, 3), (peer) => clipToWidth(`${pad}${row(peer)}`, width));
     },
     facts: [
       ...(details.ownership ? [`This agent: ${details.ownership}`] : []),
       ...Arr.flatMap(details.peers, (peer) => agentFactLines(peer.name, [peer.id])),
     ],
+    // Expansion wraps each peer's whole task and names this agent's role and each peer's ID.
+    ...((details.ownership !== undefined || details.peers.length > 0) && {
+      expandLabel: details.peers.length > 3 ? countLabel(details.peers.length, "peer") : "details",
+    }),
   } satisfies NoticeBody;
 };
 
@@ -318,6 +329,7 @@ const noticeBody = (
     return {
       rows: (width) => agentTextLines(question, width, theme, { expanded, indent }),
       facts: details.id ? agentFactLines(details.name ?? details.id, [details.id]) : [],
+      ...(details.id !== undefined && { expandLabel: "details" }),
     };
   }
   if (details?.kind === "stopped" && details.runs !== undefined)
@@ -342,8 +354,10 @@ export const presentSubagentNotification: CodePreviewMessagePresenter = (input, 
           new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
         ),
     };
+  const expandLabel = noticeBody(details, theme, true, 0)?.expandLabel;
   return {
     ...presentation,
+    ...(expandLabel !== undefined && { expandLabel }),
     collapsed: () =>
       composeToolComponent(
         (width) =>

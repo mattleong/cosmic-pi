@@ -1,5 +1,8 @@
+import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
+import * as Arr from "effect/Array";
 import { describe, expect, it, vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
+import { fullScreenKeybindingOptions, splitKeyLabel } from "../src/manager/key-labels.ts";
 import { SearchableSelectPage } from "../src/manager/searchable-select.ts";
 
 const choice = (name: string) => {
@@ -69,5 +72,31 @@ describe("searchable selector state", () => {
         expect(fixture.select).not.toHaveBeenCalled();
       }
     }
+  });
+});
+
+describe("configured key labels", () => {
+  it("reads `/` as a key, not a separator", () => {
+    expect(splitKeyLabel("Esc/C-c")).toEqual(["Esc", "C-c"]);
+    expect(splitKeyLabel("/")).toEqual(["/"]);
+    expect(splitKeyLabel("C-//Esc")).toEqual(["C-/", "Esc"]);
+    expect(splitKeyLabel("Esc//")).toEqual(["Esc", "/"]);
+  });
+
+  it("names only the primary configured keys until help expands, then every cancel alias", () => {
+    const fixture = page();
+    const keys = new KeybindingsManager(TUI_KEYBINDINGS, {
+      "tui.select.cancel": ["escape", "ctrl+c"],
+    });
+    const component = new SearchableSelectPage({
+      ...fixture.options,
+      ...fullScreenKeybindingOptions(keys),
+    });
+    const screen = () => Arr.join(component.render(120), "\n");
+    expect(screen()).toContain("↑↓ Move");
+    expect(screen()).toContain("Esc Back");
+    expect(screen()).not.toContain("C-c");
+    component.handleInput("?");
+    expect(screen()).toMatch(/Esc\/C-c\/h\/q Back/u);
   });
 });

@@ -51,16 +51,24 @@ const ACTIVITY_KINDS = {
   cancelled: "stopped",
 } as const satisfies Record<string, ManagerActivityKind>;
 
+/** What an open call waits on, which replaces its spinner: a reply wins over a queue. */
+export const compactHold = (
+  summary: Pick<CompactSummary, "waiting" | "queued"> | undefined,
+): "waiting" | "queued" | undefined =>
+  summary?.waiting ? "waiting" : summary?.queued ? "queued" : undefined;
+
 export function compactStatusIcon(
   status: CompactStatus,
   theme: Theme,
   animationFrame = 0,
   returnedCheckmark = false,
   messageIcon?: CompactSummary["messageIcon"],
-  waiting = false,
+  hold?: "waiting" | "queued",
 ): string {
-  if (waiting && (status === "pending" || status === "running"))
-    return theme.fg(managerActivityColor("waiting"), managerActivityGlyph("waiting"));
+  if (hold && (status === "pending" || status === "running"))
+    return hold === "waiting"
+      ? theme.fg(managerActivityColor("waiting"), managerActivityGlyph("waiting"))
+      : theme.fg("muted", SUITE_STATUS_GLYPHS.queued);
   if (messageIcon && (status === "success" || status === "returned"))
     return theme.fg(status === "success" ? "success" : "muted", MESSAGE_GLYPHS[messageIcon]);
   if (status === "returned")
@@ -99,7 +107,7 @@ function compactRowPrefix(input: CompactRowInput, theme: Theme): string {
     input.animationFrame,
     input.returnedCheckmark,
     input.summary.messageIcon,
-    input.summary.waiting === true,
+    compactHold(input.summary),
   );
   const action = compactSingleLine(input.summary.action ?? "");
   return `${icon} ${theme.fg("accent", compactSingleLine(input.name))}${action ? ` ${action}` : ""}`;

@@ -92,6 +92,7 @@ Each question and proxy call owns one exact Deferred entry through `acquireUseRe
 - Only explicit blocking `ask_user` requests from local Pi children are relayed, through the versioned `pi-ask-user/protocol` root capability. `pi-ask-user` remains the sole registrar and must be discoverable in the child; a missing relay or capability fails closed.
 - Asynchronous questionnaires, `agent_contact_parent` questions, and raw `extension_ui_request` forwarding are not supported.
 - The root derives owner run, assignment epoch, and request ID from coordinator state. A separate strict 128 KiB decoder keeps questionnaires out of tool input.
+- When the root opens a relayed questionnaire on screen, never while it is queued, it sends the pending proxy call one `proxy_questionnaire_shown` notice so the child's `ask_user` row reads as waiting on the user. The notice is only a display hint: the child honors it once, for a pending `ask_user` call of the current activation, and ignores it after the call settles.
 - `run/questionnaire-lifetime.ts` keeps at most 256 request-ID tombstones per assignment, so replayed answered or cancelled identities cannot reopen a dialog.
 - Pause, stop, settlement, and assignment replacement revoke queued, visible, or hidden waits; process cleanup joins their finalizers outside the service lock, and shutdown revokes before leaf-first release. A stalled owned cleanup keeps stop and shutdown waiting.
 - Deliberate cancellation remains a cancelled outcome, not an invitation to retry through another UI.

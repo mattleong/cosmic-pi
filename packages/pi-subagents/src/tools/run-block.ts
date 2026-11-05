@@ -338,7 +338,7 @@ const attentionAction = (run: SubagentRunView): string | undefined => {
     case "question":
       return `Reply with agent_send({ to: ${id}, message: "..." }), then call agent_await again.`;
     case "question-unavailable":
-      return "Waiting for a reply, but its question is unavailable; agent_read shows its state.";
+      return "Waiting for reply, but its question is unavailable; agent_read shows its state.";
     case undefined:
       return undefined;
   }

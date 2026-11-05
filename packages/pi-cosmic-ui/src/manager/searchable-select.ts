@@ -38,6 +38,7 @@ import {
   keyHintRows,
   TEXT_INPUT_KEY_LABELS,
   type FramedKeyHints,
+  type KeyHintPart,
 } from "./key-labels.ts";
 import { focusedField, LIST_CURSOR, selectionMarker } from "./style.ts";
 
@@ -89,6 +90,8 @@ export interface SearchableSelectPageOptions<A> extends SearchableSelectHostOpti
   readonly initialQuery?: string | undefined;
   readonly initialSearchMode?: boolean | undefined;
   readonly cancelBehavior?: "close" | "clear-search" | undefined;
+  /** Extra default pairs for keys the host handles, such as a picker's `Tab` scope switch. */
+  readonly hints?: ReadonlyArray<KeyHintPart> | undefined;
   readonly select: (value: A) => void;
   readonly cancel: () => void;
 }
@@ -329,21 +332,27 @@ export class SearchableSelectPage<A> implements Component, Focusable {
 
   private searchCancel(): string {
     const verb = this.options.cancelBehavior === "close" ? "Cancel" : "Clear";
-    return `${this.keys().key("tui.select.cancel", "Esc")} ${verb}`;
+    return keyHint(this.keys().primary("tui.select.cancel", "Esc"), verb);
   }
 
+  // Default bars name only the primary configured keys; cancel aliases such as `C-c` join the
+  // expanded exit pair.
   private footer(inner: number): FramedKeyHints {
-    const { key, movement } = this.keys();
-    const confirm = key("tui.select.confirm", "Enter");
-    const cancel = key("tui.select.cancel", "Esc");
+    const { key, binding, primary, movement } = this.keys();
+    const cancel = binding("tui.select.cancel", "Esc");
     const move = keyHint(movement ?? "↑↓", "Move");
-    const select = keyHint(confirm, "Select");
+    const select = keyHint(primary("tui.select.confirm", "Enter"), "Select");
+    const extra = this.options.hints ?? [];
     if (this.searchMode)
-      return framedKeyHints(["Type to filter", move, select], [this.searchCancel()], inner);
+      return framedKeyHints(
+        ["Type to filter", move, select, ...extra],
+        [this.searchCancel()],
+        inner,
+      );
     const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
     return framedKeyHintBar(
       {
-        hints: [move, select, keyHint("/", "Filter")],
+        hints: [move, select, keyHint("/", "Filter"), ...extra],
         more: [
           keyHint("j/k", "Move"),
           keyHint(`${pages}/C-u/C-d`, "Page"),
@@ -351,8 +360,8 @@ export class SearchableSelectPage<A> implements Component, Focusable {
           keyHint("l", "Select"),
         ],
         exit: "nested",
-        exitKey: cancel,
-        exitAliases: ["h", "q"],
+        exitKey: cancel.key,
+        exitAliases: [...cancel.aliases, "h", "q"],
       },
       this.alternateHelp,
       inner,

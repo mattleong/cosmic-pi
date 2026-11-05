@@ -292,7 +292,7 @@ export function registerSubagentApplication(
             session: () =>
               ownsActivation() && currentActivation === activation ? activation.ctx : undefined,
           }),
-          questionnaireHandler: (request, questionnaireOwner) =>
+          questionnaireHandler: (request, questionnaireOwner, shown) =>
             Effect.suspend(() =>
               ownsActivation() && currentActivation === activation
                 ? askParentQuestionnaire(
@@ -300,6 +300,7 @@ export function registerSubagentApplication(
                     activation.ctx.sessionManager.getSessionId(),
                     request,
                     questionnaireOwner,
+                    shown,
                   )
                 : Effect.fail(
                     InvalidSubagentRequestError.make({

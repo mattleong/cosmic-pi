@@ -244,7 +244,7 @@ export function updateCandidateModel(
   ) {
     next = { ...next, effort: "default" };
     notices.push(
-      `${model} does not support the ${candidate.effort} reasoning level. Reasoning changed to the profile default.`,
+      `${model} does not support the ${candidate.effort} reasoning level. Reasoning changed to inherit.`,
     );
   }
   if (next.openaiFastMode && !fastModeAvailable) {

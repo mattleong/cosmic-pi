@@ -75,6 +75,12 @@ const listing: SessionListContract = {
 };
 
 // Real session ids are UUIDv7: sessions started together share a prefix, not a suffix.
+const noSessions: SessionListContract = {
+  ...contractEnvelope,
+  tool: SESSION_TOOL.list,
+  sessions: [],
+  omitted: 0,
+};
 const sameRepository: SessionListContract = {
   ...contractEnvelope,
   tool: SESSION_TOOL.list,
@@ -192,6 +198,12 @@ const scenarios = [
     tool: SESSION_TOOL.list,
     args: {},
     result: result(listText(listing), listing),
+  },
+  {
+    title: "no other live sessions",
+    tool: SESSION_TOOL.list,
+    args: {},
+    result: result(listText(noSessions), noSessions),
   },
   {
     title: "listed sessions sharing a repository",

@@ -726,26 +726,34 @@ const activityLines = (): ReadonlyArray<string> => {
   return [
     ...activityGalleryFrames({ ...gallery, widths: [57, 180], maxRows: [8] }),
     ...activityGalleryFrames({ ...gallery, widths: [57], maxRows: [3], open: ["task-0000000023"] }),
+    // Technical facts: a finished task's exit code, and a running one with no exit facts yet.
+    ...activityGalleryFrames({
+      ...gallery,
+      title: `${gallery.title} · technical`,
+      widths: [],
+      managerWidths: [57, 180],
+      open: ["task-0000000023", "task-0000000022"],
+      technical: true,
+    }),
   ];
 };
 
+type ScopeFiles = Parameters<typeof taskSettingsSubcommand>[0]["read"];
+
 /**
- * `/tasks settings` through its subcommand: the scope groups, the Global group opened, and one
- * size's choice list. The global file sets a per-task size the project row inherits, and the
- * project sets its own running limit.
+ * `/tasks settings` through its subcommand, opened on `read`'s files. With `explore`, also the
+ * Global group opened, one size's choice list, and the Project group.
  */
-const settingsLines = (): Effect.Effect<string[]> =>
+const settingsLines = (
+  read: ScopeFiles,
+  options: { readonly prefix?: string; readonly explore?: boolean } = {},
+): Effect.Effect<string[]> =>
   Effect.gen(function* () {
     setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
     const command = taskSettingsSubcommand({
       config: () => ({ ...DEFAULT_BACKGROUND_TASK_CONFIG, logBufferBytesPerTask: 1024 ** 2 }),
       captureAuthority: () => () => true,
-      read: (location) =>
-        Promise.resolve(
-          location.scope === "global"
-            ? { logBufferBytesPerTask: 1024 ** 2, stopGraceMs: 5_000 }
-            : { maxRunning: 16 },
-        ),
+      read,
       write: () => Promise.resolve(),
     });
     const surface = fakeCustomSurfaceHost();
@@ -762,11 +770,16 @@ const settingsLines = (): Effect.Effect<string[]> =>
     surface.mount();
     const frames = (title: string) =>
       Arr.flatMap([180, 57], (width) => [
-        `── /tasks settings · ${title} · ${width} cols`,
+        `── /tasks settings · ${options.prefix ?? ""}${title} · ${width} cols`,
         ...Arr.map(surface.editor?.render(width) ?? [], (line) => Str.trimEnd(line)),
         "",
       ]);
     const lines = [...frames("scope groups")];
+    if (!options.explore) {
+      surface.editor?.handleInput?.("\u001b");
+      yield* Effect.promise(() => opened);
+      return lines;
+    }
     surface.editor?.handleInput?.("\r");
     lines.push(...frames("the Global group opened"));
     for (const key of ["j", "j", "j"]) surface.editor?.handleInput?.(key);
@@ -852,7 +865,24 @@ describe.skipIf(!directory)("presentation gallery", () => {
         }
       }
       lines.push(...activityLines());
-      lines.push(...(yield* settingsLines()));
+      // The global file sets a per-task size the project row inherits, and the project sets its
+      // own running limit.
+      lines.push(
+        ...(yield* settingsLines(
+          (location) =>
+            Promise.resolve(
+              location.scope === "global"
+                ? { logBufferBytesPerTask: 1024 ** 2, stopGraceMs: 5_000 }
+                : { maxRunning: 16 },
+            ),
+          { explore: true },
+        )),
+        ...(yield* settingsLines(() => Promise.resolve({}), { prefix: "default files · " })),
+        ...(yield* settingsLines(
+          (location) => Promise.resolve(location.scope === "global" ? { enabled: false } : {}),
+          { prefix: "tasks off globally · " },
+        )),
+      );
       yield* writeGallerySection(directory, "pi-background-task", lines);
     }),
   );

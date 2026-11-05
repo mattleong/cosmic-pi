@@ -93,6 +93,9 @@ const pending = (
   return { subject: knownAddresseeSubject(to, names) };
 };
 
+/** What an empty listing says, in a compact heading and a preview body alike. */
+export const NO_OTHER_SESSIONS = "no other live sessions";
+
 const UNUSABLE_STATES = ["unavailable", "unresponsive", "unreachable"] as const;
 
 /**
@@ -116,6 +119,8 @@ const listSummary = (
 ): CompactSummary => {
   const total = details.sessions.length + details.omitted;
   const duplicates = Arr.filter(details.sessions, ({ duplicate }) => duplicate).length;
+  // An empty listing's counter says so, where a preview's status line can show it too.
+  if (total === 0) return { subject: "", counters: [NO_OTHER_SESSIONS], outcome: "success" };
   return {
     subject: countLabel(total, "session"),
     counters: unusableCounters(details.sessions),
@@ -178,8 +183,25 @@ export const sessionToolDetails = (
     ),
   );
 
+/**
+ * What expanding a settled row reveals: every session where a compact row only counts them,
+ * otherwise sessions' ids and directories. An empty list has nothing more to show; a clipped
+ * message or session list names its own hidden lines.
+ */
+const settledExpandLabel = (details: SessionToolDetails, style: CollapsedStyle): string | false => {
+  if (details.tool !== SESSION_TOOL.list) return "details";
+  if (details.sessions.length === 0) return false;
+  return style === "compact" ? "sessions" : "details";
+};
+
+type CollapsedStyle = "compact" | "preview";
+
 export const sessionToolCompactSummary =
-  (tool: string, names?: SessionNames): CompactSummaryProvider<SessionToolArgs> =>
+  (
+    tool: string,
+    names?: SessionNames,
+    style: CollapsedStyle = "compact",
+  ): CompactSummaryProvider<SessionToolArgs> =>
   ({ phase, args, result }) => {
     // The words a send carries, shown beneath its collapsed compact row.
     const words =
@@ -190,5 +212,7 @@ export const sessionToolCompactSummary =
         : {};
     if (phase !== "settled") return { ...pending(tool, args.to, names), ...words };
     const details = sessionToolDetails(tool, result);
-    return details ? { ...settled(details), ...words } : undefined;
+    return details
+      ? { expandLabel: settledExpandLabel(details, style), ...settled(details), ...words }
+      : undefined;
   };

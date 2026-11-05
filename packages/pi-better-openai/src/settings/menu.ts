@@ -130,7 +130,6 @@ export function openOpenAISettingsMenu(
               id: "section.fast",
               label: "Fast mode",
               description: "Request priority processing on OpenAI models, and remember the choice.",
-              submenuTitle: "Fast mode settings",
               items: () =>
                 settingsItemsFromDescriptors(
                   [fastEnabledDescriptor, ...FAST_SETTING_DESCRIPTORS],
@@ -142,7 +141,6 @@ export function openOpenAISettingsMenu(
               id: "section.compaction",
               label: "Compaction",
               description: "Use OpenAI native compaction when Pi triggers compaction.",
-              submenuTitle: "Compaction settings",
               items: () => settingsItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, cfg),
               summary: () => (cfg.compaction.enabled ? "OpenAI native" : "Pi default"),
             },
@@ -151,7 +149,6 @@ export function openOpenAISettingsMenu(
               label: "Usage",
               description:
                 "How subscription usage refreshes. Footer visibility is in /cosmic-ui settings.",
-              submenuTitle: "Usage settings",
               items: () => settingsItemsFromDescriptors(USAGE_SETTING_DESCRIPTORS, cfg),
               summary: () => `refresh every ${formatDuration(cfg.usage.refreshIntervalMs)}`,
             },
@@ -159,7 +156,6 @@ export function openOpenAISettingsMenu(
               id: "section.image",
               label: "Image tool",
               description: "Defaults for the openai_image tool and /openai image.",
-              submenuTitle: "Image tool settings",
               items: () => settingsItemsFromDescriptors(imageDescriptors, cfg),
               summary: () =>
                 cfg.image.enabled
@@ -170,7 +166,6 @@ export function openOpenAISettingsMenu(
               id: "section.diagnostics",
               label: "Diagnostics",
               description: "Show diagnostics, config paths, and redacted raw config.",
-              submenuTitle: "Diagnostics",
               items: diagnosticItems,
               summary: () => "debug info · config",
             },
@@ -186,7 +181,7 @@ export function openOpenAISettingsMenu(
                 description: group.description,
                 submenu: (_value, complete) =>
                   createSettingsGroupSubmenu({
-                    title: group.submenuTitle,
+                    title: group.label,
                     description: group.description,
                     items: group.items,
                     onChange: writeSetting,

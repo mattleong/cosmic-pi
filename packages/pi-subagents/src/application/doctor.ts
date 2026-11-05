@@ -90,7 +90,7 @@ const routeOutcome = (
     : check(
         label,
         fallbacks > 0 ? "warning" : "failed",
-        `${prefix}${first.model}: ${failure}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
+        `${prefix}${first.model}: ${Fn.pipe(failure, Str.trimEnd, Str.replace(/\.$/u, ""))}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
       );
 };
 
@@ -288,9 +288,8 @@ const readinessFailure = (
     )
     .pipe(
       Effect.as(undefined),
-      Effect.catch((error) =>
-        Effect.succeed(error.code ? `${error.message} [${error.code}]` : error.message),
-      ),
+      // The panel reads as a person would; the message already says what to do.
+      Effect.catch((error) => Effect.succeed(error.message)),
       Effect.timeoutOption(PREFLIGHT_TIMEOUT),
       Effect.map(Option.getOrElse(() => "readiness check timed out")),
     );

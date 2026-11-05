@@ -21,6 +21,9 @@ export interface AsyncQuestionnaireSnapshot {
   readonly titles?: ReadonlyArray<AsyncQuestionTitle>;
 }
 
+/** Where a pending questionnaire stands for the user: on screen, hidden, or queued behind others. */
+export type PendingPresentation = "open" | "hidden" | "queued";
+
 export interface AsyncQuestionnaireResult {
   readonly requests: ReadonlyArray<AsyncQuestionnaireSnapshot>;
 }

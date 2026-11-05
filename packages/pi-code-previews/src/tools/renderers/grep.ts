@@ -18,6 +18,7 @@ import { previewCacheKey } from "./shared/preview-cache-key";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
+import { previewHeadingText } from "../../preview/heading-wrap";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { hostObject } from "../../shared/untrusted-value";
 
@@ -34,7 +35,7 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
         glob ? escapeControlChars(glob) : undefined,
         limit ? `limit ${limit}` : undefined,
       ]);
-      return new Text(text, 0, 0);
+      return previewHeadingText(() => text);
     },
 
     renderResult: (result, { expanded, isPartial }, theme, renderContext) => {

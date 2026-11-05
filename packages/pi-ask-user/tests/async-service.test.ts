@@ -5,6 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Scheduler from "effect/Scheduler";
@@ -671,5 +672,58 @@ it.effect("cancellation after final failed-opening acknowledgement retains it", 
     });
     expect(yield* Ref.get(f.messages)).toEqual([]);
     expect((yield* control(service, "await", id))?.delivery).toBe("waiter");
+  }),
+);
+
+it.effect("an await follows its questionnaire: queued, then on screen, hidden, and back", () =>
+  Effect.gen(function* () {
+    const [firstAnswer, secondAnswer, hide, reveal] = yield* Effect.all([
+      Deferred.make<AskUserOutcome>(),
+      Deferred.make<AskUserOutcome>(),
+      Deferred.make<void>(),
+      Deferred.make<void>(),
+    ]);
+    const host: AskUserHost = (input, presence) =>
+      Effect.gen(function* () {
+        if (!presence) return outcome;
+        yield* Deferred.succeed(presence.opened, undefined);
+        yield* Queue.offer(presence.visibility, "open");
+        if (input.questions[0]!.key === "0") return yield* Deferred.await(firstAnswer);
+        yield* Deferred.await(hide);
+        yield* Queue.offer(presence.visibility, "hidden");
+        yield* Deferred.await(reveal);
+        yield* Queue.offer(presence.visibility, "open");
+        return yield* Deferred.await(secondAnswer);
+      });
+    const service = yield* acquireService(host, () => Effect.void);
+    yield* service.startAsync(keyedRequest(0));
+    const second = yield* service.startAsync(keyedRequest(1));
+    const seen = yield* Ref.make<string[]>([]);
+    const seenAfter = (count: number) =>
+      Effect.gen(function* () {
+        for (let i = 0; i < 200 && (yield* Ref.get(seen)).length < count; i++)
+          yield* Effect.yieldNow;
+        return yield* Ref.get(seen);
+      });
+    const waiter = yield* Effect.forkChild(
+      service.controlAsync({ action: "await", requestId: second.requestId }, (presentation) =>
+        Ref.update(seen, (items) => [...items, presentation]),
+      ),
+      { startImmediately: true },
+    );
+    // Queued behind the first, it never claims to be on screen.
+    for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+    expect(yield* Ref.get(seen)).toEqual(["queued"]);
+    yield* Deferred.succeed(firstAnswer, outcome);
+    expect(yield* seenAfter(2)).toEqual(["queued", "open"]);
+    yield* Deferred.succeed(hide, undefined);
+    expect(yield* seenAfter(3)).toEqual(["queued", "open", "hidden"]);
+    yield* Deferred.succeed(reveal, undefined);
+    expect(yield* seenAfter(4)).toEqual(["queued", "open", "hidden", "open"]);
+    yield* Deferred.succeed(secondAnswer, outcome);
+    expect((yield* Fiber.join(waiter)).requests[0]).toMatchObject({ status: "submitted" });
+    for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+    // Settled, it reports nothing more.
+    expect(yield* Ref.get(seen)).toHaveLength(4);
   }),
 );

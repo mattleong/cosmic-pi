@@ -61,6 +61,11 @@ export class PreviewFrames<TArgs, TDetails, TState extends object> {
     return this.frame(context).context ?? context;
   }
 
+  /** The latest context recorded for a row, which holds no earlier render context. */
+  latestFor(state: TState): ToolRenderContext<TState, TArgs> | undefined {
+    return this.frames.get(state)?.context;
+  }
+
   currentResult(context: ToolRenderContext<TState, TArgs>): AgentToolResult<TDetails> | undefined {
     const recorded = this.frame(context).result;
     return recorded && recorded.partial === context.isPartial ? recorded.result : undefined;
@@ -124,14 +129,24 @@ export function previewIssues<TArgs, TDetails, TState extends object>(
   return value;
 }
 
+/** Rows a collapsed preview row adds after everything it draws, given what it drew. */
+export type PreviewClosing = (rows: readonly string[], width: number) => readonly string[];
+
 class PreviewIssuesFrame extends Container {
   readonly body: Component;
+  private readonly closing: PreviewClosing | undefined;
 
-  constructor(body: Component, issues: Component) {
+  constructor(body: Component, issues: Component, closing: PreviewClosing | undefined) {
     super();
     this.body = body;
+    this.closing = closing;
     this.addChild(body);
     this.addChild(issues);
+  }
+
+  override render(width: number): string[] {
+    const rows = super.render(width);
+    return this.closing ? [...rows, ...this.closing(rows, width)] : rows;
   }
 }
 
@@ -240,6 +255,7 @@ export function renderWithPreviewIssues<TArgs, TDetails, TState extends object>(
   provider: CompactSummaryProvider<TArgs, TDetails, TState>,
   context: ToolRenderContext<TState, TArgs>,
   theme: Theme,
+  closing?: PreviewClosing,
 ): Component {
   frames.frame(context).context = context;
   const detached: ToolRenderContext<TState, TArgs> = { ...context, lastComponent: undefined };
@@ -265,7 +281,7 @@ export function renderWithPreviewIssues<TArgs, TDetails, TState extends object>(
   issueSlots.set(context.state, slot);
   try {
     const body = render({ ...context, lastComponent: unwrapPreviewIssues(context.lastComponent) });
-    return new PreviewIssuesFrame(body, slot.placed ? EMPTY : lines);
+    return new PreviewIssuesFrame(body, slot.placed ? EMPTY : lines, closing);
   } finally {
     issueSlots.delete(context.state);
   }

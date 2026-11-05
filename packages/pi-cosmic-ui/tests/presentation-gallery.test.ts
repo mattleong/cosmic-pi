@@ -15,7 +15,9 @@ import {
   writeGallerySection,
 } from "pi-cosmic-core/testing";
 import { createWorkingRow } from "../src/working/row.ts";
+import { getKeybindings } from "@earendil-works/pi-tui";
 import { ActivityComponent } from "../src/activity/component.ts";
+import { fullScreenKeybindingOptions } from "../src/manager/key-labels.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityInspectionKey, activityWidgetHeight } from "../src/activity/widget-projection.ts";
 import type { ActivityRow } from "../src/activity/model.ts";
@@ -219,8 +221,12 @@ const scenarios: ReadonlyArray<{
   },
 ];
 
+// Pi hands the manager its configured select keys, such as `escape`/`ctrl+c` for cancel.
+const piKeybindings = () => fullScreenKeybindingOptions(getKeybindings());
+
 const manager = (rows: readonly ActivityRow[], height: number) =>
   new ActivityComponent({
+    ...piKeybindings(),
     snapshot: () => rows,
     theme: plainTheme,
     height: () => height,
@@ -424,6 +430,7 @@ const detailedRows: readonly ActivityRow[] = [checker, ticker, flaky];
 
 const detailedManager = (height: number) =>
   new ActivityComponent({
+    ...piKeybindings(),
     snapshot: () => detailedRows,
     theme: plainTheme,
     height: () => height,
@@ -551,6 +558,31 @@ const liveFrames = () => {
     lines.push(
       `── Live progress · widget · ${width} cols`,
       ...renderActivityWidget(liveRows, width, 8, { now: 90_000, theme: plainTheme }),
+      "",
+    );
+  // A wall-clock `now` beside a start recorded as 1 or in the future shows no elapsed time.
+  const clock = Date.UTC(2026, 10, 4);
+  const implausible = [
+    activityRow("unset-start", "running", undefined, {
+      title: "Audit retries",
+      ...agent("worker"),
+      startedAt: 1,
+    }),
+    activityRow("skewed-start", "running", undefined, {
+      title: "Sync mirrors",
+      kind: "command",
+      startedAt: clock + 60_000,
+    }),
+    activityRow("measured", "running", undefined, {
+      title: "Index docs",
+      ...agent("scout"),
+      startedAt: clock - 95_000,
+    }),
+  ];
+  for (const width of [100, 57])
+    lines.push(
+      `── Live progress · widget · implausible starts show no elapsed time · ${width} cols`,
+      ...renderActivityWidget(implausible, width, 8, { now: clock, theme: plainTheme }),
       "",
     );
   const inspected = new Set([activityInspectionKey(flaky)]);

@@ -72,15 +72,11 @@ const footer = (
   inner: number,
   keybindingLabel: SearchableSelectHostOptions["keybindingLabel"],
 ): FramedKeyHints => {
-  const { key } = configuredKeyLabels(keybindingLabel, PROFILE_SET_SHORTCUTS);
-  const confirm = key("tui.select.confirm", "Enter");
-  const up = key("tui.select.up", "↑");
-  const down = key("tui.select.down", "↓");
-  const move = moveKeyHint(
-    Str.length(up) === 1 && Str.length(down) === 1 ? `${up}${down}` : `${up}/${down}`,
-  );
+  const keys = configuredKeyLabels(keybindingLabel, PROFILE_SET_SHORTCUTS);
+  const confirm = keys.primary("tui.select.confirm", "Enter");
+  const move = moveKeyHint(keys.movement);
   // Aliases such as C-c belong in expanded help, not the default hint.
-  const [cancel, ...cancelAliases] = Str.split(key("tui.select.cancel", "Esc"), "/");
+  const { key: cancel, aliases: cancelAliases } = keys.binding("tui.select.cancel", "Esc");
   if (state.searching)
     return framedKeyHints(
       ["Type to filter", move, keyHint(confirm, "Edit")],
@@ -224,7 +220,7 @@ const previewRows = (
               "muted",
               state.parentEffort === undefined
                 ? candidate.effort === "default"
-                  ? "profile default"
+                  ? "inherit"
                   : candidate.effort
                 : candidateEffortLabel(profile.id, candidate, state.parentEffort),
             ),
@@ -286,7 +282,7 @@ export const renderProfileSetPicker = (
   const theme = options.theme;
   const frame = listDetailFrame(theme, "list");
   const inner = width - 2;
-  const title = clipToWidth(" /subagents profiles › Profile sets ", inner, "");
+  const title = clipToWidth(" Managing saved profiles ", inner, "");
   const hints = footer(state, inner, options.keybindingLabel);
   const hintRows = keyHintRows(hints.overflow, inner, (row) => theme.fg("dim", row));
   return framedScreen(frame, {

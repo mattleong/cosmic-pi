@@ -64,6 +64,12 @@ export interface CompactSummary {
    */
   waiting?: true;
   /**
+   * The call is open but its request waits its turn in a queue, such as a questionnaire behind
+   * earlier ones: while pending or running, its status glyph is the muted queued `○` instead of the
+   * spinner. `waiting` wins when both are set; settled rows ignore it.
+   */
+  queued?: true;
+  /**
    * A delivered message someone wrote: a successful or neutral heading shows which way it went
    * instead of its check or dot. Problems and attention keep their own icons.
    */
@@ -71,9 +77,10 @@ export interface CompactSummary {
   /** Words someone wrote, such as a sent message: a collapsed compact row shows them beneath it. */
   quote?: string;
   /**
-   * What expansion reveals, named by the collapsed compact row's `▸ label · C-o Expand`. Without it
-   * the row says `output` when the result has content and `details` otherwise; `false` omits the
-   * affordance because expansion only repeats what the collapsed row shows.
+   * What expansion reveals, named by the collapsed row's `▸ label · C-o Expand` in both collapsed
+   * styles unless the row already shows an affordance. Without it the shell infers `output`,
+   * `error`, or `details` from what the collapsed row leaves out; `false` omits the affordance
+   * because expansion only repeats what the collapsed row shows.
    */
   expandLabel?: string | false;
   issues?: readonly CompactIssue[];

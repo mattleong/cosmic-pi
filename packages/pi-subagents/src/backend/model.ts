@@ -143,6 +143,8 @@ export type BackendEvent =
         ok: boolean,
         payloadJson: string,
       ) => Effect.Effect<void, SubagentProcessError>;
+      /** Tells the caller its `ask_user` questionnaire is on the user's screen. */
+      readonly questionnaireShown: () => Effect.Effect<void, SubagentProcessError>;
     } & BackendProxyRequest)
   | { readonly type: "proxy_cancel"; readonly requestId: string }
   | { readonly type: "protocol_error"; readonly message: string }

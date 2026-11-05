@@ -6,7 +6,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import { composeToolComponent, renderExpansionAffordance, toolExpandHint } from "pi-cosmic-ui/tool";
+import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import type { ToolCallCollapsedStyle } from "../config/schema";
 import { sharedPresentation, type SharedPresentation } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
@@ -16,7 +16,8 @@ import { BorderedToolCall, statusBorderColor } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
 import { renderCompactRow } from "./compact-row";
 import { renderCompactAffordance } from "./compact-quote";
-import { renderPreviewHeading } from "./preview-heading";
+import { showsAffordance } from "./expand-affordance";
+import { previewHeadingRow } from "./preview-heading";
 import { statusBackground } from "./self-background";
 
 /** A custom message presented like a settled tool row: its heading, then what someone wrote. */
@@ -31,7 +32,11 @@ export interface CodePreviewMessage {
   readonly collapsed?: (() => Component | undefined) | undefined;
   /** The complete expanded body; defaults to the collapsed body. */
   readonly expanded?: (() => Component | undefined) | undefined;
-  /** What expansion reveals; a collapsed frame then shows the configured expand hint. */
+  /**
+   * What expansion reveals, such as `details` or `conversation`: in both styles the collapsed
+   * message then ends with `▸ label · C-o Expand`, unless its body already ends in an affordance.
+   * Defaults to the summary's `expandLabel`.
+   */
   readonly expandLabel?: string | undefined;
   /** Native components, such as images, drawn unchanged below the frame as Pi draws tool images. */
   readonly attachments?: ReadonlyArray<Component> | undefined;
@@ -164,11 +169,7 @@ class MessageShell implements Component {
               width,
             ),
           ]
-        : new Text(
-            renderPreviewHeading(message.label ?? message.name, summary, expanded, theme),
-            0,
-            0,
-          ).render(width)),
+        : [previewHeadingRow(message.label ?? message.name, summary, expanded, theme, width)]),
       ...renderCompactIssues(
         summary.issues,
         theme,
@@ -182,12 +183,16 @@ class MessageShell implements Component {
     // A collapsed compact message is a bare compact row, as a collapsed compact tool row is.
     if (compact && !expanded) {
       shown.addChild(heading);
-      if (body) shown.addChild(beneathRow(body));
-      const label = message.expandLabel;
-      if (label !== undefined)
-        shown.addChild(
-          composeToolComponent((width) => renderCompactAffordance(label, theme, width)),
-        );
+      const label = this.expandLabel();
+      const beneath = body && beneathRow(body);
+      shown.addChild(
+        composeToolComponent((width) => {
+          const rows = beneath?.render(width) ?? [];
+          return label === undefined || showsAffordance(rows)
+            ? rows
+            : [...rows, ...renderCompactAffordance(label, theme, width)];
+        }),
+      );
     } else shown.addChild(this.frame(heading, body, status));
     for (const attachment of message.attachments ?? []) {
       shown.addChild(new Spacer(1));
@@ -201,19 +206,14 @@ class MessageShell implements Component {
     body: Component | undefined,
     status: ReturnType<typeof compactStatus>,
   ): Component {
-    const { message, theme, policy } = this;
-    const hint = this.options.expanded ? undefined : message.expandLabel;
+    const { theme, policy } = this;
+    const hint = this.options.expanded ? undefined : this.expandLabel();
     if (policy.toolCallBackground === "border") {
       const rest = new Container();
       if (body) rest.addChild(body);
       const shell = new BorderedToolCall(theme);
-      shell.setContent(
-        heading,
-        rest,
-        { codePreviewBorderResultExpandLabel: hint && theme.fg("muted", toolExpandHint()) },
-        statusBorderColor(status, false),
-        undefined,
-      );
+      shell.setContent(heading, rest, {}, statusBorderColor(status, false), undefined);
+      shell.setExpandFallback((_, rows) => hint !== undefined && !showsAffordance(rows));
       return shell;
     }
     const shell =
@@ -223,14 +223,29 @@ class MessageShell implements Component {
           )
         : new Container();
     shell.addChild(heading);
-    if (body) shell.addChild(body);
-    if (hint !== undefined)
-      shell.addChild(
-        composeToolComponent((width) => [
-          clipToWidth(renderExpansionAffordance(hint, false, theme), width),
-        ]),
-      );
+    shell.addChild(
+      composeToolComponent((width) => {
+        const rows = body?.render(width) ?? [];
+        return hint === undefined || showsAffordance(rows)
+          ? rows
+          : [...rows, clipToWidth(renderExpansionAffordance(hint, false, theme), width)];
+      }),
+    );
     return shell;
+  }
+
+  /**
+   * What expansion reveals: the presenter's `expandLabel`, else its summary's. A collapsed body that
+   * already ends in its own affordance, such as clipped authored text, doesn't get a second one.
+   */
+  private expandLabel(): string | undefined {
+    const { expandLabel, summary } = this.message;
+    if (expandLabel !== undefined)
+      return Str.isNonEmpty(Str.trim(expandLabel)) ? expandLabel : undefined;
+    const declared = summary.expandLabel;
+    return declared === false || declared === undefined || !Str.isNonEmpty(Str.trim(declared))
+      ? undefined
+      : declared;
   }
 }
 

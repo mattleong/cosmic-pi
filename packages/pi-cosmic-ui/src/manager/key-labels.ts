@@ -1,9 +1,10 @@
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { clipToWidth } from "./chrome.ts";
 import type { FullScreenSelectionKeybindingId } from "./keymap.ts";
 
@@ -64,15 +65,31 @@ export const fullScreenKeybindingOptions = (keybindings: HostKeybindingSource) =
 
 const SHIFT_LABEL_PREFIX = "⇧";
 
+// A label made only of modifiers (`C-`, `A-⇧`) is still waiting for its key, so a `/` after it is
+// the key itself rather than a separator.
+const MODIFIERS_ONLY = /^(?:C-|A-|⇧|⌘)+$/;
+
+/**
+ * Splits a `/`-joined key label (`Esc/C-c`) into its keys, keeping `/` itself as a key: `/`,
+ * `C-/`, and `Esc//` read as `["/"]`, `["C-/"]`, and `["Esc", "/"]`.
+ */
+export const splitKeyLabel = (label: string): ReadonlyArray<string> => {
+  const keys: string[] = [];
+  let current = "";
+  for (const char of label) {
+    if (char === "/" && current !== "" && !MODIFIERS_ONLY.test(current)) {
+      keys.push(current);
+      current = "";
+    } else current = `${current}${char}`;
+  }
+  return current === "" ? keys : [...keys, current];
+};
+
 const filterReservedKeyLabel = (
   label: string,
   reservedKeys: ReadonlySet<string>,
   fallback: string,
 ): string => {
-  if (label === "/") return reservedKeys.has("/") ? fallback : label;
-  // Widened so the negated Arr.some guard cannot narrow the non-empty split result to never.
-  const parts: ReadonlyArray<string> = Str.split(label, "/");
-  if (Arr.some(parts, (part) => part.length === 0)) return label;
   const collides = (part: string): boolean =>
     reservedKeys.has(part) ||
     (part.length === 2 &&
@@ -80,7 +97,7 @@ const filterReservedKeyLabel = (
       reservedKeys.has(Fn.pipe(part, Str.slice(SHIFT_LABEL_PREFIX.length))));
   return (
     Arr.join(
-      Arr.filter(parts, (part) => !collides(part)),
+      Arr.filter(splitKeyLabel(label), (part) => !collides(part)),
       "/",
     ) || fallback
   );
@@ -282,6 +299,26 @@ export const framedKeyHintBar = (
   return framedKeyHints(hints, tail, inner);
 };
 
+/** `↑↓` when both keys are one glyph, `C-p/C-n` otherwise; never `↑/↓`. */
+export const movementKeyLabel = (up: string, down: string): string =>
+  Str.length(up) === 1 && Str.length(down) === 1 ? `${up}${down}` : `${up}/${down}`;
+
+/** A configured binding as a hint key: the primary key, and aliases for expanded help. */
+export interface ConfiguredKey {
+  readonly key: string;
+  readonly aliases: ReadonlyArray<string>;
+}
+
+const configuredKey = (label: string, fallback: string): ConfiguredKey => {
+  const [key, ...aliases] = splitKeyLabel(label);
+  return { key: key ?? fallback, aliases };
+};
+
+/**
+ * Hint labels for the `tui.select.*` keys a surface was configured with. `key` keeps every
+ * configured key (`Esc/C-c`); default bars use `primary` and put `aliases` in expanded help, and
+ * `movement` names the primary up and down keys as one label (`↑↓`).
+ */
 export const configuredKeyLabels = (
   keybindingLabel: ((id: FullScreenSelectionKeybindingId, fallback: string) => string) | undefined,
   reserved: ReadonlySet<string>,
@@ -291,8 +328,40 @@ export const configuredKeyLabels = (
     const label = configured === undefined || configured === "" ? fallback : configured;
     return filterReservedKeyLabel(label, reserved, fallback);
   };
+  const binding = (id: FullScreenSelectionKeybindingId, fallback: string): ConfiguredKey =>
+    configuredKey(key(id, fallback), fallback);
+  const primary = (id: FullScreenSelectionKeybindingId, fallback: string): string =>
+    binding(id, fallback).key;
   const movement = keybindingLabel
-    ? `${key("tui.select.up", "↑")}/${key("tui.select.down", "↓")}`
+    ? movementKeyLabel(primary("tui.select.up", "↑"), primary("tui.select.down", "↓"))
     : undefined;
-  return { key, movement, navigation: movement ? `j/k · ${movement}` : "j/k" };
+  return {
+    key,
+    binding,
+    primary,
+    movement,
+    navigation: movement ? `j/k · ${movement}` : "j/k",
+  };
+};
+
+const piSelectKeyLabel = (id: FullScreenSelectionKeybindingId, fallback: string): string =>
+  invokeHostCallback((): string => {
+    const keys: unknown = getKeybindings().getKeys(id);
+    return Arr.isArray(keys) ? formatKeyIds(Arr.filter(keys, Predicate.isString)) : fallback;
+  }, fallback);
+
+/**
+ * Pi's own select keys, as surfaces built on pi-tui lists (settings lists and their choice
+ * submenus) match them: the primary keys for the default bar and the cancel aliases, such as
+ * `C-c`, for expanded help. Unreadable bindings fall back to the default keys.
+ */
+export const piSelectHintKeys = () => {
+  const keys = configuredKeyLabels(piSelectKeyLabel, new Set());
+  const cancel = keys.binding("tui.select.cancel", "Esc");
+  return {
+    move: keys.movement ?? "↑↓",
+    confirm: keys.primary("tui.select.confirm", "Enter"),
+    cancel: cancel.key,
+    cancelAliases: cancel.aliases,
+  };
 };

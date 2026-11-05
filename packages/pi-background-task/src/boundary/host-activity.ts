@@ -6,6 +6,7 @@ import {
   type ActivityItem,
 } from "pi-cosmic-ui/activity";
 import { formatBytes, formatClockTime } from "pi-cosmic-core/display";
+import { joinInline } from "pi-cosmic-ui/manager";
 import { exitStatusMeaning } from "pi-code-previews";
 import { safeTextSuffix } from "pi-cosmic-core/text";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -118,16 +119,17 @@ export function backgroundTaskActivityItems(
 const withMeaning = (value: string, meaning: string | undefined): string =>
   meaning ? `${value} (${meaning})` : value;
 
-const exitField = (task: BackgroundTaskView): string => {
+/** The exit facts the task has, such as `code 1` or `signal SIGTERM`; none while it runs. */
+const exitField = (task: BackgroundTaskView): string | undefined => {
   const code = Predicate.isNumber(task.exitCode)
-    ? withMeaning(String(task.exitCode), exitStatusMeaning(task.exitCode))
+    ? `code ${withMeaning(String(task.exitCode), exitStatusMeaning(task.exitCode))}`
     : task.exitCode === null
-      ? "unknown"
-      : "none";
+      ? "code unknown"
+      : undefined;
   const signal = task.signal
-    ? withMeaning(task.signal, exitStatusMeaning(undefined, task.signal))
-    : "none";
-  return `code ${code} · signal ${signal}`;
+    ? `signal ${withMeaning(task.signal, exitStatusMeaning(undefined, task.signal))}`
+    : undefined;
+  return joinInline([code, signal]) || undefined;
 };
 
 // Local wall-clock times; the item's own ages and elapsed time cover the relative view.
@@ -170,6 +172,7 @@ export function backgroundTaskActivityDetail(
   const failure = failureSummary(task);
   const output = logTail(task);
   const dropped = task.droppedLogBytes > 0 ? `${formatBytes(task.droppedLogBytes)} not kept` : "";
+  const exit = exitField(task);
   return {
     sections: [
       ...(failure ? [{ body: failure }] : []),
@@ -182,7 +185,7 @@ export function backgroundTaskActivityDetail(
     technical: [
       { label: "ID", value: task.id },
       { label: "PID", value: task.pid === undefined ? "none" : String(task.pid) },
-      { label: "Exit", value: exitField(task) },
+      ...(exit === undefined ? [] : [{ label: "Exit", value: exit }]),
       { label: "Started", value: clockTime(task.startedAt, now) },
       ...(task.endedAt === undefined
         ? []

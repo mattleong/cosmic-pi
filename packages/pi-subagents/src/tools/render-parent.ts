@@ -34,7 +34,7 @@ import { agentTextLines } from "../ui/agent-text.ts";
 const waitingLine = (theme: Parameters<typeof toolRunningLine>[0]): string =>
   toolStatusLine(theme, "waiting", "Waiting for reply");
 
-export const CONTACT_PARENT_LABEL = "Contact Parent";
+export const CONTACT_PARENT_LABEL = "Contact parent";
 
 const ContactSchema = Schema.Struct({
   kind: Schema.Literals(["progress", "warning", "question"]),

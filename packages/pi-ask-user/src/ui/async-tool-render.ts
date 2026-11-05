@@ -11,7 +11,8 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { countLabel } from "pi-cosmic-core/display";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
-import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
+import { toolRunningLine } from "pi-cosmic-ui/tool";
+import type { PendingPresentation } from "../questionnaire/async-model.ts";
 import {
   answersBody,
   callBody,
@@ -30,6 +31,7 @@ import {
   callTitles,
   decodeAsyncControl,
   decodeExpandedAsyncRows,
+  decodePresentation,
   contentText,
   deliveryFacts,
   isStatusList,
@@ -128,14 +130,7 @@ export function renderAsyncResult(
   context: ResultContext = {},
 ): Component {
   if (options.isPartial)
-    return new Text(
-      // An await is a wait on the user, as its compact row says.
-      decodeAsyncControl(context.args)?.action === "await"
-        ? toolStatusLine(theme, "waiting", "Needs your input")
-        : toolRunningLine(theme),
-      0,
-      0,
-    );
+    return presentationLine(decodePresentation(envelope(input)?.details), theme);
   const result = envelope(input);
   const decoded = decodeExpandedAsyncRows(result?.details);
   const rows = decoded ?? [];
@@ -155,6 +150,17 @@ export function renderAsyncResult(
   return collapsedRows(rows, states, list, theme);
 }
 
+/**
+ * A live call's line: an await says where its questionnaire stands, as its compact row does, and
+ * spins only until it knows. A hidden one's issue already says so and how to resume it.
+ */
+function presentationLine(presentation: PendingPresentation | undefined, theme: Theme): Component {
+  if (presentation === "open") return waitingState(stateWords("waiting"), theme);
+  if (presentation === "hidden") return emptyBody();
+  if (presentation === "queued") return queuedState(stateWords("queued"), theme);
+  return new Text(toolRunningLine(theme), 0, 0);
+}
+
 function collapsedRows(
   rows: readonly ReplayedSnapshot[],
   states: readonly QuestionnaireState[],
@@ -164,7 +170,7 @@ function collapsedRows(
   if (rows.length === 0) return mutedState(["No questionnaires", "None"], theme);
   // An open questionnaire needs the user now; a queued one only waits its turn.
   const pendingState = (alternatives: readonly string[]) =>
-    states.includes("waiting")
+    states.includes("waiting") || states.includes("hidden")
       ? waitingState(alternatives, theme)
       : states.includes("queued")
         ? queuedState(alternatives, theme)
@@ -172,6 +178,8 @@ function collapsedRows(
   if (list) return pendingState(stateCounts(states));
   const [state] = states;
   if (state === "cancelled") return cancelledLine(theme);
+  // Its issue says it is hidden and how to resume it.
+  if (state === "hidden") return emptyBody();
   const answers = submittedAnswers(rows);
   if (answers) return answersBody(answers, rowTitles(rows), theme, true);
   return state && isPendingState(state) ? pendingState(stateWords(state)) : emptyBody();
@@ -204,11 +212,12 @@ export const presentAsyncMessage: CodePreviewMessagePresenter = (input, options,
   // The icon says whether it was answered or cancelled; the heading names the questions.
   const subject = storedTitlesLabel(delivered?.titles) ?? "questionnaire";
   const presentation = { name: "ask_user_answers", label: "Answers", expanded };
+  // A preview body already shows the stored text that expansion would.
   if (!outcome)
     return {
       ...presentation,
       summary: { subject },
-      ...(preview && { collapsed: () => new Text(raw, 0, 0) }),
+      ...(preview ? { collapsed: () => new Text(raw, 0, 0) } : { expandLabel: "message" }),
     };
   const cancelled = outcome.outcome === "cancelled";
   // The preview heading carries no glyph, so its body names the cancellation.
@@ -220,6 +229,8 @@ export const presentAsyncMessage: CodePreviewMessagePresenter = (input, options,
       outcome: cancelled ? "cancelled" : "success",
       counters: answers?.length ? [countLabel(answers.length, "answer")] : [],
     },
+    // The request and delivery IDs.
+    expandLabel: "details",
     ...(answers && { collapsed: () => answersBody(answers, titles, theme, true) }),
     ...(cancellation && {
       collapsed: () => cancelledLine(theme),

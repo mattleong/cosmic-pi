@@ -65,11 +65,18 @@ export const parentCompactSummary: CompactSummaryProvider<ParentToolArgs> = ({
   const details = decodeParentToolDetails(result);
   if (details === undefined) return undefined;
   if (isReadFailure(details))
-    return { subject: requested, outcome: "error", issues: [failureIssue(details)] };
+    return {
+      subject: requested,
+      outcome: "error",
+      issues: [failureIssue(details)],
+      expandLabel: "details",
+    };
   return {
     subject: readLabel(details),
     metadata: details.compacted ? ["after compaction"] : [],
     outcome: "success",
+    // Collapsed rows show only the heading; expansion shows the whole read, or the parent's id.
+    expandLabel: details.items.length > 0 ? "messages" : "details",
   };
 };
 

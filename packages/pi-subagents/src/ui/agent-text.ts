@@ -192,6 +192,14 @@ export const indentedLines = (line: string, width: number, indent = 2): string[]
   );
 };
 
+/** A line wrapped beneath `indent`, its continuation rows hanging two columns further in. */
+export const hangingLines = (line: string, width: number, indent = 0): string[] => {
+  const shift = Math.min(indent, Math.max(0, width - 1));
+  const hang = Math.min(shift + 2, Math.max(0, width - 1));
+  const [first = "", ...rest] = wrapTextWithAnsi(line, Math.max(1, width - hang));
+  return [`${pad(shift)}${first}`, ...Arr.map(rest, (row) => `${pad(hang)}${row}`)];
+};
+
 /** One agent in a block list: its name and state, then the words it wrote or a short note. */
 export interface AgentTextBlock {
   readonly glyph: string;

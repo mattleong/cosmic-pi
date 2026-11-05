@@ -87,7 +87,10 @@ describe("subagents doctor", () => {
       const byLabel = new Map(Arr.map(checks, (item) => [item.label, item]));
       expect(byLabel.get("Profile scout")?.status).toBe("ok");
       expect(byLabel.get("Profile reviewer")).toMatchObject({ status: "warning" });
-      expect(byLabel.get("Profile reviewer")?.detail).toContain("provider_unauthenticated");
+      // The panel reads as a person would: the cause in words, without its internal code.
+      expect(byLabel.get("Profile reviewer")?.detail).toBe(
+        "test/opus: The provider is not signed in; a fallback will be tried",
+      );
       expect(Arr.filter(probed, (model) => model === "test/haiku")).toHaveLength(1);
       expect(byLabel.get("Private state")?.status).toBe("ok");
       expect(byLabel.get("Node")?.status).toBe("ok");

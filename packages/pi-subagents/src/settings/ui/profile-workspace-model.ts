@@ -91,13 +91,16 @@ export const candidateEffortLevel = (
     ? (profileDefaultEffort(profile) ?? parentEffort)
     : candidate.effort;
 
+/** An unpinned reasoning level reads as the level it inherits, such as `inherit (low)`. */
+export const inheritedEffortLabel = (level: string): string => `inherit (${level})`;
+
 export const candidateEffortLabel = (
   profile: ProfileId,
   candidate: ProfileCandidate,
   parentEffort: SubagentEffort,
 ): string =>
   candidate.effort === "default"
-    ? `${candidateEffortLevel(profile, candidate, parentEffort)} (profile default)`
+    ? inheritedEffortLabel(candidateEffortLevel(profile, candidate, parentEffort))
     : candidate.effort;
 
 /**
@@ -134,11 +137,12 @@ export const targetProfilePrimarySummary = (
   inspection: ProfileSettingsInspection,
   target: ProfileWorkspaceTarget,
   profile: ProfileId,
+  parentModel?: string,
 ): string => {
   const draft = loadProfileRouteDraft(inspection, target, profile);
   const kind = draftKindLabel(draft, profileWorkspaceScope(target));
   const primary = draft.candidates[0];
-  if (primary) return `${kind} · ${candidateModelLabel(primary, undefined)}`;
+  if (primary) return `${kind} · ${candidateModelLabel(primary, parentModel)}`;
   return draft.kind === "disabled" || draft.kind === "invalid" ? kind : `${kind} · disabled`;
 };
 
@@ -290,7 +294,7 @@ export const candidateFieldChoices = (
     return [
       {
         value: "default",
-        label: effectiveDefault ? `${effectiveDefault} (profile default)` : "Profile default",
+        label: effectiveDefault ? inheritedEffortLabel(effectiveDefault) : "inherit",
         description: "Follow the profile's default reasoning level instead of pinning an override.",
       },
       ...Arr.map(candidateEfforts(options.supportedEfforts), (effort) => ({

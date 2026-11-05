@@ -1,16 +1,7 @@
-import { Text, type Component } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
+import { previewHeadingText } from "../../../preview/heading-wrap";
 
+/** A preview heading whose text follows the row's state, wrapped as every preview heading is. */
 export function stateHeading(text: () => string): Component {
-  const heading = new Text("", 0, 0);
-  let shown: string | undefined;
-  return {
-    render(width) {
-      const next = text();
-      if (next !== shown) heading.setText((shown = next));
-      return heading.render(width);
-    },
-    invalidate() {
-      heading.invalidate();
-    },
-  };
+  return previewHeadingText(text);
 }

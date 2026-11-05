@@ -45,12 +45,19 @@ export const activityMark = (row: ActivityRow, now = 0): ActivityMark => {
     color: managerActivityColor(kind),
   };
 };
+/** Longer spans come from a skewed clock or a missing start, such as `startedAt: 1`, not real work. */
+const MAX_ACTIVITY_SPAN = 7 * 24 * 60 * 60 * 1_000;
+
+/** The span between two activity times, or `undefined` when it is negative or implausibly long. */
+export const activitySpan = (later: number, earlier: number): number | undefined => {
+  const span = later - earlier;
+  return Number.isFinite(span) && span >= 0 && span <= MAX_ACTIVITY_SPAN ? span : undefined;
+};
+
 export const activityElapsed = (row: ActivityRow, now?: number, compact = false): string => {
   if (row.startedAt === undefined) return "";
-  const elapsed = Math.max(
-    0,
-    (row.endedAt ?? now ?? row.updatedAt ?? row.startedAt) - row.startedAt,
-  );
+  const elapsed = activitySpan(row.endedAt ?? now ?? row.updatedAt ?? row.startedAt, row.startedAt);
+  if (elapsed === undefined) return "";
   const text = formatElapsed(elapsed);
   return compact ? Str.split(text, " ")[0] : text;
 };
@@ -140,10 +147,18 @@ const memberStatus = (
       { text: reason, drop: STATUS_DROP.state, clip: REASON_MINIMUM_WIDTH },
     ];
   const elapsed = activityElapsed(row, now, width < 60);
-  // Beside a status, a bare duration would read as an age: say what it measures.
-  const measured =
-    attention && elapsed ? (isFinished(row) ? `after ${elapsed}` : `· ${elapsed}`) : elapsed;
-  return [{ text: attention }, { text: measured, drop: STATUS_DROP.elapsed }];
+  if (isFinished(row)) {
+    // Beside a status, a bare duration would read as an age: say what it measures.
+    const measured = attention && elapsed ? `after ${elapsed}` : elapsed;
+    return [{ text: attention }, { text: measured, drop: STATUS_DROP.elapsed }];
+  }
+  // A row waiting for its parent's reply keeps its elapsed time when cramped; its `?` glyph still
+  // says it is waiting.
+  const waitWord = activityAttention(row) === "parent" ? { drop: STATUS_DROP.waitWord } : {};
+  return [
+    { text: attention, ...waitWord },
+    { text: elapsed, lead: attention ? "· " : "", drop: STATUS_DROP.elapsed },
+  ];
 };
 
 /** What running work is doing now, in its producer's words, when that adds to its status. */

@@ -102,7 +102,7 @@ const PANEL_MOTIONS: Partial<Record<FullScreenAction, PanelMotion>> = {
 
 const CLOSE_ACTIONS: ReadonlySet<FullScreenAction> = new Set(["cancel", "quit", "back"]);
 
-/** A framed, read-only text panel that wraps long lines, scrolls, and closes with Esc or q. */
+/** A framed, read-only text panel that wraps long lines, scrolls, and closes with Esc, C-c, or q. */
 export class TextPanelComponent implements Component {
   private readonly options: TextPanelOptions;
   private readonly frame: ListDetailFrame;
@@ -121,14 +121,16 @@ export class TextPanelComponent implements Component {
     return Math.max(0, this.rowCount - this.bodyHeight);
   }
 
+  // The panel closes on C-c and q as well as Esc; expanded help names them in the exit pair.
   private hintBar(scrollable: boolean): KeyHintBar {
     const exit = this.options.exit ?? "top";
-    if (!scrollable) return { hints: [], exit };
+    const exitAliases = ["C-c", "q"];
+    if (!scrollable) return { hints: [], exit, exitAliases };
     return {
       hints: [keyHint("↑↓", "Scroll")],
       more: [keyHint("j/k", "Scroll"), keyHint("PgUp/PgDn", "Page"), keyHint("gg/G", "Ends")],
       exit,
-      exitAliases: ["q"],
+      exitAliases,
     };
   }
 

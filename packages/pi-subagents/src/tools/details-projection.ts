@@ -564,6 +564,10 @@ export const projectInvalidAgents = (
     return name === undefined ? { scope: entry.scope } : { scope: entry.scope, name };
   });
 
+/** The caller's model as `agent_profiles` details keep it, when one is known. */
+export const projectParentModel = (model: string | undefined): string | undefined =>
+  optionalText(model, MAX_PROFILE_MODEL_SELECTOR_CHARS);
+
 export const projectSubagentProfileRoutes = (
   profiles: ReadonlyArray<SubagentProfileView>,
 ): ReadonlyArray<SubagentProfileRouteCard> =>

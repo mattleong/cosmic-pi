@@ -21,6 +21,7 @@ import {
   keyHintBar,
   moveKeyHint,
   keyHintRows,
+  piSelectHintKeys,
   settingAffordanceHint,
   type KeyHintBar,
   type SettingAffordance,
@@ -110,16 +111,21 @@ export interface SettingsHintSource {
   readonly settingsHint: (expanded: boolean) => string;
 }
 
-const GENERIC_SUBMENU_HINT: KeyHintBar = {
-  hints: [moveKeyHint(), keyHint("Enter", "Select")],
-  more: [keyHint("j/k", "Move")],
-  exit: "nested",
-  exitAliases: ["h", "q"],
+// Pi's select keys drive pi-tui lists, so their configured cancel aliases (`C-c`) join the exit.
+const genericSubmenuHint = (): KeyHintBar => {
+  const keys = piSelectHintKeys();
+  return {
+    hints: [moveKeyHint(keys.move), keyHint(keys.confirm, "Select")],
+    more: [keyHint("j/k", "Move")],
+    exit: "nested",
+    exitKey: keys.cancel,
+    exitAliases: [...keys.cancelAliases, "h", "q"],
+  };
 };
 
 const submenuHint = (submenu: SettingsSubmenu, expanded: boolean): string => {
   const callback = submenu.settingsHint;
-  if (!callback) return keyHintBar(GENERIC_SUBMENU_HINT, expanded);
+  if (!callback) return keyHintBar(genericSubmenuHint(), expanded);
   const hint = invokeHostCallback<unknown>(() => callback.call(submenu, expanded), "");
   return Option.getOrElse(decodeHintText(hint), () => "");
 };
@@ -131,19 +137,21 @@ export const settingsListHint = (list: Component, options: SettingsHintOptions):
   const row = settingsListPosition(list)?.row;
   const affordance = row && settingRowAffordance(row);
   const enter = affordance && settingAffordanceHint(affordance);
+  const keys = piSelectHintKeys();
+  const move = moveKeyHint(keys.move);
   if (options.searching)
-    return joinKeyHints(["Type to filter", moveKeyHint(), enter, keyHint("Esc", "Clear")]);
+    return joinKeyHints(["Type to filter", move, enter, keyHint(keys.cancel, "Clear")]);
   if (options.filtered)
     return keyHintBar(
       {
-        hints: [moveKeyHint(), enter, keyHint("/", "Filter"), keyHint("Esc", "Clear")],
+        hints: [move, enter, keyHint("/", "Filter"), keyHint(keys.cancel, "Clear")],
         more: [keyHint("j/k", "Move"), keyHint("gg/G", "Ends"), keyHint("q", "Close")],
       },
       options.expanded,
     );
   return keyHintBar(
     {
-      hints: [moveKeyHint(), enter, options.filterable === true && keyHint("/", "Filter")],
+      hints: [move, enter, options.filterable === true && keyHint("/", "Filter")],
       more: [
         keyHint("j/k", "Move"),
         keyHint("gg/G", "Ends"),
@@ -151,7 +159,8 @@ export const settingsListHint = (list: Component, options: SettingsHintOptions):
         affordance && settingAffordanceHint(affordance, "Space/l"),
       ],
       exit: options.level,
-      exitAliases: ["h", "q"],
+      exitKey: keys.cancel,
+      exitAliases: [...keys.cancelAliases, "h", "q"],
     },
     options.expanded,
   );

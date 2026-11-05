@@ -5,13 +5,14 @@ import {
   type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
+import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import * as Predicate from "effect/Predicate";
 import { extensionApiFixture, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
 import { stripAnsi } from "pi-cosmic-core";
 import { registerCodePreviewsCommand } from "../src/commands/register";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { expandedText, withCodePreviewMessageShell } from "../index";
+import { authoredTextLines, expandedText, withCodePreviewMessageShell } from "../index";
 import {
   captureRegistrations,
   galleryDirectory,
@@ -190,11 +191,21 @@ const StatusDemoArgs = Schema.Struct({
   subject: Schema.optionalKey(Schema.String),
   path: Schema.optionalKey(Schema.Literal(true)),
   waiting: Schema.optionalKey(Schema.Literal(true)),
+  /** Open, but its request waits its turn in a queue. */
+  queued: Schema.optionalKey(Schema.Literal(true)),
   outcome: Schema.optionalKey(Schema.Literals(["queued", "paused", "returned"])),
   metadata: Schema.optionalKey(Schema.String),
   /** A state the collapsed result states above its output, as a task's `running` does. */
   state: Schema.optionalKey(Schema.String),
-  expandLabel: Schema.optionalKey(Schema.Literal(false)),
+  expandLabel: Schema.optionalKey(Schema.Union([Schema.String, Schema.Literal(false)])),
+  /** An issue the row shows, which carries its state when expanded. */
+  issue: Schema.optionalKey(Schema.String),
+  issueSeverity: Schema.optionalKey(Schema.Literals(["info", "warning", "attention"])),
+  /** The collapsed preview draws no result body; only the heading summarizes it. */
+  summaryOnly: Schema.optionalKey(Schema.Literal(true)),
+  /** The collapsed result body ends with its own affordance for clipped output. */
+  clipped: Schema.optionalKey(Schema.Literal(true)),
+  messageIcon: Schema.optionalKey(Schema.Literal("received")),
 });
 const statusDemoArgs = Fn.flow(
   Schema.decodeUnknownOption(StatusDemoArgs),
@@ -205,10 +216,14 @@ const statusDemo = () =>
     { name: "status_demo", label: "Status demo" },
     {
       renderCall: (args) => new Text(`Status demo ${statusDemoArgs(args).subject ?? ""}`, 0, 0),
-      renderResult: (result, _options, _theme, context) => {
+      renderResult: (result, _options, theme, context) => {
         const output = result.content[0]?.type === "text" ? result.content[0].text : "";
-        const { state } = statusDemoArgs(context.args);
-        return new Text(state === undefined ? output : `${state}\n${output}`, 0, 0);
+        const { state, summaryOnly, clipped } = statusDemoArgs(context.args);
+        if (summaryOnly) return new Container();
+        const shown = clipped
+          ? `${Str.split(output, "\n")[0] ?? ""}\n${renderExpansionAffordance("2 more lines", false, theme)}`
+          : output;
+        return new Text(state === undefined ? shown : `${state}\n${shown}`, 0, 0);
       },
     },
     {
@@ -219,19 +234,33 @@ const statusDemo = () =>
           subject: args.subject ?? "",
           ...(args.path && { pathSubject: true }),
           ...(args.waiting && { waiting: true }),
+          ...(args.queued && { queued: true }),
           ...(metadata !== undefined && { metadata: [metadata] }),
-          ...(args.expandLabel === false && { expandLabel: false }),
-          ...(phase === "settled" && { outcome: args.outcome ?? "returned" }),
+          ...(args.expandLabel !== undefined && { expandLabel: args.expandLabel }),
+          ...(args.messageIcon && { messageIcon: args.messageIcon }),
+          ...(args.issue !== undefined && {
+            issues: [
+              {
+                severity: args.issueSeverity ?? "warning",
+                code: "demo",
+                message: args.issue,
+              },
+            ],
+          }),
+          ...(phase === "settled" && {
+            outcome: args.outcome ?? (args.issueSeverity === "warning" ? "warning" : "returned"),
+          }),
         };
       },
       expandedContent: {
         renderCall: () => new Container(),
-        renderResult: (result, _options, theme) =>
-          expandedText(
-            theme,
-            "Output",
+        renderResult: (result, _options, theme) => {
+          const lines = Arr.filter(
             Arr.map(result.content, (part) => (part.type === "text" ? part.text : "[image]")),
-          ),
+            Str.isNonEmpty,
+          );
+          return lines.length === 0 ? new Container() : expandedText(theme, "Output", lines);
+        },
       },
     },
   );
@@ -257,6 +286,36 @@ const statusDemoMessage = withCodePreviewMessageShell((message, _options, theme)
   collapsed: () => new Text(messageText(message.content), 0, 0),
   expanded: () =>
     expandedText(theme, "Message", [messageText(message.content), "The full note continues here."]),
+  expandLabel: "message",
+}));
+
+/** A message whose heading subject is long prose or a long path, which a collapsed heading cuts. */
+const longSubjectMessage = (subject: string, path: boolean) =>
+  withCodePreviewMessageShell((message, _options, theme) => ({
+    name: "status_message",
+    label: "Image ready",
+    summary: {
+      subject,
+      ...(path && { pathSubject: true }),
+      metadata: ["PNG · 70 bytes"],
+      outcome: "success",
+    },
+    collapsed: () => new Text(messageText(message.content), 0, 0),
+    expanded: () => expandedText(theme, "Details", [subject, messageText(message.content)]),
+    expandLabel: "details",
+  }));
+
+/** A message whose collapsed words end in their own affordance, so the shell adds no second one. */
+const longStatusMessage = withCodePreviewMessageShell((message, _options, theme) => ({
+  name: "status_message",
+  label: "Status message",
+  summary: { subject: "from release-bot", outcome: "returned", messageIcon: "received" },
+  collapsed: () => ({
+    render: (width) =>
+      authoredTextLines(messageText(message.content), width, theme, { expanded: false, indent: 0 }),
+    invalidate: () => undefined,
+  }),
+  expanded: () => expandedText(theme, "Message", Str.split(messageText(message.content), "\n")),
   expandLabel: "message",
 }));
 
@@ -1285,6 +1344,46 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "status_demo",
+    title: "paused run whose body doesn't state it keeps its state line",
+    args: { subject: "auth review", outcome: "paused" },
+    result: text("Reviewed 3 of 7 files"),
+  },
+  {
+    tool: "status_demo",
+    title: "a body listing paused work states the state, so no state line",
+    args: { subject: "auth review", outcome: "paused" },
+    result: text("0/1 finished · 1 paused\n‖ auth-review · paused"),
+  },
+  {
+    tool: "status_demo",
+    title: "a body that only mentions running keeps the running line",
+    args: { subject: "dev server" },
+    result: text("The dev server keeps running on port 5173"),
+    phase: "running",
+  },
+  {
+    tool: "status_demo",
+    title: "a body counting running work states the state, so no running line",
+    args: { subject: "subagents" },
+    result: text("0/2 finished · 2 running"),
+    phase: "running",
+  },
+  {
+    tool: "status_demo",
+    title: "an open call whose request is queued shows the queued glyph",
+    args: { subject: "Release checklist", queued: true },
+    result: text("Asked for answers to 4 questions"),
+    phase: "running",
+  },
+  {
+    tool: "status_demo",
+    title: "an open queued call whose body says so has no state line",
+    args: { subject: "Release checklist", queued: true },
+    result: text("Queued behind 2 earlier questionnaires"),
+    phase: "running",
+  },
+  {
+    tool: "status_demo",
     title: "prose subject cut at a word",
     args: {
       subject:
@@ -1308,6 +1407,89 @@ const scenarios: ReadonlyArray<
     title: "expansion adds nothing, so no affordance",
     args: { subject: "status all", metadata: "no questionnaires", expandLabel: false },
     result: text("No questionnaires"),
+  },
+  {
+    tool: "status_demo",
+    title: "summary-only row names what expansion reveals after its timing",
+    args: {
+      subject: "release check",
+      metadata: "12 passed",
+      expandLabel: "checks",
+      summaryOnly: true,
+    },
+    result: text("12 checks passed\nlint, typecheck, unit, e2e, …"),
+    durationMs: 2100,
+    timing: true,
+  },
+  {
+    tool: "status_demo",
+    title: "empty partial update keeps the expansion affordance",
+    args: { subject: "Which release should ship first?", waiting: true },
+    result: text(""),
+    phase: "running",
+  },
+  {
+    tool: "status_demo",
+    title: "a clipped body's own affordance closes the row after its timing",
+    args: { subject: "build log", clipped: true, expandLabel: "log" },
+    result: text("Compiled 48 modules\nWrote dist/app.js\nDone"),
+    durationMs: 3400,
+    timing: true,
+  },
+  {
+    tool: "status_demo",
+    title: "a receipt with a warning shows the warning, not a state line",
+    args: {
+      subject: "from release-bot",
+      messageIcon: "received",
+      issue: "Integration tests need docker, which isn't running",
+      issueSeverity: "warning",
+      state: "received",
+    },
+    result: text("Release notes are ready."),
+  },
+  {
+    tool: "status_demo",
+    title: "a paused run whose issue states it has no state line",
+    args: {
+      subject: "auth review",
+      outcome: "paused",
+      metadata: "paused",
+      issue: "auth-review is paused",
+      issueSeverity: "info",
+    },
+    result: text("Paused by the user"),
+  },
+  {
+    tool: "grep",
+    title: "grep in a deeply nested directory",
+    args: {
+      pattern: "renderExpansionAffordance",
+      path: "/project/packages/pi-code-previews/src/tools/renderers/shared",
+      glob: "*.ts",
+    },
+    result: text("builtin-expanded-content.ts:12: import { renderExpansionAffordance }"),
+  },
+  {
+    tool: "edit",
+    title: "edit a deeply nested file",
+    args: {
+      path: "/project/packages/pi-code-previews/src/tools/renderers/shared/builtin-expanded-content.ts",
+      edits: [{ oldText: "const a = 1;", newText: "const a = 2;" }],
+    },
+    result: text(
+      "Successfully replaced text in /project/packages/pi-code-previews/src/tools/renderers/shared/builtin-expanded-content.ts.",
+      { diff: "-1 const a = 1;\n+1 const a = 2;\n 2 const b = 2;" },
+    ),
+  },
+  {
+    tool: "find",
+    title: "find in a deeply nested directory",
+    args: {
+      pattern: "*.test.ts",
+      path: "/project/packages/pi-code-previews/tests/tools/renderers/shared",
+    },
+    result: text("cache-retirement.test.ts\npreview-text.test.ts"),
   },
   {
     tool: "read",
@@ -1437,6 +1619,51 @@ describe.skipIf(!directory)("presentation gallery", () => {
                   role: "custom",
                   customType: "status_message",
                   content: "Release notes are ready for review.",
+                  display: true,
+                  timestamp: 0,
+                },
+              }),
+              ...galleryMessageFrames(
+                longSubjectMessage(
+                  "A watercolor otter reading a newspaper on a riverbank at dawn",
+                  false,
+                ),
+                {
+                  title: `${style} · message heading cuts a long prose subject at a word`,
+                  message: {
+                    role: "custom",
+                    customType: "status_message",
+                    content: "Saved to otter.png",
+                    display: true,
+                    timestamp: 0,
+                  },
+                },
+              ),
+              ...galleryMessageFrames(
+                longSubjectMessage(
+                  "packages/pi-better-openai/generated/openai-image-2026-09-27T10-00-00-000Z.png",
+                  true,
+                ),
+                {
+                  title: `${style} · message heading keeps a long path's file name`,
+                  message: {
+                    role: "custom",
+                    customType: "status_message",
+                    content: "Saved to the project.",
+                    display: true,
+                    timestamp: 0,
+                  },
+                },
+              ),
+              ...galleryMessageFrames(longStatusMessage, {
+                title: `${style} · clipped message keeps one affordance`,
+                message: {
+                  role: "custom",
+                  customType: "status_message",
+                  content: Arr.join(
+                    Arr.map(Arr.range(1, 14), (line) => `Release note ${line}: one change.`),
+                    "\n",
+                  ),
                   display: true,
                   timestamp: 0,
                 },

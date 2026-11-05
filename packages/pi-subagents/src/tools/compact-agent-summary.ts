@@ -130,6 +130,8 @@ const summarizeSend = (details: SendDetails): CompactSummary => {
       subject: details.to === MAIN_AGENT_ID ? "main" : displayName(details.name),
       counters: status === undefined ? [] : [status],
       messageIcon: "sent",
+      // Expansion explains a departure from plain delivery and names a recipient that isn't main.
+      ...(status === undefined && details.to === details.name && { expandLabel: false }),
     },
     sendIssues(details),
   );
@@ -217,6 +219,7 @@ export const createAgentCompactSummary =
     }
     const details = decodeAgentToolDetails(result.details);
     if (details?.action !== tool) return undefined;
-    const summary = summarizeDetails(details);
+    // Expansion keeps every agent's words and adds each one's `Details`, in both styles.
+    const summary: CompactSummary = { expandLabel: "details", ...summarizeDetails(details) };
     return tool === AGENT_TOOL_NAME.send ? { ...summary, ...sentWords(input) } : summary;
   };

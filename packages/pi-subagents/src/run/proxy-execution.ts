@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
 import * as Fn from "effect/Function";
@@ -21,10 +22,12 @@ interface RunProxyExecutionDependencies {
     callerRunId: string,
     request: BackendProxyRequest,
   ) => Effect.Effect<BackendProxyResult, SubagentError>;
+  /** `shown` reports, once, that the questionnaire opened on the user's screen. */
   readonly executeQuestionnaire?: (
     record: RunRecord,
     requestId: string,
     request: AskUserRequest,
+    shown: () => void,
   ) => Effect.Effect<BackendProxyResult, SubagentError>;
 }
 
@@ -77,7 +80,9 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
           ? Effect.fromResult(decodeQuestionnaireProxyRequest(event)).pipe(
               Effect.flatMap((questionnaire) =>
                 executeQuestionnaire
-                  ? executeQuestionnaire(record, event.requestId, questionnaire)
+                  ? askWithShownNotice(event, (shown) =>
+                      executeQuestionnaire(record, event.requestId, questionnaire, shown),
+                    )
                   : unavailable,
               ),
             )
@@ -110,5 +115,25 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
       );
     });
 }
+
+/**
+ * Runs `ask` while relaying its first `shown` report to the caller as a one-time notice. The
+ * notice ends with the call, so it never follows the response.
+ */
+const askWithShownNotice = <A, E>(
+  event: Extract<BackendEvent, { readonly type: "proxy_request" }>,
+  ask: (shown: () => void) => Effect.Effect<A, E>,
+): Effect.Effect<A, E> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shown = yield* Deferred.make<void>();
+      yield* Deferred.await(shown).pipe(
+        Effect.andThen(event.questionnaireShown()),
+        Effect.ignore,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      return yield* ask(() => void Deferred.doneUnsafe(shown, Effect.void));
+    }),
+  );
 
 export type RunProxyExecution = ReturnType<typeof proxyExecutionHandler>;

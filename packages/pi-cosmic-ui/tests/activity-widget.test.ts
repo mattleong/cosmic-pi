@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { stripAnsi } from "pi-cosmic-core/security";
+import { activityElapsed } from "../src/activity/row-line.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetSections, widgetFailuresExpire } from "../src/activity/widget-projection.ts";
 import { activityRow, memberRow, mountActivity } from "./support/activity.ts";
@@ -130,5 +131,54 @@ describe("agent identity at narrow widths", () => {
           Arr.some(screen, (line) => Str.includes(title)(line) && /\d+m?s? *│/u.test(line)),
         ).toBe(true);
     }
+  });
+});
+
+describe("waiting rows at narrow widths", () => {
+  const parent = activityRow("fanout", "running", undefined, {
+    title: "Ad-hoc fan-out",
+    profile: "planner",
+    model: "claude-bridge/claude-opus-5-5",
+    startedAt: 0,
+  });
+  const waiting = memberRow("asking", parent, "needs-input", {
+    title: "Choose a library",
+    profile: "researcher",
+    model: "claude-bridge/claude-sonnet-5-5",
+    startedAt: 10_000,
+    inputTarget: "parent",
+  });
+
+  it("keeps a waiting row's elapsed time in the widget at phone width", () => {
+    for (const width of [57, 80, 120]) {
+      const lines = Arr.map(
+        renderActivityWidget([parent, waiting], width, 8, { now: 90_000, theme: plainTheme }),
+        stripAnsi,
+      );
+      const row = Arr.findFirst(lines, Str.includes("Choose a lib"));
+      expect(Option.getOrElse(row, () => "")).toMatch(/\d+m(?: \d+s)?$/u);
+    }
+  });
+
+  it("wraps the preview's facts between whole facts, never after a separator", () => {
+    for (const width of [72, 90, 100, 120, 160]) {
+      const { component } = mountActivity(() => [parent, waiting], { height: 16 });
+      component.handleInput("j");
+      const panes = Arr.map(component.render(width), (line) => stripAnsi(line));
+      for (const line of panes) expect(line).not.toMatch(/ [·→] *│ *$/u);
+    }
+  });
+});
+
+describe("elapsed time", () => {
+  const now = Date.UTC(2026, 10, 4);
+
+  it("shows plausible spans and omits spans from a missing start, a skewed clock, or beyond a week", () => {
+    const at = (startedAt: number) =>
+      activityElapsed(activityRow("work", "running", undefined, { startedAt }), now);
+    expect(at(now - 90_000)).not.toBe("");
+    expect(at(1)).toBe("");
+    expect(at(now + 5_000)).toBe("");
+    expect(at(now - 8 * 24 * 60 * 60 * 1_000)).toBe("");
   });
 });

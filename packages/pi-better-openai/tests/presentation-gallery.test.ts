@@ -50,6 +50,14 @@ const details = (status: string, request = prompt): CodexImageDetails => ({
   action: "generate",
   outputFormat: "png",
 });
+const { savedPath: _savedPath, ...unsaved } = details("completed");
+/** A later image the user asked for with `/openai image`; no tool row describes it. */
+const commandDetails: CodexImageDetails = {
+  ...details("completed", "A paper boat drifting across a rain puddle"),
+  id: "ig_9f8e7d6c",
+  revisedPrompt: "A folded paper boat floating on a rippled rain puddle under grey skies",
+  savedPath: "/project/.pi/generated-images/openai-image-2026-09-27T10-04-12-000Z-ig_9f8e7d6c.png",
+};
 const imageResult = (status: string, request = prompt) => ({
   content: [...text(imageResultText(details(status, request))), image],
   details: details(status, request),
@@ -67,6 +75,11 @@ const toolScenarios: ReadonlyArray<GalleryScenario> = [
     },
   },
   { title: "completed with an image", args, result: imageResult("completed") },
+  {
+    title: "completed without saving a file",
+    args: { ...args, save: "none" },
+    result: { content: [...text(imageResultText(unsaved)), image], details: unsaved },
+  },
   {
     title: "completed with a short prompt",
     args: { prompt: "An otter", action: "generate" },
@@ -115,12 +128,15 @@ const toolScenarios: ReadonlyArray<GalleryScenario> = [
   },
 ];
 
-const message = (status: string): GalleryMessageScenario["message"] => ({
+const message = (
+  status: string,
+  shown: CodexImageDetails = details(status),
+): GalleryMessageScenario["message"] => ({
   role: "custom",
   customType: "openai-image",
-  content: [...text(imageResultText(details(status))), image],
+  content: [...text(imageResultText(shown)), image],
   display: true,
-  details: details(status),
+  details: shown,
   timestamp: 0,
 });
 const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
@@ -211,7 +227,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       const lines: string[] = [];
       for (const style of ["compact", "preview"] as const)
         withPresentationSettings({ toolCallCollapsedStyle: style, toolCallTiming: false }, () => {
-          const { tool, message: renderMessage } = registerImagePresentation();
+          const { tool, message: renderMessage } = registerImagePresentation(undefined, "/project");
           for (const scenario of toolScenarios)
             lines.push(
               ...galleryFrames(tool, { ...scenario, title: `${style} · ${scenario.title}` }),
@@ -225,13 +241,13 @@ describe.skipIf(!directory)("presentation gallery", () => {
             );
           for (const background of ["border", "on", "off"] as const)
             withPresentationSettings({ toolCallBackground: background }, () => {
-              const framed = registerImagePresentation();
+              const framed = registerImagePresentation(undefined, "/project");
               const completed = Option.getOrThrow(
                 Arr.findFirst(toolScenarios, (entry) => entry.title === "completed with an image"),
               );
               lines.push(
                 ...galleryTranscriptFrames(
-                  `${style} · ${background} · transcript: an image tool call beside an image message`,
+                  `${style} · ${background} · transcript: the agent's openai_image call, then the user's /openai image message`,
                   [
                     {
                       name: framed.tool.name,
@@ -239,7 +255,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
                       args: completed.args,
                       result: completed.result!,
                     },
-                    { render: framed.message, message: message("completed") },
+                    { render: framed.message, message: message("completed", commandDetails) },
                   ],
                 ),
               );

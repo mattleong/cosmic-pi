@@ -151,6 +151,13 @@ const textOnlyFailure = (result: AgentToolResult<unknown> | undefined): string |
   return Str.trim(text) ? text : undefined;
 };
 
+/**
+ * Expanded, a row always shows the complete prompt and its options; once settled, also the
+ * image's facts or the failure's recovery step. The streamed progress text never shows.
+ */
+const REQUEST_LABEL = "prompt";
+const SETTLED_LABEL = "details";
+
 export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
   phase,
   args,
@@ -160,19 +167,26 @@ export const imageCompactSummary: CompactSummaryProvider<ToolParams> = ({
   const action = args.action ?? "auto";
   if (!ACTIONS.has(action) || !Predicate.isString(args.prompt)) return undefined;
   const subject = imagePromptSubject(args.prompt);
-  if (phase !== "settled") return { action, subject };
+  if (phase !== "settled") return { action, subject, expandLabel: REQUEST_LABEL };
   const record = imageRecord(result?.details);
 
   if (context.isError && record?.status !== "cancelled") {
     const text = textOnlyFailure(result);
     return text === undefined
       ? undefined
-      : { action, subject, outcome: "error", issues: [imageFailureIssue(text)] };
+      : {
+          action,
+          subject,
+          outcome: "error",
+          issues: [imageFailureIssue(text)],
+          expandLabel: SETTLED_LABEL,
+        };
   }
 
   if (!record) return undefined;
-  return imageRecordSummary(record, {
+  const summary = imageRecordSummary(record, {
     hasImage: result !== undefined && Arr.some(result.content, (part) => part.type === "image"),
     prompt: args.prompt,
   });
+  return summary && { ...summary, expandLabel: SETTLED_LABEL };
 };

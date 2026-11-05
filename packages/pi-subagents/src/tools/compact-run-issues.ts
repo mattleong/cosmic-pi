@@ -153,17 +153,15 @@ function attentionIssues(
 ): void {
   const attention = runAttention(card);
   switch (attention?.kind) {
+    // A paused run raises nothing: a held state, not a problem, and every surface draws the run's
+    // own row with `‖`.
     case undefined:
-      return;
     case "paused":
-      // A held state, not a problem: the heading already says the run is paused.
-      if (runCleanupAttention(card) !== undefined) return;
-      add("info", "paused-recovery", `${label} is paused`);
       return;
     case "question": {
       if (questions === "omitted") return;
       if (questions === "named") {
-        add("attention", "parent-question", `${label} asks a question`, attention.message);
+        add("attention", "parent-question", `${label} is waiting for reply`, attention.message);
         return;
       }
       // The whole question is detail only when the message can't show all of it.
@@ -180,7 +178,7 @@ function attentionIssues(
       add(
         "attention",
         "question-unavailable",
-        `${label} is waiting for a reply, but its question is unavailable`,
+        `${label} is waiting for reply, but its question is unavailable`,
       );
   }
 }

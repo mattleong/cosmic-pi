@@ -1,5 +1,7 @@
-import type * as Effect from "effect/Effect";
+import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { makeSessionCapabilityProtocol } from "pi-cosmic-core/session-capability";
 import { AskUserService } from "../questionnaire/service.ts";
@@ -39,6 +41,7 @@ const UNAVAILABLE =
   "The root questionnaire capability is unavailable or its owner is already active.";
 const INVALID_OWNER = "Invalid questionnaire owner.";
 const decodeOwner = decodeUnknownOrUndefined(QuestionnaireOwnerSchema);
+const isShownCallback = Schema.is(ForeignCallable<[]>());
 const invalid = (message: string) => Promise.reject(AskUserValidationError.make({ message }));
 const ownerKey = (owner: QuestionnaireOwner) =>
   JSON.stringify([owner.runId, owner.assignmentEpoch, owner.requestId]);
@@ -58,6 +61,7 @@ export function registerQuestionnaireCapability(
       input: AskUserRequest,
       rawOwner: QuestionnaireOwner,
       signal: AbortSignal,
+      shown?: () => void,
     ): Promise<AskUserOutcome> => {
       const owner = decodeOwner(rawOwner);
       if (!owner) return invalid(INVALID_OWNER);
@@ -87,8 +91,14 @@ export function registerQuestionnaireCapability(
           finish();
           return Promise.reject(unavailable());
         }
+        // The caller's callback: admitted only as callable, and a throw can't reach the service.
+        const reportShown = Effect.suspend(() =>
+          isShownCallback(shown) && !linked.aborted
+            ? Effect.ignore(Effect.try(() => shown()))
+            : Effect.void,
+        );
         running = options.run(
-          AskUserService.use((service) => service.askOwned(request, owner)),
+          AskUserService.use((service) => service.askOwned(request, owner, reportShown)),
           linked,
         );
         return running.then(

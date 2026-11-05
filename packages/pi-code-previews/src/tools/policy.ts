@@ -16,10 +16,6 @@ type PreviewSettings = Pick<
   (typeof PREVIEW_SETTINGS)[number]["setting"] | "bashResultPreview"
 >;
 
-export function formatToolsSettingValue(tools: readonly CodePreviewToolName[]): string {
-  return tools.length ? Arr.join(tools, ", ") : "none";
-}
-
 export type ToolPreviewSetting = keyof PreviewSettings;
 
 /**

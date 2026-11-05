@@ -4,6 +4,8 @@ import type { CodePreviewRendererPresentation } from "../../application/renderer
 import { capturePreviewHostTools } from "../../boundary/host-tool-renderers";
 import { argumentFailureIssue, isRejectedEmptyCall } from "../argument-failure";
 import { createBuiltinCompactSummary } from "../builtin-compact-summary";
+import { previewBodiesShowContent } from "../../preview/expand-affordance";
+import { codePreviewSettings } from "../../config/state";
 import { withCodePreviewRenderers } from "../cooperative-tools";
 import type { CORE_CODE_PREVIEW_TOOLS, CodePreviewToolName } from "../names";
 import { admitsPreviewSource } from "../preview-admission";
@@ -41,7 +43,10 @@ export function createBuiltinPreviewRenderers(
     rejectionAware(name, RENDERER_FACTORIES[name](session.cwd)),
     {
       ...session,
-      compactSummary: (input) => createBuiltinCompactSummary(name, input),
+      compactSummary: previewBodiesShowContent(
+        (input) => createBuiltinCompactSummary(name, input),
+        session.collapsedStyle ?? codePreviewSettings.toolCallCollapsedStyle,
+      ),
       expandedContent: builtinExpandedContent(name, session.cwd),
     },
   );

@@ -1,10 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { clipToWidth, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
+import { clipToWidth, RUNNING_SPINNER_FRAMES, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
 import {
   Container,
@@ -28,7 +27,7 @@ import { layoutPreviewHeading } from "./preview-heading";
 import { recordHeadingSubject } from "./heading-coverage";
 import { borderState } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
-import { compactSingleLine, compactStatusIcon } from "./compact-row";
+import { compactHold, compactSingleLine, compactStatusIcon } from "./compact-row";
 import type { ShellRenderBody } from "./tool-shell";
 
 const BODY_INDENT = "  ";
@@ -214,40 +213,19 @@ function captureCollapsedResult<TArgs, TState extends object>(
 
 const plainText = (rows: readonly string[]): string =>
   Str.toLowerCase(Str.replace(/\s+/gu, " ")(stripTerminalControls(Arr.join(rows, " "))));
-const words = (text: string): ReadonlyArray<string> =>
-  Option.getOrElse(Str.match(/[\p{L}\p{N}]+/gu)(text), (): ReadonlyArray<string> => []);
 const escapeRegExp = Str.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-const sameWords = (text: string, fact: string): boolean =>
-  Str.includes(` ${Arr.join(words(fact), " ")} `)(` ${Arr.join(words(text), " ")} `);
 
 /**
- * Whether rows state the fact as whole words, regardless of case and of quotes around it, as an
- * answer listed in a body states the quoted answer.
+ * Whether rows state the fact as whole words, even across a wrap, regardless of case and of quotes
+ * around it, as an answer listed in a body states the quoted answer.
  */
 function statesFact(rows: readonly string[], fact: string): boolean {
-  const said = Str.toLowerCase(Str.replace(/^["'“‘«]+|["'”’»]+$/gu, "")(fact));
+  const said = Str.toLowerCase(Str.replace(/^["'“‘«]+|["'”’»]+$/gu, "")(Str.trim(fact)));
   return (
     said !== "" &&
     new RegExp(`(?:^|[^\\p{L}\\p{N}])${escapeRegExp(said)}(?:$|[^\\p{L}\\p{N}])`, "u").test(
       plainText(rows),
     )
-  );
-}
-
-/**
- * Whether the rows hold the fact: its words in order, even across a wrap, or every word of it on
- * one row, which may phrase it its own way, as `Removed 3 completed tasks` does `3 removed`.
- */
-function mentionsFact(rows: readonly string[], fact: string): boolean {
-  const lower = Str.toLowerCase(fact);
-  const factWords = words(lower);
-  if (factWords.length === 0) return false;
-  return (
-    sameWords(plainText(rows), lower) ||
-    Arr.some(rows, (row) => {
-      const said = new Set(words(plainText([row])));
-      return Arr.every(factWords, (word) => said.has(word));
-    })
   );
 }
 
@@ -264,7 +242,7 @@ interface StatusInput {
   readonly value: PreviewIssues;
   /** Everything the collapsed row draws. */
   readonly collapsed: readonly string[];
-  /** The expanded heading, issues, and bodies, whose facts the status line doesn't repeat. */
+  /** The expanded heading, issues, and bodies. */
   readonly expanded: readonly string[];
   /** The expanded issue rows. */
   readonly issues: readonly string[];
@@ -273,23 +251,22 @@ interface StatusInput {
 }
 
 /**
- * The fact a compact row's heading shows beside its glyph, its first counter or else its first
- * metadata, keeping each ` · ` part that the collapsed preview shows and the rest of the expanded
- * row doesn't.
+ * The fact a compact heading shows beside its glyph, its first counter or else its first metadata:
+ * each ` · ` part the collapsed row states and the expanded row doesn't.
  */
 function keptFact({ value, collapsed, expanded }: StatusInput): string | undefined {
   const { summary } = value;
   const fact = compactSingleLine(summary?.counters?.[0] ?? summary?.metadata?.[0] ?? "");
   const kept = Arr.filter(
     Arr.map(Str.split(fact, " · "), Str.trim),
-    (part) => part !== "" && mentionsFact(collapsed, part) && !statesFact(expanded, part),
+    (part) => part !== "" && statesFact(collapsed, part) && !statesFact(expanded, part),
   );
   return kept.length > 0 ? sentenceCase(Arr.join(kept, " · ")) : undefined;
 }
 
 /**
- * Whether the collapsed row says `Cancelled` where it would show issues, while the expanded row
- * shows issues collapsed rows leave out, such as information, in its place.
+ * Whether a cancelled row's collapsed `Cancelled`, drawn where it has no issues, gives way to
+ * issues only an expanded row shows, such as information.
  */
 function cancelledLineReplaced({ value, theme }: StatusInput, width: number): boolean {
   const shown = (expanded: boolean) =>
@@ -297,49 +274,110 @@ function cancelledLineReplaced({ value, theme }: StatusInput, width: number): bo
   return value.cancelled && !shown(false) && shown(true);
 }
 
+/** A live or held state, and the word and glyphs by which a heading or body already states it. */
+const HELD_STATES = {
+  running: { word: "running", glyphs: RUNNING_SPINNER_FRAMES },
+  waiting: { word: "waiting", glyphs: [SUITE_STATUS_GLYPHS.waiting] },
+  queued: { word: "queued", glyphs: [SUITE_STATUS_GLYPHS.queued] },
+  paused: { word: "paused", glyphs: [SUITE_STATUS_GLYPHS.paused] },
+} as const;
+type HeldState = keyof typeof HELD_STATES;
+
+// Indentation, tree branches, and box rules before a row's own text.
+const ROW_LEAD = /^[\s│├└┌┬─╭╰]+/u;
+
 /**
- * A preview heading carries no status glyph, and content-only bodies leave state to the heading, so
- * an expanded preview row states its state on its own line. A running, waiting, held, stopped, or
- * unconfirmed row always says so unless an issue already does. Otherwise, a settled row keeps the
- * state fact its collapsed preview shows but the expanded row would drop, such as a task's
- * `running`, after the compact row's status glyph. A call that hasn't started needs no line.
+ * Whether a row states the held state: it begins with the state's glyph, opens with the state word
+ * capitalized (`Paused by the user`) or a count of it (`1 paused`, `0/2 running`), or holds a later
+ * `·`-separated fact that begins with the word (`auth-review · waiting for reply`). Prose that only
+ * mentions the word, even at the start of a wrapped line, doesn't state the row's state.
+ */
+function statesHeld(rows: readonly string[], state: HeldState): boolean {
+  const { word, glyphs } = HELD_STATES[state];
+  const end = "(?:$|[^\\p{L}\\p{N}])";
+  const opening = new RegExp(`^(?:${sentenceCase(word)}|\\d+(?:/\\d+)? ${word})${end}`, "u");
+  const fact = new RegExp(`^(?:\\d+(?:/\\d+)? )?${word}${end}`, "iu");
+  return Arr.some(rows, (row) => {
+    const plain = Str.replace(ROW_LEAD, "")(stripTerminalControls(row));
+    if (Arr.some(glyphs, (glyph) => Str.startsWith(`${glyph} `)(plain))) return true;
+    const [first, ...rest] = Str.split(plain, " · ");
+    return opening.test(first) || Arr.some(rest, (segment) => fact.test(Str.trim(segment)));
+  });
+}
+
+/**
+ * A preview heading carries no status glyph, so an expanded preview row states the row's state on
+ * its own line, which exists only so the state never disappears on expansion. Issues carry state,
+ * so a row that shows any has no line, except a cancelled row whose collapsed `Cancelled` they
+ * replace. A live, waiting, queued, or paused row says so unless its heading or body already does;
+ * a cancelled, unconfirmed, or other settled row keeps the fact its collapsed row states and the
+ * expanded row doesn't. The glyph is the state's own: a settled receipt is never marked as a
+ * warning.
  */
 function previewStatusRows(input: StatusInput, width: number): string[] {
-  const { value, theme, issues } = input;
+  const { value, theme, issues, expanded } = input;
+  if (issues.length > 0 && !cancelledLineReplaced(input, width)) return [];
   const { status, summary } = value;
   const metadata = sentenceCase(compactSingleLine(summary?.metadata?.[0] ?? ""));
-  const said = (fallback: string) => metadata || fallback;
-  const live = status === "pending" || status === "running";
-  const quietIssues = issues.length === 0;
+  // A live or held state the heading or body already states needs no line. A phrase such as
+  // `Needs your input` counts wherever it appears; the bare state word only as `statesHeld` finds it.
+  const unstated = (state: HeldState, text: string) =>
+    statesHeld(expanded, state) ||
+    (Str.toLowerCase(text) !== HELD_STATES[state].word && statesFact(expanded, text))
+      ? undefined
+      : text;
+  const said = (state: HeldState, fallback: string) => unstated(state, metadata || fallback);
+  const hold = status === "pending" || status === "running" ? compactHold(summary) : undefined;
   const line = Match.value(status).pipe(
     Match.when(
-      () => live && summary?.waiting === true,
-      () => toolStatusLine(theme, "waiting", said("Waiting for a reply")),
+      () => hold === "waiting",
+      () => {
+        const text = said("waiting", "Waiting for reply");
+        return text && toolStatusLine(theme, "waiting", text);
+      },
     ),
-    Match.when("running", () => toolRunningLine(theme, input.frame)),
+    Match.when(
+      () => hold === "queued",
+      () => {
+        const text = said("queued", "Queued");
+        return text && theme.fg("muted", `${SUITE_STATUS_GLYPHS.queued} ${text}`);
+      },
+    ),
+    Match.when("running", () =>
+      unstated("running", "running") === undefined
+        ? undefined
+        : toolRunningLine(theme, input.frame),
+    ),
     Match.when("pending", () => undefined),
-    Match.when("queued", () =>
-      theme.fg("muted", `${SUITE_STATUS_GLYPHS.queued} ${said("Queued")}`),
-    ),
-    Match.when("paused", () => toolStatusLine(theme, "paused", said("Paused"))),
+    Match.when("queued", () => {
+      const text = said("queued", "Queued");
+      return text && theme.fg("muted", `${SUITE_STATUS_GLYPHS.queued} ${text}`);
+    }),
+    Match.when("paused", () => {
+      const text = said("paused", "Paused");
+      return text && toolStatusLine(theme, "paused", text);
+    }),
     Match.when("cancelled", () => {
-      const text =
-        keptFact(input) ??
-        (quietIssues || cancelledLineReplaced(input, width) ? "Cancelled" : undefined);
-      return text === undefined ? undefined : toolStatusLine(theme, "stopped", text);
+      const text = keptFact(input) ?? (statesFact(expanded, "cancelled") ? undefined : "Cancelled");
+      return text && toolStatusLine(theme, "stopped", text);
     }),
     Match.when("uncertain", () => {
-      const text = keptFact(input) ?? (quietIssues ? "Outcome unconfirmed" : undefined);
-      return text === undefined ? undefined : theme.fg("warning", `≈ ${text}`);
+      const text =
+        keptFact(input) ??
+        (statesFact(expanded, "unconfirmed") ? undefined : "Outcome unconfirmed");
+      return text && theme.fg("warning", `≈ ${text}`);
     }),
     Match.orElse((settled) => {
       const text = keptFact(input);
-      return text === undefined
-        ? undefined
-        : `${compactStatusIcon(settled, theme, input.frame, false, summary?.messageIcon)} ${theme.fg("muted", text)}`;
+      // Without issues, a warning outcome has nothing the line could be warning about.
+      const glyph = settled === "warning" ? "returned" : settled;
+      return (
+        text &&
+        `${compactStatusIcon(glyph, theme, input.frame, false, summary?.messageIcon)} ${theme.fg("muted", text)}`
+      );
     }),
   );
-  if (line === undefined) return [];
+  if (!line) return [];
   // Continuation rows hang beneath the text, past the glyph.
   return Arr.map(
     wrapTextWithAnsi(line, Math.max(1, width - BODY_INDENT.length - GLYPH_HANG.length)),

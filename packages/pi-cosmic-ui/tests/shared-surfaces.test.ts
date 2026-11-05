@@ -89,6 +89,13 @@ describe("shared settings surface", () => {
     expect(onChange).toHaveBeenLastCalledWith("first", "off", expect.anything());
   });
 
+  it("names Pi's configured cancel aliases, such as C-c, only in expanded help", () => {
+    const { press, text } = surfaceFor(rows());
+    expect(text()).not.toContain("C-c");
+    press("?");
+    expect(text()).toContain("Esc/C-c/h/q Close");
+  });
+
   it("clears an applied filter with Esc before Esc closes the surface", () => {
     const { press, onCancel, text } = surfaceFor(rows());
     press("/", "z", "z", "\r");

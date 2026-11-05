@@ -128,8 +128,18 @@ const workspaceCandidateSummary = (
   const metadata = `${theme.fg("muted", effort)}${theme.fg("warning", fast)}`;
   const modelWidth = Math.max(0, width - visibleWidth(metadata) - 3);
   return modelWidth > 0
-    ? `${theme.fg(managerTone.value, clipToWidth(candidateModelLabel(candidate, parentModel), modelWidth))} · ${metadata}`
+    ? `${theme.fg(managerTone.value, clipToWidth(fittedModelLabel(candidate, parentModel, modelWidth), modelWidth))} · ${metadata}`
     : clipToWidth(metadata, width);
+};
+
+/** An inherited model drops its provider before it would clip: `inherit (claude-opus-5-5)`. */
+const fittedModelLabel = (
+  candidate: ProfileCandidate,
+  parentModel: string | undefined,
+  width: number,
+): string => {
+  const full = candidateModelLabel(candidate, parentModel);
+  return visibleWidth(full) <= width ? full : candidateModelLabel(candidate, parentModel, true);
 };
 
 interface ProfileTableRow {
@@ -399,8 +409,24 @@ const fieldLine = (
   layout: { readonly selected: boolean; readonly labelWidth: number; readonly width: number },
 ): string => {
   const { selected, labelWidth, width } = layout;
-  const value = row.value
-    ? `${Fn.pipe(" ", Str.repeat(Math.max(0, labelWidth - visibleWidth(row.label)) + 2))}${selected && !row.fixed ? row.value : fieldValue(state, theme, row)}`
+  const gap = Math.max(0, labelWidth - visibleWidth(row.label)) + 2;
+  const candidate =
+    row.scope === "candidate" && row.field === "model"
+      ? state.draft.candidates[row.candidateIndex]
+      : undefined;
+  // `LIST_CURSOR`, a space, the label, and the gap come before the value.
+  const shown = candidate
+    ? {
+        ...row,
+        value: fittedModelLabel(
+          candidate,
+          state.parentModel,
+          width - 2 - visibleWidth(row.label) - gap,
+        ),
+      }
+    : row;
+  const value = shown.value
+    ? `${Fn.pipe(" ", Str.repeat(gap))}${selected && !row.fixed ? shown.value : fieldValue(state, theme, shown)}`
     : "";
   const text = clipToWidth(
     `${selected ? LIST_CURSOR : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
@@ -483,7 +509,7 @@ const workspaceFooter = (
     Boolean(state.pendingConfirmation) || state.busy,
   );
   // Aliases such as C-c belong in the expanded bar, not the default one.
-  const [cancel, ...cancelAliases] = Str.split(keys.cancel, "/");
+  const { cancel, cancelAliases } = keys;
   const border = (hint: string): FramedKeyHints => ({
     border: borderKeyHint(hint, inner),
     overflow: "",
@@ -492,10 +518,6 @@ const workspaceFooter = (
     return border(
       joinKeyHints([keyHint(keys.confirm, "Confirm"), exitKeyHint("decision", [], cancel)]),
     );
-  const move =
-    Str.length(keys.up) === 1 && Str.length(keys.down) === 1
-      ? `${keys.up}${keys.down}`
-      : `${keys.up}/${keys.down}`;
   if (state.busy)
     return border(state.cancellableBusy ? keyHint(cancel, "Cancel loading") : "Saving…");
   const profiles = state.pane === "profiles";
@@ -508,7 +530,7 @@ const workspaceFooter = (
   return framedKeyHintBar(
     {
       hints: [
-        moveKeyHint(move),
+        moveKeyHint(keys.move),
         enter && keyHint(keys.confirm, enter),
         keyHint("Tab", other),
         keyHint("m", "Model"),

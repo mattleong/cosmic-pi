@@ -26,8 +26,8 @@ import {
 import {
   callTitles,
   QUESTIONS_SHOWN,
-  questionsShown,
-  type QuestionsShown,
+  decodePresentation,
+  type PresentationProgress,
   decodeOutcome,
   fallbackText,
   requestArguments,
@@ -38,7 +38,7 @@ import { questionnaireArgumentPreparer } from "./arguments.ts";
 import { AskUserContractSchema } from "./contract-schema.ts";
 import { askUserContract, questionnaireToolResult } from "./contract.ts";
 
-type AskUserToolDetails = AskUserOutcome | QuestionsShown;
+type AskUserToolDetails = AskUserOutcome | PresentationProgress;
 
 // Converted on first registration, so processes that never register the tool skip the cost.
 const outputSchema = Fn.memoize(toPiToolOutputSchema);
@@ -91,7 +91,7 @@ export function registerAskUserTool(
     renderResult(result, options, theme, context) {
       if (options.isPartial)
         return new Text(
-          questionsShown(result.details)
+          decodePresentation(result.details) === "open"
             ? toolStatusLine(theme, "waiting", "Needs your input")
             : toolRunningLine(theme),
           0,

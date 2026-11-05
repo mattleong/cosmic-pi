@@ -29,7 +29,7 @@ import {
 } from "../ui/compact-summary.ts";
 import { styledTaskOutputLine } from "../ui/output-lines.ts";
 import { failureFactLines, resultFactLines } from "../ui/result-facts.ts";
-import { taskDisplayName, taskStatePresentation } from "../ui/task-state.ts";
+import { emptyTaskListLabel, taskDisplayName, taskStatePresentation } from "../ui/task-state.ts";
 import {
   backgroundLogLines,
   type BackgroundTaskFailureDetails,
@@ -134,7 +134,7 @@ interface Row {
 }
 
 const hiddenMarker = (hidden: number, theme: PreviewTheme): Row => ({
-  text: theme.fg("muted", `--- ${countLabel(hidden, "line")} hidden ---`),
+  text: theme.fg("muted", `… ${countLabel(hidden, "line")} hidden`),
 });
 
 function boundedLines(lines: ReadonlyArray<string>, label: string, theme: PreviewTheme): Row[] {
@@ -203,12 +203,6 @@ function taskRows(
   return rows;
 }
 
-const EMPTY_LISTS = {
-  active: "No active tasks",
-  completed: "No completed tasks",
-  all: "No background tasks",
-} as const;
-
 const COLLAPSED_TAIL_LINES = 4;
 
 const outputLines = (text: string): string[] =>
@@ -265,9 +259,9 @@ function waitRows(
   ];
 }
 
-function emptyListLabel(args: Partial<BackgroundTaskToolInput>): string {
-  return EMPTY_LISTS[args.state === "active" || args.state === "completed" ? args.state : "all"];
-}
+// `stop all` stops the active tasks, so an empty one reads like an empty active listing.
+const emptyListLabel = (state: string | undefined): string =>
+  Str.capitalize(emptyTaskListLabel(state));
 
 function logRows(
   details: Extract<BackgroundTaskToolDetails, { readonly action: "logs" }>,
@@ -304,9 +298,9 @@ function collapsedRows(
     case "wait":
       return waitRows(details, theme);
     case "list":
-      return taskRows(details.tasks, emptyListLabel(args), false, theme);
+      return taskRows(details.tasks, emptyListLabel(args.state), false, theme);
     case "stop_all":
-      return taskRows(details.tasks, EMPTY_LISTS.active, false, theme);
+      return taskRows(details.tasks, emptyListLabel("active"), false, theme);
     case "clear":
       return [
         { text: theme.fg("muted", `Removed ${countLabel(details.removed, "completed task")}`) },
@@ -396,12 +390,25 @@ function expandedSections(
           : []),
       ];
     }
+    // A compact heading already says a listing is empty.
     case "list":
-      return [
-        { label: "Tasks", rows: taskRows(details.tasks, emptyListLabel(args), true, theme, true) },
-      ];
+      return headingShowsState && details.tasks.length === 0
+        ? []
+        : [
+            {
+              label: "Tasks",
+              rows: taskRows(details.tasks, emptyListLabel(args.state), true, theme, true),
+            },
+          ];
     case "stop_all":
-      return [{ label: "Tasks", rows: taskRows(details.tasks, EMPTY_LISTS.active, true, theme) }];
+      return headingShowsState && details.tasks.length === 0
+        ? []
+        : [
+            {
+              label: "Tasks",
+              rows: taskRows(details.tasks, emptyListLabel("active"), true, theme),
+            },
+          ];
     case "logs":
       return [{ label: "Output", rows: logRows(details, text, theme, true) }];
   }

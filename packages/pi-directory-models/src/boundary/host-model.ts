@@ -128,7 +128,7 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
       try: () => pi.setThinkingLevel(thinkingLevel),
       catch: hostError(
         "thinking",
-        `Couldn't restore thinking level ${thinkingLevel}, saved for this directory`,
+        `Couldn't restore thinking level ${thinkingLevel}, saved for this directory\nSet it with /thinking ${thinkingLevel} to try again`,
       ),
     });
   const after = yield* readThinkingLevel(pi);
