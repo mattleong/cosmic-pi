@@ -12,7 +12,7 @@ import {
 } from "../tools/compact-summary";
 import { layoutCompactRow, type CompactRowInput } from "./compact-row";
 import {
-  compactIssueLabel,
+  compactIssueText,
   renderCompactDetails,
   renderCompactIssues,
   wrapHanging,
@@ -83,12 +83,15 @@ export function renderCompactChildren(
   );
   const rows =
     flat && omitted > 0
-      ? wrapHanging(theme.fg("dim", `… ${omitted} ${calls(omitted)} not listed`), width, "", "", 0)
+      ? wrapHanging(`… ${omitted} ${calls(omitted)} not listed`, width, "", "", 0, {
+          style: (row) => theme.fg("dim", row),
+        })
       : [];
   Arr.forEach(entries, (entry, index) => {
     const branch = index === entries.length - 1 && omitted === 0 ? "└─" : "├─";
     const prefix = flat ? "" : theme.fg("dim", `  ${branch} `);
-    const issueLabel = flat ? "" : compactIssueLabel(entry.issues ?? [], theme);
+    const issue = flat ? undefined : compactIssueText(entry.issues ?? []);
+    const issueLabel = issue ? theme.fg(issue.color, issue.text) : "";
     const { row, issueShown } = layoutCompactRow(
       childRowInput(entry, issueLabel, flat, options),
       theme,
@@ -100,9 +103,13 @@ export function renderCompactChildren(
         ...renderCompactIssues(entry.issues, theme, width, true),
         ...renderCompactDetails(entry.details, theme, width),
       );
-    else if (issueLabel && !issueShown) {
+    else if (issue && !issueShown) {
       const rail = theme.fg("dim", branch === "├─" ? "  │    " : "       ");
-      rows.push(...wrapHanging(issueLabel, width, rail, rail, 8));
+      rows.push(
+        ...wrapHanging(issue.text, width, rail, rail, 8, {
+          style: (line) => theme.fg(issue.color, line),
+        }),
+      );
     }
   });
   if (!flat && omitted > 0) rows.push(...omissionRows(omitted, hiddenFailed, theme, width));
@@ -142,13 +149,17 @@ function omissionRows(
   width: number,
 ): string[] {
   const branch = theme.fg("dim", "  └─ ");
-  const more = theme.fg("dim", `… ${omitted} more ${calls(omitted)}`);
-  const failed = hiddenFailed > 0 ? theme.fg("error", `${hiddenFailed} failed`) : "";
-  const single = branch + more + (failed ? ` (${failed})` : "");
+  const more = `… ${omitted} more ${calls(omitted)}`;
+  const failed = hiddenFailed > 0 ? `${hiddenFailed} failed` : "";
+  const dim = (row: string) => theme.fg("dim", row);
+  const error = (row: string) => theme.fg("error", row);
+  const single = branch + dim(more) + (failed ? ` (${error(failed)})` : "");
   if (visibleWidth(single) <= width) return [single];
   const spaces = Fn.pipe(" ", Str.repeat(visibleWidth(branch)));
-  const rows = wrapHanging(more, width, branch, spaces, 8);
+  const rows = wrapHanging(more, width, branch, spaces, 8, { style: dim });
   return failed
-    ? rows.concat(wrapHanging(failed, width, spaces, spaces, visibleWidth(failed)))
+    ? rows.concat(
+        wrapHanging(failed, width, spaces, spaces, visibleWidth(failed), { style: error }),
+      )
     : rows;
 }

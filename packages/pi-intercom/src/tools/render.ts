@@ -3,7 +3,7 @@ import type {
   Theme,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -14,6 +14,7 @@ import {
   expandedFields,
   expandedText,
   getTextContent,
+  previewHeadingText,
   previewIssuesSlot,
   expandedSection,
   type ExpandedField,
@@ -104,11 +105,12 @@ export const renderSessionCall =
   (args: SessionToolArgs, theme: Theme, context: RenderContext): Component => {
     const { state } = context;
     const running = context.executionStarted && context.isPartial;
-    const header = composeToolComponent((width) => {
-      if (!Number.isFinite(width) || width < 1) return [];
-      const target = state.sessionTarget ?? knownAddresseeSubject(args.to, names);
-      return new Text(renderToolHeader(heading(tool, target), theme), 0, 0).render(width);
-    });
+    const header = previewHeadingText(() =>
+      renderToolHeader(
+        heading(tool, state.sessionTarget ?? knownAddresseeSubject(args.to, names)),
+        theme,
+      ),
+    );
     const runningLine = composeToolComponent((width) =>
       running && width >= 1 ? [toolRunningLine(theme)] : [],
     );
@@ -217,7 +219,7 @@ const listBody = (details: ListDetails, theme: Theme): Component => {
 
 /** The `Details` section: the session's id and directory, or how it was addressed. */
 const detailsOf = (session: SessionView | undefined, to: string | undefined, theme: Theme) =>
-  sessionDetails(theme, session?.sessionId ?? to ?? "", session?.cwd);
+  sessionDetails(theme, session ?? { sessionId: to ?? "" });
 
 /** How a recipient reads a message, worth saying only when it waits; a woken one reads it now. */
 const DELIVERY_STATUS = {

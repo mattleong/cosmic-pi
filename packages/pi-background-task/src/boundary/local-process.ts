@@ -6,6 +6,7 @@ import {
   type ProcessGroupExitGuard,
 } from "pi-cosmic-core/platform/process-group-exit-guard";
 import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { nodePath, nodeSpawn, type NodeChildProcess } from "pi-cosmic-core/platform/node-builtins";
 import { utf8ByteLength, utf8Suffix } from "pi-cosmic-core/text";
 import * as Arr from "effect/Array";
@@ -235,12 +236,15 @@ const missingShell = (shellPath: string | undefined) =>
   LocalProcessError.make({
     reason: "spawn",
     operation: PROCESS_FAILURES.spawn.operation,
-    message: shellPath ? `Couldn't find the shell ${shellPath}` : "Couldn't find a shell",
+    message: shellPath
+      ? `Couldn't find the shell ${formatDisplayPath(shellPath, "")}`
+      : "Couldn't find a shell",
   });
 
 const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
   fs.stat(cwd).pipe(
-    Effect.mapError(() => processError("cwd", cwd)),
+    // A task's status shows these messages, so a directory under home reads `~/…`.
+    Effect.mapError(() => processError("cwd", formatDisplayPath(cwd, ""))),
     Effect.flatMap((info) =>
       info.type === "Directory"
         ? Effect.void
@@ -248,7 +252,7 @@ const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
             LocalProcessError.make({
               operation: PROCESS_FAILURES.cwd.operation,
               reason: "cwd",
-              message: `The working directory is not a directory: ${cwd}`,
+              message: `The working directory is not a directory: ${formatDisplayPath(cwd, "")}`,
             }),
           ),
     ),

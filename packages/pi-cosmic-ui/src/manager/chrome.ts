@@ -1,4 +1,9 @@
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+  sliceByColumn,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
@@ -158,41 +163,60 @@ const closeUpMarker = (clipped: string, marker: string): string => {
 
 const FACT_ARROW = " → ";
 
+// A name too wide for a row splits after `-`, `_`, or `.` only when every part then fits a row;
+// otherwise it stays one run, so a blob such as JSON never strands a fragment like `file.`.
+const nameTokens = (segment: string, restWidth: number) => {
+  if (visibleWidth(segment) <= restWidth) return [{ token: segment, startsWideName: false }];
+  const parts = Str.split(segment, /(?<=[-_.])/u);
+  return Arr.every(parts, (part) => visibleWidth(part) <= restWidth)
+    ? Arr.map(parts, (token, index) => ({ token, startsWideName: index === 0 }))
+    : [{ token: segment, startsWideName: false }];
+};
+
 // Splits one word too wide for a row after its `/` separators, then after `-`, `_`, or `.`, then
 // anywhere, so a long path breaks between directories and names. The first row takes what fits
-// in `firstWidth` and may be empty. A name too wide for any row starts a row after its `/`, so a
-// path breaks after its directory before it breaks inside the name.
+// in `firstWidth` and may be empty. A name too wide for any row whose parts each fit one starts a
+// row after its `/`, so a path breaks after its directory before it breaks inside the name; a run
+// with no such parts fills each row it reaches.
 const breakWideWord = (word: string, firstWidth: number, restWidth: number): string[] => {
   const tokens = Arr.flatMap(Str.split(word, /(?<=\/)/u), (segment) =>
-    visibleWidth(segment) <= restWidth
-      ? [{ token: segment, startsWideName: false }]
-      : Arr.map(Str.split(segment, /(?<=[-_.])/u), (token, index) => ({
-          token,
-          startsWideName: index === 0,
-        })),
+    nameTokens(segment, restWidth),
   );
   const rows: string[] = [];
   let current = "";
+  const limit = () => (rows.length === 0 ? firstWidth : restWidth);
   for (const { token, startsWideName } of tokens) {
     if (startsWideName && Fn.pipe(current, Str.endsWith("/"))) {
       rows.push(current);
       current = "";
     }
-    if (visibleWidth(`${current}${token}`) <= (rows.length === 0 ? firstWidth : restWidth)) {
+    const tokenWidth = visibleWidth(token);
+    if (visibleWidth(current) + tokenWidth <= limit()) {
       current = `${current}${token}`;
       continue;
     }
-    if (current || rows.length === 0) rows.push(current);
-    if (visibleWidth(token) <= restWidth) current = token;
-    else {
-      const chunks = wrapTextWithAnsi(token, restWidth);
-      rows.push(...chunks.slice(0, -1));
-      current = Option.getOrElse(Arr.last(chunks), () => "");
+    if (tokenWidth <= restWidth) {
+      if (current || rows.length === 0) rows.push(current);
+      current = token;
+      continue;
     }
+    const space = Math.max(0, limit() - visibleWidth(current));
+    const head = space > 0 ? sliceByColumn(token, 0, space, true) : "";
+    if (current || head || rows.length === 0) rows.push(`${current}${head}`);
+    const chunks = wrapTextWithAnsi(
+      sliceByColumn(token, visibleWidth(head), tokenWidth - visibleWidth(head)),
+      restWidth,
+    );
+    rows.push(...chunks.slice(0, -1));
+    current = Option.getOrElse(Arr.last(chunks), () => "");
   }
   if (current) rows.push(current);
   return rows;
 };
+
+// A wide word continues on a part-filled row only when the part that fits there is worth reading
+// (8 columns, or a quarter of a narrow row); a smaller head would strand `~/` at the row's end.
+const meaningfulHead = (restWidth: number): number => Math.min(8, Math.ceil(restWidth / 4));
 
 // A separator glyph stays with the word after it, so no row ends with `→` or `·`.
 const wrapUnits = (text: string): string[] => {
@@ -222,9 +246,15 @@ const wrapWords = (text: string, firstWidth: number, restWidth: number): string[
       current = word;
       continue;
     }
-    // A word too wide for any row fills the current one first.
+    // A word too wide for any row fills the current one first, unless too little of it fits there.
     const room = current ? limit() - visibleWidth(current) - 1 : limit();
-    const [head = "", ...tail] = breakWideWord(word, Math.max(0, room), restWidth);
+    let pieces = breakWideWord(word, Math.max(0, room), restWidth);
+    if (current && visibleWidth(pieces[0] ?? "") < meaningfulHead(restWidth)) {
+      rows.push(current);
+      current = "";
+      pieces = breakWideWord(word, restWidth, restWidth);
+    }
+    const [head = "", ...tail] = pieces;
     const filled = head && current ? `${current} ${head}` : head || current;
     if (tail.length === 0) {
       current = filled;

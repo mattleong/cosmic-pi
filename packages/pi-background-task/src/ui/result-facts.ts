@@ -80,7 +80,7 @@ export function failureIssue(failure: Failure): CompactIssue {
 }
 
 /** The technical facts an expanded failure shows. */
-export function failureFactLines(failure: Failure): string[] {
+export function failureFactLines(failure: Failure, directoryStated = false): string[] {
   const task = failure.taskId === undefined ? undefined : sanitizeTerminalLine(failure.taskId);
   const cursors =
     failure.afterCursor === undefined
@@ -92,27 +92,31 @@ export function failureFactLines(failure: Failure): string[] {
   return Arr.filter(
     [
       joined([task, cursors]),
-      failure.cwd === undefined ? "" : displayDirectory(failure.cwd),
+      failure.cwd === undefined || directoryStated ? "" : displayDirectory(failure.cwd),
       failure.limit === undefined ? "" : `limit ${failure.limit} running`,
     ],
     (line) => line !== "",
   );
 }
 
-const taskFacts = (task: BackgroundTaskSnapshot): string =>
+const taskFacts = (task: BackgroundTaskSnapshot, directoryStated = false): string =>
   joined([
     sanitizeTerminalLine(task.id),
-    displayDirectory(task.cwd),
+    directoryStated ? undefined : displayDirectory(task.cwd),
     task.pid === undefined ? undefined : `pid ${task.pid}`,
   ]);
 
 /**
  * The technical facts an expanded result shows: the task ID first, then directories, processes,
- * and cursors.
+ * and cursors. A start whose request row already states its directory leaves it out.
  */
-export function resultFactLines(details: BackgroundTaskToolDetails): string[] {
+export function resultFactLines(
+  details: BackgroundTaskToolDetails,
+  directoryStated = false,
+): string[] {
   switch (details.action) {
     case "start":
+      return [taskFacts(details.snapshot, directoryStated)];
     case "status":
     case "stop":
       return [taskFacts(details.snapshot)];

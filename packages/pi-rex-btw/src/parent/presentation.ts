@@ -1,5 +1,5 @@
 import type { AgentToolResult, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Container, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Str from "effect/String";
@@ -10,6 +10,7 @@ import {
   expandedSection,
   expandedText,
   getTextContent,
+  previewHeadingText,
   previewIssuesSlot,
   type CompactIssue,
   type CompactSummaryProvider,
@@ -239,15 +240,15 @@ export const renderParentCall = (
   theme: Theme,
   context: RenderContext & { readonly state: ParentRenderState },
 ): Component => {
-  const header = composeToolComponent((width) => {
-    if (!Number.isFinite(width) || width < 1) return [];
-    const subtitle = context.state.read ?? requestLabel(parentMessageCount(args.messages));
-    return new Text(
-      renderToolHeader({ title: "Parent conversation", subtitle }, theme),
-      0,
-      0,
-    ).render(width);
-  });
+  const header = previewHeadingText(() =>
+    renderToolHeader(
+      {
+        title: "Parent conversation",
+        subtitle: context.state.read ?? requestLabel(parentMessageCount(args.messages)),
+      },
+      theme,
+    ),
+  );
   const running = composeToolComponent((width) =>
     width >= 1 && context.executionStarted && context.isPartial ? [toolRunningLine(theme)] : [],
   );

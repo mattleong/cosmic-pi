@@ -74,7 +74,7 @@ describe("cut report presentation", () => {
     expect(card?.reportTruncation?.originalChars).toBe(MAX_FINAL_TEXT_CHARS * 3);
   });
 
-  it("points the compact issue at the saved file without naming agent procedures", () => {
+  it("states a cut report's retention in its issue, leaving the saved file to Details", () => {
     for (const complete of [true, false, undefined]) {
       const issues = summarize(cutRun(complete))?.issues ?? [];
       expect(Arr.flatMap(issues, (issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
@@ -87,7 +87,9 @@ describe("cut report presentation", () => {
         "\n",
       );
       expect(messages).not.toContain(ARCHIVE_PATH);
-      expect(Fn.pipe(details, Str.includes(ARCHIVE_PATH))).toBe(complete !== undefined);
+      // Details name the file and its size, so the issue never repeats them.
+      expect(details).not.toContain(ARCHIVE_PATH);
+      expect(Fn.pipe(details, Str.includes(" characters kept"))).toBe(complete !== undefined);
       expect(details).not.toMatch(/\bagent_[a-z]+\b/u);
       // A whole saved copy is a usable recovery path, not a warning.
       expect(Arr.some(issues, (issue) => issue.severity === "warning")).toBe(complete !== true);
@@ -108,11 +110,11 @@ describe("cut report presentation", () => {
       });
       expect(Arr.some(frames, ({ expanded }) => expanded)).toBe(true);
       for (const { expanded, text } of frames) {
-        // Both the issue detail and the report section name the file beside the retained report.
+        // Details name the file once beside the retained report; the issue doesn't repeat it.
         const mentions =
           Str.split(Fn.pipe(text, Str.replace(/\s+/gu, "")), ARCHIVE_PATH).length - 1;
         if (expanded) {
-          expect(mentions).toBeGreaterThanOrEqual(2);
+          expect(mentions).toBe(1);
           expect(text).toContain("finding");
         }
       }

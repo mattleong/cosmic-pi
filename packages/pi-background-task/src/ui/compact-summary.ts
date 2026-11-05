@@ -303,16 +303,19 @@ export const listedTaskIssues = (value: BackgroundTaskSnapshot): ReadonlyArray<C
 export const listedTaskOutcome = (value: BackgroundTaskSnapshot): TaskOutcome => taskOutcome(value);
 
 /**
- * A finished task's notice: its outcome and issues as a status row has them, and its duration,
- * unless its timeout issue already states it.
+ * A finished task's notice: its outcome and issues as a status row has them, and its run time,
+ * unless its timeout issue already states it. The run time joins the state as one fact,
+ * `finished in 1m 33s`, because a compact heading shows only its first fact.
  */
 export function taskNoticeSummary(value: BackgroundTaskSnapshot): TaskSummary {
   const task = taskReportSummary(value);
-  const ran =
-    value.endedAt === undefined || value.state === "timed_out"
-      ? []
-      : [formatDuration(value.endedAt - value.startedAt)];
-  return { ...task, metadata: [...(task.metadata ?? []), ...ran] };
+  if (value.endedAt === undefined || value.state === "timed_out") return task;
+  const ran = formatDuration(value.endedAt - value.startedAt);
+  const state = taskStateLabel(value.state);
+  return {
+    ...task,
+    metadata: [value.state === "exited" ? `${state} in ${ran}` : `${state} after ${ran}`],
+  };
 }
 
 // A confirmed stop is the stop action's success, not a cancelled request.

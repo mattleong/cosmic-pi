@@ -53,6 +53,7 @@ import {
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { profileWorkspaceKeys } from "./profile-workspace-keys.ts";
 import { qualifiedProfileSetLabel } from "./profile-set-picker-model.ts";
+import { countLabel } from "pi-cosmic-core/display";
 
 export interface ProfileWorkspaceConfirmation {
   readonly title: string;
@@ -207,7 +208,7 @@ const PROFILE_COLUMNS = [
  * a bare `+1` follows the reasoning label instead, saving the column gap.
  */
 const fallbackLabel = (count: number, compact: boolean): string =>
-  count === 0 ? "" : compact ? `+${count}` : `+${count} fallback${count === 1 ? "" : "s"}`;
+  count === 0 ? "" : compact ? `+${count}` : `+${countLabel(count, "fallback")}`;
 
 /**
  * How much a list gives up to keep its models whole: first the fallback column, which becomes a

@@ -85,3 +85,22 @@ test("expanded detail that only repeats its message is shown once", () => {
   const distinct = render([{ ...issue, detail: "Set image.enabled to true" }], 100, true);
   expect(Arr.some(distinct, Str.includes("image.enabled"))).toBe(true);
 });
+
+test("expanded detail breaks a long path after its last directory before inside the file name", () => {
+  const file = "agent-1-1-4f1c.md";
+  const rows = render(
+    [
+      {
+        severity: "info",
+        code: "saved",
+        message: "auth-review: full report saved to a file",
+        detail: `28,200 of 152,310 characters kept. Report file: ~/.pi/agent/subagents/reports/session-1/${file} · 152,310 characters, 3,172 lines`,
+      },
+    ],
+    57,
+    true,
+  );
+  expect(Arr.every(rows, (row) => visibleWidth(row) <= 57)).toBe(true);
+  expect(Arr.some(rows, (row) => Fn.pipe(Str.trim(row), Str.endsWith("session-1/")))).toBe(true);
+  expect(Arr.some(rows, Str.includes(file))).toBe(true);
+});

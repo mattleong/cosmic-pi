@@ -5,13 +5,7 @@ import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth, RUNNING_SPINNER_FRAMES, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
-import {
-  Container,
-  Text,
-  wrapTextWithAnsi,
-  type Component,
-  type TuiMouseEvent,
-} from "@earendil-works/pi-tui";
+import { Container, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import type { CompactSummary, CompactSummaryProvider } from "../tools/compact-summary";
 import {
@@ -26,12 +20,12 @@ import { getCodePreviewAnimationFrame, withLastComponent } from "./tool-timing";
 import { layoutPreviewHeading } from "./preview-heading";
 import { recordHeadingSubject, recordOwnCallHeading } from "./heading-coverage";
 import { borderState } from "./bordered-tool-call";
+import { wrapPreviewHeading } from "./heading-wrap";
 import { renderCompactIssues } from "./compact-issues";
 import { compactHold, compactSingleLine, compactStatusIcon } from "./compact-row";
 import type { ShellRenderBody } from "./tool-shell";
 
 const BODY_INDENT = "  ";
-const GLYPH_HANG = "  ";
 
 /**
  * The preview body an expanded slot wraps. A renderer's next `lastComponent` must be its own prior
@@ -165,7 +159,7 @@ function headingRows(
     return rows;
   }
   const { text, subjectComplete } = layoutPreviewHeading(title, summary, true, theme);
-  const built = new Text(text, 0, 0).render(width);
+  const built = wrapPreviewHeading(text, width);
   recordHeadingSubject(state, subjectComplete, built);
   return built;
 }
@@ -402,10 +396,10 @@ function previewStatusRows(input: StatusInput, width: number): string[] {
     }),
   );
   if (!line) return [];
-  // Continuation rows hang beneath the text, past the glyph.
-  return Arr.map(
-    wrapTextWithAnsi(line, Math.max(1, width - BODY_INDENT.length - GLYPH_HANG.length)),
-    (row, index) => clipToWidth(`${BODY_INDENT}${index === 0 ? "" : GLYPH_HANG}${row}`, width, ""),
+  // Continuation rows hang beneath the text, past the glyph; a path breaks after a `/` and each
+  // `·` fact stays whole, as in a heading.
+  return Arr.map(wrapPreviewHeading(line, Math.max(1, width - BODY_INDENT.length)), (row) =>
+    clipToWidth(`${BODY_INDENT}${row}`, width, ""),
   );
 }
 

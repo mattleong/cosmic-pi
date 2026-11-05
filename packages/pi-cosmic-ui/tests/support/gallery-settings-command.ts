@@ -3,10 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
+import type { RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import { SelectList } from "@earendil-works/pi-tui";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { settingsSubcommand } from "../../src/boundary/host-settings-command.ts";
 import { OwnedSurfaceOutcome } from "../../src/boundary/host-surface.ts";
+import { defaultResolvedCosmicUiConfig } from "../../src/config/schema.ts";
+import { registerSettingsCommand } from "../../src/settings/controller.ts";
 
 interface DemoConfig {
   readonly fast: string;
@@ -153,13 +156,48 @@ const completionScenarios: ReadonlyArray<readonly [keyof typeof commands, string
   ["openai", ""],
 ];
 
+// The real `/cosmic-ui settings` registration, so the footer item labels show as Pi lists them.
+const cosmicUiCompletions = (): RegisteredCommand["getArgumentCompletions"] => {
+  let completions: RegisteredCommand["getArgumentCompletions"];
+  registerSettingsCommand(
+    extensionApiFixture({
+      registerCommand(_name: string, definition: Omit<RegisteredCommand, "name" | "sourceInfo">) {
+        completions = definition.getArgumentCompletions;
+      },
+    }),
+    {
+      config: defaultResolvedCosmicUiConfig,
+      updateContext: () => undefined,
+      update: () => undefined,
+      run: () => Promise.resolve(),
+      captureAuthority: () => () => true,
+    },
+  );
+  return completions;
+};
+
+const completionFrames = (
+  title: string,
+  items: ReadonlyArray<{ value: string; label: string; description?: string }>,
+): string[] =>
+  Arr.flatMap([57, 100], (width) => [
+    `── Settings autocomplete · ${title}· ${width} cols`,
+    ...new SelectList([...items], 10, plainSelectTheme, SLASH_COMMAND_LAYOUT).render(width),
+    "",
+  ]);
+
 /** `/<ext> settings ` autocomplete, as Pi's editor lists it, in a 57- and a 100-column frame. */
-export const settingsCompletionGalleryLines = (): string[] =>
-  Arr.flatMap(completionScenarios, ([name, prefix]) => {
-    const items = commands[name].complete?.(prefix) ?? [];
-    return Arr.flatMap([57, 100], (width) => [
-      `── Settings autocomplete · /${name} settings ${prefix}· ${width} cols`,
-      ...new SelectList([...items], 10, plainSelectTheme, SLASH_COMMAND_LAYOUT).render(width),
-      "",
-    ]);
-  });
+export const settingsCompletionGalleryLines = Effect.fn("settingsCompletionGalleryLines")(
+  function* () {
+    const demo = Arr.flatMap(completionScenarios, ([name, prefix]) =>
+      completionFrames(`/${name} settings ${prefix}`, commands[name].complete?.(prefix) ?? []),
+    );
+    const complete = cosmicUiCompletions();
+    const cosmicUi: string[] = [];
+    for (const prefix of ["settings visible:m", "settings visible:s"]) {
+      const items = yield* Effect.promise(() => Promise.resolve(complete?.(prefix)));
+      cosmicUi.push(...completionFrames(`/cosmic-ui ${prefix} `, items ?? []));
+    }
+    return [...demo, ...cosmicUi];
+  },
+);

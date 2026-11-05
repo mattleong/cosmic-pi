@@ -2,13 +2,12 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, type Component } from "@earendil-works/pi-tui";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { outputLimitProjection } from "../../builtin-issues";
 import { isAffordanceRow } from "../../../preview/affordance-row";
-import { expandedSection } from "../../../preview/expanded-section";
+import { expandedText } from "../../../preview/expanded-body";
 import { ownField, ownObject, type HostObject } from "../../../shared/untrusted-value";
-import { escapeControlChars } from "../../../shared/terminal-text";
 import { numericArg } from "../../data/args";
 
 type SplitOutput = { readonly lines: string[]; readonly notice: string | undefined };
@@ -41,11 +40,7 @@ export function oversizedReadNotice(
 }
 
 export function agentNotesSection(theme: Theme, notes: string): Component {
-  return expandedSection(
-    theme,
-    "Agent notes",
-    new Text(theme.fg("dim", escapeControlChars(notes)), 0, 0),
-  );
+  return expandedText(theme, "Agent notes", Str.split(notes, "\n"), "dim");
 }
 
 export function withAgentNotes(body: Component, theme: Theme, notes: string | undefined) {

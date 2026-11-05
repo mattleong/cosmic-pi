@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { Container, type Component } from "@earendil-works/pi-tui";
 import { previewIssuesSlot } from "pi-code-previews";
 import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -17,15 +17,12 @@ import {
   clipToWidth,
   spinnerFrameAt,
 } from "pi-cosmic-ui/manager";
-import {
-  composeToolComponent as renderComponent,
-  renderToolHeader,
-  toolStatusLine,
-} from "pi-cosmic-ui/tool";
+import { composeToolComponent as renderComponent, toolStatusLine } from "pi-cosmic-ui/tool";
 import { agentTextLines, expandedRowsBody, factRowLines } from "../ui/agent-text.ts";
 import { agentFactLines, runRoleLabel, runRouteFact } from "../ui/run-facts.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import type { SubagentStartFailure } from "./model.ts";
+import { previewHeading } from "./render-preview.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
 // Raw call arguments reach the renderer before Pi validates them, and models send null for absent
@@ -93,7 +90,7 @@ export const renderSubagentStartCall = (
     agents.length === 0 ? "Start subagents" : `Start ${countLabel(agents.length, "subagent")}`;
   const container = new Container();
   if (!contentOnly) {
-    container.addChild(new Text(renderToolHeader({ title }, theme), 0, 0));
+    container.addChild(previewHeading({ title }, theme));
     if (context) container.addChild(previewIssuesSlot(context));
   }
   const rows = (width: number): string[] => {

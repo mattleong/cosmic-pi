@@ -163,6 +163,20 @@ const sent = (disposition: "woken" | "queued" | "held"): SessionSendDetails => (
   disposition,
 });
 
+// A long session name wraps the heading, which hangs under its title.
+const longNamed = {
+  sessionId: "01a19957-15d8-7047-8e3f-7bccf1353038",
+  name: "checkout redesign review for the acme platform team",
+  cwd: `${home}/dev/clients/acme-corporation/platform/web-frontend`,
+};
+const sentLongName: SessionSendDetails = {
+  ...contractEnvelope,
+  tool: SESSION_TOOL.send,
+  outcome: "delivered",
+  session: longNamed,
+  disposition: "woken",
+};
+
 const uncertain: SessionSendDetails = {
   ...contractEnvelope,
   tool: SESSION_TOOL.send,
@@ -275,6 +289,12 @@ const scenarios = [
     tool: SESSION_TOOL.send,
     args: { to: web.sessionId, message },
     result: result(sendText(sent("queued")), sent("queued")),
+  },
+  {
+    title: "sent to a session with a long name",
+    tool: SESSION_TOOL.send,
+    args: { to: longNamed.sessionId, message },
+    result: result(sendText(sentLongName), sentLongName),
   },
   {
     title: "sent a long message",

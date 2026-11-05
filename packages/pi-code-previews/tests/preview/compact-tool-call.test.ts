@@ -54,3 +54,80 @@ test("quoted words show beneath a collapsed row with their line breaks, bounded 
   assert.ok(Arr.every(hostile, (row) => visibleWidth(row) <= 20));
   assert.equal(Fn.pipe(Arr.join(hostile, ""), Str.includes("\u001b[2J")), false);
 });
+
+const offers = (rows: readonly string[]) => Arr.some(rows, Str.includes("▸ prompt"));
+
+test("an affordance that reveals only the subject shows only where the row cuts the subject", () => {
+  const prompt = "A watercolor otter floating on a river at dawn";
+  const render = (width: number, subjectOnly: boolean, compactSubject?: string) =>
+    Arr.map(
+      renderCompactToolCall(
+        {
+          name: "image",
+          phase: "running",
+          summary: {
+            action: "generate",
+            subject: prompt,
+            ...(compactSubject !== undefined && { compactSubject }),
+            ...(subjectOnly && { expandsSubjectOnly: true }),
+          },
+          expandLabel: "prompt",
+        },
+        theme,
+        width,
+      ),
+      stripAnsi,
+    );
+  assert.equal(offers(render(100, true)), false);
+  assert.equal(offers(render(100, false)), true);
+  assert.equal(offers(render(30, true)), true);
+  assert.equal(offers(render(100, true, "otter")), true);
+});
+
+test("a collapsed row whose subject is cut keeps its first metadata where the subject keeps room", () => {
+  const subject =
+    "pnpm vitest run --reporter=dot tests/task-service.test.ts tests/log-buffer.test.ts";
+  for (const width of [57, 100]) {
+    const [row = ""] = renderCompactToolCall(
+      {
+        name: "background_task",
+        phase: "settled",
+        summary: { subject, outcome: "success", metadata: ["finished in 1m 33s"] },
+      },
+      theme,
+      width,
+    );
+    const plain = stripAnsi(row);
+    assert.match(plain, /… · finished in 1m 33s$/u);
+    const shown = /^✓ background_task (.*)…/u.exec(plain)?.[1] ?? "";
+    assert.ok(Fn.pipe(subject, Str.startsWith(`${shown} `)));
+    assert.ok(visibleWidth(row) <= width);
+  }
+  // Too narrow to leave the subject its room, the row keeps the subject instead.
+  const [narrow = ""] = renderCompactToolCall(
+    {
+      name: "background_task",
+      phase: "settled",
+      summary: { subject, outcome: "success", metadata: ["finished in 1m 33s"] },
+    },
+    theme,
+    40,
+  );
+  assert.doesNotMatch(stripAnsi(narrow), /finished/u);
+});
+
+test("metadata gives way to the subject when the subject could only be cut inside a word", () => {
+  const subject = "https://example.test/docs/getting-started/installation";
+  const [row = ""] = renderCompactToolCall(
+    {
+      name: "fetch_content",
+      phase: "settled",
+      summary: { subject, outcome: "success", metadata: ["outcome unknown"] },
+    },
+    theme,
+    70,
+  );
+  const plain = stripAnsi(row);
+  assert.doesNotMatch(plain, /outcome unknown/u);
+  assert.ok(Fn.pipe(plain, Str.includes(subject)));
+});

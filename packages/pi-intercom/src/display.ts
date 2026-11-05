@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { authoredTextLines, expandedDetails } from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
-import { displayDirectory } from "./identity.ts";
+import { clippedSessionName, displayDirectory } from "./identity.ts";
 
 /** Words a session wrote, without terminal escape sequences that would restyle the view. */
 export const sessionText = (text: string): string => stripTerminalControls(text);
@@ -42,18 +42,30 @@ export const PREVIEW_BODY_INDENT = 2;
 export const statusLine = (text: string, theme: Pick<Theme, "fg">): Component =>
   new Text(theme.fg("muted", sanitizeTerminalLine(text)), 0, 0);
 
-/** The expanded `Details` section: a session's full id and its directory. */
+/**
+ * The expanded `Details` section: a session's full id, its whole name when the heading clipped it,
+ * and its directory.
+ */
 export const sessionDetails = (
   theme: Pick<Theme, "fg">,
-  sessionId: string,
-  cwd: string | undefined,
-): Component =>
-  expandedDetails(theme, [
+  session: {
+    readonly sessionId: string;
+    readonly name?: string | undefined;
+    readonly cwd?: string | undefined;
+  },
+): Component => {
+  const name = clippedSessionName(session);
+  return expandedDetails(theme, [
     Arr.join(
       Arr.filter(
-        [`Session ${sanitizeTerminalLine(sessionId)}`, displayDirectory(cwd ?? "")],
+        [
+          `Session ${sanitizeTerminalLine(session.sessionId)}`,
+          name === undefined ? "" : `Name ${name}`,
+          displayDirectory(session.cwd ?? ""),
+        ],
         Str.isNonEmpty,
       ),
       " · ",
     ),
   ]);
+};

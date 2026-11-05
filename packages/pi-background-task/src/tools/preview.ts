@@ -40,7 +40,12 @@ import {
   type BackgroundTaskToolDetails,
 } from "./command.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
-import { commandLines, requestTaskId, type LabeledRow } from "./request-view.ts";
+import {
+  commandLines,
+  requestStatesStartDirectory,
+  requestTaskId,
+  type LabeledRow,
+} from "./request-view.ts";
 
 type PreviewTheme = Pick<Theme, "fg" | "bold">;
 
@@ -545,15 +550,18 @@ function previewSections(input: BackgroundTaskPreviewInput, theme: PreviewTheme)
 
 /**
  * The technical facts of an expanded result, decoded from its details. Every action's Details
- * lead with the task ID: a result that doesn't name it keeps the requested one.
+ * lead with the task ID: a result that doesn't name it keeps the requested one. A start's
+ * directory is left out when the request's Directory row above already states it.
  */
 function factLines(input: BackgroundTaskPreviewInput): ReadonlyArray<string> {
   if (!input.expanded) return [];
+  const directoryStated = requestStatesStartDirectory(input.args);
   const facts = Option.match(input.failure, {
-    onSome: ({ failure }) => failureFactLines(failure),
+    onSome: ({ failure }) => failureFactLines(failure, directoryStated),
     onNone: () =>
       Option.match(input.details, {
-        onSome: (details) => Arr.filter(resultFactLines(details), (line) => line !== ""),
+        onSome: (details) =>
+          Arr.filter(resultFactLines(details, directoryStated), (line) => line !== ""),
         onNone: () => [],
       }),
   });

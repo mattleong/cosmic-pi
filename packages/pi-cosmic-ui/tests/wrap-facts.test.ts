@@ -39,4 +39,20 @@ describe("wrapFacts", () => {
     expect(lines[0]).toBe("Saved to .pi/generated-images/");
     expect(Arr.join(Arr.map(lines, Str.trim), "")).toBe(`Saved to .pi/generated-images/${name}`);
   });
+
+  it("starts a wide path on the next row when only a sliver of it fits beside the words before", () => {
+    const path = "~/.pi/agent/subagents/reports/session-1/agent-1-1-4f1c.md";
+    const lines = wrapFacts(`28,200 of 152,310 characters kept. Report file: ${path}`, 52);
+
+    expect(lines[0]).toBe("28,200 of 152,310 characters kept. Report file:");
+    expect(Arr.join(Arr.map(Arr.drop(lines, 1), Str.trim), "")).toBe(path);
+  });
+
+  it("fills each row with a name that has no part narrow enough to break after", () => {
+    const blob = `{"file.json":"${Str.repeat(60)("a")}"}`;
+    const lines = wrapFacts(`Wrote out/${blob}`, 30);
+
+    expect(Arr.join(Arr.map(lines, Str.trim), "")).toBe(`Wrote out/${blob}`);
+    for (const line of Arr.dropRight(lines, 1)) expect(visibleWidth(line)).toBe(30);
+  });
 });

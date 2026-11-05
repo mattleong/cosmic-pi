@@ -192,7 +192,7 @@ export const refuseHiddenLocalEdits = Effect.fn("GitRepository.refuseHiddenLocal
         `Hidden: ${listedPaths(hidden)}`,
         "Rule: Git skips the files of skip-worktree and assume-unchanged entries (`git ls-files -v` tags them `S` or lowercase), so their local edits can't be checked and integration would overwrite them.",
         "Nothing was changed.",
-        `Remedy: in ${root}, clear the bit with \`git update-index --no-skip-worktree -- <path>\` or \`git update-index --no-assume-unchanged -- <path>\`, then prepare again; or revise the workspace so the writer leaves these files unchanged.`,
+        `Remedy: in ${homeDisplayPath(root)}, clear the bit with \`git update-index --no-skip-worktree -- <path>\` or \`git update-index --no-assume-unchanged -- <path>\`, then prepare again; or revise the workspace so the writer leaves these files unchanged.`,
       ],
       "\n",
     ),

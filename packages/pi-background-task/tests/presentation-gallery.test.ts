@@ -677,6 +677,18 @@ const noticeScenarios: ReadonlyArray<GalleryMessageScenario> = [
   notice("task timed out", timedOut, [out("Applying migration 0042_add_sessions...")]),
   notice("task stopped by the user", stoppedServer, serverLog),
   notice("task killed without output", killed, []),
+  // An unnamed task's heading is its whole command, so expansion doesn't repeat it.
+  notice(
+    "unnamed task with a long command",
+    task({
+      id: "task-0000000017",
+      command: "pnpm vitest run --reporter=dot tests/task-service.test.ts tests/log-buffer.test.ts",
+      state: "exited",
+      endedAt: 42_001,
+      exitCode: 0,
+    }),
+    [out("Test Files  2 passed (2)")],
+  ),
   notice("task in a folder under home", { ...finished, cwd: `${homedir()}/web` }, [
     out("Found 0 errors in 212 files."),
   ]),
@@ -862,6 +874,9 @@ const settingsLines = (
     lines.push(...frames("the Global group opened"));
     for (const key of ["j", "j", "j"]) surface.editor?.handleInput?.(key);
     lines.push(...frames("the Global group on output per task"));
+    for (const key of ["j", "j", "j", "j", "j"]) surface.editor?.handleInput?.(key);
+    lines.push(...frames("the Global group on shell"));
+    for (const key of ["k", "k", "k", "k", "k"]) surface.editor?.handleInput?.(key);
     surface.editor?.handleInput?.("\r");
     lines.push(...frames("output per task choices"));
     for (const key of ["\u001b", "\u001b", "j", "\r"]) surface.editor?.handleInput?.(key);

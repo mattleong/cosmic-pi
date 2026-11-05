@@ -10,6 +10,7 @@ import {
   expandedArguments,
   expandedDetails,
   expandedSection,
+  previewHeadingText,
   previewIssuesSlot,
 } from "pi-code-previews";
 import { failureMessage, restatesText } from "pi-cosmic-core/message-text";
@@ -326,7 +327,7 @@ export function callBody(
   theme: Theme,
   context: Pick<RenderContext, "expanded" | "state" | "isPartial" | "executionStarted">,
 ): Component {
-  const heading = new Text(renderToolHeader(header, theme), 0, 0);
+  const heading = previewHeadingText(() => renderToolHeader(header, theme));
   // A started call spins until it reports where its questions stand, as its expanded row does.
   if (!context.expanded) {
     const state: unknown = context.state;

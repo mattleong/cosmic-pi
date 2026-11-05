@@ -15,6 +15,7 @@ import {
   expandedBody,
   expandedFields,
   getTextContent,
+  previewHeadingText,
   previewIssuesSlot,
   withCodePreviewShell,
   type CompactAnimationScheduler,
@@ -22,7 +23,6 @@ import {
 import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
-import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import {
   MAIN_AGENT_ID,
@@ -291,12 +291,10 @@ export function registerAgentTools(
           return previewCall(theme, context, { title: heading, subtitle });
         }
         const running = context.executionStarted && context.isPartial;
-        const heading = composeToolComponent((width) => [
-          clipToWidth(
-            renderToolHeader({ title: `Message → ${recipientLabel(context, call.to)}` }, theme),
-            width,
-          ),
-        ]);
+        // The recipient's name is learned from the result, so the heading reads it at each render.
+        const heading = previewHeadingText(() =>
+          renderToolHeader({ title: `Message → ${recipientLabel(context, call.to)}` }, theme),
+        );
         const container = new Container();
         container.addChild(heading);
         // Issues follow the heading, so the shell knows where the heading ends and the body begins.

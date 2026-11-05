@@ -51,8 +51,10 @@ it.each(["compact", "preview"] as const)(
       timeoutSeconds: 123.456,
     };
     const text = "Original result and recovery text";
+    // The task the start admitted: its command, in the requested directory.
+    const started = { ...snapshot, command: args.command, cwd: "/project/relative" };
     const expandedText = (decodes: boolean) => {
-      const details = decodes ? { action: "start", snapshot } : { action: "start" };
+      const details = decodes ? { action: "start", snapshot: started } : { action: "start" };
       const harness = createToolPresentationHarness(registeredTool("on", style));
       const result = { content: [{ type: "text" as const, text }], details };
       const frames = harness.cycle(args, result, { states: [false, true, false, true] });
@@ -62,12 +64,11 @@ it.each(["compact", "preview"] as const)(
       );
     };
     for (const expanded of expandedText(true)) {
-      // Every argument stays readable in full, with its exact value.
+      // Every argument stays readable in full, with its exact value, beside the task it started.
       for (const value of [args.command, args.cwd, `${args.timeoutSeconds}s`])
         expect(expanded).toContain(value);
       expect(expanded).not.toContain(text);
-      expect(expanded).toContain(snapshot.id);
-      expect(expanded).toContain(snapshot.cwd);
+      expect(expanded).toContain(started.id);
     }
     for (const expanded of expandedText(false)) expect(expanded).toContain(text);
   },

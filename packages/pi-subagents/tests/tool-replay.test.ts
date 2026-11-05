@@ -162,7 +162,8 @@ describe("subagent tool history replay", () => {
         if (sample.name === "agent_await")
           for (const { expanded, text } of adopted)
             if (expanded) {
-              expect(archiveMentions(text)).toBeGreaterThan(1);
+              // The expanded replay names the saved file once, in Details.
+              expect(archiveMentions(text)).toBe(1);
               expect(text).toContain("Report start.");
             }
       }

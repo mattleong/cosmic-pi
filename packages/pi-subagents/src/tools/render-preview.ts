@@ -5,7 +5,12 @@ import * as Str from "effect/String";
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import { expandedSection, isRejectedEmptyCall, receivedArguments } from "pi-code-previews";
+import {
+  expandedSection,
+  isRejectedEmptyCall,
+  previewHeadingText,
+  receivedArguments,
+} from "pi-code-previews";
 import {
   renderExpansionAffordance,
   renderToolHeader,
@@ -22,12 +27,16 @@ interface PreviewRenderContext {
 
 type RenderCall<Params extends TSchema> = NonNullable<ToolDefinition<Params>["renderCall"]>;
 
+/** A tool heading that wraps rather than clips, its continuation rows hanging beneath it. */
+export const previewHeading = (header: ToolHeader, theme: Theme): Component =>
+  previewHeadingText(() => renderToolHeader(header, theme));
+
 /** A call Pi rejected for malformed JSON arrives as `{}`, so its heading names only the tool. */
 export const rejectionAwareCall =
   <Params extends TSchema>(label: string, renderCall: RenderCall<Params>): RenderCall<Params> =>
   (args, theme, context) =>
     isRejectedEmptyCall(context)
-      ? new Text(renderToolHeader({ title: label }, theme), 0, 0)
+      ? previewHeading({ title: label }, theme)
       : renderCall(args, theme, context);
 
 /**
@@ -54,7 +63,7 @@ export const previewCall = (
   content?: Component,
 ): Component => {
   const container = new Container();
-  container.addChild(new Text(renderToolHeader(header, theme), 0, 0));
+  container.addChild(previewHeading(header, theme));
   if (content) container.addChild(content);
   if (context.executionStarted && context.isPartial)
     container.addChild(new Text(toolRunningLine(theme), 0, 0));

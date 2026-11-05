@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import type { JsonObject } from "../src/platform/json-document.ts";
 import {
@@ -53,6 +54,25 @@ describe("completeSettingsArguments", () => {
         value: "project maxRunning 16",
         label: "project maxRunning 16",
         description: "Running at once",
+      },
+    ]);
+  });
+
+  it("cuts a label too long for the completion column at a word boundary", () => {
+    const long = [
+      { id: "visible:subagents", label: "Subagent profiles and delegation", values: ["on"] },
+      { id: "unbroken", label: "Supercalifragilisticexpialidocious" },
+    ];
+    const descriptions = Arr.map(
+      completeSettingsArguments("", long) ?? [],
+      (choice) => choice.description,
+    );
+    expect(descriptions).toEqual(["Subagent profiles…", "Supercalifragilisti…"]);
+    expect(completeSettingsArguments("visible:subagents o", long)).toEqual([
+      {
+        value: "visible:subagents on",
+        label: "visible:subagents on",
+        description: "Subagent profiles…",
       },
     ]);
   });

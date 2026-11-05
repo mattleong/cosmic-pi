@@ -97,10 +97,10 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
   },
   {
     id: "usage.showOnlyOnSubscriptionModels",
-    label: "Usage on subscriptions only",
+    label: "Usage on plans only",
     currentValue: (cfg) => formatOnOff(cfg.usage.showOnlyOnSubscriptionModels),
     values: ON_OFF_VALUES,
-    description: "Show usage only when the current OpenAI model signs in with a subscription.",
+    description: "Show usage only when the current OpenAI model signs in with a subscription plan.",
     decoder: OnOffSchema,
   },
   {

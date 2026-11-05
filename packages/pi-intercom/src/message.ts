@@ -56,8 +56,7 @@ export const presentIntercomMessage: CodePreviewMessagePresenter = (message, opt
   const from = Option.getOrUndefined(decodeSender(envelope?.details))?.from;
   const text = Option.getOrUndefined(decodeText(envelope?.details))?.text;
   const sender = from ? sessionSubject(from) : "another session";
-  const details = (): Component | undefined =>
-    from ? sessionDetails(theme, from.sessionId, from.cwd) : undefined;
+  const details = (): Component | undefined => (from ? sessionDetails(theme, from) : undefined);
   const presentation = {
     name: "session_message",
     label: "Session message",

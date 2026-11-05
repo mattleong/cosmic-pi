@@ -147,8 +147,16 @@ export const captureOutputText = ({
 
 const characterCount = (count: number): string => count.toLocaleString("en-US");
 
+/** A count with grouped digits and its noun, such as `1 line` or `3,172 lines`. */
+const groupedCountLabel = (count: number, singular: string): string =>
+  count === 1 ? countLabel(count, singular) : `${characterCount(count)} ${singular}s`;
+
+/** A saved file's size, such as `152,310 characters, 3,172 lines`. */
+export const savedFileSize = (archive: SubagentReportArchive): string =>
+  `${groupedCountLabel(archive.chars, "character")}, ${groupedCountLabel(archive.lines, "line")}`;
+
 const savedFileText = (label: string, archive: SubagentReportArchive): string =>
-  `${label}: ${sanitizeTerminalLine(archive.path)} (${characterCount(archive.chars)} characters, ${countLabel(archive.lines, "line")})`;
+  `${label}: ${sanitizeTerminalLine(archive.path)} (${savedFileSize(archive)})`;
 
 /**
  * The one pointer to a saved report, wherever a report reaches a parent, such as

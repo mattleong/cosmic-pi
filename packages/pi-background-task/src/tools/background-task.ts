@@ -14,6 +14,7 @@ import * as Str from "effect/String";
 import {
   expandedSection,
   getTextContent,
+  previewHeadingText,
   previewIssuesSlot,
   withCodePreviewShell,
   type CompactAnimationScheduler,
@@ -189,11 +190,12 @@ export function registerBackgroundTaskTool(
     },
     renderCall(args, theme, context) {
       const { state, executionStarted, isPartial } = context;
-      const heading = composeToolComponent((width) => {
-        if (!Number.isFinite(width) || width < 1) return [];
-        const subtitle = headingSubtitle(args, state.backgroundTaskSubject);
-        return new Text(renderToolHeader({ title: TITLE, subtitle }, theme), 0, 0).render(width);
-      });
+      const heading = previewHeadingText(() =>
+        renderToolHeader(
+          { title: TITLE, subtitle: headingSubtitle(args, state.backgroundTaskSubject) },
+          theme,
+        ),
+      );
       const running = composeToolComponent((width) =>
         width >= 1 && executionStarted && isPartial && state.backgroundTaskSubject === undefined
           ? [toolRunningLine(theme)]

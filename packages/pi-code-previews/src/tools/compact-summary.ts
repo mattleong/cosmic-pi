@@ -21,6 +21,11 @@ export type CompactStatus = Exclude<CompactPhase, "settled"> | CompactOutcome;
 export interface CompactDetail {
   readonly label: string;
   readonly text: string;
+  /**
+   * Raw evidence, such as a call's JSON arguments, which wraps where each row ends; other details
+   * are facts, which wrap between whole facts and break a long path after a `/`.
+   */
+  readonly verbatim?: true;
 }
 
 export interface CompactChild {
@@ -83,6 +88,11 @@ export interface CompactSummary {
    * because expansion only repeats what the collapsed row shows.
    */
   expandLabel?: string | false;
+  /**
+   * Expansion reveals only the subject, such as a prompt a compact heading may cut: a collapsed
+   * compact row whose heading shows the whole subject draws no `expandLabel` affordance.
+   */
+  expandsSubjectOnly?: true;
   issues?: readonly CompactIssue[];
   children?: { entries: readonly CompactChild[]; total: number };
 }

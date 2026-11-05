@@ -2,10 +2,12 @@ import * as Effect from "effect/Effect";
 import { invalidRequest } from "../run/errors.ts";
 import { nodeErrorCode } from "./harness-shared.ts";
 import { nodeFsConstants, nodeFsPromises } from "pi-cosmic-core/platform/node-builtins";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 /**
  * Why the Node binary running Pi can no longer start Pi children or helpers. On macOS, Homebrew
- * resolves it to a versioned Cellar path that `brew upgrade` deletes while Pi keeps running.
+ * resolves it to a versioned Cellar path that `brew upgrade` deletes while Pi keeps running. The
+ * check reads the real path; the problem names it as the user reads it.
  */
 export const nodeExecutableProblem = (
   executable = process.execPath,
@@ -15,8 +17,8 @@ export const nodeExecutableProblem = (
       () => undefined,
       (cause: unknown) =>
         nodeErrorCode(cause) === "ENOENT"
-          ? `Node at ${executable} was removed since Pi started; restart Pi.`
-          : `Node at ${executable} is no longer executable; restart Pi.`,
+          ? `Node at ${homeDisplayPath(executable)} was removed since Pi started; restart Pi.`
+          : `Node at ${homeDisplayPath(executable)} is no longer executable; restart Pi.`,
     ),
   );
 

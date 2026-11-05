@@ -4,6 +4,7 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { formatBytes, formatDuration } from "pi-cosmic-core/display";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { ON_OFF_SETTING_VALUES, settingOnOff } from "pi-cosmic-ui/manager/settings-surface";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
@@ -64,7 +65,7 @@ export type BackgroundTaskSettingKind =
   | "bytes"
   | "milliseconds"
   | "seconds"
-  | "text";
+  | "path";
 
 export interface BackgroundTaskSettingDescriptor<Id extends BackgroundTaskSettingId> {
   readonly id: Id;
@@ -87,15 +88,18 @@ const NUMBER_FORMATS = {
   seconds: (seconds: number) => formatDuration(seconds * 1_000),
 } as const;
 
-/** A value as settings show it: switches read `on`/`off`, sizes and durations in their units. */
+/**
+ * A value as settings show it: switches read `on`/`off`, sizes and durations in their units, and
+ * paths home-relative.
+ */
 export const formatSettingValue = (
   kind: BackgroundTaskSettingKind,
   value: BackgroundTaskConfig[BackgroundTaskSettingId],
 ): string => {
   if (Predicate.isBoolean(value)) return settingOnOff(value);
   if (Predicate.isNumber(value))
-    return kind === "switch" || kind === "text" ? String(value) : NUMBER_FORMATS[kind](value);
-  return sanitizeTerminalLine(value ?? "");
+    return kind === "switch" || kind === "path" ? String(value) : NUMBER_FORMATS[kind](value);
+  return sanitizeTerminalLine(formatDisplayPath(value ?? "", ""));
 };
 
 const onOff = <Id extends BooleanSettingId>(id: Id, label: string, description: string) => ({
@@ -183,6 +187,9 @@ const numberSetting = <Id extends NumberSettingId>(
 ) => {
   const { minimum, maximum } = NUMBER_BOUNDS[id];
   const { parse, expected } = NUMBER_INPUT[kind];
+  // The range reads in the same spelling as the examples before it, such as `4KB`.
+  const bound = (value: number) =>
+    kind === "bytes" ? commandValue(kind, value) : formatSettingValue(kind, value);
   return {
     id,
     label,
@@ -197,7 +204,7 @@ const numberSetting = <Id extends NumberSettingId>(
         ? parsed
         : undefined;
     },
-    invalid: `${id} must be ${expected} from ${formatSettingValue(kind, minimum)} to ${formatSettingValue(kind, maximum)}`,
+    invalid: `${id} must be ${expected} from ${bound(minimum)} to ${bound(maximum)}`,
   };
 };
 
@@ -261,7 +268,7 @@ const SETTING_DESCRIPTORS = {
     label: "Shell",
     description:
       "The shell tasks run in, instead of Pi's shell and command prefix; default uses Pi's.",
-    kind: "text",
+    kind: "path",
     values: [],
     commandValues: [],
     openValues: true,

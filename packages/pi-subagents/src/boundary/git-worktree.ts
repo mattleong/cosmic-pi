@@ -14,6 +14,7 @@ import type { WorktreeHook } from "../config/schema.ts";
 import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";
 import { runWorktreeHook } from "./worktree-hook.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 import { worktreeKind, worktreeRemoveHooks } from "./git-worktree-hooks.ts";
 import type {
   WorkspaceAcquired,
@@ -379,7 +380,9 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
               onSuccess: () =>
                 Effect.fail(withOutcome(error, "The partial workspace was removed.")),
               onFailure: () =>
-                Effect.fail(withOutcome(error, `The partial workspace remains at ${dir}.`)),
+                Effect.fail(
+                  withOutcome(error, `The partial workspace remains at ${homeDisplayPath(dir)}.`),
+                ),
             }),
           ),
       ),

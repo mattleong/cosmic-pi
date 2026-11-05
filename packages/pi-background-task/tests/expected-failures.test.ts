@@ -101,7 +101,8 @@ const cases: ReadonlyArray<Case> = [
     },
     text: "Couldn't find the working directory /project/apps/missing",
     code: "invalid_cwd",
-    facts: ["/project/apps/missing"],
+    // The request's Directory row states the directory once.
+    facts: ["apps/missing"],
     hidden: [],
   },
   {

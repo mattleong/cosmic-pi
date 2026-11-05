@@ -24,7 +24,6 @@ import type { SubagentAwaitUntil } from "../run/service.ts";
 import {
   composeToolComponent as renderComponent,
   renderExpansionAffordance,
-  renderToolHeader,
   toolRunningLine,
 } from "pi-cosmic-ui/tool";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -45,7 +44,7 @@ import { rejectedFailureText } from "./failure-details.ts";
 import { boundToolOutput } from "./format.ts";
 import { renderCompactResultComponent, renderProfileRoutesComponent } from "./render-management.ts";
 import { formatAwaitCounters, renderAwaitProgressComponent } from "./render-await.ts";
-import { textResultBody } from "./render-preview.ts";
+import { previewHeading, textResultBody } from "./render-preview.ts";
 import { cardBlockLines, cardFactLines } from "./render-run-cards.ts";
 import {
   expandedFactDetails,
@@ -71,7 +70,7 @@ export const rawResultSection = (
 };
 
 export const renderSubagentCall = (name: string, target: string, theme: Theme): Component =>
-  new Text(renderToolHeader({ title: name, subtitle: target }, theme), 0, 0);
+  previewHeading({ title: name, subtitle: target }, theme);
 
 const CallArgumentsSchema = Schema.Record(Schema.String, Schema.Json);
 

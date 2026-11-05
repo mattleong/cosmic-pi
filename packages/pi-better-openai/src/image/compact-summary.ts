@@ -188,18 +188,21 @@ const hasOptions = (args: Partial<ToolParams>): boolean =>
 
 /**
  * What expanding a pending request reveals: its options, and the prompt wherever the collapsed
- * heading may cut it. A compact heading may cut it at any width; a preview heading wraps, so it
- * hides only a prompt it can't name exactly.
+ * heading may cut it. A preview heading wraps, so it hides only a prompt it can't name exactly. A
+ * compact heading may cut it at any width, so a request without options declares that its `prompt`
+ * reveals only the subject, which the shell drops where the row shows the prompt whole.
  */
-const requestLabel = (
+const requestExpansion = (
   args: Partial<ToolParams>,
   prompt: string,
   style: ToolCallCollapsedStyle,
-): string | false => {
+): Pick<CompactSummary, "expandLabel" | "expandsSubjectOnly"> => {
   const options = hasOptions(args);
-  if (style === "compact" || !imageHeadingsShowPrompt(prompt))
-    return options ? DETAILS_LABEL : PROMPT_LABEL;
-  return options && OPTIONS_LABEL;
+  const exact = imageHeadingsShowPrompt(prompt);
+  if (options)
+    return { expandLabel: style === "compact" || !exact ? DETAILS_LABEL : OPTIONS_LABEL };
+  if (style === "preview") return { expandLabel: !exact && PROMPT_LABEL };
+  return { expandLabel: PROMPT_LABEL, ...(exact && { expandsSubjectOnly: true }) };
 };
 
 /** The image tool's summary for rows drawn in `style`, read when the shell wraps the tool. */
@@ -210,7 +213,7 @@ export const imageCompactSummaryFor =
     if (!ACTIONS.has(action) || !Predicate.isString(args.prompt)) return undefined;
     const subject = imagePromptSubject(args.prompt);
     if (phase !== "settled")
-      return { action, subject, expandLabel: requestLabel(args, args.prompt, style) };
+      return { action, subject, ...requestExpansion(args, args.prompt, style) };
     const record = imageRecord(result?.details);
 
     if (context.isError && record?.status !== "cancelled") {

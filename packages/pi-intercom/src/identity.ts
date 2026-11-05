@@ -91,6 +91,14 @@ export const sessionSubject = (session: SessionIdentity): string => {
     : clipText(directory, MAX_SUBJECT_CHARS);
 };
 
+/** A session's whole name when {@link sessionSubject} clipped it, so expansion can show it. */
+export const clippedSessionName = (session: {
+  readonly name?: string | undefined;
+}): string | undefined => {
+  const name = sanitizeTerminalLine(session.name ?? "");
+  return name.length > MAX_SUBJECT_CHARS ? name : undefined;
+};
+
 /** How a heading names an addressee before a session answers: full ids shorten to `#9038`. */
 export const addresseeSubject = (to: string | undefined): string => {
   const target = sanitizeTerminalLine(to ?? "");

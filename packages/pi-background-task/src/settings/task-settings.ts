@@ -1,4 +1,5 @@
 import {
+  effectiveDisplayValue,
   INHERIT,
   inheritChoice,
   SCOPES,
@@ -88,7 +89,7 @@ const SETTING_SUMMARIES = {
   stopGraceMs: (value) => `${value} grace`,
   maxWaitSeconds: (value) => `${value} wait`,
   showFooterStatus: (value) => `footer ${value}`,
-  shellPath: (value) => value,
+  shellPath: (value) => `shell ${value}`,
 } as const satisfies Record<BackgroundTaskSettingId, (value: string) => string>;
 
 // Every summary leads with these values in effect; a scope's own other values follow them.
@@ -159,7 +160,7 @@ function createTaskSettingsSubcommand(
   const inheritedValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting): string =>
     scope === "project"
       ? effectiveValue("global", setting)
-      : settingDisplayValue(setting, DEFAULT_BACKGROUND_TASK_CONFIG[setting.id]);
+      : effectiveDisplayValue(setting, DEFAULT_BACKGROUND_TASK_CONFIG[setting.id]);
   // The value in effect for a scope: its own, else what it inherits.
   const effectiveValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting): string =>
     ownValue(scope, setting) ?? inheritedValue(scope, setting);
@@ -171,7 +172,7 @@ function createTaskSettingsSubcommand(
     config: BackgroundTaskConfig,
     files: ReadonlyArray<ScopeFile>,
   ): SettingsSurfaceItem[] => {
-    const listed = Arr.filter(BACKGROUND_TASK_SETTINGS, (setting) => setting.values.length > 0);
+    const listed = BACKGROUND_TASK_SETTINGS;
     scopesRead = true;
     for (const file of files) {
       if (!("own" in file)) continue;
@@ -192,10 +193,20 @@ function createTaskSettingsSubcommand(
     ): SettingsSurfaceItem => {
       const inherited = settingInherited(inheritedValue(scope, setting));
       const currentValue = rowValue(scope, setting);
+      const description = `${setting.description} ${sessionValueSentence(setting, sessionValue(config, setting))}`;
+      // A path has no choices to offer, so its row names the command that sets it; a no-break
+      // space keeps the id with its argument when the description wraps.
+      if (setting.values.length === 0)
+        return {
+          id: rowKey(scope, setting.id),
+          label: setting.label,
+          description: `${description} Set it with /tasks settings ${scope === "project" ? "project " : ""}${setting.id}\u00a0<path>.`,
+          currentValue,
+        };
       return {
         id: rowKey(scope, setting.id),
         label: setting.label,
-        description: `${setting.description} ${sessionValueSentence(setting, sessionValue(config, setting))}`,
+        description,
         currentValue,
         values: [
           inherited,

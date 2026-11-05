@@ -95,6 +95,21 @@ describe("image expansion", () => {
     expect(summary?.expandLabel).toEqual(expect.any(String));
   });
 
+  // A compact heading may cut the prompt, so the shell drops `prompt` only where it showed whole.
+  it("marks a compact request's prompt affordance as revealing only the subject", () => {
+    const pending = (args: Input["args"]) =>
+      imageCompactSummary({ ...input(), phase: "running", args, result: undefined });
+    const plain = pending({ prompt: "An otter", action: "generate" });
+    expect(plain?.expandLabel).toEqual(expect.any(String));
+    expect(plain?.expandsSubjectOnly).toBe(true);
+    for (const args of [
+      { prompt: "An otter", action: "generate", save: "none" },
+      { prompt: "An otter\nat dawn" },
+      { prompt: Str.repeat(30)("otter ") },
+    ] satisfies Input["args"][])
+      expect(pending(args)?.expandsSubjectOnly).toBeUndefined();
+  });
+
   // A preview heading wraps, so it already shows a short prompt whole.
   it("offers a pending preview row's expansion only for what its heading leaves out", () => {
     const preview = imageCompactSummaryFor("preview");

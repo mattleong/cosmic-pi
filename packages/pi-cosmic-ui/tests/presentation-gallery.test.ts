@@ -827,7 +827,10 @@ describe.skipIf(!directory)("presentation gallery", () => {
       lines.push(...detailFrames(), ...liveFrames(), ...attentionFrames(), ...edgeFrames());
       lines.push(...workingFrames());
       lines.push(...sharedSurfaceGalleryLines());
-      lines.push(...(yield* settingsCommandGalleryLines()), ...settingsCompletionGalleryLines());
+      lines.push(
+        ...(yield* settingsCommandGalleryLines()),
+        ...(yield* settingsCompletionGalleryLines()),
+      );
       yield* writeGallerySection(
         directory,
         "pi-cosmic-ui",

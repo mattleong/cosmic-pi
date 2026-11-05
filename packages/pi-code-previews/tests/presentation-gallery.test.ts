@@ -5,7 +5,8 @@ import {
   type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
+import { previewHeadingText } from "../src/preview/heading-wrap";
 import * as Predicate from "effect/Predicate";
 import { extensionApiFixture, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
 import { stripAnsi } from "pi-cosmic-core";
@@ -14,6 +15,7 @@ import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import {
   authoredTextLines,
+  captureCodePreviewPresentationPolicy,
   expandedBody,
   expandedDetails,
   expandedFields,
@@ -97,7 +99,13 @@ function registered(style: "compact" | "preview", background?: "border") {
       name,
       captured.resolveToolRenderers(
         name,
-        name === "mcp__docs__lookup" ? nativeMcpCall : isWebAccessTool(name) ? webCall : undefined,
+        name === "mcp__docs__lookup"
+          ? nativeMcpCall
+          : name === "source_check"
+            ? webResultOnly
+            : isWebAccessTool(name)
+              ? webCall
+              : undefined,
       )!,
     ]),
   );
@@ -135,19 +143,24 @@ const cartTestSource = Arr.join(
   "\n",
 );
 
+const webResult: NonNullable<ToolRenderers["renderResult"]> = (result) =>
+  new Text(
+    Fn.pipe(
+      Option.getOrUndefined(Arr.findFirst(result.content, (part) => part.type === "text"))?.text ??
+        "",
+      Str.slice(0, 200),
+    ),
+    0,
+    0,
+  );
+
 const webCall: ToolRenderers = {
   renderCall: (args) => new Text(JSON.stringify(args), 0, 0),
-  renderResult: (result) =>
-    new Text(
-      Fn.pipe(
-        Option.getOrUndefined(Arr.findFirst(result.content, (part) => part.type === "text"))
-          ?.text ?? "",
-        Str.slice(0, 200),
-      ),
-      0,
-      0,
-    ),
+  renderResult: webResult,
 };
+
+/** A third-party renderer without its own call heading, so the adapter draws the heading. */
+const webResultOnly: ToolRenderers = { renderResult: webResult };
 
 const nativeMcpCall: ToolRenderers = {
   renderCall: (args, _theme, context) => {
@@ -216,6 +229,10 @@ const StatusDemoArgs = Schema.Struct({
   /** An issue the row shows, which carries its state when expanded. */
   issue: Schema.optionalKey(Schema.String),
   issueSeverity: Schema.optionalKey(Schema.Literals(["info", "warning", "attention"])),
+  /** Detail the issue keeps for expansion. */
+  issueDetail: Schema.optionalKey(Schema.String),
+  /** In compact style, `expandLabel` reveals only the subject (`expandsSubjectOnly`). */
+  subjectOnly: Schema.optionalKey(Schema.Literal(true)),
   /** The collapsed preview draws no result body; only the heading summarizes it. */
   summaryOnly: Schema.optionalKey(Schema.Literal(true)),
   /** The collapsed result body ends with its own affordance for clipped output. */
@@ -226,11 +243,18 @@ const statusDemoArgs = Fn.flow(
   Schema.decodeUnknownOption(StatusDemoArgs),
   Option.getOrElse((): typeof StatusDemoArgs.Type => ({})),
 );
-const statusDemo = () =>
+const statusDemo = (style = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle) =>
   withCodePreviewRenderers<unknown, unknown, object>(
     { name: "status_demo", label: "Status demo" },
     {
-      renderCall: (args) => new Text(`Status demo ${statusDemoArgs(args).subject ?? ""}`, 0, 0),
+      // A preview heading hangs its continuation rows, as tool headings draw theirs.
+      renderCall: (args, theme) =>
+        previewHeadingText(() =>
+          renderToolHeader(
+            { title: "Status demo", subtitle: statusDemoArgs(args).subject ?? "" },
+            theme,
+          ),
+        ),
       renderResult: (result, _options, theme, context) => {
         const output = result.content[0]?.type === "text" ? result.content[0].text : "";
         const { state, summaryOnly, clipped } = statusDemoArgs(context.args);
@@ -253,6 +277,9 @@ const statusDemo = () =>
           ...(args.counter !== undefined && { counters: [args.counter] }),
           ...(metadata !== undefined && { metadata: [metadata] }),
           ...(args.expandLabel !== undefined && { expandLabel: args.expandLabel }),
+          // A preview heading wraps, so it shows the whole subject such a label would reveal.
+          ...(args.subjectOnly &&
+            (style === "compact" ? { expandsSubjectOnly: true } : { expandLabel: false })),
           ...(args.messageIcon && { messageIcon: args.messageIcon }),
           ...(args.issue !== undefined && {
             issues: [
@@ -260,6 +287,7 @@ const statusDemo = () =>
                 severity: args.issueSeverity ?? "warning",
                 code: "demo",
                 message: args.issue,
+                ...(args.issueDetail !== undefined && { detail: args.issueDetail }),
               },
             ],
           }),
@@ -313,6 +341,10 @@ const statusDemoMessage = withCodePreviewMessageShell((message, _options, theme)
   expandLabel: "message",
 }));
 
+/** A command too long for a collapsed heading beside its outcome. */
+const LONG_COMMAND =
+  "pnpm vitest run --reporter=dot tests/task-service.test.ts tests/log-buffer.test.ts";
+
 /** A message whose heading subject is long prose or a long path, which a collapsed heading cuts. */
 const longSubjectMessage = (subject: string, path: boolean) =>
   withCodePreviewMessageShell((message, _options, theme) => ({
@@ -328,6 +360,34 @@ const longSubjectMessage = (subject: string, path: boolean) =>
     expanded: () => expandedText(theme, "Details", [subject, messageText(message.content)]),
     expandLabel: "details",
   }));
+
+/** A finished task's notice: its long command is the subject and its outcome the only fact. */
+const outcomeMessage = withCodePreviewMessageShell((message, _options, theme) => ({
+  name: "background_task",
+  label: "Background task",
+  summary: {
+    subject: LONG_COMMAND,
+    metadata: ["finished in 1m 33s"],
+    outcome: "success",
+  },
+  collapsed: () => new Text(messageText(message.content), 0, 0),
+  expanded: () => expandedText(theme, "Output", [messageText(message.content)]),
+  expandLabel: "output",
+}));
+
+/** A message whose counters are alternatives, widest first, as a run's report counts them. */
+const countedMessage = withCodePreviewMessageShell((message, _options, theme) => ({
+  name: "status_message",
+  label: "Agent report",
+  summary: {
+    subject: "auth-review",
+    counters: ["2 finished · 1 failed · 1 with warnings", "2 finished · 1 failed", "2 finished"],
+    outcome: "warning",
+  },
+  collapsed: () => new Text(messageText(message.content), 0, 0),
+  expanded: () => expandedText(theme, "Report", [messageText(message.content)]),
+  expandLabel: "report",
+}));
 
 /** A message whose collapsed words end in their own affordance, so the shell adds no second one. */
 const longStatusMessage = withCodePreviewMessageShell((message, _options, theme) => ({
@@ -450,6 +510,18 @@ const scenarios: ReadonlyArray<
     tool: "source_check",
     title: "third-party source evidence is not a verdict",
     args: { claim: "The provider supports cancellation" },
+    result: text("Sources, cited passages, and manual review guidance", {
+      sourceCount: 2,
+      passageCount: 4,
+      searchCount: 1,
+    }),
+  },
+  {
+    tool: "source_check",
+    title: "third-party heading without its own renderer wraps a long claim",
+    args: {
+      claim: "The provider supports cancellation of streaming responses after the first token",
+    },
     result: text("Sources, cited passages, and manual review guidance", {
       sourceCount: 2,
       passageCount: 4,
@@ -1024,6 +1096,21 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "bash",
+    title: "bash long command wraps beneath its heading",
+    args: {
+      command:
+        "pnpm vitest run --reporter=dot packages/pi-code-previews/tests/preview/compact-issues.test.ts",
+    },
+    result: text("2 passed"),
+  },
+  {
+    tool: "bash",
+    title: "bash multi-line command hangs beneath its heading",
+    args: { command: "cd packages/pi-code-previews\npnpm typecheck && pnpm test" },
+    result: text("Tests 1204 passed"),
+  },
+  {
+    tool: "bash",
     title: "bash success ending in a newline draws no blank row",
     args: { command: "git --no-pager diff --stat && node --version" },
     result: text(" src/cart.ts | 4 ++++\n 1 file changed, 4 insertions(+)\nv22.22.1\n\n"),
@@ -1348,6 +1435,34 @@ const scenarios: ReadonlyArray<
     },
     phase: "running",
     narrow: true,
+  },
+  {
+    tool: "status_demo",
+    title: "issue detail breaks a long path after its directory",
+    args: {
+      subject: "auth-review",
+      issue: "auth-review: full report saved to a file",
+      issueSeverity: "info",
+      issueDetail:
+        "28,200 of 152,310 characters kept. Report file: ~/.pi/agent/subagents/reports/session-1/agent-1-1-4f1c.md · 152,310 characters, 3,172 lines",
+    },
+    result: text("Report summary"),
+  },
+  {
+    tool: "status_demo",
+    title: "long subject beside its outcome fact",
+    args: { subject: LONG_COMMAND, metadata: "finished in 1m 33s" },
+    result: text("Test Files  2 passed (2)"),
+  },
+  {
+    tool: "status_demo",
+    title: "affordance that reveals only the subject shows only where the heading cuts it",
+    args: {
+      subject: "A watercolor otter reading a newspaper on a riverbank at dawn",
+      expandLabel: "prompt",
+      subjectOnly: true,
+    },
+    phase: "running",
   },
   {
     tool: "status_demo",
@@ -1846,6 +1961,26 @@ describe.skipIf(!directory)("presentation gallery", () => {
                   },
                 },
               ),
+              ...galleryMessageFrames(outcomeMessage, {
+                title: `${style} · message heading keeps its outcome beside a cut subject`,
+                message: {
+                  role: "custom",
+                  customType: "background_task",
+                  content: "Test Files  2 passed (2)",
+                  display: true,
+                  timestamp: 0,
+                },
+              }),
+              ...galleryMessageFrames(countedMessage, {
+                title: `${style} · message heading keeps the widest counter that fits`,
+                message: {
+                  role: "custom",
+                  customType: "status_message",
+                  content: "Two reviews finished; one failed.",
+                  display: true,
+                  timestamp: 0,
+                },
+              }),
               ...galleryMessageFrames(longStatusMessage, {
                 title: `${style} · clipped message keeps one affordance`,
                 message: {

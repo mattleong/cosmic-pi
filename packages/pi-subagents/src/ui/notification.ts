@@ -118,9 +118,12 @@ const completedSummary = (details: CompletedDetails): CompactSummary => {
     ],
     Str.isNonEmpty,
   );
+  // Counter alternatives, widest first, so a narrow heading keeps the whole counts that fit.
   return {
     subject: "",
-    counters: [Arr.join(counts, " · ")],
+    counters: Arr.map(Arr.reverse(Arr.range(1, counts.length)), (shown) =>
+      Arr.join(Arr.take(counts, shown), " · "),
+    ),
     outcome,
     ...(issues.length > 0 && { issues }),
   };

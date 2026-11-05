@@ -160,6 +160,29 @@ const notes: AskUserQuestion = {
   prompt: "Anything else the implementer should know?",
   mode: "text",
 };
+// Titles long enough together that the heading wraps at a phone's width.
+const releaseQuestions = [
+  { ...environment, title: "Deployment environment" },
+  {
+    key: "rollback",
+    title: "Rollback plan",
+    prompt: "How should a failed release roll back?",
+    mode: "single",
+    choices: [
+      { value: "revert", label: "Revert the deploy", description: "Redeploy the last release." },
+      { value: "flag", label: "Feature flag", description: "Turn the new code path off." },
+    ],
+  },
+  { ...summary, title: "Release notes" },
+] satisfies ReadonlyArray<AskUserQuestion>;
+const releasePlan: AskUserOutcome = {
+  outcome: "submitted",
+  answers: [
+    chosen,
+    { key: "rollback", kind: "choices", values: ["flag"], labels: ["Feature flag"] },
+    { key: "summary", kind: "text", text: "Faster startup and smaller bundles." },
+  ],
+};
 const cartPlan: AskUserOutcome = {
   outcome: "submitted",
   answers: [
@@ -419,6 +442,14 @@ describe.skipIf(!directory)("presentation gallery", () => {
           "questions shown, needs your input",
           { questions: [environment, checks, library, summary] },
           { content: [], details: { questionnaire: "open" } },
+        ),
+        live("ask_user", "opening a questionnaire with long titles", {
+          questions: releaseQuestions,
+        }),
+        asked(
+          "answers to questions with long titles",
+          { questions: releaseQuestions },
+          releasePlan,
         ),
         asked("one choice selected", { questions: [environment] }, oneChoice),
         asked("several choices selected", { questions: [checks] }, severalChoices),

@@ -10,6 +10,7 @@ import {
 } from "pi-cosmic-core/platform/node-builtins";
 import { WorkspaceError } from "../workspace/model.ts";
 import { withoutGitLocalEnvironment } from "./git-local-environment.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 /** Oldest Git with every option isolated workspaces use (`rev-parse --path-format`). */
 export const MINIMUM_GIT_VERSION = [2, 31] as const;
@@ -89,7 +90,7 @@ const resolveGitInstallation = Effect.fn("GitInstallation.resolveGitInstallation
   if (!match)
     return yield* unavailable(
       "Git didn't report its version, so isolated writer workspaces are unavailable.",
-      `Executable: ${executable}`,
+      `Executable: ${homeDisplayPath(executable)}`,
     );
   return { executable, version: Arr.join(Arr.filter(match.slice(1), Boolean), ".") };
 });
@@ -115,7 +116,7 @@ export const supportedGitInstallation = gitInstallation.pipe(
     (installation) =>
       unavailable(
         `Git ${installation.version} is too old for isolated writer workspaces.`,
-        `Executable: ${installation.executable}\nIsolated writers need Git ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later. Upgrade Git, or use the shared-checkout writer workspace.`,
+        `Executable: ${homeDisplayPath(installation.executable)}\nIsolated writers need Git ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later. Upgrade Git, or use the shared-checkout writer workspace.`,
       ),
   ),
 );

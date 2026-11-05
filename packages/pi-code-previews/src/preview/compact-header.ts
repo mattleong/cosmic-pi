@@ -47,9 +47,10 @@ const TRAILING_BREAK = /[\s,;:.\-–—…]+$/u;
 
 /**
  * Cuts prose at the end on a word boundary, ending in `…`, so every word that remains is whole.
- * One word wider than the room is cut where it reaches the edge.
+ * One word wider than the room is cut where it reaches the edge, as is text whose last boundary
+ * would discard more than `slack` of the room.
  */
-export function endElide(text: string, width: number): string {
+export function endElide(text: string, width: number, slack = WORD_CUT_SLACK): string {
   if (width <= 0) return "";
   if (visibleWidth(text) <= width) return text;
   let head = "";
@@ -64,19 +65,44 @@ export function endElide(text: string, width: number): string {
   }
   const atWord = lastBreak === undefined ? undefined : Str.replace(TRAILING_BREAK, "")(lastBreak);
   const kept =
-    atWord && visibleWidth(atWord) >= (width - 1) * (1 - WORD_CUT_SLACK)
+    atWord && visibleWidth(atWord) >= (width - 1) * (1 - slack)
       ? atWord
       : Str.replace(TRAILING_BREAK, "")(head);
   return `${kept || head}…`;
 }
 
-export function elideSubject(text: string, width: number, kind: CompactSubjectKind): string {
-  return kind === "path" ? middleElide(text, width) : endElide(text, width);
+/** A cut that makes room for a fact keeps whole words, however much of the room it gives up. */
+export const FACT_CUT_SLACK = 1;
+
+export function elideSubject(
+  text: string,
+  width: number,
+  kind: CompactSubjectKind,
+  slack = WORD_CUT_SLACK,
+): string {
+  return kind === "path" ? middleElide(text, width) : endElide(text, width, slack);
+}
+
+// A prose cut is clean when the text it drops starts at a space, after any punctuation it trimmed.
+const WORD_BREAK = /^[,;:.\-–—…]*\s/u;
+
+/**
+ * Whether `cut`, a shortening of `text`, keeps every word it shows whole, or for a path its whole
+ * file name. Only such a cut gives way to a fact that is not a counter.
+ */
+export function cutsCleanly(text: string, cut: string, kind: CompactSubjectKind): boolean {
+  if (cut === text) return true;
+  if (kind === "path")
+    return Str.endsWith(Option.getOrElse(Arr.last(Str.split(text, "/")), () => text))(cut);
+  const head = Str.endsWith("…")(cut) ? Str.slice(0, -1)(cut) : cut;
+  return Str.startsWith(head)(text) && WORD_BREAK.test(Str.slice(head.length)(text));
 }
 
 /**
  * Lays out `identity subject · counter`, choosing the first counter alternative that leaves the
- * subject 12 columns.
+ * subject 12 columns; a subject cut beside it keeps whole words. Without counters the first
+ * optional fact takes a counter's place when such a cut exists (or keeps a path's file name), so a
+ * heading whose subject is cut still shows its outcome, such as `finished in 1m 33s`.
  */
 export function layoutCompactHeader(
   identity: string,
@@ -105,36 +131,42 @@ export function layoutCompactHeader(
   const subjectWidth = visibleWidth(subject);
   const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
   const counterBudget = remaining - subjectMinimum;
-  const counter = Option.getOrUndefined(
-    Arr.findFirst(counters, (value) => visibleWidth(`${separator}${value}`) <= counterBudget),
-  );
-  const counterText = counter === undefined ? "" : `${separator}${counter}`;
-  const counterWidth = visibleWidth(counterText);
   const timingToken = timing && Str.trim(timing) ? `${separator}${timing}` : "";
-  const timingText =
-    (!counters.length || counterText.length > 0) &&
-    counterWidth + visibleWidth(timingToken) <= counterBudget
-      ? timingToken
-      : "";
-  const target = elideSubject(
-    subject,
-    remaining - counterWidth - visibleWidth(timingText) - 1,
-    subjectKind,
-  );
+  const lay = (facts: readonly string[]) => {
+    const counter = Option.getOrUndefined(
+      Arr.findFirst(facts, (value) => visibleWidth(`${separator}${value}`) <= counterBudget),
+    );
+    const counterText = counter === undefined ? "" : `${separator}${counter}`;
+    const counterWidth = visibleWidth(counterText);
+    const timingText =
+      (!counters.length || counterText.length > 0) &&
+      counterWidth + visibleWidth(timingToken) <= counterBudget
+        ? timingToken
+        : "";
+    const target = elideSubject(
+      subject,
+      remaining - counterWidth - visibleWidth(timingText) - 1,
+      subjectKind,
+      counter === undefined ? WORD_CUT_SLACK : FACT_CUT_SLACK,
+    );
+    return { counter, counterText, timingText, target };
+  };
+  const promoted = extra === undefined ? undefined : lay([extra]);
+  const { counter, counterText, timingText, target } =
+    counters.length > 0
+      ? lay(counters)
+      : promoted?.counter !== undefined && cutsCleanly(subject, promoted.target, subjectKind)
+        ? promoted
+        : lay([]);
   if (subject && !target)
     return {
       row: clipToWidth(`${identity} ${subject}`, width),
       counter: undefined,
       subjectComplete: false,
     };
-  const row = identity + (target ? ` ${target}` : "") + counterText;
-  const token = extra === undefined ? "" : `${separator}${extra}`;
-  const fits =
-    target === subject &&
-    visibleWidth(row) + visibleWidth(timingText) + visibleWidth(token) <= width;
   return {
-    row: row + (fits ? token : "") + timingText,
-    counter,
+    row: identity + (target ? ` ${target}` : "") + counterText + timingText,
+    counter: counters.length ? counter : undefined,
     subjectComplete: target === subject,
   };
 }

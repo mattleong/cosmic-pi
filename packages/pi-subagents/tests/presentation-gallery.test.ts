@@ -122,6 +122,7 @@ import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
 import type { DoctorCheck } from "../src/application/doctor.ts";
+import { nodeExecutableProblem } from "../src/boundary/node-executable.ts";
 import { showDoctorReport } from "../src/settings/doctor-report.ts";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { registerSubagentManagerCommand } from "../src/settings/controller.ts";
@@ -607,7 +608,49 @@ const awaitScenarios = Effect.gen(function* () {
       },
     },
   );
-  return [live, settled, cancelled, userInput, siblingQuestion, agentMessage, cutReport];
+  const overLimitReport = yield* scenario(
+    "a report too long to save in full",
+    { tool: "agent_await", args: { runIds: ["agent-1"], until: "all_finished" } },
+    {
+      service: {
+        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
+          use([
+            {
+              run: {
+                ...authReview,
+                state: "completed" as const,
+                finalText: Fn.pipe(
+                  "Finding 1: session.ts:118 swallows a timeout.\n",
+                  Str.repeat(600),
+                ),
+                finalTextTruncation: {
+                  retainedChars: 28_200,
+                  originalChars: 1_402_880,
+                  originalLines: 29_310,
+                },
+                reportArchive: {
+                  path: privateStatePath("subagents/reports/session-1/agent-1-1-9b2e.md"),
+                  chars: 1_048_576,
+                  lines: 21_904,
+                  complete: false,
+                },
+                ...timing(4, 0.5),
+              },
+            },
+          ]),
+      },
+    },
+  );
+  return [
+    live,
+    settled,
+    cancelled,
+    userInput,
+    siblingQuestion,
+    agentMessage,
+    cutReport,
+    overLimitReport,
+  ];
 });
 
 const candidate = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => ({
@@ -763,6 +806,11 @@ const agentScenarios = Effect.all([
     "guidance to a running peer",
     { tool: "agent_send", args: { to: "agent-4", message: peerNote } },
     sent("agent-4", "schema-check", "guided"),
+  ),
+  agentScenario(
+    "guidance to a peer with a long name",
+    { tool: "agent_send", args: { to: "agent-9", message: peerNote } },
+    sent("agent-9", "billing-and-invoicing-migration-review-follow-up", "guided"),
   ),
   agentScenario(
     "message wakes the idle main agent",
@@ -2681,40 +2729,56 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = [
   },
 ];
 
-/** `/subagents doctor` opens a read-only panel whose wrapped details hang beneath each label. */
+/**
+ * `/subagents doctor` opens a read-only panel whose wrapped details hang beneath each label. The
+ * failed Node check is the boundary's own problem text for a Node removed from under home.
+ */
 const doctorLines = Effect.fn("SubagentGallery.doctorLines")(function* () {
+  const nodeProblem = yield* nodeExecutableProblem(
+    nodePath.join(nodeDisplayHomeDirectory(), ".pi-gallery-removed-node/26.13.0/bin/node"),
+  );
+  const reports: ReadonlyArray<readonly [string, ReadonlyArray<DoctorCheck>]> = [
+    ["a failed route and a Git warning", DOCTOR_CHECKS],
+    [
+      "Node was removed since Pi started",
+      Arr.map(DOCTOR_CHECKS, (check) =>
+        check.label === "Node" ? { ...check, status: "failed", detail: nodeProblem ?? "" } : check,
+      ),
+    ],
+  ];
   const lines: string[] = [];
-  for (const width of [180, 57]) {
-    const surface = fakeCustomSurfaceHost({ columns: width, rows: 46 });
-    const mounted = deferredPromise();
-    const ctx = sessionContextFixture({
-      mode: "tui",
-      hasUI: true,
-      ui: {
-        notify: () => undefined,
-        custom: (factory, options) => {
-          const opened = surface.custom(factory, options);
-          queueMicrotask(() => {
-            surface.mount();
-            mounted.resolve();
-          });
-          return opened;
+  for (const [title, checks] of reports)
+    for (const width of [180, 57]) {
+      const surface = fakeCustomSurfaceHost({ columns: width, rows: 46 });
+      const mounted = deferredPromise();
+      const ctx = sessionContextFixture({
+        mode: "tui",
+        hasUI: true,
+        ui: {
+          notify: () => undefined,
+          custom: (factory, options) => {
+            const opened = surface.custom(factory, options);
+            queueMicrotask(() => {
+              surface.mount();
+              mounted.resolve();
+            });
+            return opened;
+          },
         },
-      },
-    });
-    const shown = yield* step(() => showDoctorReport(ctx, DOCTOR_CHECKS, () => true)).pipe(
-      Effect.forkScoped,
-    );
-    yield* step(() => mounted.promise);
-    const panel = surface.overlays.at(-1) ?? surface.editor;
-    lines.push(
-      `── subagents doctor · a failed route and a Git warning · ${width} cols`,
-      ...Arr.map(panel?.render(width) ?? [], (line) => Str.trimEnd(line)),
-      "",
-    );
-    panel?.handleInput?.("\u001b");
-    yield* Fiber.join(shown);
-  }
+      });
+      const shown = yield* step(() => showDoctorReport(ctx, checks, () => true)).pipe(
+        Effect.forkScoped,
+      );
+      yield* step(() => mounted.promise);
+      const panel = surface.overlays.at(-1) ?? surface.editor;
+      lines.push(
+        `── subagents doctor · ${title} · ${width} cols`,
+        ...Arr.map(panel?.render(width) ?? [], (line) => Str.trimEnd(line)),
+        "",
+      );
+      panel?.handleInput?.("\u001b");
+      yield* Fiber.join(shown);
+    }
   return lines;
 });
 

@@ -20,16 +20,16 @@ import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { quoteText } from "pi-cosmic-core/message-text";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import { managerStateGlyph } from "pi-cosmic-ui/manager";
-import {
-  composeToolComponent,
-  renderToolHeader,
-  toolRunningLine,
-  toolStatusLine,
-} from "pi-cosmic-ui/tool";
+import { composeToolComponent, toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 import { QUOTED_TEXT_LIMIT } from "./compact-run-issues.ts";
-import { errorSection, rejectionAwareCall, textResultBody } from "./render-preview.ts";
+import {
+  errorSection,
+  previewHeading,
+  rejectionAwareCall,
+  textResultBody,
+} from "./render-preview.ts";
 import { agentTextLines } from "../ui/agent-text.ts";
 
 /** A sent question's live status: it waits on the parent's reply. */
@@ -196,11 +196,7 @@ export const contactParentRenderers = {
     const message = request && request.kind !== "warning" ? request.message : undefined;
     const container = new Container();
     container.addChild(
-      new Text(
-        renderToolHeader({ title: CONTACT_PARENT_LABEL, subtitle: request?.kind }, theme),
-        0,
-        0,
-      ),
+      previewHeading({ title: CONTACT_PARENT_LABEL, subtitle: request?.kind }, theme),
     );
     // Issues follow the heading, so the shell knows where the heading ends and the body begins.
     container.addChild(previewIssuesSlot(context));

@@ -32,11 +32,11 @@ const footerLabels = {
   "openai.fast": "Fast indicator",
   branch: "Branch",
   pullRequest: "Pull request",
-  subagents: "Subagent profiles and delegation",
+  subagents: "Subagent profiles",
   git: "Git changes",
   context: "Context usage",
   session: "Session",
-  metrics: "Token and cost metrics",
+  metrics: "Tokens and cost",
   "openai.usage": "OpenAI usage",
   extensions: "Extension status",
 } satisfies Record<(typeof DEFAULT_FOOTER_ORDER)[number], string>;

@@ -23,6 +23,7 @@ import { TaskNoticeDetailsSchema, type TaskNoticeDetails } from "../task/notice.
 import { taskNoticeSummary } from "./compact-summary.ts";
 import { taskOutputLine } from "./output-lines.ts";
 import { displayDirectory } from "./result-facts.ts";
+import { taskDisplayName } from "./task-state.ts";
 
 const Envelope = Schema.Struct({
   content: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
@@ -61,10 +62,12 @@ const expandedNotice = (
     return expandedText(theme, undefined, stored ? Str.split(stored, "\n") : []);
   const { task, tail } = details;
   const output = stripTerminalControls(tail);
+  // The agent's notice redacts the command too.
+  const command = sanitizeTerminalLine(sanitizeDiagnosticContent(task.command));
   return expandedBody(
     expandedFields(theme, [
-      // The agent's notice redacts the command too.
-      { label: "Command", lines: [sanitizeTerminalLine(sanitizeDiagnosticContent(task.command))] },
+      // A heading that names the task by this exact command already shows it.
+      ...(command === taskDisplayName(task) ? [] : [{ label: "Command", lines: [command] }]),
       ...(output ? [] : [{ label: "Output", lines: ["none"] }]),
     ]),
     expandedText(theme, "Output", output ? Arr.map(Str.split(output, "\n"), taskOutputLine) : []),

@@ -4,7 +4,10 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
+import { clipText } from "./display.ts";
 import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-document.ts";
+import { safeTextPrefix } from "./text.ts";
+import { lastIndexOfFrom } from "./text-scan.ts";
 
 interface SettingsCompletionDescriptor {
   readonly id: string;
@@ -19,8 +22,25 @@ interface SettingsCompletionChoice {
   readonly description: string;
 }
 
+/** Pi's completion list gives each description about this many columns before cutting mid-word. */
+const COMPLETION_DESCRIPTION_LIMIT = 20;
+
+/** Cuts a completion description at the last whole word that fits, so the list never ends mid-word. */
+const completionDescription = (text: string): string => {
+  if (text.length <= COMPLETION_DESCRIPTION_LIMIT) return text;
+  const head = safeTextPrefix(text, COMPLETION_DESCRIPTION_LIMIT);
+  const space = lastIndexOfFrom(head, " ", COMPLETION_DESCRIPTION_LIMIT - 1);
+  return space > 0
+    ? `${Str.trimEnd(Fn.pipe(head, Str.slice(0, space)))}…`
+    : clipText(text, COMPLETION_DESCRIPTION_LIMIT);
+};
+
 const nonEmpty = (matches: SettingsCompletionChoice[]): SettingsCompletionChoice[] | null =>
-  matches.length > 0 ? matches : null;
+  matches.length > 0
+    ? Arr.map(matches, (choice) =>
+        Object.assign({}, choice, { description: completionDescription(choice.description) }),
+      )
+    : null;
 
 const completeSettingIds = (
   head: string,

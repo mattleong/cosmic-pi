@@ -28,7 +28,7 @@ export const SETTING_ITEM_DEFINITIONS = {
     values: DIFF_BACKGROUND_INTENSITIES,
   },
   wordEmphasis: {
-    label: "Word-level diff emphasis",
+    label: "Word diff emphasis",
     description:
       "Highlight changed words inside edit diffs. All mode is the default; smart suppresses low-signal punctuation and wrapper syntax.",
     values: DIFF_WORD_EMPHASES,
@@ -80,7 +80,7 @@ export const SETTING_ITEM_DEFINITIONS = {
     values: ON_OFF_VALUES,
   },
   editCollapsedLines: {
-    label: "Edit diff preview lines",
+    label: "Edit preview lines",
     description:
       "Maximum edit diff lines shown before collapsing. `all` matches pi's built-in edit diff behavior.",
     values: ["all", "60", "100", "160", "240"],
@@ -109,7 +109,7 @@ export const SETTING_ITEM_DEFINITIONS = {
     values: ON_OFF_VALUES,
   },
   pathListCollapsedLines: {
-    label: "Find/ls preview lines",
+    label: "Path preview lines",
     description: "Maximum find and ls result lines shown before collapsing.",
     values: ["10", "20", "40", "80", "120"],
   },
@@ -136,7 +136,7 @@ export const SETTING_ITEM_DEFINITIONS = {
     values: ON_OFF_VALUES,
   },
   secretWarnings: {
-    label: "Secret value warnings",
+    label: "Secret warnings",
     description:
       "Show preview-only warnings when read, write, or bash output looks like it may contain secrets.",
     values: ON_OFF_VALUES,

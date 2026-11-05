@@ -15,6 +15,7 @@ import {
 import { formatDuration } from "pi-cosmic-core/display";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
 /** One labeled request fact; a multi-line command keeps its line breaks. */
@@ -110,6 +111,15 @@ const secondsText = (seconds: number): string => {
 
 const row = (label: string, ...lines: string[]): LabeledRow => ({ label, lines });
 
+/**
+ * Whether a start's heading, which names it by its name or else its command, shows the command
+ * exactly: one it had to clip, flatten onto one line, or clean of control characters appears
+ * again in full.
+ */
+const headingShowsCommand = (name: string | undefined, command: string): boolean =>
+  command.length <= BACKGROUND_TASK_FIELD_BOUNDS.maxCommandDisplayChars &&
+  sanitizeTerminalLine(name === undefined ? command : Str.trim(name)) === command;
+
 function startRows(args: RequestArguments): LabeledRow[] {
   const name = textValue(args.name);
   const command = textValue(args.command);
@@ -118,8 +128,9 @@ function startRows(args: RequestArguments): LabeledRow[] {
     ...(name !== undefined && sanitizeTerminalLine(Str.trim(name)) !== visibleText(Str.trim(name))
       ? [row("Name", visibleText(name))]
       : []),
-    // The heading clips a long command, so the command always appears in full.
-    ...(command === undefined ? [] : [row("Command", ...commandLines(command))]),
+    ...(command === undefined || headingShowsCommand(name, command)
+      ? []
+      : [row("Command", ...commandLines(command))]),
   ];
 }
 
@@ -215,6 +226,19 @@ export function backgroundTaskRequestRows(args: unknown): BackgroundTaskRequestV
         (field) => !isPresent(decoded[field]) || fieldShown(decoded, field),
       ),
   };
+}
+
+/**
+ * Whether the expanded request states a start's working directory in its Directory row, so the
+ * result's Details needn't repeat it.
+ */
+export function requestStatesStartDirectory(args: unknown): boolean {
+  const known = decodeKnownRequest(args);
+  return (
+    Option.isSome(known) &&
+    known.value.action === "start" &&
+    textValue(known.value.cwd) !== undefined
+  );
 }
 
 /** The task a request names, as its expanded Details show it. */

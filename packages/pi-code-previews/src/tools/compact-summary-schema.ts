@@ -33,6 +33,7 @@ const Summary = Schema.Struct({
   messageIcon: Schema.optionalKey(Schema.Literals(["sent", "received"])),
   quote: Schema.optionalKey(Schema.String),
   expandLabel: Schema.optionalKey(Schema.Union([Schema.String, Schema.Literal(false)])),
+  expandsSubjectOnly: Schema.optionalKey(Schema.Literal(true)),
   children: Schema.optionalKey(
     Schema.Struct({
       total: Schema.Natural,
@@ -42,7 +43,13 @@ const Summary = Schema.Struct({
           label: Schema.String,
           returnedCheckmark: Schema.optionalKey(Schema.Literal(true)),
           details: Schema.optionalKey(
-            Schema.Array(Schema.Struct({ label: Schema.String, text: Schema.String })),
+            Schema.Array(
+              Schema.Struct({
+                label: Schema.String,
+                text: Schema.String,
+                verbatim: Schema.optionalKey(Schema.Literal(true)),
+              }),
+            ),
           ),
           subject: Schema.optionalKey(Schema.String),
           durationMs: Schema.optionalKey(Schema.Finite),

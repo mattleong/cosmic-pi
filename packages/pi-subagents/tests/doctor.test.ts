@@ -13,6 +13,7 @@ import { InvalidSubagentRequestError } from "../src/run/errors.ts";
 import { resolveTestConfig } from "./fixtures/profile-settings-inspection.ts";
 import { profileLayerFor } from "./run/fixtures/service-harness.ts";
 import { git } from "../src/boundary/git-worktree-process.ts";
+import { nodeExecutableProblem } from "../src/boundary/node-executable.ts";
 import { nodePath as path } from "./support/node-builtins.ts";
 import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 import { temporaryDirectory, writeFile } from "./workspace/fixtures/repository.ts";
@@ -120,6 +121,15 @@ describe("subagents doctor", () => {
         detail: `~/${missing} is not writable`,
       });
     }).pipe(Effect.scoped),
+  );
+
+  it.effect("names a removed Node home-relative while checking the real executable", () =>
+    Effect.gen(function* () {
+      const missing = `.pi-subagents-doctor-node-${process.pid}/bin/node`;
+      const problem = yield* nodeExecutableProblem(path.join(nodeDisplayHomeDirectory(), missing));
+      expect(problem).toContain(`~/${missing}`);
+      expect(problem).not.toContain(nodeDisplayHomeDirectory());
+    }),
   );
 
   it.effect("names the provider to sign in to when Pi knows none of a route's models", () =>

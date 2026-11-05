@@ -106,7 +106,8 @@ function childDetails(
     const text =
       preview?.text ??
       (nativeModelCalls.has(call.name) ? safeNativeArgumentText(call.args) : "unavailable");
-    if (!EMPTY_ARGUMENTS.has(Str.trim(text))) details.push({ label: "Arguments", text });
+    if (!EMPTY_ARGUMENTS.has(Str.trim(text)))
+      details.push({ label: "Arguments", text, verbatim: true });
   }
   return details;
 }

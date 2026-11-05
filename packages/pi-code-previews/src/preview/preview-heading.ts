@@ -1,11 +1,12 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CompactSummary } from "../tools/compact-summary";
-import { elideSubject } from "./compact-header";
+import { cutsCleanly, elideSubject, FACT_CUT_SLACK } from "./compact-header";
 import { wrapPreviewHeading } from "./heading-wrap";
 import { compactSingleLine } from "./compact-row";
 
@@ -87,15 +88,20 @@ export function wrappedPreviewHeading(
   };
 }
 
+const singleLineFacts = (values: readonly string[] | undefined): string[] =>
+  Arr.filter(Arr.map(values ?? [], compactSingleLine), Str.isNonEmpty);
+
 // The least room a cut subject keeps before a counter gives way to it, as compact headings keep.
 const SUBJECT_MINIMUM = 12;
 
 /**
- * A preview heading on one row, as tool rows draw theirs: the title, then the action, subject,
- * first counter, and metadata dimmed. Counters are alternatives, so only the first shows. A subject
- * that doesn't fit is cut the way compact headings cut it (prose at the end on a word boundary, a
- * path in the middle); metadata follows only a whole subject, and the first counter stays while the
- * cut subject keeps its minimum room.
+ * A preview heading on one row, as tool rows draw theirs: the title, then the action, subject, a
+ * counter, and metadata dimmed. Counters are alternatives, widest first, as on compact rows: the
+ * first that fits beside the whole subject shows, with as much metadata after it as fits. Otherwise
+ * the first counter alternative that leaves the subject its minimum room stays, or without counters
+ * the first metadata when the cut keeps whole words or a path's file name, so the row keeps its
+ * outcome, and the subject is cut the way compact headings cut it (prose at the end on a word
+ * boundary, a path in the middle).
  */
 export function previewHeadingRow(
   title: string,
@@ -108,26 +114,44 @@ export function previewHeadingRow(
   const subject = compactSingleLine(
     expanded ? summary.subject : (summary.compactSubject ?? summary.subject),
   );
-  const facts = headingFacts(summary);
-  const tail = (count: number) => factTail(facts, count);
+  const counters = singleLineFacts(summary.counters);
+  const metadata = singleLineFacts(summary.metadata);
   const room =
     width - visibleWidth(compactSingleLine(title)) - 1 - (action ? visibleWidth(action) + 1 : 0);
-  const draw = (shown: string, count: number) =>
+  const draw = (shown: string, shownFacts: readonly string[], count: number) =>
     clipToWidth(
-      renderToolHeader({ title, subtitle: headingSubtitle(action, shown, facts, count) }, theme),
+      renderToolHeader(
+        { title, subtitle: headingSubtitle(action, shown, shownFacts, count) },
+        theme,
+      ),
       width,
     );
-  for (let count = facts.length; count >= 0; count--)
-    if (visibleWidth(subject) + visibleWidth(tail(count)) <= room) return draw(subject, count);
-  const counter =
-    Arr.isReadonlyArrayNonEmpty(summary.counters ?? []) &&
-    room - visibleWidth(tail(1)) >= Math.min(SUBJECT_MINIMUM, visibleWidth(subject))
-      ? 1
-      : 0;
-  const cut = elideSubject(
-    subject,
-    room - visibleWidth(tail(counter)),
-    summary.pathSubject ? "path" : "prose",
+  const fits = (shownFacts: readonly string[], count: number) =>
+    visibleWidth(subject) + visibleWidth(factTail(shownFacts, count)) <= room;
+  for (const shownFacts of counters.length > 0
+    ? Arr.map(counters, (counter) => [counter, ...metadata])
+    : [metadata])
+    for (let count = shownFacts.length; count >= 1; count--)
+      if (fits(shownFacts, count)) return draw(subject, shownFacts, count);
+  const kind = summary.pathSubject ? "path" : "prose";
+  const counter = Option.getOrUndefined(
+    Arr.findFirst(
+      counters.length > 0 ? counters : Arr.take(metadata, 1),
+      (value) =>
+        room - visibleWidth(factTail([value], 1)) >=
+        Math.min(SUBJECT_MINIMUM, visibleWidth(subject)),
+    ),
   );
-  return draw(cut, counter);
+  const cut = (kept: readonly string[]) =>
+    elideSubject(
+      subject,
+      room - visibleWidth(factTail(kept, kept.length)),
+      kind,
+      kept.length > 0 ? FACT_CUT_SLACK : undefined,
+    );
+  const kept = counter === undefined ? [] : [counter];
+  // Metadata gives way only to a cut that keeps whole words, or a path's file name.
+  return counters.length > 0 || cutsCleanly(subject, cut(kept), kind)
+    ? draw(cut(kept), kept, kept.length)
+    : draw(cut([]), [], 0);
 }

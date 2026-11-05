@@ -2,10 +2,11 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Markdown, wrapTextWithAnsi, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { escapeControlChars } from "../shared/terminal-text";
+import { wrapPlainText } from "../shared/text-wrap";
 
 /** Wrapped rows of authored words a collapsed view shows before its expansion affordance. */
 export const COLLAPSED_AUTHORED_TEXT_ROWS = 10;
@@ -107,7 +108,7 @@ export const authoredTextLines = (
   if (words === "") return [];
   const rows = options.verbatim
     ? Arr.flatMap(Str.split(words, "\n"), (line) =>
-        line === "" ? [""] : wrapTextWithAnsi(theme.fg(color, line), inner),
+        line === "" ? [""] : Arr.map(wrapPlainText(line, inner), (row) => theme.fg(color, row)),
       )
     : Arr.map(markdownLines(words, inner, theme, color), (row) => Str.trimEnd(row));
   if (rows.length === 0 || (rows.length === 1 && rows[0] === "")) return [];

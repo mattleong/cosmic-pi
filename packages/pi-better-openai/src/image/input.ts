@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Str from "effect/String";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
-import { isStrictlyInsidePathWith } from "pi-cosmic-core/platform/paths";
+import { formatDisplayPath, isStrictlyInsidePathWith } from "pi-cosmic-core/platform/paths";
 import { type SafeFileContract } from "pi-cosmic-core/platform/safe-file";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
 import { MAX_IMAGE_INPUTS, fail, type ImageInput } from "./types.ts";
@@ -16,8 +16,9 @@ const INPUT_MIME_TYPES: ReadonlyMap<string, string> = new Map([
   ["webp", "image/webp"],
   ["gif", "image/gif"],
 ]);
-const outsideWorkspace = (path: string) =>
-  fail("input", `Image input must be a file inside the current workspace: ${path}`);
+// Messages name an input as people read it, relative to the workspace or home; checks use the real path.
+const outsideWorkspace = (shown: string) =>
+  fail("input", `Image input must be a file inside the current workspace: ${shown}`);
 
 export const imageInputReader = (dependencies: {
   readonly fs: FileSystem.FileSystem;
@@ -31,15 +32,16 @@ export const imageInputReader = (dependencies: {
   const resolveInput = Effect.fn("OpenAIImage.resolveInput")(function* (
     inputPath: string,
     realWorkspace: string,
+    shown: string,
   ) {
     const realInput = yield* fs
       .realPath(inputPath)
-      .pipe(Effect.mapError(() => outsideWorkspace(inputPath)));
-    if (!isInside(realWorkspace, realInput)) return yield* outsideWorkspace(inputPath);
+      .pipe(Effect.mapError(() => outsideWorkspace(shown)));
+    if (!isInside(realWorkspace, realInput)) return yield* outsideWorkspace(shown);
     return realInput;
   });
   const validateInput = Effect.fn("OpenAIImage.validateInput")(function* (
-    inputPath: string,
+    shown: string,
     realInput: string,
     realWorkspace: string,
   ) {
@@ -50,8 +52,8 @@ export const imageInputReader = (dependencies: {
           fail(
             "input",
             error.operation === "size"
-              ? `Image input is too large (max 20 MB): ${inputPath}`
-              : `Image input changed during validation: ${inputPath}`,
+              ? `Image input is too large (max 20 MB): ${shown}`
+              : `Image input changed during validation: ${shown}`,
           ),
         ),
       );
@@ -63,12 +65,12 @@ export const imageInputReader = (dependencies: {
             "sharp",
             error.operation === "unavailable"
               ? error.message
-              : `Image input is not a readable image: ${inputPath}`,
+              : `Image input is not a readable image: ${shown}`,
           ),
         ),
       );
     const mimeType = metadata.format && INPUT_MIME_TYPES.get(metadata.format);
-    if (!mimeType) return yield* fail("input", `Image input is not a readable image: ${inputPath}`);
+    if (!mimeType) return yield* fail("input", `Image input is not a readable image: ${shown}`);
     return { data: verified.bytes, mimeType };
   });
 
@@ -85,11 +87,12 @@ export const imageInputReader = (dependencies: {
       const trimmed = Str.trim(raw);
       if (!trimmed) continue;
       const candidate = path.resolve(workspace, trimmed);
-      if (!isInside(workspace, candidate)) return yield* outsideWorkspace(candidate);
-      const realInput = yield* resolveInput(candidate, realWorkspace);
+      const shown = formatDisplayPath(candidate, workspace);
+      if (!isInside(workspace, candidate)) return yield* outsideWorkspace(shown);
+      const realInput = yield* resolveInput(candidate, realWorkspace, shown);
       // Skip a repeated file before reading it or starting another decoder process.
       if (seen.has(realInput)) continue;
-      const input = yield* validateInput(candidate, realInput, realWorkspace);
+      const input = yield* validateInput(shown, realInput, realWorkspace);
       if (validated.length >= MAX_IMAGE_INPUTS)
         return yield* fail("input", `Too many image inputs (max ${MAX_IMAGE_INPUTS}).`);
       total += input.data.byteLength;

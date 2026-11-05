@@ -8,7 +8,8 @@ import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
-import { expandedSection } from "../../preview/expanded-section";
+import { expandedArguments, expandedSection } from "../../preview/expanded-section";
+import { previewHeadingText } from "../../preview/heading-wrap";
 import { escapeControlChars, replaceSgrSequences } from "../../shared/terminal-text";
 import { withCodePreviewRenderers } from "../../tools/cooperative-tools";
 import { getFallbackResultText } from "../../tools/data/results";
@@ -29,7 +30,7 @@ import {
 } from "./identity";
 import type { ThirdPartyAdapter } from "../registry";
 import { webAccessSummary } from "./summary";
-import { hostContainer } from "../../shared/untrusted-value";
+import { hostContainer, hostValue } from "../../shared/untrusted-value";
 
 export const webAccessAdapter = {
   names: WEB_ACCESS_TOOLS,
@@ -65,6 +66,9 @@ function unlessShownBy(
     invalidate: () => section.invalidate(),
   };
 }
+
+// Built outside the render call, so the heading holds only its text, never the call's arguments.
+const fixedHeading = (text: string): Component => previewHeadingText(() => text);
 
 export function createWebAccessRenderers(
   name: WebAccessTool,
@@ -144,17 +148,22 @@ export function createWebAccessRenderers(
       context,
       (lastComponent) => downstream?.renderCall?.(args, theme, { ...context, lastComponent }),
       (original) => {
-        if (context.expanded)
-          return Predicate.isObject(args) && Rec.isEmptyRecord(args)
-            ? new Container()
-            : unlessShownBy(
-                original,
-                invokeHostCallback(() => JSON.stringify(args) ?? "", ""),
-                expandedSection(theme, "Arguments", new Text(escapeControlChars(full), 0, 0)),
-              );
-        return downstream?.renderCall
+        // Without the provider's own call rendering, the adapter draws the heading.
+        const heading = downstream?.renderCall
           ? new Container()
-          : new Text(renderToolHeader({ title: label, subtitle: subject }, theme), 0, 0);
+          : fixedHeading(renderToolHeader({ title: label, subtitle: subject }, theme));
+        if (!context.expanded) return heading;
+        const body = new Container();
+        body.addChild(heading);
+        if (!(Predicate.isObject(args) && Rec.isEmptyRecord(args)))
+          body.addChild(
+            unlessShownBy(
+              original,
+              invokeHostCallback(() => JSON.stringify(args) ?? "", ""),
+              expandedArguments(theme, hostValue(args)),
+            ),
+          );
+        return body;
       },
       fallback,
     );

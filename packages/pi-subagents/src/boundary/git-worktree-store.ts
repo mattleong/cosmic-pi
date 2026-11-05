@@ -215,7 +215,7 @@ const lockTimeout = (sourceRoot: string, directory: string) => {
       : "Another Pi session is still changing workspaces for this checkout.",
     detail: Arr.join(
       [
-        `Lock: ${holder.slot}`,
+        `Lock: ${homeDisplayPath(holder.slot)}`,
         `Owner: ${holder.ownerPid === undefined ? "unknown process" : `process ${holder.ownerPid}${here ? " (this Pi process)" : ""}`}`,
         `Waited ${Duration.format(WORKSPACE_LOCK_WAIT)}. Try again once that operation finishes; a lock whose process has exited is reclaimed automatically.`,
       ],

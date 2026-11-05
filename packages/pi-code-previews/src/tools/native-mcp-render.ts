@@ -24,6 +24,7 @@ import {
 import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
 import { compactPlainText } from "../preview/compact-row";
 import { expandedSection } from "../preview/expanded-section";
+import { expandedText } from "../preview/expanded-body";
 import { repeatsIssueMessage } from "../preview/compact-issues";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
@@ -107,8 +108,7 @@ function renderOutput(
   return safeContent(
     () => {
       const body = new Container();
-      if (saved !== undefined)
-        body.addChild(expandedSection(theme, "Saved output", textBlock(theme, saved, "muted")));
+      if (saved !== undefined) body.addChild(expandedText(theme, "Saved output", [saved], "muted"));
       if (raw)
         body.addChild(
           expandedSection(

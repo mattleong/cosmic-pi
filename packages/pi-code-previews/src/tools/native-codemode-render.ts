@@ -9,6 +9,8 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";
 import { codePreviewSettings } from "../config/state";
 import { expandedSection } from "../preview/expanded-section";
+import { expandedText } from "../preview/expanded-body";
+import { previewHeadingText } from "../preview/heading-wrap";
 import { renderCompactChildren } from "../preview/compact-children";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
@@ -108,6 +110,9 @@ function renderCallList(
   };
 }
 
+// Built outside the render call, so the heading holds only its text, never the call's arguments.
+const fixedHeading = (text: string): Component => previewHeadingText(() => text);
+
 const rawText = (text: string) => (theme: Theme) =>
   Arr.join(
     Arr.map(Str.split(text, "\n"), (line) => theme.fg("toolOutput", escapeControlChars(line))),
@@ -150,10 +155,11 @@ export function createNativeCodemodeRenderers(
           body.addChild(runningLine(theme, context.state));
         if (evidence.fullOutputPath && !nativeCodemodeHeader(result))
           body.addChild(
-            expandedSection(
+            expandedText(
               theme,
               "Saved output",
-              new Text(theme.fg("muted", sanitizeDiagnosticContent(evidence.fullOutputPath)), 0, 0),
+              [sanitizeDiagnosticContent(evidence.fullOutputPath)],
+              "muted",
             ),
           );
         for (const [label, text] of outputSections(result, evidence, context))
@@ -257,10 +263,8 @@ export function createNativeCodemodeRenderers(
         return safeContent(() => {
           const body = new Container();
           body.addChild(
-            new Text(
+            fixedHeading(
               renderToolHeader({ title: "codemode", ...(label && { subtitle: label }) }, theme),
-              0,
-              0,
             ),
           );
           body.addChild(previewIssuesSlot(context));

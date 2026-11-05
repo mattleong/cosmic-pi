@@ -21,10 +21,11 @@ import {
   type NoticeRun,
 } from "./notice-details.ts";
 import { homeDisplayPath } from "./display-path.ts";
+import { savedFileSize } from "../run/state.ts";
 
 /** A saved report or failure file as a display fact, such as `Report file: <path> · 98 characters, 5 lines`. */
 export const savedFileFact = (label: string, archive: SubagentReportArchive): string =>
-  `${label}: ${sanitizeTerminalLine(homeDisplayPath(archive.path))} · ${archive.chars.toLocaleString("en-US")} characters, ${archive.lines.toLocaleString("en-US")} lines${archive.complete ? "" : " (cut at the archive limit)"}`;
+  `${label}: ${sanitizeTerminalLine(homeDisplayPath(archive.path))} · ${savedFileSize(archive)}${archive.complete ? "" : " (cut at the archive limit)"}`;
 
 /** A worktree writer's workspace and its outcome, such as `Worktree ws-1 · proposal: 3 files`. */
 export const workspaceFact = (

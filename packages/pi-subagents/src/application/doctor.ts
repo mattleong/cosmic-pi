@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { SafeFile } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { SubagentBackendRegistry } from "../backend/service.ts";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
@@ -113,7 +114,7 @@ const routeOutcome = (
     ? check(
         label,
         "ok",
-        `${prefix}${first.model}${fallbacks > 0 ? ` (+${fallbacks} fallback${fallbacks === 1 ? "" : "s"})` : ""}`,
+        `${prefix}${first.model}${fallbacks > 0 ? ` (+${countLabel(fallbacks, "fallback")})` : ""}`,
       )
     : check(
         label,

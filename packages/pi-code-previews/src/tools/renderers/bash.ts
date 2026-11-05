@@ -23,6 +23,7 @@ import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { previewIssuesSlot } from "../../preview/preview-issues";
+import { wrapPreviewHeading } from "../../preview/heading-wrap";
 
 function shouldHideBashResult(args: HostObject | undefined): boolean {
   return shouldHideShellResultByCommand(
@@ -51,6 +52,32 @@ function streamingTail(lines: readonly string[], theme: Theme): Component {
   return new Text(Arr.join(rows, "\n"), 0, 0);
 }
 
+/**
+ * The heading and its command, wrapped as preview headings wrap. A multi-line command's later
+ * lines hang beneath the heading as its wrapped rows do, so none reads as output.
+ */
+function commandHeading(lines: readonly string[]): Component {
+  let cached: { readonly width: number; readonly rows: string[] } | undefined;
+  return {
+    render(width) {
+      if (cached?.width === width) return cached.rows;
+      const hang = width > COMMAND_HANG.length * 4 ? COMMAND_HANG : "";
+      const rows = Arr.flatMap(lines, (line, index) =>
+        index === 0
+          ? wrapPreviewHeading(line, width)
+          : Arr.map(wrapPreviewHeading(line, width - hang.length), (row) => `${hang}${row}`),
+      );
+      cached = { width, rows };
+      return rows;
+    },
+    invalidate() {
+      cached = undefined;
+    },
+  };
+}
+
+const COMMAND_HANG = "  ";
+
 export function bashPreviewRenderers(): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
@@ -60,14 +87,18 @@ export function bashPreviewRenderers(): PreviewRenderers {
       const timeout = Predicate.isNumber(timeoutArg)
         ? theme.fg("muted", ` (timeout ${timeoutArg}s)`)
         : "";
-      const highlighted = Arr.join(
-        renderHighlightedText(command || "…", "bash", theme, renderContext.invalidate),
-        "\n",
+      const [first = "", ...rest] = renderHighlightedText(
+        command || "…",
+        "bash",
+        theme,
+        renderContext.invalidate,
+      );
+      const rows = [`${renderCodePreviewToolTitle("bash", theme)} ${first}`, ...rest];
+      const lines = Arr.map(rows, (line, index) =>
+        index === rows.length - 1 ? `${line}${timeout}` : line,
       );
       const heading = new Container();
-      heading.addChild(
-        new Text(`${renderCodePreviewToolTitle("bash", theme)} ${highlighted}${timeout}`, 0, 0),
-      );
+      heading.addChild(commandHeading(lines));
       heading.addChild(previewIssuesSlot(renderContext));
       return heading;
     },

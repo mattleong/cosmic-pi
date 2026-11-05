@@ -5,7 +5,7 @@ import { type CompactIssue } from "pi-code-previews";
 import { skippedCandidateLabel } from "../profiles/model.ts";
 import { runAttention, runCleanupAttention } from "../run/attention.ts";
 import { reportTruncationText } from "../run/state.ts";
-import { savedFileFact, workspaceFact } from "../ui/notice-facts.ts";
+import { workspaceFact } from "../ui/notice-facts.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { cleanupEvidenceText, proposalDiffStatLines } from "./format.ts";
 import { countLabel } from "pi-cosmic-core/display";
@@ -15,7 +15,6 @@ import {
   quoteText,
   restatesText,
 } from "pi-cosmic-core/message-text";
-import { isTextFragment } from "./text-fragments.ts";
 
 type AddIssue = (
   severity: CompactIssue["severity"],
@@ -299,20 +298,26 @@ function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssu
   workspaceOutcomeIssue(card, label, add);
   const reportCut = card.finalTextTruncated === true && card.finalText !== undefined;
   const archive = card.reportArchive;
-  const savedDetail = (saved: NonNullable<SubagentRunCard["reportArchive"]>): string =>
-    Fn.pipe(
-      [
-        card.reportTruncation && reportTruncationText(card.reportTruncation),
-        savedFileFact("Report file", saved),
-      ],
-      Arr.filter(isTextFragment),
-      Arr.join(". "),
-    );
+  // Details name the file and its size, so the detail only says what the file holds.
+  const savedDetail = (holds: string): string =>
+    card.reportTruncation
+      ? `${reportTruncationText(card.reportTruncation)}; ${holds}.`
+      : `${Str.capitalize(holds)}.`;
   // A whole saved report is a usable recovery path, so the cut is routine information.
   if (reportCut && archive?.complete === true)
-    add("info", "report-saved", `${label}: full report saved to a file`, savedDetail(archive));
+    add(
+      "info",
+      "report-saved",
+      `${label}: full report saved to a file`,
+      savedDetail("the full report is in its file"),
+    );
   if (reportCut && archive?.complete === false)
-    add("warning", "report-cut", `${label}: report too long to save in full`, savedDetail(archive));
+    add(
+      "warning",
+      "report-cut",
+      `${label}: report too long to save in full`,
+      savedDetail("its file holds only the start of the report"),
+    );
   const clipped =
     (reportCut && archive === undefined) ||
     (card.errorTruncated === true && card.error !== undefined);
