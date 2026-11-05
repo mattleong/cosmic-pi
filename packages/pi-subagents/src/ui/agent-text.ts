@@ -16,9 +16,10 @@ import {
   expandedSection,
 } from "pi-code-previews";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { indexOfFrom } from "pi-cosmic-core/text-scan";
+import { indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 import { clipToWidth, wrapFacts, type ManagerStatusColor } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { countLabel } from "pi-cosmic-core/display";
 
 /** Wrapped rows of an agent's words that a collapsed view shows before its expansion affordance. */
 export const COLLAPSED_AGENT_TEXT_ROWS = 10;
@@ -179,7 +180,7 @@ export const agentTextLines = (
   return [
     ...Arr.map(rows.slice(0, limit), (row) => (row === "" ? "" : `${prefix}${row}`)),
     clipToWidth(
-      `${prefix}${renderExpansionAffordance(`${rows.length - limit} more lines`, false, theme)}`,
+      `${prefix}${renderExpansionAffordance(countLabel(rows.length - limit, "more line"), false, theme)}`,
       width,
     ),
   ];
@@ -199,7 +200,21 @@ export type FactSpan = readonly [text: string, color?: ThemeColor, weight?: "bol
 
 type FactTheme = Pick<Theme, "fg" | "bold">;
 
-const FACT_BREAKS = [" · ", " "] as const;
+const FACT_SEPARATOR = " · ";
+const FACT_BREAKS = [FACT_SEPARATOR, " "] as const;
+/** How `wrapFacts` leads a row that starts a new fact: the separator's `·`, then a space. */
+const FACT_MARKER = "·";
+const FACT_LEAD = `${FACT_MARKER} `;
+
+/** The color of the span holding `offset`. */
+const colorAt = (spans: ReadonlyArray<FactSpan>, offset: number): ThemeColor | undefined => {
+  let end = 0;
+  for (const [text, color] of spans) {
+    end += text.length;
+    if (offset < end) return color;
+  }
+  return undefined;
+};
 
 /** The spans' text from `start` to `end`, each part in its span's color. */
 const paintRange = (
@@ -243,14 +258,28 @@ export const hangingLines = (
   const rows = wrapFacts(text, Math.max(1, width - shift), pad(options.hang ?? 2));
   return Arr.map(rows, (row, index) => {
     // Each row is the next stretch of the facts after its hanging indent; the break between rows
-    // drops only a separator or a space.
-    const body = index === 0 ? row : Str.trimStart(row);
+    // drops only a space or a separator, whose `·` may lead the row as the new fact's marker.
+    const trimmed = index === 0 ? row : Str.trimStart(row);
+    const lead = pad(shift + row.length - trimmed.length);
+    const led = Fn.pipe(trimmed, Str.slice(FACT_LEAD.length));
+    if (
+      index > 0 &&
+      Fn.pipe(trimmed, Str.startsWith(FACT_LEAD)) &&
+      Fn.pipe(text, Str.startsWith(FACT_SEPARATOR, at)) &&
+      Fn.pipe(text, Str.startsWith(led, at + FACT_SEPARATOR.length))
+    ) {
+      const color = colorAt(spans, at + 1);
+      at += FACT_SEPARATOR.length;
+      const painted = paintRange(spans, at, at + led.length, theme);
+      at += led.length;
+      return `${lead}${color === undefined ? FACT_MARKER : theme.fg(color, FACT_MARKER)} ${painted}`;
+    }
+    const body = trimmed;
     for (const gap of FACT_BREAKS)
       if (Fn.pipe(text, Str.startsWith(gap, at)) && !Fn.pipe(text, Str.startsWith(body, at))) {
         at += gap.length;
         break;
       }
-    const lead = pad(shift + row.length - body.length);
     if (!Fn.pipe(text, Str.startsWith(body, at))) return `${lead}${body}`;
     const painted = paintRange(spans, at, at + body.length, theme);
     at += body.length;
@@ -270,17 +299,37 @@ export interface FactRowOptions {
   readonly wholeFacts?: boolean | undefined;
 }
 
-const FACT_SEPARATOR = " · ";
 const CLIPPED_FACTS = `${FACT_SEPARATOR}…`;
 
-/** The color of the span holding `offset`. */
-const colorAt = (spans: ReadonlyArray<FactSpan>, offset: number): ThemeColor | undefined => {
-  let end = 0;
-  for (const [text, color] of spans) {
-    end += text.length;
-    if (offset < end) return color;
-  }
-  return undefined;
+/** A collapsed row's trailing words keep at least this many columns, or the row ends `· …`. */
+const MIN_TRAILING_COLUMNS = 8;
+/** A word-boundary cut keeps at least this share of the trailing fact's room, as `endElide` does. */
+const WORD_CUT_SHARE = 0.6;
+
+/**
+ * Where a row too wide for `room` ends, leaving a column for `…`: after the last whole word of its
+ * trailing fact, or before that fact (`facts`) when only a sliver of it would fit.
+ */
+interface TrailingCut {
+  readonly end: number;
+  /** The row keeps whole facts up to `end` and ends `· …`. */
+  readonly facts: boolean;
+}
+
+const trailingCut = (text: string, room: number): TrailingCut => {
+  const slice = (start: number, end: number) => Fn.pipe(text, Str.slice(start, end));
+  let fit = Math.min(text.length, room - 1);
+  while (fit > 0 && visibleWidth(slice(0, fit)) > room - 1) fit--;
+  const separator = lastIndexOfFrom(text, FACT_SEPARATOR, fit - FACT_SEPARATOR.length);
+  const factStart = separator === -1 ? 0 : separator + FACT_SEPARATOR.length;
+  if (separator > 0 && visibleWidth(slice(factStart, fit)) < MIN_TRAILING_COLUMNS)
+    return { end: separator, facts: true };
+  const wholeWord = fit === text.length || slice(fit, fit + 1) === " ";
+  const space = wholeWord ? fit : lastIndexOfFrom(text, " ", fit - 1);
+  let end =
+    space > factStart && space - factStart >= WORD_CUT_SHARE * (fit - factStart) ? space : fit;
+  while (end > 1 && slice(end - 1, end) === " ") end--;
+  return { end, facts: false };
 };
 
 /**
@@ -308,6 +357,14 @@ const clippedFactRow = (
       at = indexOfFrom(text, FACT_SEPARATOR, at + FACT_SEPARATOR.length)
     )
       kept = at;
+  if (kept === -1 && visibleWidth(text) > room && room > 1) {
+    const cut = trailingCut(text, room);
+    if (cut.facts) kept = cut.end;
+    else {
+      const color = colorAt(spans, cut.end - 1);
+      return `${lead}${paintRange(spans, 0, cut.end, theme)}${color === undefined ? "…" : theme.fg(color, "…")}`;
+    }
+  }
   if (kept === -1)
     return clipToWidth(`${lead}${paintRange(spans, 0, Number.POSITIVE_INFINITY, theme)}`, width);
   const color = colorAt(spans, kept);

@@ -57,7 +57,7 @@ const exampleTarget = (example: string | undefined, listed: number): string =>
     ? `the ${example} session`
     : listed === 1
       ? "the session listed above"
-      : "one of the sessions listed above";
+      : "one of the sessions above";
 
 const howToMessage = (example: string | undefined, listed: number): ReadonlyArray<string> => [
   "To message one, ask your agent, for example:",

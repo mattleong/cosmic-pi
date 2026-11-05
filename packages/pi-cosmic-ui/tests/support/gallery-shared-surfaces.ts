@@ -102,6 +102,18 @@ const replacedLinesGitStatus: FooterGitStatus = applyGitNumstat(
   Arr.join(["15000\t4224\tsrc/a.ts", "217\t246\tsrc/b.ts", "-\t-\tlogo.png"], "\n"),
 );
 
+// Every git sign at once: conflicts and commits behind as well as ahead, beside the token arrows.
+const everyGitSignStatus: FooterGitStatus = {
+  staged: 2,
+  modified: 3,
+  untracked: 1,
+  conflicts: 1,
+  ahead: 2,
+  behind: 1,
+  linesAdded: 40,
+  linesRemoved: 12,
+};
+
 const footerFrames = (
   density: FooterDensity,
   title = `${density} density`,
@@ -748,6 +760,7 @@ export const sharedSurfaceGalleryLines = (): string[] => {
     ...footerFrames("compact"),
     ...footerFrames("auto"),
     ...footerFrames("auto", "replaced lines (git totals)", replacedLinesGitStatus, [180, 57]),
+    ...footerFrames("auto", "every git sign", everyGitSignStatus, [180, 57]),
     ...cosmicUiSettingsFrames(),
     ...groupedSettingsFrames(),
     ...scopedSettingsFrames(),

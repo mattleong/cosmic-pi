@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { clipText } from "./display.ts";
+import { clipProse } from "./display.ts";
 import { sanitizeTerminalLine } from "./security.ts";
 import { codeUnitAt, indexOfFrom } from "./text-scan.ts";
 
@@ -58,7 +58,7 @@ const firstLineText = (text: string): string => {
 };
 
 const clippedMessage = (message: string, fallback: string, limit = MESSAGE_TEXT_LIMIT): string =>
-  clipText(message || fallback, Math.min(limit, MESSAGE_TEXT_LIMIT));
+  clipProse(message || fallback, Math.min(limit, MESSAGE_TEXT_LIMIT));
 
 export function firstLineMessage(
   text: string,
@@ -168,7 +168,7 @@ function failureFromFirstLine(
   );
   if (phrase === undefined) return clippedMessage(message, fallback, limit);
   const shownCode = code !== undefined && phrase !== "Too long for the model's context";
-  return clipText(`${phrase}${shownCode ? ` (${code})` : ""}`, limit);
+  return clipProse(`${phrase}${shownCode ? ` (${code})` : ""}`, limit);
 }
 
 export function failureMessage(text: string, fallback: string, limit = MESSAGE_TEXT_LIMIT): string {

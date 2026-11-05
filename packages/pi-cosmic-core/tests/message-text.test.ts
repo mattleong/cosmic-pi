@@ -25,3 +25,10 @@ test.each([
   expect(message).not.toContain("invalid_request_error");
   expect(message).not.toContain("Client.request");
 });
+
+test("a long failure message ends at a whole word", () => {
+  const raw = `Provider rejected the session: ${Fn.pipe("quota detail ", Str.repeat(40))}`;
+  const message = failureMessage(raw, "failed", 120);
+  expect(message.length).toBeLessThanOrEqual(120);
+  expect(message).toMatch(/ (?:quota|detail)…$/u);
+});

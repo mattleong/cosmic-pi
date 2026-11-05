@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { countLabel } from "pi-cosmic-core/display";
+import { countLabel, formatCount } from "pi-cosmic-core/display";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import type { CompactIssue } from "../../tools/compact-issues";
@@ -84,7 +84,7 @@ function truncationIssues(
 function storedContentCounters(details: WebAccessDetails): string[] | undefined {
   const { matchCount, returnedMatches, returnedChars, contentLength } = details;
   if (matchCount !== undefined && returnedMatches !== undefined)
-    return [`${returnedMatches}/${matchCount} matches`];
+    return [`${formatCount(returnedMatches)}/${countLabel(matchCount, "match", "matches")}`];
   if (returnedChars !== undefined && contentLength !== undefined)
     return [countLabel(returnedChars, "character")];
   return undefined;

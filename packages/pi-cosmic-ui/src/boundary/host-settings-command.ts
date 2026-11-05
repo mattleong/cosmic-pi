@@ -104,7 +104,7 @@ export interface SettingsCommandOptions<Config> {
     | undefined;
   readonly config: (ctx: ExtensionContext) => Config | undefined;
   /**
-   * The `status` text; build it with `settingsStatusText`. Defaults to one `Label: value (id)`
+   * The `status` text; build it with `settingsStatusText`. Defaults to one `Label (id): value`
    * row per descriptor.
    */
   readonly status?: ((ctx: ExtensionContext) => string | Promise<string>) | undefined;
@@ -170,6 +170,7 @@ interface SettingsListContent {
 // hangs its continuation rows.
 const NOTICE_COLUMNS = 55;
 const NOTICE_HANGING = "  ";
+const HELP_ROW_INDENT = "  ";
 const DESCRIPTION_INDENT = "    ";
 type NoticeLevel = "info" | "warning" | "error";
 const NOTICE_PREFIX_COLUMNS = { info: 0, warning: "Warning: ".length, error: "Error: ".length };
@@ -211,15 +212,17 @@ export interface SettingsStatusSection {
   readonly rows: ReadonlyArray<SettingsStatusRow>;
 }
 
-/** One setting as help and status name it: `Label: value (id)`. */
+/**
+ * One setting as help and status name it: `Label (id): value`, the pair order rejections use, so a
+ * value's own parentheses (`inherit (normal)`) never sit beside the id's.
+ */
 export const settingsStatusLine = (row: SettingsStatusRow): string => {
-  const valued =
-    row.value === undefined ? (row.label ?? row.id) : `${row.label ?? row.id}: ${row.value}`;
-  return row.label === undefined ? valued : `${valued} (${row.id})`;
+  const named = row.label === undefined ? row.id : `${row.label} (${row.id})`;
+  return row.value === undefined ? named : `${named}: ${row.value}`;
 };
 
 /**
- * The `/<ext> settings status` text: a title, then `Label: value (id)` rows grouped under
+ * The `/<ext> settings status` text: a title, then `Label (id): value` rows grouped under
  * optional section titles, then notes, all wrapped for a 57-column phone.
  */
 export const settingsStatusText = (options: {
@@ -547,7 +550,11 @@ export function settingsSubcommand<Config>(
       "",
       "Settings:",
       ...Arr.flatMap(currentValues(ctx), (row) => [
-        `  ${settingsStatusLine(row)}`,
+        // A wrapped row hangs past the description's column, so its value never reads as description.
+        ...Arr.map(
+          wrapFacts(settingsStatusLine(row), NOTICE_COLUMNS - HELP_ROW_INDENT.length, "    "),
+          (line) => `${HELP_ROW_INDENT}${line}`,
+        ),
         ...Arr.map(
           wrapFacts(row.description, NOTICE_COLUMNS - DESCRIPTION_INDENT.length, ""),
           (line) => `${DESCRIPTION_INDENT}${line}`,

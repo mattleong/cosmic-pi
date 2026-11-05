@@ -4,7 +4,7 @@ import {
   agentMessageDeliveryText,
   agentMessageRecipientState,
 } from "pi-cosmic-core/host-agent-messages";
-import { countLabel, formatBytes } from "pi-cosmic-core/display";
+import { countLabel, formatBytes, formatCount } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { MAX_MESSAGE_CHARS, MAX_READ_BYTES } from "../transport/protocol.ts";
 import type {
@@ -85,7 +85,7 @@ const REFUSAL_TEXT: Record<ToolRefusalCode, (to: string, id: string) => string> 
   session_receive_disabled: (to) =>
     `${to} has turned off messages from other sessions. Nothing was delivered.`,
   session_message_too_long: () =>
-    `The message is longer than ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters. Shorten it and send again.`,
+    `The message is longer than ${formatCount(MAX_MESSAGE_CHARS)} characters. Shorten it and send again.`,
 };
 
 export const refusalText = (refusal: SessionRefusal): string => {

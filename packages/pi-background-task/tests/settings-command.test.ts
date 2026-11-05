@@ -18,7 +18,7 @@ import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
 import { BackgroundTaskConfigError } from "../src/config/store.ts";
 import { taskSettingsSubcommand, type TaskSettingsActions } from "../src/settings/task-settings.ts";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
-import { BACKGROUND_TASK_SETTINGS } from "../src/config/options.ts";
+import { BACKGROUND_TASK_SETTINGS, formatSettingValue } from "../src/config/options.ts";
 
 const SPOOFED_SHELL = "/bin/\u001b[31mzsh\nspoof = injected";
 
@@ -184,6 +184,17 @@ describe("/tasks settings", () => {
       expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "warning")).toHaveLength(6);
     }),
   );
+
+  it("shows a wait in the whole seconds its command accepts back", () => {
+    const wait = Option.getOrThrow(
+      Arr.findFirst(BACKGROUND_TASK_SETTINGS, (setting) => setting.id === "maxWaitSeconds"),
+    );
+    for (const seconds of [0, 1, 30, 59, 60, 90, 3_600]) {
+      const shown = formatSettingValue("seconds", seconds);
+      expect(shown).not.toMatch(/ms$/u);
+      expect(wait.parse(shown)).toBe(seconds);
+    }
+  });
 
   it.effect("a size the list offers saves as bytes", () =>
     Effect.gen(function* () {

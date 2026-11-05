@@ -12,6 +12,7 @@ import {
 import { MAX_TASK_CHARS } from "./state.ts";
 import { childSystemPrompt } from "./tool-policy.ts";
 import { descendantRunIds } from "./tree.ts";
+import { formatCount } from "pi-cosmic-core/display";
 
 export interface LaunchPlan {
   readonly request: StartSubagentRequest;
@@ -33,7 +34,7 @@ export const validateStartRequest = (
     return Effect.fail(
       invalidRequest(
         "task_too_large",
-        `Subagent task is too large: ${request.task.length.toLocaleString("en-US")} characters, over the ${MAX_TASK_CHARS.toLocaleString("en-US")}-character limit.`,
+        `Subagent task is too large: ${formatCount(request.task.length)} characters, over the ${formatCount(MAX_TASK_CHARS)}-character limit.`,
       ),
     );
   return Effect.void;

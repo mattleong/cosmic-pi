@@ -43,6 +43,7 @@ import {
   type AgentToolName,
   type SubagentToolName,
 } from "../run/tool-policy.ts";
+import { formatCount } from "pi-cosmic-core/display";
 
 // Parents trained on other harnesses send these field names; name the replacement instead of
 // only rejecting the key.
@@ -130,7 +131,7 @@ const StartSpecBaseFields = {
   name: Type.Optional(
     nonblankString(
       MAX_TASK_CHARS,
-      `Optional display name; one longer than ${MAX_NAME_CHARS} characters is cut.`,
+      `Optional display name; one longer than ${formatCount(MAX_NAME_CHARS)} characters is cut.`,
     ),
   ),
   profile: Type.Optional(Type.Enum(PROFILE_IDS, { description: PROFILE_PARAMETER_DESCRIPTION })),
@@ -249,7 +250,7 @@ const AwaitParameters = Type.Object(
     // Out-of-range waits are clamped by the tool rather than rejected before it runs.
     timeoutSeconds: Type.Optional(
       Type.Number({
-        description: `Stop waiting after this many whole seconds, from 1 to ${MAX_AWAIT_TIMEOUT_SECONDS.toLocaleString("en-US")} (other values are clamped), and return the latest observation. Subagents keep running.`,
+        description: `Stop waiting after this many whole seconds, from 1 to ${formatCount(MAX_AWAIT_TIMEOUT_SECONDS)} (other values are clamped), and return the latest observation. Subagents keep running.`,
       }),
     ),
   },

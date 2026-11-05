@@ -1931,6 +1931,14 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
     message: dbMigration.question?.message ?? "",
     generation: 1,
   }),
+  ...notified("a question from an 80-character name", {
+    type: "question",
+    id: dbMigration.id,
+    name: LONGEST_RUN_NAME,
+    requestId: "q-2",
+    message: dbMigration.question?.message ?? "",
+    generation: 1,
+  }),
   {
     title: "reloading Pi stops workers",
     message: {

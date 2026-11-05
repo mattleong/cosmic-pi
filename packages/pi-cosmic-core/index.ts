@@ -145,11 +145,13 @@ export {
 export { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "./src/text-scan.ts";
 export {
   clampPercent,
+  clipProse,
   clipText,
   countLabel,
   formatBytes,
   formatClockTime,
   formatCost,
+  formatCount,
   formatDuration,
   formatElapsed,
   formatRelativeAge,

@@ -30,6 +30,7 @@ import {
 import { recordRunWarning } from "./warnings.ts";
 import { MAX_CONTACT_TEXT_CHARS, MAX_PARENT_MESSAGE_CHARS } from "./limits.ts";
 import { samePiModel } from "./model-catalog.ts";
+import { formatCount } from "pi-cosmic-core/display";
 
 const ACTIVITY_PUBLISH_INTERVAL_MILLIS = 1_000;
 
@@ -38,7 +39,7 @@ const retainedContactText = (message: string): string =>
   clipWithMarker(
     message,
     MAX_CONTACT_TEXT_CHARS,
-    ` … [message cut to ${MAX_CONTACT_TEXT_CHARS.toLocaleString("en-US")} of ${message.length.toLocaleString("en-US")} characters]`,
+    ` … [message cut to ${formatCount(MAX_CONTACT_TEXT_CHARS)} of ${formatCount(message.length)} characters]`,
   );
 
 interface RunEventDependencies {

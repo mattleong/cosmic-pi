@@ -48,7 +48,8 @@ const ESCAPE = "\u001b";
 
 /**
  * Wraps plain `·`-joined facts between whole facts before it breaks inside one, so a row breaks at
- * `… compact` / `· changes apply after /reload`. A fact that starts a row leads with `· `.
+ * `… compact` / `· changes apply after /reload`. A fact that starts a row leads with `· `, and its
+ * own continuation hangs past it.
  */
 const wrapPlainFacts = (text: string, firstWidth: number, restWidth: number): string[] => {
   const rows: string[] = [];
@@ -65,7 +66,12 @@ const wrapPlainFacts = (text: string, firstWidth: number, restWidth: number): st
       rows.push(current);
       current = "";
     }
-    const parts = wrapWords(leading ? fact : `· ${fact}`, limit(), restWidth);
+    // A led fact's own continuation hangs past its `· `, so it never reads as another fact.
+    const under = leading ? "" : "  ";
+    const parts = Arr.map(
+      wrapWords(`${leading ? "" : "· "}${fact}`, limit(), Math.max(1, restWidth - under.length)),
+      (part, index) => (index === 0 ? part : `${under}${part}`),
+    );
     leading = false;
     rows.push(...parts.slice(0, -1));
     current = Option.getOrElse(Arr.last(parts), () => "");

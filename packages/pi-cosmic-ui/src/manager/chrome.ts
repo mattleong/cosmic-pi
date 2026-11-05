@@ -162,6 +162,7 @@ const closeUpMarker = (clipped: string, marker: string): string => {
 };
 
 const FACT_ARROW = " → ";
+const FACT_LEAD = "· ";
 
 // A name too wide for a row splits after `-`, `_`, or `.` only when every part then fits a row;
 // otherwise it stays one run, so a blob such as JSON never strands a fragment like `file.`.
@@ -274,19 +275,22 @@ export const wrapWords = (text: string, firstWidth: number, restWidth: number): 
 
 /**
  * Wraps `·`-joined facts between whole facts, so no `·` or `→` ends a line; every line after the
- * first hangs under it. A fact too wide for a line breaks before its `→`, which then leads the
+ * first hangs under it, and a fact that starts a line leads with `· ` so it never reads as the rest
+ * of the fact before. A fact too wide for a line breaks before its `→`, which then leads the
  * continuation (`→ provider/model`); a part still too wide breaks between words, then after a
  * `/`. Widths of 8 or less drop the hanging indent. Pass plain text and style the lines.
  */
 export const wrapFacts = (facts: string, width: number, hangingIndent = "  "): string[] => {
   const hanging = width > 8 ? hangingIndent : "";
   const room = Math.max(1, width - visibleWidth(hanging));
-  const pieces = Arr.flatMap(Str.split(facts, INLINE_SEPARATOR), (fact) => {
-    if (visibleWidth(fact) <= room) return [{ text: fact, join: INLINE_SEPARATOR }];
+  const pieces = Arr.flatMap(Str.split(facts, INLINE_SEPARATOR), (fact, index) => {
+    const lead = index === 0 ? "" : FACT_LEAD;
+    if (visibleWidth(fact) <= room - visibleWidth(lead))
+      return [{ text: fact, join: INLINE_SEPARATOR, lead }];
     const [first, ...rest] = Str.split(fact, FACT_ARROW);
     return [
-      { text: first, join: INLINE_SEPARATOR },
-      ...Arr.map(rest, (part) => ({ text: `→ ${part}`, join: " " })),
+      { text: first, join: INLINE_SEPARATOR, lead },
+      ...Arr.map(rest, (part) => ({ text: `→ ${part}`, join: " ", lead: "" })),
     ];
   });
   const lines: string[] = [];
@@ -300,7 +304,12 @@ export const wrapFacts = (facts: string, width: number, hangingIndent = "  "): s
     }
     if (current) lines.push(current);
     // An over-wide piece starts its own line; the facts after it keep packing onto its last row.
-    const rows = wrapWords(piece.text, limit(), room);
+    // A led fact's own continuation hangs past its `· `, so it never reads as another fact.
+    const under = Str.repeat(visibleWidth(piece.lead))(" ");
+    const rows = Arr.map(
+      wrapWords(`${piece.lead}${piece.text}`, limit(), Math.max(1, room - under.length)),
+      (row, index) => (index === 0 ? row : `${under}${row}`),
+    );
     lines.push(...rows.slice(0, -1));
     current = Option.getOrElse(Arr.last(rows), () => "");
   }

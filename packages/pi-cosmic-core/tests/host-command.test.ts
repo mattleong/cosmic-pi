@@ -131,6 +131,7 @@ describe("registered extension command", () => {
 
 const PHONE_COLUMNS = 55;
 const lines = (text: string) => Str.split(text, "\n");
+const indentOf = (line: string) => line.length - Str.trimStart(line).length;
 const fitsPhone = (text: string) => Arr.every(lines(text), (line) => line.length <= PHONE_COLUMNS);
 
 describe("bare command overview", () => {
@@ -165,5 +166,29 @@ describe("bare command overview", () => {
     expect(Arr.every(body, Str.startsWith("  "))).toBe(true);
     expect(body).toContain("  /a-rather-long-command health");
     expect(body).toContain("    Short");
+  });
+
+  it("wraps a stacked command too wide for a row past its description's column", () => {
+    const text = extensionCommandOverview("subagents", "Manage subagents", [
+      {
+        name: "settings",
+        arguments: "[session|global|project] <id> <value>",
+        description: "Change one setting",
+      },
+    ]);
+    const body = lines(text).slice(1);
+    const description = Arr.findFirstIndex(body, (line) => Str.trim(line) === "Change one setting");
+    const usage = Option.match(description, {
+      onNone: () => [],
+      onSome: (at) => body.slice(0, at),
+    });
+
+    expect(fitsPhone(text)).toBe(true);
+    expect(usage.length).toBeGreaterThan(1);
+    expect(Arr.join(Arr.map(usage, Str.trim), " ")).toBe(
+      "/subagents settings [session|global|project] <id> <value>",
+    );
+    // Every continuation sits deeper than the description's four columns.
+    expect(Arr.every(usage.slice(1), (line) => indentOf(line) > 4)).toBe(true);
   });
 });

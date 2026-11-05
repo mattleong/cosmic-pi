@@ -7,6 +7,7 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { escapeControlChars } from "../shared/terminal-text";
 import { wrapPlainText } from "../shared/text-wrap";
+import { countLabel } from "pi-cosmic-core/display";
 
 /** Wrapped rows of authored words a collapsed view shows before its expansion affordance. */
 export const COLLAPSED_AUTHORED_TEXT_ROWS = 10;
@@ -120,7 +121,7 @@ export const authoredTextLines = (
   return [
     ...Arr.map(rows.slice(0, limit), indented),
     clipToWidth(
-      `${prefix}${renderExpansionAffordance(`${rows.length - limit} more lines`, false, theme)}`,
+      `${prefix}${renderExpansionAffordance(countLabel(rows.length - limit, "more line"), false, theme)}`,
       width,
     ),
   ];

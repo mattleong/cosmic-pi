@@ -1,7 +1,8 @@
 import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Str from "effect/String";
-import { formatBytes, formatClockTime } from "../src/display.ts";
+import * as Fn from "effect/Function";
+import { clipProse, countLabel, formatBytes, formatClockTime } from "../src/display.ts";
 
 it("drops a trailing .0 from sizes, as durations do", () => {
   expect(formatBytes(18 * 1024)).toBe("18 KB");
@@ -23,4 +24,27 @@ it("shows the date only when an absolute time falls on another local day", () =>
   expect(undated).toBe(nextDay);
   // No seconds on any form.
   expect(Str.includes("41")(nextDay)).toBe(false);
+});
+
+it("groups the digits of counts from 1,000", () => {
+  expect(countLabel(80_000, "character")).toBe("80,000 characters");
+  expect(countLabel(152_310, "character")).toBe("152,310 characters");
+  expect(countLabel(999, "character")).toBe("999 characters");
+  expect(countLabel(1, "character")).toBe("1 character");
+});
+
+it("cuts prose at the last whole word that keeps most of the budget", () => {
+  const prose = Fn.pipe("quota detail ", Str.repeat(20));
+  const cut = clipProse(prose, 60);
+  expect(cut.length).toBeLessThanOrEqual(60);
+  expect(cut).toMatch(/ (?:quota|detail)…$/u);
+  expect(cut.length).toBeGreaterThan(36);
+  // A word that ends exactly at the budget's edge stays whole.
+  expect(clipProse("approve the plan now", 17)).toBe("approve the plan…");
+  expect(clipProse("short", 60)).toBe("short");
+});
+
+it("cuts one long token mid-word rather than giving up most of the budget", () => {
+  const token = Fn.pipe("x", Str.repeat(100));
+  expect(clipProse(`Failed: ${token}`, 40)).toBe(`Failed: ${Fn.pipe("x", Str.repeat(31))}…`);
 });

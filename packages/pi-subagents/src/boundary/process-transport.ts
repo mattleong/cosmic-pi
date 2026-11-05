@@ -10,6 +10,7 @@ import * as Arr from "effect/Array";
 import { confirmProcessGroupExit } from "pi-cosmic-core/platform/process-tree";
 import { guardProcessGroupAtHostExit } from "pi-cosmic-core/platform/process-group-exit-guard";
 import { nodeSpawn, type NodeChildProcess } from "pi-cosmic-core/platform/node-builtins";
+import { formatBytes } from "pi-cosmic-core/display";
 import { cleanupFailureDiagnostic } from "../run/cleanup-diagnostic.ts";
 import type { BackendCleanupVerifier } from "../backend/model.ts";
 import type { SubagentCleanupDiagnostic } from "../run/model.ts";
@@ -210,7 +211,9 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
         if (backlogOverflowed) return;
         if (queuedBytes + bytes > MAX_QUEUED_BYTES) {
           backlogOverflowed = true;
-          appendStderr(Buffer.from(`\n${label} event backlog exceeded ${MAX_QUEUED_BYTES} bytes.`));
+          appendStderr(
+            Buffer.from(`\n${label} event backlog exceeded ${formatBytes(MAX_QUEUED_BYTES)}.`),
+          );
           Queue.offerUnsafe(events, {
             type: "protocol_error",
             message: `${label} event backlog exceeded its byte budget.`,

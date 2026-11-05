@@ -31,6 +31,7 @@ import { listSessions, readSession, sendToSession, type SessionToolRefusal } fro
 import { renderSessionCall, renderSessionResult, sessionExpandedContent } from "./render.ts";
 import { sessionToolCompactSummary } from "./summary.ts";
 import { listText, readText, refusalText, sendText } from "./text.ts";
+import { formatCount } from "pi-cosmic-core/display";
 
 export interface SessionToolRunner {
   readonly run: <A, E>(
@@ -145,7 +146,7 @@ export function registerSessionTools(
       defineTool({
         name: SESSION_TOOL.send,
         label: "Session Send",
-        description: `Send a message of at most ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters to the main agent of another live Pi session, by sessionId from session_list. An idle session starts a turn to read it, a busy one reads it after its current turn, and one that holds messages reads it after its user's next prompt. Nothing is stored for later: an unreachable session gets nothing. A timeout or lost connection is uncertain: the message may have arrived, so don't resend.`,
+        description: `Send a message of at most ${formatCount(MAX_MESSAGE_CHARS)} characters to the main agent of another live Pi session, by sessionId from session_list. An idle session starts a turn to read it, a busy one reads it after its current turn, and one that holds messages reads it after its user's next prompt. Nothing is stored for later: an unreachable session gets nothing. A timeout or lost connection is uncertain: the message may have arrived, so don't resend.`,
         promptSnippet: "Message the main agent of another live Pi session",
         promptGuidelines: GUIDELINES,
         parameters: SessionSendParameters,

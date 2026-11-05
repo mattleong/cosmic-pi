@@ -141,18 +141,19 @@ export function renderWithShiki(
   }
 }
 
-const EMPTY_STATUS: ShikiStatus = {
+// Before the highlighter starts, health still reports the configured limits rather than zeros.
+const emptyStatus = (): ShikiStatus => ({
   initialized: false,
   cacheSize: 0,
-  cacheLimit: 0,
-  maxHighlightChars: 0,
+  cacheLimit: codePreviewPerformanceConfig.cacheLimit,
+  maxHighlightChars: codePreviewPerformanceConfig.maxHighlightChars,
   loadedLanguages: 0,
   pendingLanguages: 0,
   statusVersion: 0,
-};
+});
 export function getShikiStatus(): ShikiStatus {
   const snapshot = syntaxProjection();
-  if (!snapshot) return EMPTY_STATUS;
+  if (!snapshot) return emptyStatus();
   return {
     ...snapshot.status,
     cacheSize:

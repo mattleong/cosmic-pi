@@ -214,6 +214,8 @@ interface NoticeBody {
    * affordance; undefined when it adds nothing.
    */
   readonly expandLabel?: string | undefined;
+  /** The label of the agents' words beneath an expanded heading that wraps. */
+  readonly label?: string | undefined;
 }
 
 const completedBody = (
@@ -252,6 +254,8 @@ const completedBody = (
           ),
     facts: Arr.flatMap(runs, (run) => savedAgentFactLines(run.name, run.facts ?? [run.id])),
     expandLabel: "details",
+    // A lone failure's body is only its notes; its words are the heading's issue.
+    ...(runs.length > 1 ? { label: "Reports" } : only?.outcome !== "failed" && { label: "Report" }),
   };
 };
 
@@ -318,6 +322,7 @@ const peersBody = (details: PeerDetails, theme: Theme, expanded: boolean, indent
     ...((details.ownership !== undefined || details.peers.length > 0) && {
       expandLabel: details.peers.length > 3 ? countLabel(details.peers.length, "peer") : "details",
     }),
+    label: "Agents",
   }) satisfies NoticeBody;
 
 /** The body a notice shows below its heading; undefined when its details carry no display copy. */
@@ -335,6 +340,7 @@ const noticeBody = (
       rows: (width) => agentTextLines(question, width, theme, { expanded, indent }),
       facts: details.id ? agentFactLines(details.name ?? details.id, [details.id]) : [],
       ...(details.id !== undefined && { expandLabel: "details" }),
+      label: "Question",
     };
   }
   if (details?.kind === "stopped" && details.runs !== undefined)
@@ -359,10 +365,11 @@ export const presentSubagentNotification: CodePreviewMessagePresenter = (input, 
           new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
         ),
     };
-  const expandLabel = noticeBody(details, theme, true, 0)?.expandLabel;
+  const shape = noticeBody(details, theme, true, 0);
   return {
     ...presentation,
-    ...(expandLabel !== undefined && { expandLabel }),
+    ...(shape?.expandLabel !== undefined && { expandLabel: shape.expandLabel }),
+    ...(shape?.label !== undefined && { bodyLabel: shape.label }),
     collapsed: () =>
       composeToolComponent(
         (width) =>

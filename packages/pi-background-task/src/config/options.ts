@@ -85,7 +85,8 @@ const NUMBER_FORMATS = {
   count: String,
   bytes: formatBytes,
   milliseconds: formatDuration,
-  seconds: (seconds: number) => formatDuration(seconds * 1_000),
+  // Whole seconds read as seconds, so a zero wait shows `0s` rather than `0ms`.
+  seconds: (seconds: number) => (seconds < 60 ? `${seconds}s` : formatDuration(seconds * 1_000)),
 } as const;
 
 /**

@@ -122,7 +122,7 @@ test("a wrapped detail line's continuation hangs past the next detail line's sta
     50,
     true,
   );
-  const continuation = Arr.findFirst(rows, (row) => Str.startsWith("420")(Str.trimStart(row)));
+  const continuation = Arr.findFirst(rows, (row) => Str.startsWith("· 420")(Str.trimStart(row)));
   const next = Arr.findFirst(rows, (row) => Str.trim(row) === "Next line");
   expect(Option.map(continuation, indent)).toEqual(Option.map(next, (row) => indent(row) + 2));
   expect(Option.isSome(next)).toBe(true);

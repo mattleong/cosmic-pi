@@ -25,6 +25,7 @@ import { SELECTION_MARKER } from "./viewport.ts";
 import { clipToWidth, managerNoticeColor, managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { keyHint, keyHintBar, keyRangeLabel, moveKeyHint } from "pi-cosmic-ui/manager/key-labels";
 import { LIST_CURSOR, selectionMarker } from "pi-cosmic-ui/manager/style";
+import { formatCount } from "pi-cosmic-core/display";
 
 export interface DialogInputMode {
   readonly kind: "custom" | "text" | "note";
@@ -269,7 +270,7 @@ function renderInput(
     " ",
     model.theme.fg(
       characterCount >= maximum * 0.9 ? "warning" : "dim",
-      `${characterCount} / ${maximum} characters`,
+      `${formatCount(characterCount)} / ${formatCount(maximum)} characters`,
     ),
   );
   if (model.externalEditorBusy) append(" ", model.theme.fg("warning", "External editor is open…"));

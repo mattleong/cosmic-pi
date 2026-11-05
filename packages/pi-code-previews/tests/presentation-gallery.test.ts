@@ -433,6 +433,21 @@ const namedSenderMessage = (sender: string) =>
     expandLabel: "details",
   }));
 
+/** An agent's report under a long run name, whose words a wrapped heading labels `Report`. */
+const reportMessage = withCodePreviewMessageShell((message, _options, theme) => ({
+  name: "agent_report",
+  label: "Agent report",
+  summary: { subject: "billing-ledger-reconciliation-review-follow-up-v2", outcome: "success" },
+  collapsed: () => new Text(messageText(message.content), 0, 0),
+  expanded: () =>
+    expandedBody(
+      expandedAuthoredText(theme, undefined, messageText(message.content)),
+      expandedDetails(theme, ["run-7f3a"]),
+    ),
+  expandLabel: "details",
+  bodyLabel: "Report",
+}));
+
 /** A task notice whose labeled facts include a command too long for the value column. */
 const longFieldMessage = withCodePreviewMessageShell((message, _options, theme) => ({
   name: "background_task",
@@ -2126,6 +2141,17 @@ describe.skipIf(!directory)("presentation gallery", () => {
                   views: EXTREME_VIEWS,
                 },
               ),
+              ...galleryMessageFrames(reportMessage, {
+                title: `${style} · a wrapped report heading labels the report beneath it`,
+                message: {
+                  role: "custom",
+                  customType: "agent_report",
+                  content: "Found 3 stale references to the legacy ledger export.",
+                  display: true,
+                  timestamp: 0,
+                },
+                views: EXTREME_VIEWS,
+              }),
               ...galleryMessageFrames(longFieldMessage, {
                 title: `${style} · a field too long for the value column stacks beneath its label`,
                 message: {

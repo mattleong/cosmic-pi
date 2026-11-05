@@ -18,6 +18,7 @@ import {
   REPORT_ARCHIVE_ROOT,
   SUBAGENT_STATE_ROOT,
 } from "./private-state.ts";
+import { formatCount } from "pi-cosmic-core/display";
 
 export const ReportArchiveEntry = Schema.Struct({
   id: Schema.String,
@@ -55,7 +56,7 @@ export const reportArchiveRoot = (agentDirectory: string): string =>
 // A report cut by the archive cap says so in its own file, not only in the notice that links it.
 const archivedContent = (entry: ReportArchiveEntry): string =>
   entry.originalChars !== undefined && entry.originalChars > entry.text.length
-    ? `${entry.text}\n\n[Report truncated: this file holds the first ${entry.text.length.toLocaleString("en-US")} of ${entry.originalChars.toLocaleString("en-US")} characters.]`
+    ? `${entry.text}\n\n[Report truncated: this file holds the first ${formatCount(entry.text.length)} of ${formatCount(entry.originalChars)} characters.]`
     : entry.text;
 
 const archiveIO = <A>(

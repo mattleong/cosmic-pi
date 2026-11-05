@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import type * as Path from "effect/Path";
 import * as Str from "effect/String";
-import { formatBytes } from "pi-cosmic-core/display";
+import { formatBytes, formatCount } from "pi-cosmic-core/display";
 import { utf8ByteLength } from "pi-cosmic-core/text";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
 import { InvalidBackgroundCommandError, InvalidBackgroundCwdError } from "./errors.ts";
@@ -33,7 +33,7 @@ export const normalizeStartRequest = Effect.fn("BackgroundTaskAdmission.normaliz
     const name = request.name && Str.trim(request.name);
     if ((name?.length ?? 0) > BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars)
       return yield* invalidCommand(
-        `Background task name must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars} characters.`,
+        `Background task name must not exceed ${formatCount(BACKGROUND_TASK_FIELD_BOUNDS.maxNameChars)} characters.`,
         "name",
       );
     if (!validTimeout(request.timeoutSeconds))
@@ -45,7 +45,7 @@ export const normalizeStartRequest = Effect.fn("BackgroundTaskAdmission.normaliz
     if (cwd.length > BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars) {
       return yield* InvalidBackgroundCwdError.make({
         cwd,
-        message: `Resolved background working directory must not exceed ${BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars} characters.`,
+        message: `Resolved background working directory must not exceed ${formatCount(BACKGROUND_TASK_FIELD_BOUNDS.maxCwdChars)} characters.`,
       });
     }
     const prepared: StartBackgroundTask = {

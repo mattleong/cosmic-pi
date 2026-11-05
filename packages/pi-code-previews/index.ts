@@ -65,6 +65,7 @@ export { compactPlainText, renderCompactRow } from "./src/preview/compact-row";
 export { endElide, middleElide } from "./src/preview/compact-header";
 export { headingShowedSubject } from "./src/preview/heading-coverage";
 export { previewHeadingText, wrapPreviewHeading } from "./src/preview/heading-wrap";
+export { previewMessageHeading, type PreviewMessageHeading } from "./src/preview/preview-heading";
 export { expandedArguments, expandedSection } from "./src/preview/expanded-section";
 export {
   expandedAuthoredText,

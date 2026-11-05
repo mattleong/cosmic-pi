@@ -28,6 +28,7 @@ import {
 } from "./model.ts";
 import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { homeDisplayPath } from "../ui/display-path.ts";
+import { formatCount } from "pi-cosmic-core/display";
 
 interface ParentProfileModel {
   readonly model: string;
@@ -188,7 +189,7 @@ const resolveCandidate = (
     )
       return skipCandidate(
         "fork_context_too_large",
-        `Pi model ${resolvedModel} has a ${catalogModel.contextWindow}-token window, too small for the ${inherited}-token conversation a fork inherits.`,
+        `Pi model ${resolvedModel} has a ${formatCount(catalogModel.contextWindow)}-token window, too small for the ${formatCount(inherited)}-token conversation a fork inherits.`,
       );
     if (hardEffort !== undefined && supportedEfforts && !supportedEfforts.includes(hardEffort))
       return skipCandidate(

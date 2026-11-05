@@ -5,10 +5,21 @@ import * as Str from "effect/String";
 import { wrapFacts } from "../src/manager/chrome.ts";
 
 describe("wrapFacts", () => {
-  it("wraps between whole facts under a hanging indent", () => {
+  it("wraps between whole facts under a hanging indent, leading each new fact's row with ·", () => {
     const lines = wrapFacts("running · 12s · task-0000000012 · /project", 24);
 
-    expect(lines).toEqual(["running · 12s", "  task-0000000012", "  /project"]);
+    expect(lines).toEqual(["running · 12s", "  · task-0000000012", "  · /project"]);
+  });
+
+  it("hangs an over-wide fact's continuation past its lead, so only a new fact leads with ·", () => {
+    const lines = wrapFacts("cosmic-pi #3038 · the-checkout-redesign-review-session · scout", 24);
+
+    expect(lines).toEqual([
+      "cosmic-pi #3038",
+      "  · the-checkout-",
+      "    redesign-review-",
+      "    session · scout",
+    ]);
   });
 
   it("keeps packing facts onto the last row of a fact broken across lines", () => {

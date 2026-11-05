@@ -92,8 +92,10 @@ const wrapWords = (text: string, first: string, rest: string): string[] =>
 
 /**
  * The shared overview `/<name> help` shows: a title, then one line per subcommand with its
- * description in a padded column; an entry with an empty name stands for bare `/<name>`. When any line wouldn't fit a phone, every description moves
- * to its own indented line beneath its command instead. `notes` follow as written.
+ * description in a padded column; an entry with an empty name stands for bare `/<name>`. When any
+ * line wouldn't fit a phone, every description moves to its own line beneath its command, indented
+ * four columns, and a command too wide for a row wraps six columns in, past the description's
+ * column. `notes` follow as written.
  */
 export const extensionCommandOverview = (
   name: string,
@@ -119,7 +121,8 @@ export const extensionCommandOverview = (
       ...(fits
         ? aligned
         : Arr.flatMap(subcommands, (entry, index) => [
-            `  ${usages[index] ?? ""}`,
+            // A wrapped usage hangs past the description's column, so it never reads as description.
+            ...wrapWords(usages[index] ?? "", "  ", "      "),
             ...wrapWords(entry.description, "    ", "    "),
           ])),
       ...notes,

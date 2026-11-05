@@ -30,7 +30,7 @@ describe("/intercom list example", () => {
     expect(one).toContain("the session listed above");
     expect(one).not.toContain("the web session");
     expect(listReport(listing([LONG_NAME, `${LONG_NAME} follow-up`]))).toContain(
-      "one of the sessions listed above",
+      "one of the sessions above",
     );
   });
 });

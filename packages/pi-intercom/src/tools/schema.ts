@@ -2,6 +2,7 @@ import { toolArgumentPreparer, type ToolFieldAliases } from "pi-cosmic-core/tool
 import { Type, type TObject } from "typebox";
 import { MAX_IDENTITY_CHARS, MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import type { SessionToolName } from "./contract.ts";
+import { formatCount } from "pi-cosmic-core/display";
 
 const strictObjectOptions = { additionalProperties: false } as const;
 
@@ -20,7 +21,7 @@ export const SessionSendParameters = Type.Object(
     to: SessionId,
     message: Type.String({
       minLength: 1,
-      description: `Self-contained message text for the other session's agent, at most ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters.`,
+      description: `Self-contained message text for the other session's agent, at most ${formatCount(MAX_MESSAGE_CHARS)} characters.`,
     }),
   },
   strictObjectOptions,

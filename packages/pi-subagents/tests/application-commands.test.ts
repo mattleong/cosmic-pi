@@ -69,7 +69,7 @@ describe("application settings commands", () => {
       notify.mockClear();
       yield* command(args);
       expect(notify).toHaveBeenCalledWith(
-        expect.stringMatching(/Worktree \(writerWorkspace\)/u),
+        expect.stringMatching(/\(writerWorkspace\): Worktree/u),
         expect.anything(),
       );
     }

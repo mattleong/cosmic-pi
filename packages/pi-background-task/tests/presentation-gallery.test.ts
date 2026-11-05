@@ -1028,6 +1028,36 @@ const settingsMissingPathLines = (): Effect.Effect<string[]> =>
     return lines;
   });
 
+/** The Longest wait setting at zero and a rejected wait, both read in whole seconds. */
+const settingsZeroWaitLines = (): Effect.Effect<string[]> =>
+  Effect.gen(function* () {
+    const notices: string[] = [];
+    const command = taskSettingsSubcommand({
+      config: () => ({ ...DEFAULT_BACKGROUND_TASK_CONFIG, maxWaitSeconds: 0 }),
+      captureAuthority: () => () => true,
+      read: () => Promise.resolve({}),
+      write: () => Promise.resolve(),
+    });
+    const ctx = extensionContextFixture({
+      cwd: "/project",
+      mode: "rpc",
+      hasUI: true,
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => void notices.push(message) },
+    });
+    yield* Effect.promise(() => Promise.resolve(command.handler("status", ctx)));
+    const lines = ["── /tasks settings status · a zero longest wait · notice", ...notices, ""];
+    notices.length = 0;
+    yield* Effect.promise(() => Promise.resolve(command.handler("maxWaitSeconds 500ms", ctx)));
+    for (const width of [57, 100])
+      lines.push(
+        `── /tasks settings maxWaitSeconds 500ms · rejected · ${width} cols`,
+        ...Arr.flatMap(notices, (posted) => noticeFrame("Warning", posted, width)),
+        "",
+      );
+    return lines;
+  });
+
 const directory = galleryDirectory(process.env) ?? "";
 
 const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
@@ -1124,6 +1154,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...(yield* settingsNoticeLines()),
         ...(yield* settingsSaveFailureLines()),
         ...(yield* settingsMissingPathLines()),
+        ...(yield* settingsZeroWaitLines()),
         ...(yield* settingsLines(
           (location) => Promise.resolve(location.scope === "global" ? { enabled: false } : {}),
           { prefix: "tasks off globally · " },

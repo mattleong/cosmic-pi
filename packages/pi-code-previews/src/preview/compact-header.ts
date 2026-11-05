@@ -43,12 +43,16 @@ export type CompactSubjectKind = "prose" | "path";
 
 // A word-boundary cut that would discard more than this share of the room cuts mid-word instead.
 const WORD_CUT_SLACK = 0.4;
-const TRAILING_BREAK = /[\s,;:.\-–—…]+$/u;
+const TRAILING_BREAK = /[\s,;:._\-–—…]+$/u;
+// Where a name too wide for the room may be cut, as a wrapped heading breaks one.
+const NAME_BREAK = /^[-_.]$/u;
 
 /**
  * Cuts prose at the end on a word boundary, ending in `…`, so every word that remains is whole.
- * One word wider than the room is cut where it reaches the edge, as is text whose last boundary
- * would discard more than `slack` of the room.
+ * Text whose last word boundary would discard more than `slack` of the room is cut inside the word
+ * that reaches the edge, after its last `-`, `_`, or `.` that fits, so a long name keeps whole
+ * segments (`billing-and-invoicing…`); only a segment that would also discard more is cut where it
+ * reaches the edge.
  */
 export function endElide(text: string, width: number, slack = WORD_CUT_SLACK): string {
   if (width <= 0) return "";
@@ -56,18 +60,32 @@ export function endElide(text: string, width: number, slack = WORD_CUT_SLACK): s
   let head = "";
   let headWidth = 0;
   let lastBreak: string | undefined;
+  let lastNameBreak: string | undefined;
   for (const { segment } of graphemes.segment(text)) {
     const segmentWidth = visibleWidth(segment);
-    if (headWidth + segmentWidth > width - 1) break;
-    if (/\s/u.test(segment)) lastBreak = head;
+    // A word or segment that ends exactly at the edge is whole.
+    if (headWidth + segmentWidth > width - 1) {
+      if (/\s/u.test(segment)) lastBreak = head;
+      else if (NAME_BREAK.test(segment)) lastNameBreak = head;
+      break;
+    }
+    if (/\s/u.test(segment)) {
+      lastBreak = head;
+      lastNameBreak = undefined;
+    }
     head += segment;
     headWidth += segmentWidth;
+    if (NAME_BREAK.test(segment)) lastNameBreak = head;
   }
-  const atWord = lastBreak === undefined ? undefined : Str.replace(TRAILING_BREAK, "")(lastBreak);
-  const kept =
-    atWord && visibleWidth(atWord) >= (width - 1) * (1 - slack)
-      ? atWord
-      : Str.replace(TRAILING_BREAK, "")(head);
+  const enough = (cut: string) => visibleWidth(cut) >= (width - 1) * (1 - slack);
+  const kept = Option.getOrElse(
+    Arr.findFirst([lastBreak, lastNameBreak], (cut) => {
+      if (cut === undefined) return Option.none();
+      const trimmed = Str.replace(TRAILING_BREAK, "")(cut);
+      return Str.isNonEmpty(trimmed) && enough(trimmed) ? Option.some(trimmed) : Option.none();
+    }),
+    () => Str.replace(TRAILING_BREAK, "")(head),
+  );
   return `${kept || head}…`;
 }
 

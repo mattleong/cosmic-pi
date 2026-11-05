@@ -45,6 +45,12 @@ export interface CodePreviewMessage {
   readonly expandLabel?: string | undefined;
   /** Native components, such as images, drawn unchanged below the frame as Pi draws tool images. */
   readonly attachments?: ReadonlyArray<Component> | undefined;
+  /**
+   * The label, such as `Report`, of the expanded body's unlabeled section beneath a heading that
+   * wraps, whose continuation rows would otherwise share the words' column. A delivered message
+   * (`summary.messageIcon`) defaults to `Message`; other messages get one only when they set it.
+   */
+  readonly bodyLabel?: string | undefined;
 }
 
 export interface CodePreviewMessageOptions extends MessageRenderOptions {
@@ -210,10 +216,15 @@ class MessageShell implements Component {
         ? message.expanded(this.headingState)
         : message.collapsed?.()
       : message.collapsed?.();
-    // A delivered message's unlabeled words would share the column of a wrapped heading's rows.
+    // Unlabeled words would share the column of a wrapped heading's rows.
+    const bodyLabel = Str.isNonEmpty(Str.trim(message.bodyLabel ?? ""))
+      ? message.bodyLabel
+      : message.summary.messageIcon !== undefined
+        ? "Message"
+        : undefined;
     const body =
-      expanded && content && message.summary.messageIcon !== undefined
-        ? labeledBeneathWrappedHeading(content, this.headingState)
+      expanded && content && bodyLabel !== undefined
+        ? labeledBeneathWrappedHeading(content, bodyLabel, this.headingState)
         : content;
     const shown = new Container();
     // A collapsed compact message is a bare compact row, as a collapsed compact tool row is.
@@ -286,15 +297,17 @@ class MessageShell implements Component {
 }
 
 /**
- * A message body whose unlabeled section is labeled `Message` beneath a heading that wrapped, as a
- * `bash` result is labeled `Output`: the heading's continuation rows hang at the body's column.
+ * A message body whose unlabeled section is labeled beneath a heading that wrapped, as a `bash`
+ * result is labeled `Output`: the heading's continuation rows hang at the body's column.
  */
-function labeledBeneathWrappedHeading(body: Component, headingState: WeakKey): Component {
+function labeledBeneathWrappedHeading(
+  body: Component,
+  label: string,
+  headingState: WeakKey,
+): Component {
   return {
     render: (width) =>
-      drawWithBodyLabel(headingWrapped(headingState) ? "Message" : undefined, () =>
-        body.render(width),
-      ),
+      drawWithBodyLabel(headingWrapped(headingState) ? label : undefined, () => body.render(width)),
     invalidate: () => body.invalidate(),
   };
 }

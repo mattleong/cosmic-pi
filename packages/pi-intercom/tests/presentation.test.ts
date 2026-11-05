@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
@@ -16,6 +16,7 @@ import {
   type SessionToolName,
 } from "../src/tools/contract.ts";
 import { stripTerminalControls } from "pi-cosmic-core/security";
+import { plainTheme } from "pi-cosmic-core/testing";
 import { registerSessionTools } from "../src/tools/register.ts";
 import { listText, readText, refusalText, sendText } from "../src/tools/text.ts";
 
@@ -70,6 +71,8 @@ const read = {
   truncated: false,
   state: "idle",
 } as const;
+
+const dimmed = (text: string) => `\u001b[2m${text}\u001b[22m`;
 
 const listing = {
   ...contractEnvelope,
@@ -215,6 +218,70 @@ describe("session tool rows", () => {
     const label = /^\S+ (.+)… · busy/u.exec(Str.trim(Option.getOrElse(row, () => "")))?.[1] ?? "";
     expect(label).not.toBe("");
     expect(Str.startsWith(`${label} `)(longName)).toBe(true);
+  });
+
+  it("dims a wrapped row's leading `·` like the separators between facts", () => {
+    const deepListing = {
+      ...contractEnvelope,
+      tool: SESSION_TOOL.list,
+      sessions: [
+        {
+          ...web,
+          name: "checkout redesign review",
+          cwd: "/work/acme/platform/services/billing/checkout-redesign-review",
+          state: "busy",
+          duplicate: true,
+        },
+      ],
+      omitted: 0,
+    } as const;
+    // The plain theme, except that dim text is marked so the test can see which parts are dim.
+    const theme = new Proxy(plainTheme, {
+      get: (target, key) =>
+        key === "fg"
+          ? (color: string, text: string) => (color === "dim" ? dimmed(text) : text)
+          : target[key as keyof Theme],
+    });
+    const harness = createToolPresentationHarness(toolFor(SESSION_TOOL.list, "preview"), {
+      width: 57,
+      theme,
+    });
+    const [, expanded] = harness.cycle({}, result(listText(deepListing), deepListing), {
+      states: [false, true],
+    });
+    const led = Arr.filter(Str.split(expanded?.text ?? "", "\n"), (row) =>
+      Str.startsWith("· ")(Str.trimStart(stripTerminalControls(row))),
+    );
+    expect(led.length).toBeGreaterThan(0);
+    for (const row of led) expect(Str.startsWith(dimmed("·"))(Str.trimStart(row))).toBe(true);
+  });
+
+  it("leads a wrapped name's facts row with `·` when its facts don't all fit beside the name", () => {
+    const longNameListing = {
+      ...contractEnvelope,
+      tool: SESSION_TOOL.list,
+      sessions: [
+        {
+          ...web,
+          name: "checkout redesign review for the acme platform team and billing and the support desks",
+          cwd: "/srv/checkout/web",
+          state: "busy",
+          duplicate: false,
+        },
+      ],
+      omitted: 0,
+    } as const;
+    const harness = createToolPresentationHarness(toolFor(SESSION_TOOL.list, "preview"), {
+      width: 57,
+    });
+    const [, expanded] = harness.cycle({}, result(listText(longNameListing), longNameListing), {
+      states: [false, true],
+    });
+    const rows = Arr.map(Str.split(stripTerminalControls(expanded?.text ?? ""), "\n"), (row) =>
+      Str.trimStart(row),
+    );
+    const directoryRow = Arr.findFirst(rows, Str.includes("/srv/checkout/web"));
+    expect(Option.map(directoryRow, Str.startsWith("· "))).toEqual(Option.some(true));
   });
 
   it("falls back to the result text when its details don't decode", () => {

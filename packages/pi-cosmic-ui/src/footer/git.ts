@@ -70,18 +70,20 @@ export function applyGitNumstat(status: FooterGitStatus, output: string): Footer
   return { ...status, linesAdded, linesRemoved };
 }
 
+// Git-prompt signs: `!` modified and `=` conflicted keep `~` meaning "about", and `⇡`/`⇣` keep
+// `↑`/`↓` for token direction.
 const GIT_STATUS_PARTS = [
-  ["conflicts", "!", "conflicted"],
+  ["conflicts", "=", "conflicted"],
   ["staged", "+", "staged"],
-  ["modified", "~", "modified"],
+  ["modified", "!", "modified"],
   ["untracked", "?", "untracked"],
-  ["ahead", "↑", "ahead"],
-  ["behind", "↓", "behind"],
+  ["ahead", "⇡", "ahead"],
+  ["behind", "⇣", "behind"],
 ] as const satisfies ReadonlyArray<readonly [keyof FooterGitStatus, string, string]>;
 
 /**
- * `~1 ?1` compactly, or `1 modified · 1 untracked` when labeled: a label replaces its sign, so a
- * wide footer never shows `~` before a count, where it would read as "about".
+ * `!1 ?1 ⇡2` compactly, or `1 modified · 1 untracked · 2 ahead` when labeled: a label replaces its
+ * sign rather than following it.
  */
 export function formatGitStatus(status: FooterGitStatus, labeled = false): string {
   return Arr.join(

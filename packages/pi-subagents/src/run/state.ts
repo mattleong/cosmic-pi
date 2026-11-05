@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { countLabel, clipText } from "pi-cosmic-core/display";
+import { countLabel, clipText, formatCount } from "pi-cosmic-core/display";
 import { safeTextPrefix, safeTextSuffix, utf8ByteLength, utf8Prefix } from "pi-cosmic-core/text";
 import {
   sanitizeDiagnosticError,
@@ -145,15 +145,9 @@ export const captureOutputText = ({
   };
 };
 
-const characterCount = (count: number): string => count.toLocaleString("en-US");
-
-/** A count with grouped digits and its noun, such as `1 line` or `3,172 lines`. */
-const groupedCountLabel = (count: number, singular: string): string =>
-  count === 1 ? countLabel(count, singular) : `${characterCount(count)} ${singular}s`;
-
 /** A saved file's size, such as `152,310 characters, 3,172 lines`. */
 export const savedFileSize = (archive: SubagentReportArchive): string =>
-  `${groupedCountLabel(archive.chars, "character")}, ${groupedCountLabel(archive.lines, "line")}`;
+  `${countLabel(archive.chars, "character")}, ${countLabel(archive.lines, "line")}`;
 
 const savedFileText = (label: string, archive: SubagentReportArchive): string =>
   `${label}: ${sanitizeTerminalLine(archive.path)} (${savedFileSize(archive)})`;
@@ -174,7 +168,7 @@ export const failureFileText = (archive: SubagentReportArchive): string =>
 
 /** How much of a cut report the run kept in memory, such as `16,384 of 90,000 characters kept`. */
 export const reportTruncationText = (truncation: SubagentReportTruncation): string =>
-  `${characterCount(truncation.retainedChars)} of ${characterCount(truncation.originalChars)} characters kept`;
+  `${formatCount(truncation.retainedChars)} of ${countLabel(truncation.originalChars, "character")} kept`;
 
 /** Leads a report inlined because its file couldn't be saved. */
 export const unsavedReportNote = (truncation: SubagentReportTruncation | undefined): string =>

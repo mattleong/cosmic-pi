@@ -159,6 +159,8 @@ const UNSTYLED: Pick<Theme, "fg"> = { fg: (_color, text) => text };
 interface IssueSlot {
   readonly lines: Component;
   placed: boolean;
+  /** Whether the body is drawn for an expanded row's heading, which the shell captures collapsed. */
+  readonly expandedHeading?: true;
 }
 
 const issueSlots = new WeakMap<object, IssueSlot>();
@@ -192,6 +194,21 @@ export function previewIssuesSlot(context: { readonly state: unknown }): Compone
   return slot.lines;
 }
 
+/**
+ * Whether a call body draws an expanded row's heading. The shell takes an expanded preview row's
+ * heading from the body drawn collapsed, so a heading that differs when expanded, such as a message
+ * heading that is one row only collapsed, asks here instead of reading `context.expanded` alone.
+ */
+export function drawsExpandedHeading(context: {
+  readonly expanded: boolean;
+  readonly state: unknown;
+}): boolean {
+  if (context.expanded) return true;
+  return Predicate.isObject(context.state)
+    ? issueSlots.get(context.state)?.expandedHeading === true
+    : false;
+}
+
 // Drawn where a call body places its issues slot, so the rows before it are the heading.
 const HEADING_END = "\u2063code-previews:heading-end\u2063";
 const headingEnd = composeToolComponent(() => [HEADING_END]);
@@ -213,7 +230,7 @@ export function capturePreviewCall<TArgs, TState extends object>(
   context: ToolRenderContext<TState, TArgs>,
 ): CapturedPreviewCall | undefined {
   if (!Predicate.isObject(context.state)) return undefined;
-  issueSlots.set(context.state, { lines: headingEnd, placed: false });
+  issueSlots.set(context.state, { lines: headingEnd, placed: false, expandedHeading: true });
   let body: Component;
   try {
     body = render({ ...context, expanded: false, lastComponent: undefined });

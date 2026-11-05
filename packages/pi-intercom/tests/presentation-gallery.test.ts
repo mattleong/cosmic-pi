@@ -179,6 +179,21 @@ const longNamedListing: SessionListContract = {
   ],
   omitted: 0,
 };
+// A wrapped name whose last row has room for its state but not its directory too.
+const longNameShortDirectory: SessionListContract = {
+  ...contractEnvelope,
+  tool: SESSION_TOOL.list,
+  sessions: [
+    {
+      sessionId: "01a19957-15d8-7047-8e3f-7bccf1353038",
+      name: "checkout redesign review for the acme platform team and billing and the support desks",
+      cwd: "/srv/checkout/web",
+      state: "busy",
+      duplicate: false,
+    },
+  ],
+  omitted: 0,
+};
 const readLongNamed: SessionReadContract = {
   ...contractEnvelope,
   tool: SESSION_TOOL.read,
@@ -319,6 +334,12 @@ const scenarios = [
     tool: SESSION_TOOL.list,
     args: {},
     result: result(listText(longNamedListing), longNamedListing),
+  },
+  {
+    title: "listed session with a long name and a short directory",
+    tool: SESSION_TOOL.list,
+    args: {},
+    result: result(listText(longNameShortDirectory), longNameShortDirectory),
   },
   {
     title: "read a session with a 63-character name",
@@ -534,6 +555,23 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...noticeFrames(
           "/intercom list · only a 63-character name",
           listReport({ ...longNamedListing, sessions: longNamedListing.sessions.slice(0, 1) }),
+        ),
+        ...noticeFrames(
+          "/intercom list · two 63-character names",
+          listReport({
+            ...longNamedListing,
+            sessions: [
+              { ...longNamed, state: "busy", duplicate: false },
+              {
+                ...longNamed,
+                sessionId: "01a19957-15d8-7047-8e3f-7bccf1353039",
+                name: "checkout redesign review for the acme platform team and support",
+                cwd: `${home}/dev/clients/acme-corporation/platform/support-desk`,
+                state: "idle",
+                duplicate: false,
+              },
+            ],
+          }),
         ),
         ...noticeFrames("/intercom list · none", listReport({ ...listing, sessions: [] })),
       );

@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import { InvalidSettingError } from "pi-cosmic-core/settings-completion";
@@ -371,6 +372,32 @@ describe("provider settings command shell", () => {
       expect(lines.length).toBeGreaterThan(12);
       for (const line of lines) expect(line.length).toBeLessThanOrEqual(55);
       expect(Arr.some(lines, Str.startsWith("Usage"))).toBe(false);
+    }),
+  );
+
+  it.effect("a help row that wraps keeps its value out of the description's column", () =>
+    Effect.gen(function* () {
+      const h = harness({
+        descriptors: [
+          {
+            id: "image.defaultModel",
+            label: "Image fallback model",
+            description: "Codex model that runs image requests when the current model isn't Codex.",
+            currentValue: () => "gpt-6.1-sol",
+          },
+        ],
+        config: () => ({ mode: "on" }),
+      });
+      yield* h.invoke("help");
+      const lines = Str.split(String(h.notify.mock.calls[0]?.[0]), "\n");
+      const indentOf = (needle: string) =>
+        Option.match(Arr.findFirst(lines, Str.includes(needle)), {
+          onNone: () => -1,
+          onSome: (line) => line.length - Str.trimStart(line).length,
+        });
+      const description = indentOf("Codex model");
+      expect(indentOf("(image.defaultModel)")).toBeLessThan(description);
+      expect(indentOf("gpt-6.1-sol")).toBeGreaterThan(description);
     }),
   );
 });

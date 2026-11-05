@@ -2,12 +2,13 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CompactSummary } from "../tools/compact-summary";
-import { cutsCleanly, elideSubject, FACT_CUT_SLACK } from "./compact-header";
-import { wrapPreviewHeading } from "./heading-wrap";
+import { cutsCleanly, elideSubject, endElide, FACT_CUT_SLACK } from "./compact-header";
+import { previewHeadingText, wrapPreviewHeading } from "./heading-wrap";
+import { drawsExpandedHeading } from "./preview-issues";
 import { compactSingleLine } from "./compact-row";
 
 /**
@@ -154,4 +155,49 @@ export function previewHeadingRow(
   return counters.length > 0 || cutsCleanly(subject, cut(kept), kind)
     ? draw(cut(kept), kept, kept.length)
     : draw(cut([]), [], 0);
+}
+
+/** A heading that names who a message goes to or comes from, such as `Message → web work`. */
+export interface PreviewMessageHeading {
+  /** The words before the name, such as `Message →` or `Reply ←`. */
+  readonly title: string;
+  /** The agent or session on the other end; blank when it is unknown. */
+  readonly name?: string | undefined;
+}
+
+const messageHeadingTitle = (title: string, name: string): string =>
+  Arr.join(Arr.filter([title, name], Str.isNonEmpty), " ");
+
+/**
+ * A preview call heading that names a message's other end, read at each render because a result
+ * may name the recipient after the call draws. Collapsed it is one row, as a collapsed message
+ * heading is, so a long name never wraps into the message beneath it: the name is cut at a word
+ * boundary as compact headings cut prose. Expanded it wraps with the name whole.
+ */
+export function previewMessageHeading(
+  heading: () => PreviewMessageHeading,
+  theme: Pick<Theme, "fg" | "bold">,
+  context: { readonly expanded: boolean; readonly state: unknown },
+): Component {
+  const shown = () => {
+    const { title, name } = heading();
+    return { title: compactSingleLine(title), name: compactSingleLine(name ?? "") };
+  };
+  if (drawsExpandedHeading(context))
+    return previewHeadingText(() => {
+      const { title, name } = shown();
+      return renderToolHeader({ title: messageHeadingTitle(title, name) }, theme);
+    });
+  return {
+    render(width) {
+      if (width <= 0) return [];
+      const { title, name } = shown();
+      const room = width - visibleWidth(title) - 1;
+      const cut = room > 1 ? endElide(name, room) : name;
+      return [
+        clipToWidth(renderToolHeader({ title: messageHeadingTitle(title, cut) }, theme), width),
+      ];
+    },
+    invalidate() {},
+  };
 }

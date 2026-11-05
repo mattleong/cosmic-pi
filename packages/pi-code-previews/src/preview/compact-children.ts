@@ -17,7 +17,7 @@ import {
   renderCompactIssues,
   wrapHanging,
 } from "./compact-issues";
-import { formatDuration } from "pi-cosmic-core/display";
+import { formatDuration, countLabel, formatCount } from "pi-cosmic-core/display";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
 const MAX_CHILDREN = 5;
@@ -83,7 +83,7 @@ export function renderCompactChildren(
   );
   const rows =
     flat && omitted > 0
-      ? wrapHanging(`… ${omitted} ${calls(omitted)} not listed`, width, "", "", 0, {
+      ? wrapHanging(`… ${formatCount(omitted)} ${calls(omitted)} not listed`, width, "", "", 0, {
           style: (row) => theme.fg("dim", row),
         })
       : [];
@@ -149,8 +149,8 @@ function omissionRows(
   width: number,
 ): string[] {
   const branch = theme.fg("dim", "  └─ ");
-  const more = `… ${omitted} more ${calls(omitted)}`;
-  const failed = hiddenFailed > 0 ? `${hiddenFailed} failed` : "";
+  const more = `… ${countLabel(omitted, "more call")}`;
+  const failed = hiddenFailed > 0 ? `${formatCount(hiddenFailed)} failed` : "";
   const dim = (row: string) => theme.fg("dim", row);
   const error = (row: string) => theme.fg("error", row);
   const single = branch + dim(more) + (failed ? `${dim(" · ")}${error(failed)}` : "");

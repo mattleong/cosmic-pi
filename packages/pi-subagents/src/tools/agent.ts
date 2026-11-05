@@ -15,15 +15,15 @@ import {
   expandedBody,
   expandedFields,
   getTextContent,
-  previewHeadingText,
   previewIssuesSlot,
+  previewMessageHeading,
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import { countLabel } from "pi-cosmic-core/display";
+import { countLabel, formatCount } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
-import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
+import { composeToolComponent, toolRunningLine } from "pi-cosmic-ui/tool";
 import {
   MAIN_AGENT_ID,
   MAX_AGENT_MESSAGE_CHARS,
@@ -121,7 +121,7 @@ const TOOL_SPECS: AgentToolSpecs = {
   },
   [AGENT_TOOL_NAME.send]: {
     label: "Message Agent",
-    description: `Send one message now to any other agent in this session: "main" or a run ID from agent_list. An agent you started, or one of its descendants, waiting on a question receives it as the answer; any other running agent gets it as guidance, which another agent's waiting run sees only after its question is answered. An idle main agent starts a turn; a busy one sees it when its turn ends, or after its user's next prompt if they interrupted that turn. A paused or finished local Pi run that you started, or one of its descendants, resumes with the message as its next assignment and still reports to its own parent; other agents' finished runs can't be resumed. The result says whether the message was answered, guided, or resumed, and how guidance arrived; nothing is stored for later delivery. A run that is still starting gets the message once it runs, after a wait of a few seconds at most. A message has at most ${MAX_AGENT_MESSAGE_CHARS.toLocaleString("en-US")} characters, or ${MAX_RESUME_MESSAGE_CHARS.toLocaleString("en-US")} when it resumes a run.`,
+    description: `Send one message now to any other agent in this session: "main" or a run ID from agent_list. An agent you started, or one of its descendants, waiting on a question receives it as the answer; any other running agent gets it as guidance, which another agent's waiting run sees only after its question is answered. An idle main agent starts a turn; a busy one sees it when its turn ends, or after its user's next prompt if they interrupted that turn. A paused or finished local Pi run that you started, or one of its descendants, resumes with the message as its next assignment and still reports to its own parent; other agents' finished runs can't be resumed. The result says whether the message was answered, guided, or resumed, and how guidance arrived; nothing is stored for later delivery. A run that is still starting gets the message once it runs, after a wait of a few seconds at most. A message has at most ${formatCount(MAX_AGENT_MESSAGE_CHARS)} characters, or ${formatCount(MAX_RESUME_MESSAGE_CHARS)} when it resumes a run.`,
     promptSnippet: "Message any agent in this session, including main",
     promptGuidelines: SEND_GUIDELINES,
     title: (args) => [
@@ -292,8 +292,10 @@ export function registerAgentTools(
         }
         const running = context.executionStarted && context.isPartial;
         // The recipient's name is learned from the result, so the heading reads it at each render.
-        const heading = previewHeadingText(() =>
-          renderToolHeader({ title: `Message → ${recipientLabel(context, call.to)}` }, theme),
+        const heading = previewMessageHeading(
+          () => ({ title: "Message →", name: recipientLabel(context, call.to) }),
+          theme,
+          context,
         );
         const container = new Container();
         container.addChild(heading);

@@ -17,6 +17,7 @@ import {
   toolRunningLine,
   type ToolHeader,
 } from "pi-cosmic-ui/tool";
+import { countLabel } from "pi-cosmic-core/display";
 
 interface PreviewRenderContext {
   readonly expanded: boolean;
@@ -94,7 +95,11 @@ export const textResultBody = (
     Arr.join(
       [
         theme.fg("toolOutput", Arr.join(lines.slice(0, collapsedLines), "\n")),
-        renderExpansionAffordance(`${lines.length - collapsedLines} more lines`, false, theme),
+        renderExpansionAffordance(
+          countLabel(lines.length - collapsedLines, "more line"),
+          false,
+          theme,
+        ),
       ],
       "\n",
     ),

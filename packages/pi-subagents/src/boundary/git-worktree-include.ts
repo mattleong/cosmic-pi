@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Order from "effect/Order";
-import { clipText, countLabel, formatBytes } from "pi-cosmic-core/display";
+import { clipText, countLabel, formatBytes, formatCount } from "pi-cosmic-core/display";
 import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import {
@@ -57,7 +57,7 @@ const parseWorktreeInclude = (text: string): ReadonlyArray<string> =>
   });
 
 /** What a usable `.worktreeinclude` is, as a clause after its name. */
-export const WORKTREE_INCLUDE_RULE = `a regular file of at most ${formatBytes(MAX_WORKTREE_INCLUDE_BYTES)} with at most ${MAX_WORKTREE_INCLUDE_PATTERNS} patterns of at most ${MAX_WORKTREE_INCLUDE_PATTERN_CHARS} characters, without control characters`;
+export const WORKTREE_INCLUDE_RULE = `a regular file of at most ${formatBytes(MAX_WORKTREE_INCLUDE_BYTES)} with at most ${MAX_WORKTREE_INCLUDE_PATTERNS} patterns of at most ${formatCount(MAX_WORKTREE_INCLUDE_PATTERN_CHARS)} characters, without control characters`;
 
 /**
  * The patterns of `root`'s `.worktreeinclude`, or none when it has no such file. A file that

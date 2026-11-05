@@ -3,6 +3,7 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { safeTextPrefix } from "./text.ts";
+import { codeUnitAt, lastIndexOfFrom } from "./text-scan.ts";
 
 const SECOND = 1_000;
 const MINUTE = 60 * SECOND;
@@ -47,8 +48,14 @@ export const formatRelativeAge = (milliseconds: number): string => {
   return `${Math.floor(value / DAY)}d ago`;
 };
 
+const GROUPED = new Intl.NumberFormat("en-US", { maximumFractionDigits: 20 });
+
+/** A count as the suite shows it: digits grouped from 1,000 (`152,310`), smaller counts as is. */
+export const formatCount = (count: number): string =>
+  Number.isFinite(count) && Math.abs(count) >= 1_000 ? GROUPED.format(count) : `${count}`;
+
 export const countLabel = (count: number, singular: string, plural = `${singular}s`): string =>
-  `${count} ${count === 1 ? singular : plural}`;
+  `${formatCount(count)} ${count === 1 ? singular : plural}`;
 
 /** One decimal place, dropping a trailing `.0` the way `formatDuration` does: `18 KB`, `1.5 MB`. */
 const oneDecimal = (value: number): string => `${Number(value.toFixed(1))}`;
@@ -107,4 +114,26 @@ export const clipText = (text: string, limit: number): string => {
   if (text.length <= budget) return text;
   if (budget <= 1) return safeTextPrefix("…", budget);
   return `${Str.trimEnd(safeTextPrefix(text, budget - 1))}…`;
+};
+
+// A word-boundary cut that would discard more than this share of the budget cuts mid-word instead.
+const PROSE_CUT_SLACK = 0.4;
+const TRAILING_BREAK = /[\s,;:.\-–—…]+$/u;
+
+/**
+ * Cuts prose within `limit` code units like `clipText`, but at the last space that fits, so every
+ * word that remains is whole (`quota detail…`). Only text whose last space would give up more than
+ * 40% of the budget, such as one long token, is cut mid-word.
+ */
+export const clipProse = (text: string, limit: number): string => {
+  const budget = Math.max(0, Math.floor(limit));
+  if (text.length <= budget || budget <= 1) return clipText(text, budget);
+  const head = safeTextPrefix(text, budget - 1);
+  // A word that ends exactly at the edge is whole.
+  const space =
+    codeUnitAt(text, head.length) === 0x20
+      ? head.length
+      : lastIndexOfFrom(head, " ", head.length - 1);
+  const kept = space > 0 ? Fn.pipe(head, Str.slice(0, space), Str.replace(TRAILING_BREAK, "")) : "";
+  return kept.length >= (budget - 1) * (1 - PROSE_CUT_SLACK) ? `${kept}…` : clipText(text, budget);
 };

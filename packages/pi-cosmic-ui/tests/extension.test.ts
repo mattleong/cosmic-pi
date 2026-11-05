@@ -613,7 +613,7 @@ describe("Cosmic UI extension", () => {
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));
         expect(h.exec).toHaveBeenCalledTimes(4);
         const cleanFooter = Arr.join(footer.render(100), "\n");
-        expect(cleanFooter).not.toContain("~1 ?1");
+        expect(cleanFooter).not.toMatch(/!1 \?1|1 modified/u);
 
         yield* emit(h, "session_shutdown");
         yield* Effect.promise(() => vi.advanceTimersByTimeAsync(2_000));

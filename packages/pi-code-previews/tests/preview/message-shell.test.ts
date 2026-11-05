@@ -80,6 +80,16 @@ const delivered =
       ),
   });
 
+/** An agent's report: its words unlabeled, with an optional body label. */
+const reported =
+  (subject: string, bodyLabel?: string): CodePreviewMessagePresenter =>
+  (_message, _options, theme) => ({
+    name: "agent_report",
+    summary: { subject, outcome: "success" },
+    ...(bodyLabel !== undefined && { bodyLabel }),
+    expanded: () => expandedAuthoredText(theme, undefined, "Found 3 stale references"),
+  });
+
 const STYLES = ["compact", "preview"] as const;
 const MODES = ["border", "on", "off"] as const;
 
@@ -177,6 +187,29 @@ describe("message shell", () => {
     for (const style of STYLES) {
       expect(labeled(style, "web")).toBe(false);
       expect(labeled(style, long)).toBe(true);
+    }
+  });
+
+  it("labels a message's words with its own body label beneath a heading that wraps", () => {
+    const labels = (style: "compact" | "preview", subject: string, bodyLabel?: string) =>
+      withPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: "off" }, () =>
+        Arr.filter(
+          Arr.map(
+            Str.split(
+              draw(withCodePreviewMessageShell(reported(subject, bodyLabel)), true, message, 57),
+              "\n",
+            ),
+            Str.trim,
+          ),
+          (row) => row === "Report" || row === "Message",
+        ),
+      );
+    const long = "billing-ledger-reconciliation-review-follow-up-for-the-platform-v2";
+    for (const style of STYLES) {
+      expect(labels(style, "web", "Report")).toEqual([]);
+      expect(labels(style, long, "Report")).toEqual(["Report"]);
+      // Without a body label or a delivered message's icon, the words stay unlabeled.
+      expect(labels(style, long)).toEqual([]);
     }
   });
 

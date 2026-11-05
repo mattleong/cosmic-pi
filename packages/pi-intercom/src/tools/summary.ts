@@ -5,7 +5,7 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
-import { countLabel } from "pi-cosmic-core/display";
+import { countLabel, formatCount } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import {
@@ -50,7 +50,7 @@ const REFUSAL_DETAILS: Record<ToolRefusalCode, (id: string) => string> = {
   session_receive_disabled: () =>
     "Its user turned off messages from other sessions with /intercom receive off.",
   session_message_too_long: () =>
-    `Messages are limited to ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters.`,
+    `Messages are limited to ${formatCount(MAX_MESSAGE_CHARS)} characters.`,
 };
 
 const NOTHING_SENT: ReadonlySet<ToolRefusalCode> = new Set([

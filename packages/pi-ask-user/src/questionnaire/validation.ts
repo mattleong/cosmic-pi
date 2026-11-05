@@ -9,6 +9,7 @@ import {
   type AskUserQuestion,
   type AskUserRequest,
 } from "./schema.ts";
+import { formatCount } from "pi-cosmic-core/display";
 
 export function validateQuestionnaireInput(
   value: string,
@@ -19,7 +20,7 @@ export function validateQuestionnaireInput(
   if (kind !== "note" && trimmed.length === 0) return { error: "Write an answer first" };
   if (trimmed.length > maximum)
     return {
-      error: `Keep this ${kind === "note" ? "note" : "answer"} under ${maximum} characters`,
+      error: `Keep this ${kind === "note" ? "note" : "answer"} under ${formatCount(maximum)} characters`,
     };
   return { value: trimmed };
 }

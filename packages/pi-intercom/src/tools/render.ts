@@ -15,19 +15,18 @@ import {
   expandedFields,
   expandedText,
   getTextContent,
-  previewHeadingText,
   previewIssuesSlot,
+  previewMessageHeading,
   expandedSection,
   type ExpandedField,
+  type PreviewMessageHeading,
 } from "pi-code-previews";
 import { countLabel, formatBytes } from "pi-cosmic-core/display";
 import { clipToWidth, wrapFacts } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderExpansionAffordance,
-  renderToolHeader,
   toolRunningLine,
-  type ToolHeader,
 } from "pi-cosmic-ui/tool";
 import {
   PREVIEW_BODY_INDENT,
@@ -76,10 +75,10 @@ interface RenderContext {
 const MAX_COLLAPSED_SESSIONS = 6;
 
 /** `Message → web work` and `Reply ← web work`, as the suite names messages between agents. */
-const heading = (tool: SessionToolName, target: string): ToolHeader => {
+const heading = (tool: SessionToolName, target: string): PreviewMessageHeading => {
   if (tool === SESSION_TOOL.list) return { title: "Sessions" };
-  if (tool === SESSION_TOOL.send) return { title: target ? `Message → ${target}` : "Message" };
-  return { title: target ? `Reply ← ${target}` : "Reply" };
+  if (tool === SESSION_TOOL.send) return { title: target ? "Message →" : "Message", name: target };
+  return { title: target ? "Reply ←" : "Reply", name: target };
 };
 
 const stacked = (parts: ReadonlyArray<Component>): Component => {
@@ -99,18 +98,18 @@ const callBody = (args: SessionToolArgs, theme: Theme, expanded: boolean): Compo
 
 /**
  * The heading names the session, by name once a result says it; a send's message follows it.
- * The heading reads the render state when it draws, after the result renderer has stored it.
+ * The heading reads the render state when it draws, after the result renderer has stored it, and
+ * stays one row collapsed so a long name never runs into the message.
  */
 export const renderSessionCall =
   (tool: SessionToolName, names?: SessionNames) =>
   (args: SessionToolArgs, theme: Theme, context: RenderContext): Component => {
     const { state } = context;
     const running = context.executionStarted && context.isPartial;
-    const header = previewHeadingText(() =>
-      renderToolHeader(
-        heading(tool, state.sessionTarget ?? knownAddresseeSubject(args.to, names)),
-        theme,
-      ),
+    const header = previewMessageHeading(
+      () => heading(tool, state.sessionTarget ?? knownAddresseeSubject(args.to, names)),
+      theme,
+      context,
     );
     const runningLine = composeToolComponent((width) =>
       running && width >= 1 ? [toolRunningLine(theme)] : [],
@@ -169,10 +168,21 @@ const listedRow = (session: ListedSession, label: string, theme: Theme, expanded
 /** Two columns past a fact row's hang, so a wrapped name never reads as its directory's row. */
 const NAME_HANGING = "    ";
 const FACT_HANGING = "  ";
+const FACT_MARKER = "·";
+
+/** Facts wrapped by `wrapFacts`, whose plain `·` leading a row that starts a fact is dimmed like the separators. */
+const wrappedFacts = (facts: string, width: number, hanging: string, theme: Theme): string[] =>
+  Arr.map(wrapFacts(facts, width, hanging), (row, index) => {
+    const body = Str.trimStart(row);
+    if (index === 0 || !Fn.pipe(body, Str.startsWith(`${FACT_MARKER} `))) return row;
+    const indent = Fn.pipe(row, Str.slice(0, row.length - body.length));
+    return `${indent}${theme.fg("dim", FACT_MARKER)}${Fn.pipe(body, Str.slice(FACT_MARKER.length))}`;
+  });
 
 /**
  * An expanded listed session: a name too long for its first row wraps hanging two columns past the
- * facts' column, and its facts follow on the name's last row when they fit there.
+ * facts' column, and its facts follow on the name's last row while they fit there; the rest wrap
+ * beneath it, each row that starts a fact led by `· `.
  */
 const expandedListedRows = (
   session: ListedSession,
@@ -183,22 +193,17 @@ const expandedListedRows = (
   const glyph = theme.fg(STATE_GLYPH_COLORS[session.state], SESSION_STATE_GLYPHS[session.state]);
   const name = `${glyph} ${theme.fg("toolOutput", label)}`;
   if (visibleWidth(name) <= width)
-    return wrapFacts(listedRow(session, label, theme, true), width, FACT_HANGING);
+    return wrappedFacts(listedRow(session, label, theme, true), width, FACT_HANGING, theme);
   const nameRows = wrapFacts(name, width, NAME_HANGING);
-  const factRows = Arr.map(
-    wrapFacts(
-      Arr.join(listedFacts(session, theme, true), theme.fg("dim", FACT_SEPARATOR)),
-      width - FACT_HANGING.length,
-      "",
-    ),
-    (row) => `${FACT_HANGING}${row}`,
-  );
   const [lastName = ""] = nameRows.slice(-1);
-  const [firstFacts = ""] = factRows;
-  const joined = `${lastName}${theme.fg("dim", FACT_SEPARATOR)}${Str.trimStart(firstFacts)}`;
-  return visibleWidth(joined) <= width
-    ? [...nameRows.slice(0, -1), joined, ...factRows.slice(1)]
-    : [...nameRows, ...factRows];
+  // The name's last row already fits, so wrapping it with the facts keeps it whole.
+  const lastRows = wrappedFacts(
+    Arr.join([lastName, ...listedFacts(session, theme, true)], theme.fg("dim", FACT_SEPARATOR)),
+    width,
+    FACT_HANGING,
+    theme,
+  );
+  return [...nameRows.slice(0, -1), ...lastRows];
 };
 
 /** A collapsed listed session on one row: a label too long for it ends at a word boundary first. */

@@ -30,6 +30,7 @@ import {
   unsavedReportNote,
 } from "./state.ts";
 import { isRunInSubtree } from "./tree.ts";
+import { formatCount } from "pi-cosmic-core/display";
 
 /** Addresses the root session's main agent. */
 export const MAIN_AGENT_ID = "main";
@@ -191,10 +192,7 @@ export const agentMessageContent = (sender: AgentSender, text: string): string =
   });
 
 const messageTooLarge = (limit: number, detail: string): InvalidSubagentRequestError =>
-  invalidRequest(
-    "message_too_large",
-    `Message exceeds ${limit.toLocaleString("en-US")} characters${detail}.`,
-  );
+  invalidRequest("message_too_large", `Message exceeds ${formatCount(limit)} characters${detail}.`);
 
 /** Trims a message and bounds it by the largest message any send takes, a resume's. */
 export const validateMessageText = (
@@ -218,7 +216,7 @@ export const messageSizeError = (
   kind !== "resume" && text.length > MAX_AGENT_MESSAGE_CHARS
     ? messageTooLarge(
         MAX_AGENT_MESSAGE_CHARS,
-        `; only a message that resumes a paused or finished run takes up to ${MAX_RESUME_MESSAGE_CHARS.toLocaleString("en-US")}`,
+        `; only a message that resumes a paused or finished run takes up to ${formatCount(MAX_RESUME_MESSAGE_CHARS)}`,
       )
     : undefined;
 

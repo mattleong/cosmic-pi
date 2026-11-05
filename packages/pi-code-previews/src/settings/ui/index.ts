@@ -9,6 +9,7 @@ import {
 import { getSettingsPath } from "../../config/store";
 import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 import { abbreviateHomePath } from "pi-cosmic-core/platform/paths";
+import { countLabel } from "pi-cosmic-core/display";
 import type { CodePreviewSettings } from "../../config/schema";
 import { formatOnOff, formatSettingValue } from "../../config/values";
 import { requiredCodePreviewTools } from "../../tools/policy";
@@ -42,7 +43,7 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
     label: "Read previews",
     description: "File content visibility and collapsed read size.",
     summarize: (settings) =>
-      `content ${formatOnOff(settings.readContentPreview)} · ${settings.readCollapsedLines} lines`,
+      `content ${formatOnOff(settings.readContentPreview)} · ${countLabel(settings.readCollapsedLines, "line")}`,
     ids: ["readContentPreview", "readCollapsedLines"],
   },
   {
@@ -50,7 +51,7 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
     label: "Write previews",
     description: "Write content/diff visibility and collapsed write content size.",
     summarize: (settings) =>
-      `content ${formatOnOff(settings.writeContentPreview)} · ${settings.writeCollapsedLines} lines`,
+      `content ${formatOnOff(settings.writeContentPreview)} · ${countLabel(settings.writeCollapsedLines, "line")}`,
     ids: ["writeContentPreview", "writeCollapsedLines"],
   },
   {
@@ -66,7 +67,7 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
     label: "Search/list previews",
     description: "Grep, find, and ls result visibility plus collapsed sizes.",
     summarize: (settings) =>
-      `grep ${formatOnOff(settings.grepResultPreview)} · paths ${settings.pathListCollapsedLines} lines`,
+      `grep ${formatOnOff(settings.grepResultPreview)} · paths ${countLabel(settings.pathListCollapsedLines, "line")}`,
     ids: [
       "grepResultPreview",
       "grepCollapsedLines",
