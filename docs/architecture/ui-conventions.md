@@ -136,15 +136,15 @@ Each glyph has one meaning, suite-wide. Don't introduce a glyph that isn't liste
 
 ### Footer and identity
 
-| Glyph                                  | Meaning                                                                                                                                                                                                          |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `⌂`                                    | Working directory                                                                                                                                                                                                |
-| `⎇`                                    | Git branch                                                                                                                                                                                                       |
-| `▤`                                    | Context window usage                                                                                                                                                                                             |
-| `↺`                                    | Usage limit reset time                                                                                                                                                                                           |
-| `⚡`                                   | OpenAI fast mode                                                                                                                                                                                                 |
-| `⧉`                                    | The subagent profile set                                                                                                                                                                                         |
-| `+` `~` `?` `!` `↑` `↓` before a count | Only where the footer is too narrow for labels: staged, modified, untracked, and conflicted files, and commits ahead and behind (`~346 ?23`). With room, the counts read in words, `346 modified · 23 untracked` |
+| Glyph                                  | Meaning                                                                                                                                                                                                                                                         |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `⌂`                                    | Working directory                                                                                                                                                                                                                                               |
+| `⎇`                                    | Git branch                                                                                                                                                                                                                                                      |
+| `▤`                                    | Context window usage                                                                                                                                                                                                                                            |
+| `↺`                                    | Usage limit reset time                                                                                                                                                                                                                                          |
+| `⚡`                                   | OpenAI fast mode                                                                                                                                                                                                                                                |
+| `⧉`                                    | The subagent profile set                                                                                                                                                                                                                                        |
+| `+` `~` `?` `!` `↑` `↓` before a count | Only where the footer is too narrow for labels, or where the user chose compact footer density: staged, modified, untracked, and conflicted files, and commits ahead and behind (`~346 ?23`). Otherwise the counts read in words, `346 modified · 23 untracked` |
 
 Some Code Previews tool headings carry a per-tool icon, such as `📖 read`. The icon names the tool and carries no status.
 
@@ -253,7 +253,7 @@ Some Code Previews tool headings carry a per-tool icon, such as `📖 read`. The
 ## Density and width
 
 - State each fact once per surface. Don't repeat titles, statuses, or results.
-- Label compact values whose meaning isn't obvious (`cache r163k`, `1 modified`) when there is room, and fall back to the short form only when narrow. A label replaces a sign rather than following it, so `~1` becomes `1 modified`, never `~1 modified`, which reads as "about 1".
+- Label compact values whose meaning isn't obvious (`cache r163k`, `1 modified`) when there is room, and fall back to the short form only when narrow or when the user chose compact density. A label replaces a sign rather than following it, so `~1` becomes `1 modified`, never `~1 modified`, which reads as "about 1".
 - Line counts are git's own totals, `+15217 −4470 lines`, as `git diff --shortstat` reports them. Never fold replaced lines into a separate count, and never write `~` before a count of lines.
 - Token counts read `23k tokens` wherever there is room, on every surface; the abbreviation `tok` is only a narrow-width fallback. Two surfaces in the same pane never use different words for the same count. Rates read the same way: `~50 tokens/s`, whole numbers from 10 up and one decimal below (`~7.4 tokens/s`).
 - Count summaries use the Unicode minus `−` (U+2212): `+4 −2`, `+48 −7`. Diff line prefixes inside diff bodies stay ASCII `+` and `-`.

@@ -204,7 +204,8 @@ const numberSetting = <Id extends NumberSettingId>(
         ? parsed
         : undefined;
     },
-    invalid: `${id} must be ${expected} from ${bound(minimum)} to ${bound(maximum)}`,
+    // Every scope also takes `inherit`, so the rule names it.
+    invalid: `${id} must be ${expected} from ${bound(minimum)} to ${bound(maximum)}, or inherit`,
   };
 };
 
@@ -272,7 +273,7 @@ const SETTING_DESCRIPTORS = {
     commandValues: [],
     openValues: true,
     parse: (value) => Str.trim(value),
-    invalid: "shellPath must be a path",
+    invalid: "shellPath must be a path, or inherit",
   },
 } satisfies { readonly [Id in BackgroundTaskSettingId]: BackgroundTaskSettingDescriptor<Id> };
 

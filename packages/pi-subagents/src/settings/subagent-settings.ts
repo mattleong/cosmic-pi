@@ -367,7 +367,7 @@ function subagentSettingsCommand(
     if (value !== INHERIT && limit === undefined) {
       const { minimum, maximum } = NESTING_FIELDS[field];
       return Promise.resolve(
-        failed(`${field} must be a whole number from ${minimum} to ${maximum}`),
+        failed(`${field} must be a whole number from ${minimum} to ${maximum}, or inherit`),
       );
     }
     return saveToScope(

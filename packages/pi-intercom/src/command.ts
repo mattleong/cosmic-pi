@@ -51,15 +51,23 @@ const listedLines = (session: ListedSession, label: string): ReadonlyArray<strin
 // A notice can't know its width, so a long session name ends at a word boundary in its list.
 const NOTICE_LABEL_CHARS = 40;
 
-const howToMessage = (example: string | undefined): ReadonlyArray<string> => [
+// Without a name the user could type, the example points at the list instead of inventing a session.
+const exampleTarget = (example: string | undefined, listed: number): string =>
+  example !== undefined
+    ? `the ${example} session`
+    : listed === 1
+      ? "the session listed above"
+      : "one of the sessions listed above";
+
+const howToMessage = (example: string | undefined, listed: number): ReadonlyArray<string> => [
   "To message one, ask your agent, for example:",
   // Wrapped within the notice width, so a long name stays whole rather than cut.
-  wrapNoticeText(`  "Ask the ${example ?? "web"} session to run its tests"`),
+  wrapNoticeText(`  "Ask ${exampleTarget(example, listed)} to run its tests"`),
 ];
 
 /**
  * The example names the shortest reachable session as a user would type it. A name the list cuts
- * isn't one the user could type, so the example then uses a generic name.
+ * isn't one the user could type, so the example then points at the list instead.
  */
 const exampleLabel = (sessions: ReadonlyArray<ListedSession>): string | undefined => {
   const labels = distinctSessionLabels(sessions);
@@ -94,7 +102,7 @@ export const listReport = (result: SessionListContract): string => {
         listedLines(session, labels[index] ?? ""),
       ),
       ...(result.omitted > 0 ? [`  and ${result.omitted} more`] : []),
-      ...howToMessage(exampleLabel(result.sessions)),
+      ...howToMessage(exampleLabel(result.sessions), result.sessions.length),
     ],
     "\n",
   );
@@ -111,7 +119,8 @@ const RECEIVE_CHOICES = ["on", "off"] as const;
 const notify = (ctx: ExtensionCommandContext, message: string, level: "info" | "warning") =>
   notifyAtHostBoundary(ctx, message, level);
 
-const HOW_TO_MESSAGE = howToMessage(undefined);
+// Help has no list to point at, so its example names a sample session.
+const HOW_TO_MESSAGE = howToMessage("web", 0);
 
 export function registerIntercomCommand(pi: ExtensionAPI, host: IntercomCommandHost): void {
   registerExtensionCommand(pi, {

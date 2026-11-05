@@ -38,7 +38,7 @@ const tasksApply = (id: string, value: string) => {
     });
   if (id === "logBufferBytesPerTask" && !/^\d+(?:KiB|MiB)$/u.test(value))
     return Result.fail({
-      message: `${id} must be a size such as 256KB or 1MB, from 4KB to 4MB`,
+      message: `${id} must be a size such as 256KB or 1MB, from 4KB to 4MB, or inherit`,
     });
   return Result.succeed(undefined);
 };
