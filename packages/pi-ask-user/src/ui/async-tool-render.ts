@@ -19,6 +19,7 @@ import {
   cancelledLine,
   emptyBody,
   expandedResult,
+  markReported,
   mutedState,
   queuedState,
   waitingState,
@@ -65,14 +66,14 @@ const notification = decodeUnknownOrUndefined(
 );
 const NO_TITLES: ReadonlyMap<string, string> = new Map();
 
-type ResultContext = Partial<Pick<RenderContext, "args" | "isError">>;
+type ResultContext = Partial<Pick<RenderContext, "args" | "isError" | "state">>;
 
 type AsyncToolResult = Pick<AgentToolResult<unknown>, "content" | "details">;
 
 export function renderAsyncCall(
   args: QuestionnaireArgs,
   theme: Theme,
-  context: Pick<RenderContext, "expanded" | "state" | "isPartial">,
+  context: Pick<RenderContext, "expanded" | "state" | "isPartial" | "executionStarted">,
   isControl = false,
 ): Component {
   const header = isControl
@@ -129,6 +130,7 @@ export function renderAsyncResult(
   theme: Theme,
   context: ResultContext = {},
 ): Component {
+  markReported(context);
   if (options.isPartial)
     return presentationLine(decodePresentation(envelope(input)?.details), theme);
   const result = envelope(input);
@@ -169,13 +171,17 @@ function collapsedRows(
 ): Component {
   if (rows.length === 0) return mutedState(["No questionnaires", "None"], theme);
   // An open questionnaire needs the user now; a queued one only waits its turn.
-  const pendingState = (alternatives: readonly string[]) =>
-    states.includes("waiting") || states.includes("hidden")
+  const pendingState = (alternatives: readonly string[], shown = states) =>
+    shown.includes("waiting") || shown.includes("hidden")
       ? waitingState(alternatives, theme)
-      : states.includes("queued")
+      : shown.includes("queued")
         ? queuedState(alternatives, theme)
         : mutedState(alternatives, theme);
-  if (list) return pendingState(stateCounts(states));
+  if (list) {
+    // Hidden questionnaires have their own issue, which says how to resume them.
+    const counted = Arr.filter(states, (entry) => entry !== "hidden");
+    return counted.length === 0 ? emptyBody() : pendingState(stateCounts(counted), counted);
+  }
   const [state] = states;
   if (state === "cancelled") return cancelledLine(theme);
   // Its issue says it is hidden and how to resume it.

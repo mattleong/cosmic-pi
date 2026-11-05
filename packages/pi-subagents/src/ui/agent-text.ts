@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import {
   Markdown,
   wrapTextWithAnsi,
@@ -15,7 +15,7 @@ import {
   expandedSection,
 } from "pi-code-previews";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { clipToWidth, type ManagerStatusColor } from "pi-cosmic-ui/manager";
+import { clipToWidth, wrapFacts, type ManagerStatusColor } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 
 /** Wrapped rows of an agent's words that a collapsed view shows before its expansion affordance. */
@@ -192,13 +192,96 @@ export const indentedLines = (line: string, width: number, indent = 2): string[]
   );
 };
 
-/** A line wrapped beneath `indent`, its continuation rows hanging two columns further in. */
-export const hangingLines = (line: string, width: number, indent = 0): string[] => {
-  const shift = Math.min(indent, Math.max(0, width - 1));
-  const hang = Math.min(shift + 2, Math.max(0, width - 1));
-  const [first = "", ...rest] = wrapTextWithAnsi(line, Math.max(1, width - hang));
-  return [`${pad(shift)}${first}`, ...Arr.map(rest, (row) => `${pad(hang)}${row}`)];
+/** Plain text in a row of facts, the theme color it renders in (none keeps the default), and its weight. */
+export type FactSpan = readonly [text: string, color?: ThemeColor, weight?: "bold"];
+
+type FactTheme = Pick<Theme, "fg" | "bold">;
+
+const FACT_BREAKS = [" · ", " "] as const;
+
+/** The spans' text from `start` to `end`, each part in its span's color. */
+const paintRange = (
+  spans: ReadonlyArray<FactSpan>,
+  start: number,
+  end: number,
+  theme: FactTheme,
+): string => {
+  let offset = 0;
+  let painted = "";
+  for (const [text, color, weight] of spans) {
+    const from = Math.max(start, offset);
+    const to = Math.min(end, offset + text.length);
+    if (from < to) {
+      const part = Fn.pipe(text, Str.slice(from - offset, to - offset));
+      const weighted = weight === "bold" ? theme.bold(part) : part;
+      painted += color === undefined ? weighted : theme.fg(color, weighted);
+    }
+    offset += text.length;
+  }
+  return painted;
 };
+
+/**
+ * `·`-joined facts wrapped beneath `indent` between whole facts, so no row ends with `·` or `→`;
+ * continuation rows hang `hang` columns further in. Each span keeps its color on whichever row it
+ * lands.
+ */
+export const hangingLines = (
+  spans: ReadonlyArray<FactSpan>,
+  width: number,
+  theme: FactTheme,
+  options: FactRowOptions = {},
+): string[] => {
+  const shift = Math.min(options.indent ?? 0, Math.max(0, width - 1));
+  const text = Arr.join(
+    Arr.map(spans, ([part]) => part),
+    "",
+  );
+  let at = 0;
+  const rows = wrapFacts(text, Math.max(1, width - shift), pad(options.hang ?? 2));
+  return Arr.map(rows, (row, index) => {
+    // Each row is the next stretch of the facts after its hanging indent; the break between rows
+    // drops only a separator or a space.
+    const body = index === 0 ? row : Str.trimStart(row);
+    for (const gap of FACT_BREAKS)
+      if (Fn.pipe(text, Str.startsWith(gap, at)) && !Fn.pipe(text, Str.startsWith(body, at))) {
+        at += gap.length;
+        break;
+      }
+    const lead = pad(shift + row.length - body.length);
+    if (!Fn.pipe(text, Str.startsWith(body, at))) return `${lead}${body}`;
+    const painted = paintRange(spans, at, at + body.length, theme);
+    at += body.length;
+    return `${lead}${painted}`;
+  });
+};
+
+export interface FactRowOptions {
+  /** Columns every row starts in. */
+  readonly indent?: number | undefined;
+  /** Columns continuation rows start beyond `indent`; two by default. */
+  readonly hang?: number | undefined;
+}
+
+/**
+ * A row of facts: expanded, wrapped by {@link hangingLines} so every fact shows; collapsed, one row
+ * clipped to `width`.
+ */
+export const factRowLines = (
+  spans: ReadonlyArray<FactSpan>,
+  width: number,
+  theme: FactTheme,
+  expanded: boolean,
+  options: FactRowOptions = {},
+): string[] =>
+  expanded
+    ? hangingLines(spans, width, theme, options)
+    : [
+        clipToWidth(
+          `${pad(options.indent ?? 0)}${paintRange(spans, 0, Number.POSITIVE_INFINITY, theme)}`,
+          width,
+        ),
+      ];
 
 /** One agent in a block list: its name and state, then the words it wrote or a short note. */
 export interface AgentTextBlock {
@@ -223,12 +306,19 @@ export const agentTextBlockLines = (
 ): string[] => {
   const safeWidth = Math.max(1, width);
   return Arr.flatMap(blocks, (block) => {
-    const status = block.status
-      ? theme.fg("muted", ` · ${sanitizeTerminalLine(block.status)}`)
-      : "";
-    const heading = `${theme.fg(block.tone, block.glyph)} ${theme.fg("toolTitle", theme.bold(sanitizeTerminalLine(block.name)))}${status}`;
+    const heading = factRowLines(
+      [
+        [block.glyph, block.tone],
+        [" "],
+        [sanitizeTerminalLine(block.name), "toolTitle", "bold"],
+        [block.status ? ` · ${sanitizeTerminalLine(block.status)}` : "", "muted"],
+      ],
+      safeWidth,
+      theme,
+      expanded,
+    );
     return [
-      clipToWidth(heading, safeWidth),
+      ...heading,
       ...agentTextLines(block.text, safeWidth, theme, { expanded, verbatim: block.verbatim }),
       ...Arr.flatMap(block.notes ?? [], (note) =>
         indentedLines(theme.fg("muted", sanitizeTerminalLine(note)), safeWidth),

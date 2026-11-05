@@ -294,6 +294,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 Renderers draw only from decoded details, never from model-facing text, so agent procedures, tool-call syntax, and reply hints stay in what the model reads. Each producer adds bounded, sanitized display fields where it emits the result or message, redacted as its content is.
 
 - Words first: a report, failure, question, message, or latest assistant message shows collapsed with its line breaks, bounded to about ten wrapped rows by `ui/agent-text.ts`, and whole on expansion. `agent_await`, completion notices, and `agent_read` share its agent blocks.
+- One question, one form: a pending question is an attention issue, `name asks: …`, on `agent_await` (an awaited run or another asking the caller) and `agent_read`, whose block then shows only the run's state, and the rest of a question too long for the quote when expanded. `agent_read` shows the question, not the latest assistant message, while a run waits on it.
 - Names, not IDs: rows name agents by display name. IDs, routes, profiles, usage, timing, files, workspace IDs, and selection notes appear only in an expanded, dim Details section.
 - Status only when it departs from the expected: a plain `agent_send` delivery adds nothing; a queued, held, parked, answered, or resumed one adds a short muted phrase.
 - A decoded receipt never draws its raw text; failures show through their issues. Only an entry without a decodable receipt or display copy falls back to a generic heading collapsed and its raw text expanded.

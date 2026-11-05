@@ -1,32 +1,19 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as Arr from "effect/Array";
-import * as MutableRef from "effect/MutableRef";
-import { formatDuration } from "pi-cosmic-core/display";
 import { maskIdentifier } from "pi-cosmic-core/security";
-import { currentModelKey } from "../fast/controller.ts";
 import { formatTimestampOrNever, USAGE_URL } from "./format.ts";
 import type { OpenAIProjection } from "./projection.ts";
 
-export function formatDebug(
-  projection: MutableRef.MutableRef<OpenAIProjection>,
-  ctx: ExtensionContext,
-): string {
-  const state = MutableRef.get(projection);
-  const cfg = state.config;
-  return Arr.join(
-    [
-      `Current model: ${currentModelKey(ctx)}`,
-      `Current model eligible: ${state.eligible ? "yes" : "no"}`,
-      `Usage only on OAuth: ${(cfg?.usage.showOnlyOnSubscriptionModels ?? true) ? "on" : "off"}`,
-      `Auth: ${state.authFound ? "found" : "missing"}`,
-      `Account ID: ${maskIdentifier(state.accountId) ?? "none"}`,
-      `Last fetch: ${formatTimestampOrNever(state.lastFetchAt)}`,
-      `Last successful update: ${formatTimestampOrNever(state.updatedAt)}`,
-      `Last error: ${state.error ?? "none"}`,
-      `Refresh interval: ${formatDuration(cfg?.usage.refreshIntervalMs ?? 60_000)}`,
-      `Endpoint: ${USAGE_URL}`,
-      `Auth file: ${state.authPath ?? "unknown"}`,
-    ],
-    "\n",
-  );
+/**
+ * Usage diagnostics as `Name: value` facts; its settings and the current model show elsewhere.
+ */
+export function usageDiagnosticLines(state: OpenAIProjection): string[] {
+  return [
+    `Model eligible: ${state.eligible ? "yes" : "no"}`,
+    `Auth: ${state.authFound ? "found" : "missing"}`,
+    `Account ID: ${maskIdentifier(state.accountId) ?? "none"}`,
+    `Last fetch: ${formatTimestampOrNever(state.lastFetchAt)}`,
+    `Last update: ${formatTimestampOrNever(state.updatedAt)}`,
+    `Last error: ${state.error ?? "none"}`,
+    `Endpoint: ${USAGE_URL}`,
+    `Auth file: ${state.authPath ?? "unknown"}`,
+  ];
 }

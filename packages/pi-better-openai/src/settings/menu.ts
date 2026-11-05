@@ -42,7 +42,7 @@ export function openOpenAISettingsMenu(
   >,
   signal: AbortSignal | undefined,
 ) {
-  const { run, fastProjection, formatDebugStatus } = options;
+  const { run, fastProjection, diagnosticLines } = options;
   const readRedactedConfig = () =>
     run(
       OpenAIConfigService.use((service) => service.readConfigDocument).pipe(
@@ -79,7 +79,7 @@ export function openOpenAISettingsMenu(
         ctx,
         ({ tui, theme }) => {
           let outerList: SettingsList | undefined;
-          const textPanel = (title: string, lines: string[], complete: () => void) =>
+          const textPanel = (title: string, lines: ReadonlyArray<string>, complete: () => void) =>
             new TextPanelComponent({
               theme,
               title,
@@ -94,7 +94,7 @@ export function openOpenAISettingsMenu(
               currentValue: "open",
               description: "Show Better OpenAI diagnostics.",
               submenu: (_value, complete) =>
-                textPanel("Debug info", Str.split(formatDebugStatus(ctx), "\n"), complete),
+                textPanel("Debug info", diagnosticLines(ctx), complete),
             },
             {
               id: "config.paths",
@@ -200,21 +200,28 @@ export function openOpenAISettingsMenu(
                   outerList.updateValue(section.id, section.currentValue);
               tui.requestRender();
             });
+          // Rows reconcile from the saved config once a change settles, so `show` only marks a
+          // change a newer one to the same setting superseded; a success posts no notice.
+          const latestChange = new Map<string, object>();
           function writeSetting(id: string, value: string): Promise<void> {
-            return session.apply(id, value).then(() => {
-              if (!isCurrent()) return undefined;
-              reconcilePicker();
-              void readRedactedConfig()
-                .catch(() => redactedConfig)
-                .then((nextRedactedConfig) => {
-                  if (!isCurrent()) return undefined;
-                  redactedConfig = nextRedactedConfig;
-                  invokeBestEffort(() => tui.requestRender());
-                  return undefined;
-                })
-                .catch(() => undefined);
-              return undefined;
-            });
+            const change = {};
+            latestChange.set(id, change);
+            return session
+              .apply(id, value, () => latestChange.get(id) === change)
+              .then(() => {
+                if (!isCurrent()) return undefined;
+                reconcilePicker();
+                void readRedactedConfig()
+                  .catch(() => redactedConfig)
+                  .then((nextRedactedConfig) => {
+                    if (!isCurrent()) return undefined;
+                    redactedConfig = nextRedactedConfig;
+                    invokeBestEffort(() => tui.requestRender());
+                    return undefined;
+                  })
+                  .catch(() => undefined);
+                return undefined;
+              });
           }
           return {
             // The shared settings header; the config file is under Diagnostics, since a path

@@ -145,12 +145,8 @@ export function createNativeCodemodeRenderers(
               renderCallList(children, evidence, theme, context.state),
             ),
           );
-        if (
-          statesRunning &&
-          previewStyle &&
-          context.isPartial &&
-          !Arr.some(children.entries, (child) => child.status === "running")
-        )
+        // The program's own state: running children don't say the program still runs.
+        if (statesRunning && previewStyle && context.isPartial)
           body.addChild(runningLine(theme, context.state));
         if (evidence.fullOutputPath && !nativeCodemodeHeader(result))
           body.addChild(
@@ -301,10 +297,8 @@ export function createNativeCodemodeRenderers(
               });
               const counter = projected.action ? projected.counters?.[0] : undefined;
               if (counter) rows.unshift(clipToWidth(theme.fg("muted", counter), width));
-              if (
-                options.isPartial &&
-                !Arr.some(projected.children?.entries ?? [], (child) => child.status === "running")
-              )
+              // The program's own state: running children don't say the program still runs.
+              if (options.isPartial)
                 rows.push(...new Text(toolRunningLine(theme, animationFrame), 0, 0).render(width));
               if (!options.isPartial && result.content.length)
                 rows.push(

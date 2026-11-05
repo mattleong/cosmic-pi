@@ -67,7 +67,7 @@ describe("application settings commands", () => {
     notify.mockClear();
     yield* command("settings status");
     expect(notify).toHaveBeenCalledWith(
-      expect.stringMatching(/writerWorkspace\W+worktree\b/u),
+      expect.stringMatching(/Worktree \(writerWorkspace\)/u),
       expect.anything(),
     );
     yield* settle(() => host.emit("session_shutdown", ctx));

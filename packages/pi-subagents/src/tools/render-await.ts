@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Order from "effect/Order";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { type Component } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { synchronousNow } from "pi-cosmic-core/platform/native-clock";
@@ -12,6 +12,7 @@ import { isTerminalRunState } from "../run/model.ts";
 import type { SubagentAwaitUntil } from "../run/service.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { runStateColor, runStateGlyph, runStateLabel } from "../ui/run-state.ts";
+import { factRowLines } from "../ui/agent-text.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
@@ -202,28 +203,41 @@ export const renderAwaitProgressComponent = (
   until: SubagentAwaitUntil,
   theme: Theme,
   hierarchy: AwaitHierarchy,
+  expanded = false,
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
     const frame = spinnerFrameAt(synchronousNow());
     const counters = formatAwaitCounters(cards, hierarchy, until);
     return [
-      clipToWidth(theme.fg("muted", counters), safeWidth),
+      ...factRowLines([[counters, "muted"]], safeWidth, theme, expanded),
       ...(hierarchy.contextOmitted
         ? [clipToWidth(theme.fg("dim", DESCENDANTS_OMITTED), safeWidth)]
         : []),
-      ...Arr.map(projectRunCardTree(cards), (row) => {
+      ...Arr.flatMap(projectRunCardTree(cards), (row) => {
         const run = row.run;
-        const awaited = hierarchy.awaitedRunIds.has(run.id) ? "" : theme.fg("dim", " · descendant");
+        const branch = runTreeBranch(row);
+        const glyph = runStateGlyph(run.state, frame);
         const status = Fn.pipe(
           [run.currentTool, runTiming(run)],
           Arr.filter(isTextFragment),
           Arr.map(sanitizeTerminalLine),
           Arr.join(" · "),
         );
-        return clipToWidth(
-          `${theme.fg("dim", runTreeBranch(row))}${theme.fg(runStateColor(run.state), runStateGlyph(run.state, frame))} ${theme.fg("toolTitle", sanitizeTerminalLine(run.name))}${status ? theme.fg("muted", ` · ${status}`) : ""}${awaited}`,
+        // A wrapped run's facts hang beneath its name.
+        return factRowLines(
+          [
+            [branch, "dim"],
+            [glyph, runStateColor(run.state)],
+            [" "],
+            [sanitizeTerminalLine(run.name), "toolTitle"],
+            [status ? ` · ${status}` : "", "muted"],
+            [hierarchy.awaitedRunIds.has(run.id) ? "" : " · descendant", "dim"],
+          ],
           safeWidth,
+          theme,
+          expanded,
+          { hang: visibleWidth(`${branch}${glyph} `) },
         );
       }),
     ];

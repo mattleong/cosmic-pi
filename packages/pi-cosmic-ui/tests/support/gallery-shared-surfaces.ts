@@ -205,12 +205,19 @@ const scopeGroup = (name: string, own: boolean): SettingsSurfaceItem => {
     id: `group:${name}`,
     label: name,
     description: `Delegation and nesting limits for the ${Str.toLowerCase(name)} scope.`,
-    currentValue: own ? "eager · 32 children · depth 3" : "normal · depth 2",
+    // Like the real summary, limits at their defaults are left to the rows.
+    currentValue: own ? "encouraged · 16 children" : "normal",
     children: [
-      field("delegation", "Delegation", ["eager", "normal", "normal", "eager", "off"]),
-      field("maxChildren", "Max children", ["32", "16", "8", "16", "32"]),
-      field("maxDepth", "Max depth", ["3", "2", "1", "2", "3"]),
-      field("maxActive", "Max active", ["16", "8", "4", "8", "16"]),
+      field("delegation", "Delegation", [
+        "encouraged",
+        "normal",
+        "normal",
+        "encouraged",
+        "orchestration",
+      ]),
+      field("maxDirectChildren", "Max children", ["16", "8", "4", "8", "16"]),
+      field("maxDepth", "Max depth", ["2", "2", "1", "2", "3"]),
+      field("maxActiveRuns", "Max active", ["16", "8", "4", "8", "16"]),
     ],
   };
 };

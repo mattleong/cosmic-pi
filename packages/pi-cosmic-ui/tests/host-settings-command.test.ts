@@ -4,6 +4,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
+import * as Str from "effect/String";
 import { deferredPromise, extensionContextFixture, yieldUntil } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
@@ -254,6 +255,91 @@ describe("provider settings command shell", () => {
       expect(h.apply).not.toHaveBeenCalled();
       expect(shown).toEqual(["off"]);
       expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("Trust"), "warning");
+    }),
+  );
+  it.effect(
+    "an interactive change confirms nothing and reports a failure that settles after closing",
+    () =>
+      Effect.gen(function* () {
+        const saves = Arr.map([0, 1, 2], () =>
+          deferredPromise<Awaited<ReturnType<Options["apply"]>>>(),
+        );
+        const h = harness({ config: () => ({ mode: "off" }) });
+        for (const save of saves) h.apply.mockReturnValueOnce(save.promise);
+        let latest = 0;
+        const settled: Promise<void>[] = [];
+        h.open.mockImplementationOnce((_ctx, session) => {
+          // Each change is superseded by the next; only the last one's failure is reported.
+          for (const [index, value] of Arr.map(["on", "off", "on"], (v, i) => [i, v] as const)) {
+            latest = index;
+            settled.push(session.apply("mode", value, () => latest === index));
+          }
+          return Promise.resolve(OwnedSurfaceOutcome.Settled({ value: undefined }));
+        });
+        yield* h.invoke("");
+        yield* yieldUntil(() => h.apply.mock.calls.length === 1);
+        saves[0]?.resolve(Result.succeed(undefined));
+        yield* yieldUntil(() => h.apply.mock.calls.length === 2);
+        saves[1]?.resolve(Result.fail({ message: "superseded failure" }));
+        yield* yieldUntil(() => h.apply.mock.calls.length === 3);
+        expect(h.notify).not.toHaveBeenCalled();
+        saves[2]?.resolve(Result.fail({ message: "Couldn't save demo settings" }));
+        yield* Effect.promise(() => Promise.all(settled));
+        expect(h.notify.mock.calls).toEqual([["Couldn't save demo settings", "error"]]);
+      }),
+  );
+
+  it.effect("a command-line change confirms once", () =>
+    Effect.gen(function* () {
+      const h = harness({ config: () => ({ mode: "on" }) });
+      yield* h.invoke("mode on");
+      expect(h.notify).toHaveBeenCalledTimes(1);
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
+    }),
+  );
+
+  it.effect("help, status, and argument errors fit a 57-column phone", () =>
+    Effect.gen(function* () {
+      const h = harness({
+        scopes: [
+          { name: "global", description: "Everywhere" },
+          { name: "project", description: "This project" },
+        ],
+        descriptors: [
+          {
+            id: "logBufferBytesPerTask",
+            label: "Log buffer per task",
+            description:
+              "How much recent output each task keeps in memory before older lines are dropped.",
+            values: ["64KiB", "256KiB", "1MiB"],
+            currentValue: () => "256 KB",
+          },
+        ],
+        examples: ["project logBufferBytesPerTask 1MiB"],
+        notes: () => [
+          "Scope defaults to global; inherit removes a scope's own value, and changes take effect after /reload.",
+        ],
+        config: () => ({ mode: "on" }),
+        status: undefined,
+      });
+      for (const args of [
+        "help",
+        "status",
+        "project logBufferBytesPerTask",
+        "project",
+        "logBufferBytesPerTaskWithAVeryLongMistypedSettingName 1",
+        "logBufferBytesPerTask 2GiB",
+      ])
+        yield* h.invoke(args);
+      // Pi leads a warning's first line with `Warning: `.
+      const lines = Arr.flatMap(h.notify.mock.calls, ([message, level]) =>
+        Arr.map(Str.split(String(message), "\n"), (line, index) =>
+          index === 0 && level === "warning" ? `Warning: ${line}` : line,
+        ),
+      );
+      expect(lines.length).toBeGreaterThan(12);
+      for (const line of lines) expect(line.length).toBeLessThanOrEqual(55);
+      expect(Arr.some(lines, Str.startsWith("Usage"))).toBe(false);
     }),
   );
 });

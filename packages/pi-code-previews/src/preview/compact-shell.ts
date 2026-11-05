@@ -77,6 +77,8 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
     | { plan: CompactPlan; width: number; frame: number | undefined; rows: string[] }
     | undefined;
   private detailBounds: { height: number; width: number } | undefined;
+  // The width the collapsed row would get, which the expanded heading's counter follows.
+  private renderWidth: number | undefined;
   private readonly mode: ToolCallBackgroundMode;
   private readonly options: CompactShellOptions<TArgs, TDetails, TState>;
   readonly resultSlot = resultStandIn(this, () => this.callMounted);
@@ -193,6 +195,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
       this.collapsed = { plan, width, frame, rows };
       return rows;
     }
+    this.renderWidth = width;
     this.display ??= this.renderDetails(result !== undefined, plan);
     let rows: string[];
     for (;;) {
@@ -279,6 +282,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
           elapsedMs: timing?.elapsedMs,
           timingEnabled,
           animationFrame: getCodePreviewAnimationFrame(context),
+          collapsedWidth: this.renderWidth,
         },
         theme,
         width,

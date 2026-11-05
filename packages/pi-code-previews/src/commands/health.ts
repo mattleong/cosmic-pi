@@ -7,9 +7,11 @@ import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import { hasCustomSurface, openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
+import { wrapNoticeText } from "pi-cosmic-ui/boundary/host-settings-command";
 import { codePreviewSettings, codePreviewSettingsProblems } from "../config/state";
 import { formatOnOff } from "../config/values";
 import { describeSettingsProblem, getSettingsPath } from "../config/store";
+import { SETTING_ITEM_DEFINITIONS, type SettingsUiItemId } from "../settings/ui/registry";
 import { getShikiStatus } from "../syntax/render";
 import { getEnabledCodePreviewTools } from "../tools/selection";
 import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
@@ -50,32 +52,37 @@ function toolRows(): string[] {
   });
 }
 
+/** A setting's health row, named as its settings row is. */
+const settingLine = (id: SettingsUiItemId, value: string, note?: string): string =>
+  `  ${SETTING_ITEM_DEFINITIONS[id].label}: ${value}${note === undefined ? "" : ` · ${note}`}`;
+
 function healthLines(cwd: string): string[] {
   const status = getShikiStatus();
   const settings = codePreviewSettings;
   return [
     "Code Previews health",
     "Syntax highlighting",
-    `  Highlighting: ${formatOnOff(settings.syntaxHighlighting)} · ${settings.shikiTheme} theme`,
+    settingLine("syntaxHighlighting", formatOnOff(settings.syntaxHighlighting)),
+    settingLine("shikiTheme", settings.shikiTheme),
     `  Highlighter: ${status.initialized ? "ready" : "not started"}`,
     `  Languages: ${status.loadedLanguages} loaded · ${status.pendingLanguages} pending`,
     `  Cache: ${status.cacheSize} of ${countLabel(status.cacheLimit, "entry", "entries")}`,
     `  Size limit: ${countLabel(status.maxHighlightChars, "character")} per preview`,
     "Tool rows",
-    `  Collapsed style: ${settings.toolCallCollapsedStyle} · ${RELOAD}`,
-    `  Background: ${settings.toolCallBackground} · ${RELOAD}`,
-    `  Timing: ${formatOnOff(settings.toolCallTiming)}`,
-    `  Path icons: ${settings.pathIcons}`,
+    settingLine("toolCallCollapsedStyle", settings.toolCallCollapsedStyle, RELOAD),
+    settingLine("toolCallBackground", settings.toolCallBackground, RELOAD),
+    settingLine("toolCallTiming", formatOnOff(settings.toolCallTiming)),
+    settingLine("pathIcons", settings.pathIcons),
     // Named as the settings group is; expanded rows always show full content.
     "Output previews",
-    `  Read content: ${formatOnOff(settings.readContentPreview)}`,
-    `  Write content: ${formatOnOff(settings.writeContentPreview)}`,
-    `  Edit diff: ${formatOnOff(settings.editDiffPreview)}`,
-    `  Grep results: ${formatOnOff(settings.grepResultPreview)}`,
-    `  Find results: ${formatOnOff(settings.findResultPreview)}`,
-    `  Ls entries: ${formatOnOff(settings.lsResultPreview)}`,
-    `  Bash output: ${formatOnOff(settings.bashResultPreview)}`,
-    `  Word-level diff emphasis: ${settings.wordEmphasis}`,
+    settingLine("readContentPreview", formatOnOff(settings.readContentPreview)),
+    settingLine("writeContentPreview", formatOnOff(settings.writeContentPreview)),
+    settingLine("editDiffPreview", formatOnOff(settings.editDiffPreview)),
+    settingLine("grepResultPreview", formatOnOff(settings.grepResultPreview)),
+    settingLine("findResultPreview", formatOnOff(settings.findResultPreview)),
+    settingLine("lsResultPreview", formatOnOff(settings.lsResultPreview)),
+    settingLine("bashResultPreview", formatOnOff(settings.bashResultPreview)),
+    settingLine("wordEmphasis", settings.wordEmphasis),
     "Tools",
     ...toolRows(),
     `  MCP calls: ${isNativeMcpRendererAvailable() ? "previewed" : "not available"}`,
@@ -94,7 +101,8 @@ export const healthSubcommand: ExtensionSubcommand = {
   handler: (_args, ctx) => {
     const lines = healthLines(ctx.cwd);
     if (!hasCustomSurface(ctx)) {
-      if (ctx.hasUI) notifyAtHostBoundary(ctx, Arr.join(lines, "\n"), "info");
+      // A notice doesn't hang its own wraps, so the report wraps within phone width first.
+      if (ctx.hasUI) notifyAtHostBoundary(ctx, wrapNoticeText(Arr.join(lines, "\n")), "info");
       return Promise.resolve();
     }
     return openCommandSurface(ctx, {

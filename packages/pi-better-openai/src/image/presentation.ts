@@ -25,7 +25,7 @@ import { formatBytes } from "pi-cosmic-core/display";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { restatesText } from "pi-cosmic-core/message-text";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { clipToWidth } from "pi-cosmic-ui/manager";
+import { clipToWidth, wrapFacts } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderToolHeader,
@@ -212,7 +212,14 @@ const collapsedFacts = (record: CodexImageDetails, view: ImageView, theme: Theme
   );
   const saved = sanitizeTerminalLine(savedPath(record, view));
   return [
-    new Text(theme.fg("muted", sanitizeTerminalLine(Arr.join(summary, " · "))), 0, 0),
+    // Facts wrap between whole facts, so no row ends with a separator.
+    composeToolComponent((width) =>
+      Number.isFinite(width) && width >= 1
+        ? Arr.map(wrapFacts(sanitizeTerminalLine(Arr.join(summary, " · ")), width), (line) =>
+            theme.fg("muted", line),
+          )
+        : [],
+    ),
     ...(saved
       ? [
           composeToolComponent((width) => [

@@ -17,7 +17,9 @@ import {
 export type NestingField = keyof SubagentNestingOverrides;
 
 export const WORKSPACE = "writerWorkspace";
+export const WORKSPACE_LABEL = "Writer workspace";
 export const DELEGATION = "delegation";
+export const DELEGATION_LABEL = "Delegation";
 export const INHERIT = "inherit";
 
 export const DELEGATION_DESCRIPTION =
@@ -33,21 +35,21 @@ interface NestingFieldInfo {
 
 export const NESTING_FIELDS = {
   maxDirectChildren: {
-    label: "max children",
+    label: "Max children",
     description: "How many subagents one subagent may start at a time.",
     minimum: MIN_DIRECT_CHILDREN,
     maximum: MAX_DIRECT_CHILDREN,
     presets: ["4", "8", "12", "16", "32"],
   },
   maxDepth: {
-    label: "max depth",
+    label: "Max depth",
     description: "How many levels of subagents may start further subagents.",
     minimum: MIN_SUBAGENT_DEPTH,
     maximum: MAX_SUBAGENT_DEPTH,
     presets: ["0", "1", "2", "3", "5", "8"],
   },
   maxActiveRuns: {
-    label: "max active",
+    label: "Max active",
     description: "How many subagents may run at once across the whole tree.",
     minimum: MIN_ACTIVE_RUNS,
     maximum: MAX_ACTIVE_RUNS,
@@ -71,20 +73,23 @@ export const WORKSPACE_DESCRIPTION =
 export const SUBAGENT_SETTING_DESCRIPTORS = [
   {
     id: WORKSPACE,
+    label: WORKSPACE_LABEL,
     description: WORKSPACE_DESCRIPTION,
     values: [...WRITER_WORKSPACE_MODES],
     currentValue: () => "",
   },
   {
     id: DELEGATION,
+    label: DELEGATION_LABEL,
     description: DELEGATION_DESCRIPTION,
-    values: [...DELEGATION_MODES, INHERIT],
+    values: [INHERIT, ...DELEGATION_MODES],
     currentValue: () => "",
   },
   ...Arr.map(NESTING_FIELD_IDS, (field) => ({
     id: field,
+    label: NESTING_FIELDS[field].label,
     description: NESTING_FIELDS[field].description,
-    values: [...NESTING_FIELDS[field].presets, INHERIT],
+    values: [INHERIT, ...NESTING_FIELDS[field].presets],
     openValues: true,
     currentValue: () => "",
   })),

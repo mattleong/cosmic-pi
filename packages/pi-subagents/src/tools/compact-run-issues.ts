@@ -21,6 +21,10 @@ type AddIssue = (
 
 export const QUOTED_TEXT_LIMIT = 120;
 
+/** Whether an issue's quote of `text` holds all of it, so nothing else need repeat it. */
+export const quotesWhole = (text: string): boolean =>
+  quoteText(text, { limit: QUOTED_TEXT_LIMIT }).detail === undefined;
+
 const staticSkipCodes = new Set([
   "pi_model_unknown",
   "pi_model_ambiguous",
@@ -50,14 +54,9 @@ interface RunIssueOptions {
   readonly quietHistory?: boolean | undefined;
   /** Whether the surface already draws the card's failure text, which its issue then omits. */
   readonly showsError?: ((card: SubagentRunCard) => boolean) | undefined;
-  /**
-   * Questions arrive in their own notice: the heading already says the run waits for a reply, so
-   * the call doesn't repeat the question.
-   */
-  readonly questionsNoticed?: boolean | undefined;
+  /** Whether the surface draws the card's whole question, which its issue then only quotes. */
+  readonly showsQuestion?: ((card: SubagentRunCard) => boolean) | undefined;
 }
-
-type QuestionStyle = "quoted" | "named" | "omitted";
 
 const skippedOptionsDetail = (card: SubagentRunCard): string =>
   Fn.pipe(
@@ -92,15 +91,12 @@ function selectionIssues(
   );
 }
 
-/** Attention from runs a call didn't target; a noticed question is named, not repeated. */
-export function compactAttentionIssues(
-  cards: readonly SubagentRunCard[],
-  options: Pick<RunIssueOptions, "questionsNoticed"> = {},
-): CompactIssue[] {
+/** Attention from runs a call didn't target: each question quoted, whole in its detail. */
+export function compactAttentionIssues(cards: readonly SubagentRunCard[]): CompactIssue[] {
   const issues: CompactIssue[] = [];
   for (const card of cards) {
     const add = cardIssueAdder(issues, card);
-    attentionIssues(card, cardLabel(card), add, options.questionsNoticed ? "named" : "quoted");
+    attentionIssues(card, cardLabel(card), add, false);
     cleanupIssues(card, cardLabel(card), add);
   }
   return issues;
@@ -115,7 +111,7 @@ export function compactRunIssues(
     const issueStart = issues.length;
     const label = cardLabel(card);
     const add = cardIssueAdder(issues, card);
-    attentionIssues(card, label, add, options.questionsNoticed ? "omitted" : "quoted");
+    attentionIssues(card, label, add, options.showsQuestion?.(card) === true);
     cleanupIssues(card, label, add);
     evidenceIssues(card, label, add, options.showsError?.(card) === true);
     const quiet =
@@ -145,11 +141,15 @@ function quote(add: AddIssue, label: string, code: string, text: string, fallbac
   add("warning", code, message, detail);
 }
 
+/**
+ * A run's question reads `name asks: …` on every surface. Its whole text is the issue's detail
+ * unless the surface draws it (`questionShown`), as a shown failure's is.
+ */
 function attentionIssues(
   card: SubagentRunCard,
   label: string,
   add: AddIssue,
-  questions: QuestionStyle,
+  questionShown: boolean,
 ): void {
   const attention = runAttention(card);
   switch (attention?.kind) {
@@ -159,18 +159,13 @@ function attentionIssues(
     case "paused":
       return;
     case "question": {
-      if (questions === "omitted") return;
-      if (questions === "named") {
-        add("attention", "parent-question", `${label} is waiting for reply`, attention.message);
-        return;
-      }
       // The whole question is detail only when the message can't show all of it.
       const { line, detail } = quoteText(attention.message, { limit: QUOTED_TEXT_LIMIT });
       add(
         "attention",
         "parent-question",
         `${label} asks: ${line ?? firstLineMessage(attention.message, "a question", QUOTED_TEXT_LIMIT)}`,
-        detail,
+        questionShown ? undefined : detail,
       );
       return;
     }

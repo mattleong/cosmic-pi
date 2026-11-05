@@ -152,7 +152,9 @@ const TOOL_SPECS: SubagentToolSpecs = {
       "Show each profile's configured route: its model candidates in fallback order, with effort, context, write intent, and fast mode, plus the user's custom agents and the candidates their overrides leave eligible. Launches use these routes by default; a start item's model overrides one launch, only when the user asks for a specific model or a failed run names its next candidate. Authentication is checked only at launch.",
     promptSnippet: "Show subagent profile routes and custom agents",
     renderCall: (args, theme) =>
-      renderSubagentCall("Inspect profile routes", args.profile ?? "all profiles", theme),
+      args.profile
+        ? renderSubagentCall("Inspect profile", args.profile, theme)
+        : renderSubagentCall("Inspect profile routes", "", theme),
   },
   [SUBAGENT_TOOL_NAME.start]: {
     label: "Start Subagents",

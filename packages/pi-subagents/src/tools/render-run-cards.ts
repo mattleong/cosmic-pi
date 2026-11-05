@@ -1,11 +1,12 @@
 import * as Arr from "effect/Array";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { clipToWidth } from "pi-cosmic-ui/manager";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { skippedCandidateLabel } from "../profiles/model.ts";
 import { runAttention } from "../run/attention.ts";
 import { isTerminalRunState, type SubagentRunState } from "../run/model.ts";
-import { agentTextBlockLines, type AgentTextBlock } from "../ui/agent-text.ts";
+import { agentTextBlockLines, factRowLines, type AgentTextBlock } from "../ui/agent-text.ts";
+import { quotesWhole } from "./compact-run-issues.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { savedFileFact, workspaceNote } from "../ui/notice-facts.ts";
 import { agentFactLines, runRouteFact, writerFact } from "../ui/run-facts.ts";
@@ -54,13 +55,27 @@ export const cardWords = (card: SubagentRunCard): string | undefined => {
 export const cardShowsError = (card: SubagentRunCard): boolean =>
   card.error !== undefined && cardWords(card) === card.error;
 
+/** Whether a run's block shows its pending question: expanded, when its issue quotes only part. */
+export const cardShowsQuestion = (card: SubagentRunCard): boolean => {
+  const attention = runAttention(card);
+  return (
+    attention?.kind === "question" &&
+    cardWords(card) === attention.message &&
+    !quotesWhole(attention.message)
+  );
+};
+
 /**
  * A run's block: its state when that isn't a plain finish, then its words or progress. Collapsed,
- * a failure's raw text stays behind the expansion; the row's issue already names its cause.
+ * a failure's raw text stays behind the expansion; the row's issue already names its cause. A
+ * question is its issue's quote, and the block adds the rest of a long one when expanded.
  */
 const cardBlock = (card: SubagentRunCard, expanded: boolean): AgentTextBlock => {
-  const words = !expanded && cardShowsError(card) ? undefined : cardWords(card);
   const asking = runAttention(card)?.kind === "question";
+  const words =
+    (!expanded && cardShowsError(card)) || (asking && !(expanded && cardShowsQuestion(card)))
+      ? undefined
+      : cardWords(card);
   return {
     glyph: runStateSnapshotGlyph(card.state),
     tone: runStateColor(card.state),
@@ -70,7 +85,7 @@ const cardBlock = (card: SubagentRunCard, expanded: boolean): AgentTextBlock => 
     }),
     ...(words !== undefined && { text: words, verbatim: words === card.error }),
     notes: [
-      ...(!isTerminalRunState(card.state) && words === undefined && card.progress
+      ...(!isTerminalRunState(card.state) && !asking && words === undefined && card.progress
         ? [card.progress]
         : []),
       ...reportNotes(card),
@@ -132,14 +147,23 @@ export const stateGroupLines = (
   cards: ReadonlyArray<SubagentRunCard>,
   width: number,
   theme: Theme,
+  expanded = false,
 ): string[] => {
   const groups = new Map<SubagentRunState, string[]>();
   for (const card of cards)
     groups.set(card.state, [...(groups.get(card.state) ?? []), sanitizeTerminalLine(card.name)]);
-  return Arr.map([...groups], ([state, names]) =>
-    clipToWidth(
-      `${theme.fg(runStateColor(state), runStateSnapshotGlyph(state))} ${GROUP_VERBS[state]} ${theme.fg("toolTitle", Arr.join(names, ", "))}`,
+  // Expanded, a long list of names wraps beneath the first.
+  return Arr.flatMap([...groups], ([state, names]) =>
+    factRowLines(
+      [
+        [runStateSnapshotGlyph(state), runStateColor(state)],
+        [` ${GROUP_VERBS[state]} `],
+        [Arr.join(names, ", "), "toolTitle"],
+      ],
       width,
+      theme,
+      expanded,
+      { hang: visibleWidth(`${runStateSnapshotGlyph(state)} ${GROUP_VERBS[state]} `) },
     ),
   );
 };

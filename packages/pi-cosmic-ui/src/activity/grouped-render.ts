@@ -12,10 +12,10 @@ import * as Str from "effect/String";
 import { LIST_CURSOR, focusedField } from "../manager/style.ts";
 import {
   clipToWidth,
-  INLINE_SEPARATOR,
   joinInline,
   managerNoticeColor,
   managerNoticeGlyph,
+  wrapFacts,
 } from "../manager/chrome.ts";
 import {
   configuredKeyLabels,
@@ -43,6 +43,7 @@ import {
   framedScreen,
   framedWideRows,
   framedStackedRows,
+  detailFieldRows,
   listDetailFrame,
   type ListDetailShell,
 } from "../manager/list-detail-shell.ts";
@@ -336,57 +337,32 @@ const wrapVerbatim = (text: string, width: number): string[] =>
     return Arr.map(wrapped, (part, index) => (index === 0 ? part : `${hanging}${part}`));
   });
 
-const FACT_ARROW = " → ";
-
-/**
- * Wraps `·`-joined facts between whole facts, so no `·` or `→` ends a line. A fact too wide for
- * a line breaks before its `→`, which then leads the continuation (`→ provider/model`).
- */
-const wrapFacts = (facts: string, width: number): string[] => {
-  const hanging = width > 8 ? HANGING_INDENT : "";
-  const room = Math.max(1, width - hanging.length);
-  const pieces = Arr.flatMap(Str.split(facts, INLINE_SEPARATOR), (fact) => {
-    if (visibleWidth(fact) <= room) return [{ text: fact, join: INLINE_SEPARATOR }];
-    const [first, ...rest] = Str.split(fact, FACT_ARROW);
-    return [
-      { text: first, join: INLINE_SEPARATOR },
-      ...Arr.map(rest, (part) => ({ text: `→ ${part}`, join: " " })),
-    ];
-  });
-  const lines: string[] = [];
-  let current = "";
-  for (const piece of pieces) {
-    const candidate = current ? `${current}${piece.join}${piece.text}` : piece.text;
-    if (current && visibleWidth(candidate) > (lines.length === 0 ? width : room)) {
-      lines.push(current);
-      current = piece.text;
-    } else current = candidate;
-  }
-  if (current) lines.push(current);
-  return Arr.flatMap(lines, (line, index) =>
-    index === 0
-      ? wrapTextWithAnsi(line, width)
-      : Arr.map(wrapTextWithAnsi(line, room), (part) => `${hanging}${part}`),
-  );
-};
-
 const renderBlocks = (
   blocks: readonly ActivityDetailBlock[],
   width: number,
   theme: BodyTheme,
 ): string[] =>
   Arr.flatMap(blocks, (block) =>
-    Match.value(block.kind).pipe(
-      Match.when("markdown", () =>
-        new Markdown(block.text, 0, 0, markdownTheme(theme)).render(width),
-      ),
-      Match.when("facts", () =>
-        Arr.map(wrapFacts(block.text, width), (line) => theme.fg("muted", line)),
-      ),
-      Match.when("text", () => wrapVerbatim(block.text, width)),
-      Match.exhaustive,
+    Match.value(block).pipe(
+      Match.discriminatorsExhaustive("kind")({
+        markdown: ({ text }) => new Markdown(text, 0, 0, markdownTheme(theme)).render(width),
+        facts: ({ text }) => Arr.map(wrapFacts(text, width), (line) => theme.fg("muted", line)),
+        fields: ({ fields }) => [...detailFieldRows(theme, fields, width)],
+        text: ({ text }) => wrapVerbatim(text, width),
+      }),
     ),
   );
+
+const blockKey = (block: ActivityDetailBlock): string =>
+  block.kind === "fields"
+    ? `fields\u0000${Arr.join(
+        Arr.map(
+          block.fields,
+          (field) => `${field.label}\u0002${field.value}\u0002${field.tone ?? ""}`,
+        ),
+        "\u0003",
+      )}`
+    : `${block.kind}\u0000${block.text}`;
 
 interface WrappedDetail {
   readonly key: string;
@@ -403,10 +379,7 @@ const wrappedDetail = (
   width: number,
   theme: BodyTheme,
 ) => {
-  const key = Arr.join(
-    Arr.map(blocks, (block) => `${block.kind}\u0000${block.text}`),
-    "\u0001",
-  );
+  const key = Arr.join(Arr.map(blocks, blockKey), "\u0001");
   const cached = wrappedDetails.get(shell);
   if (cached?.key === key && cached.width === width) return cached.lines;
   const lines = renderBlocks(blocks, width, theme);

@@ -9,17 +9,19 @@ import {
   type GalleryScenario,
 } from "pi-code-previews/testing";
 import { beforeAll, describe, it } from "@effect/vitest";
-import { initTheme } from "@earendil-works/pi-coding-agent";
+import { initTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { stripTerminalControls } from "pi-cosmic-core";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { fastStateText, inactiveForModelMessage } from "../src/fast/controller.ts";
 import { imageResultText } from "../src/image/result-text.ts";
-import { HIDDEN_USAGE_STATUS_TEXT } from "../src/usage/projection.ts";
+import { diagnosticLines } from "../src/settings/diagnostics.ts";
+import { HIDDEN_USAGE_STATUS_TEXT, initialProjection } from "../src/usage/projection.ts";
 import { makeResolvedConfig, testModel } from "./helpers.ts";
 import { input, settingsHarnessWith, type SettingsHarnessOptions } from "./settings-harness.ts";
 import { formatUsageDetails, formatUsageStatus, type UsageSnapshot } from "../src/usage/format.ts";
@@ -167,7 +169,7 @@ const usageFrames = (): string[] => [
   ),
   ...textFrame(
     "usage status without the Cosmic UI footer · 5-hour window not reported",
-    formatUsageStatus(usage(null), { showResetTimes: false }, now),
+    formatUsageStatus(usage(null), { showResetTimes: true }, now),
   ),
 ];
 
@@ -190,9 +192,27 @@ const noticeLines = (): string[] => [
   ...noticeFrames("/openai usage on a model without usage", HIDDEN_USAGE_STATUS_TEXT),
 ];
 
+const diagnosticsFor = (compactionUnavailable: string | undefined) => (ctx: ExtensionContext) =>
+  diagnosticLines({
+    ctx: { ...ctx, model: testModel("gpt-5.6-sol", "openai-codex") },
+    configPath: "/home/dev/.pi/agent/extensions/pi-better-openai.json",
+    fast: { desiredActive: false, active: false },
+    usage: {
+      ...initialProjection(),
+      eligible: true,
+      authFound: true,
+      accountId: "acct_7f3c9a2e41b8",
+      lastFetchAt: now,
+      updatedAt: now,
+      authPath: "/home/dev/.pi/agent/auth.json",
+    },
+    footerUsageVisible: true,
+    compactionUnavailable,
+  });
+
 /** `/openai settings` and its groups, at a desktop and a phone width. */
 const settingsLines = Effect.gen(function* () {
-  const h = settingsHarness();
+  const h = settingsHarness({ diagnosticLines: diagnosticsFor(undefined) });
   yield* h.open;
   const component = h.selectedComponent();
   const frames = (title: string) =>
@@ -209,12 +229,44 @@ const settingsLines = Effect.gen(function* () {
     for (let step = 0; step < downs; step++) component.handleInput?.(input.up);
     return shown;
   };
+  // Diagnostics, the fifth group, opens Debug info from its first row.
+  const debugInfo = () => {
+    for (let step = 0; step < 4; step++) component.handleInput?.(input.down);
+    component.handleInput?.(input.enter);
+    component.handleInput?.(input.enter);
+    const shown = frames("Diagnostics › Debug info");
+    component.handleInput?.(input.escape);
+    component.handleInput?.(input.escape);
+    return shown;
+  };
   return [
     ...frames("top level"),
     ...group("Fast mode group", 0),
     ...group("Usage group", 2),
     ...group("Image tool group", 3),
+    ...debugInfo(),
   ];
+});
+
+/** `/openai settings help` and `status` notices, as the settings command posts them. */
+const settingsCommandLines = Effect.gen(function* () {
+  const lines: string[] = [];
+  const posted = (title: string, command: string, compactionUnavailable?: string) =>
+    Effect.gen(function* () {
+      const h = settingsHarness({ diagnosticLines: diagnosticsFor(compactionUnavailable) });
+      yield* Effect.promise(() => h.invoke(command));
+      const notice: unknown = h.notify.mock.lastCall?.[0];
+      lines.push(...noticeFrames(title, Predicate.isString(notice) ? notice : "(nothing shown)"));
+    });
+  yield* posted("/openai settings help", "help");
+  yield* posted("/openai settings status", "status");
+  yield* posted(
+    "/openai settings status · OpenAI compaction unavailable",
+    "status",
+    "Better OpenAI's pi-ai 0.74.0 doesn't match Pi's 0.75.1",
+  );
+  yield* posted("/openai settings image.outputFormat png", "image.outputFormat png");
+  return lines;
 });
 
 const directory = galleryDirectory(process.env) ?? "";
@@ -261,7 +313,12 @@ describe.skipIf(!directory)("presentation gallery", () => {
               );
             });
         });
-      lines.push(...usageFrames(), ...noticeLines(), ...(yield* settingsLines));
+      lines.push(
+        ...usageFrames(),
+        ...noticeLines(),
+        ...(yield* settingsLines),
+        ...(yield* settingsCommandLines),
+      );
       yield* writeGallerySection(directory, "pi-better-openai", lines);
     }),
   );

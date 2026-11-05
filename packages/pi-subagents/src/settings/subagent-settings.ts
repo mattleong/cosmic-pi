@@ -1,6 +1,7 @@
 import {
   DELEGATION,
   DELEGATION_DESCRIPTION,
+  DELEGATION_LABEL,
   INHERIT,
   isNestingField,
   NESTING_FIELDS,
@@ -10,12 +11,14 @@ import {
   SUBAGENT_SETTINGS_COMMAND,
   WORKSPACE,
   WORKSPACE_DESCRIPTION,
+  WORKSPACE_LABEL,
   type NestingField,
 } from "./subagent-settings-options.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
@@ -24,7 +27,9 @@ import { settingInherited, type SettingsSurfaceItem } from "pi-cosmic-ui/manager
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
+import { countLabel } from "pi-cosmic-core/display";
 import {
+  settingsStatusText,
   settingsSubcommand,
   withInvocationAuthority,
   type SettingsCommandOwner,
@@ -56,10 +61,11 @@ type SettingsResult = Result.Result<
 >;
 const UNTRUSTED = "Trust this project before changing its subagent settings";
 
-const unresolvedSummary = ({ unresolvedWorkspaceCount }: WriterWorkspaceInspection) =>
-  unresolvedWorkspaceCount === undefined
+/** Worktrees in this checkout still waiting on apply or discard, and what to do about them. */
+const unresolvedSummary = ({ unresolvedWorkspaceCount: count }: WriterWorkspaceInspection) =>
+  count === undefined
     ? undefined
-    : `Unresolved workspaces: ${unresolvedWorkspaceCount}`;
+    : `${countLabel(count, "worktree")} in this checkout ${count === 1 ? "isn't" : "aren't"} applied or discarded yet; ask the agent to review ${count === 1 ? "it" : "them"}.`;
 
 const settingScope = (scope: string | undefined): ProfileSettingsScope =>
   scope === "global" || scope === "project" ? scope : "session";
@@ -121,8 +127,12 @@ const saveFailure =
       `Couldn't ${what}: ${failureMessage(error instanceof Error ? error.message : "", "unknown error")}`,
     );
 
-const withCurrent = (values: readonly string[], currentValue: string) =>
-  values.includes(currentValue) ? [...values] : [currentValue, ...values];
+/** A row's choices: `inherit (value)` first, then a current value no preset names, then presets. */
+const choiceValues = (inherited: string, presets: readonly string[], currentValue: string) => [
+  inherited,
+  ...(currentValue === inherited || presets.includes(currentValue) ? [] : [currentValue]),
+  ...presets,
+];
 
 const SCOPED_SETTING_IDS: ReadonlyArray<typeof DELEGATION | NestingField> = [
   DELEGATION,
@@ -164,36 +174,43 @@ const inheritedValue = (
 };
 
 const SCOPED_SETTING_LABELS = {
-  [DELEGATION]: "delegation",
+  [DELEGATION]: DELEGATION_LABEL,
   ...Rec.map(NESTING_FIELDS, (field) => field.label),
 } as const satisfies Record<typeof DELEGATION | NestingField, string>;
 
-/** One scoped setting as a row of its scope's group, which already names the scope. */
-const scopedSettingItem = (
+/** A scope's own value for one setting, or `inherit`. */
+const ownValue = (
   inspection: ProfileSettingsInspection,
   scope: ProfileSettingsScope,
   id: typeof DELEGATION | NestingField,
+): string =>
+  id === DELEGATION
+    ? (scopeDelegation(inspection, scope) ?? INHERIT)
+    : ownNestingValue(scopeNesting(inspection, scope), id);
+
+/**
+ * One scoped setting as a row of its scope's group, which already names the scope: `own` is the
+ * scope's value or `inherit`, and `inherited` the value it takes then.
+ */
+const scopedSettingItem = (
+  scope: ProfileSettingsScope,
+  id: typeof DELEGATION | NestingField,
+  own: string,
+  inherited: string,
 ): SettingItem => {
   const reloadNote = scope === "session" ? "" : " Takes effect after /reload.";
-  const inherited = settingInherited(inheritedValue(inspection, scope, id));
-  const source = `Inherit uses ${INHERITED_FROM[scope]}.`;
-  const label = Str.capitalize(SCOPED_SETTING_LABELS[id]);
-  if (id === DELEGATION)
-    return {
-      id: `${scope}:${DELEGATION}`,
-      label,
-      description: `${DELEGATION_DESCRIPTION} ${source}${reloadNote}`,
-      currentValue: scopeDelegation(inspection, scope) ?? inherited,
-      values: [...DELEGATION_MODES, inherited],
-    };
-  const own = ownNestingValue(scopeNesting(inspection, scope), id);
-  const currentValue = own === INHERIT ? inherited : own;
+  const inheritedLabel = settingInherited(inherited);
+  const currentValue = own === INHERIT ? inheritedLabel : own;
   return {
     id: `${scope}:${id}`,
-    label,
-    description: `${NESTING_FIELDS[id].description} ${source}${reloadNote}`,
+    label: SCOPED_SETTING_LABELS[id],
+    description: `${id === DELEGATION ? DELEGATION_DESCRIPTION : NESTING_FIELDS[id].description} Inherit uses ${INHERITED_FROM[scope]}.${reloadNote}`,
     currentValue,
-    values: withCurrent([...NESTING_FIELDS[id].presets, inherited], currentValue),
+    values: choiceValues(
+      inheritedLabel,
+      id === DELEGATION ? DELEGATION_MODES : NESTING_FIELDS[id].presets,
+      currentValue,
+    ),
   };
 };
 
@@ -361,47 +378,88 @@ function subagentSettingsCommand(
     const trusted = isProjectTrusted(ctx);
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
-        const scopes = editableScopes(trusted);
-        const shown = (scope: ProfileSettingsScope, id: typeof DELEGATION | NestingField) => {
-          const own =
-            id === DELEGATION
-              ? scopeDelegation(inspection, scope)
-              : scopeNesting(inspection, scope)?.[id];
-          return own === undefined
-            ? settingInherited(inheritedValue(inspection, scope, id))
-            : String(own);
-        };
-        const nestingLine = (scope: ProfileSettingsScope) =>
-          `  ${scope}: ${Fn.pipe(
-            NESTING_FIELD_IDS,
-            Arr.map((id) => `${id} = ${shown(scope, id)}`),
-            Arr.join(", "),
-          )}`;
-        const delegationLine = (scope: ProfileSettingsScope) =>
-          `  ${scope}: ${shown(scope, DELEGATION)}`;
         const effective = inspection.session.effectiveConfig;
-        const unresolved = unresolvedSummary(workspace);
-        return Arr.join(
-          [
-            "Subagents settings",
-            `  ${WORKSPACE} = ${workspace.mode} (default)${unresolved ? `; ${unresolved}` : ""}`,
-            `  ${DELEGATION} = ${effective.delegation} (in effect)`,
-            `  maxDirectChildren = ${effective.nesting.maxDirectChildren}, maxDepth = ${effective.nesting.maxDepth}, maxActiveRuns = ${effective.nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS} (in effect)`,
-            `  hooks = WorktreeCreate ${effective.hooks.WorktreeCreate.length}, WorktreeRemove ${effective.hooks.WorktreeRemove.length} (applies after /reload)`,
-            "Delegation by scope:",
-            ...Arr.map(scopes, delegationLine),
-            "Nesting limits by scope:",
-            ...Arr.map(scopes, nestingLine),
+        const inEffect = {
+          [DELEGATION]: effective.delegation,
+          maxDirectChildren: String(effective.nesting.maxDirectChildren),
+          maxDepth: String(effective.nesting.maxDepth),
+          maxActiveRuns: String(effective.nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS),
+        } as const satisfies Record<typeof DELEGATION | NestingField, string>;
+        const row = (id: typeof DELEGATION | NestingField, value: string) => ({
+          id,
+          label: SCOPED_SETTING_LABELS[id],
+          value,
+        });
+        const hooks = effective.hooks;
+        return settingsStatusText({
+          title: "Subagents settings",
+          sections: [
+            {
+              title: "In effect",
+              rows: [
+                {
+                  id: WORKSPACE,
+                  label: WORKSPACE_LABEL,
+                  value: WRITER_WORKSPACE_LABELS[workspace.mode],
+                },
+                ...Arr.map(SCOPED_SETTING_IDS, (id) => row(id, inEffect[id])),
+              ],
+            },
+            ...Arr.map(editableScopes(trusted), (scope) => ({
+              title: SCOPE_LABELS[scope],
+              rows: Arr.map(SCOPED_SETTING_IDS, (id) => {
+                const own = ownValue(inspection, scope, id);
+                return row(
+                  id,
+                  own === INHERIT ? settingInherited(inheritedValue(inspection, scope, id)) : own,
+                );
+              }),
+            })),
           ],
-          "\n",
-        );
+          notes: [
+            `Worktree hooks: ${hooks.WorktreeCreate.length} on create and ${hooks.WorktreeRemove.length} on remove; changes apply after /reload.`,
+            ...Arr.filter([unresolvedSummary(workspace)], Predicate.isString),
+          ],
+        });
       },
     );
   };
 
+  // What each row shows, kept current through the picker's saves: a scope's own value or
+  // `inherit`, and the writer workspace by its label. Inherited labels derive from it live.
   const committed = new Map<string, string>();
+  let opened: ProfileSettingsInspection | undefined;
   const rowId = (id: string, scope: string | undefined) =>
     id === WORKSPACE ? id : `${settingScope(scope)}:${id}`;
+
+  /** The value a scope inherits now: the project follows global's value as last saved. */
+  const liveInherited = (
+    inspection: ProfileSettingsInspection,
+    scope: ProfileSettingsScope,
+    id: typeof DELEGATION | NestingField,
+  ): string => {
+    const global = scope === "project" ? committed.get(rowId(id, "global")) : undefined;
+    if (global === undefined) return inheritedValue(inspection, scope, id);
+    return global === INHERIT ? inheritedValue(inspection, "global", id) : global;
+  };
+
+  const scopedRow = (
+    inspection: ProfileSettingsInspection,
+    scope: ProfileSettingsScope,
+    id: typeof DELEGATION | NestingField,
+  ): SettingItem =>
+    scopedSettingItem(
+      scope,
+      id,
+      committed.get(rowId(id, scope)) ?? ownValue(inspection, scope, id),
+      liveInherited(inspection, scope, id),
+    );
+
+  const shownRowValue = (id: string, scope: string | undefined): string | undefined => {
+    if (id === WORKSPACE) return committed.get(WORKSPACE);
+    if (opened === undefined || (id !== DELEGATION && !isNestingField(id))) return undefined;
+    return scopedRow(opened, settingScope(scope), id).currentValue;
+  };
 
   const open = (ctx: ExtensionCommandContext, session: SettingsSession<undefined>) => {
     if (!actions.isAvailable()) return Promise.resolve({ _tag: "Blocked" as const });
@@ -410,27 +468,32 @@ function subagentSettingsCommand(
       ([workspace, inspection]) => {
         const scopes = editableScopes(trusted);
         const unresolved = unresolvedSummary(workspace);
+        opened = inspection;
+        committed.clear();
+        committed.set(WORKSPACE, WRITER_WORKSPACE_LABELS[workspace.mode]);
+        for (const scope of scopes)
+          for (const id of SCOPED_SETTING_IDS)
+            committed.set(rowId(id, scope), ownValue(inspection, scope, id));
         const items: SettingItem[] = [
           {
             id: WORKSPACE,
-            label: "Writer workspace",
-            description: `${WORKSPACE_DESCRIPTION}${unresolved ? ` ${unresolved}.` : ""}`,
+            label: WORKSPACE_LABEL,
+            description: `${WORKSPACE_DESCRIPTION}${unresolved ? ` ${unresolved}` : ""}`,
             currentValue: WRITER_WORKSPACE_LABELS[workspace.mode],
             values: Arr.map(WRITER_WORKSPACE_MODES, (mode) => WRITER_WORKSPACE_LABELS[mode]),
           },
         ];
-        for (const item of items) committed.set(item.id, item.currentValue);
-        // Each scope is one group row, so the list reads by scope instead of repeating it.
+        // Each scope is one group row, so the list reads by scope instead of repeating it. Its
+        // rows and summary derive on demand, so a global save shows in the project's inherited
+        // values at once.
         const groups = Arr.map(scopes, (scope): SettingsSurfaceItem => {
-          const children = Arr.map(SCOPED_SETTING_IDS, (id) =>
-            scopedSettingItem(inspection, scope, id),
-          );
-          for (const child of children) committed.set(child.id, child.currentValue);
+          const children = () =>
+            Arr.map(SCOPED_SETTING_IDS, (id) => scopedRow(inspection, scope, id));
           const summary = () =>
             scopeGroupSummary(
               Arr.map(
                 SCOPED_SETTING_IDS,
-                (id) => [id, committed.get(rowId(id, scope)) ?? INHERIT] as const,
+                (id) => [id, scopedRow(inspection, scope, id).currentValue] as const,
               ),
             );
           return {
@@ -476,22 +539,30 @@ function subagentSettingsCommand(
       "session maxDirectChildren inherit",
     ],
     notes: () => [
-      "Delegation and nesting limits apply to the named scope, session by default. Session",
-      `changes apply now; global and project changes after /reload, and project wins. ${INHERIT}`,
-      "clears a scope's own value. The writer workspace default applies to later launches and new",
-      "sessions and ignores the scope; running writers and existing workspaces keep their mode.",
+      `Delegation and nesting limits apply to the named scope, session by default. Session changes apply now; global and project changes after /reload, and project wins. ${INHERIT} clears a scope's own value.`,
+      "The writer workspace default applies to later launches and new sessions and ignores the scope; running writers and existing workspaces keep their mode.",
     ],
     scopes: SCOPES,
     scopeBlocked: (ctx, scope) =>
       scope === "project" && !isProjectTrusted(ctx) ? UNTRUSTED : undefined,
     config: () => undefined,
     status: statusText,
-    apply: (ctx, id, value, _signal, scope) =>
-      apply(ctx, id, value, settingScope(scope)).then((result) => {
-        if (Result.isSuccess(result)) committed.set(rowId(id, scope), shownValue(id, value));
+    // Rows show a change as soon as it is chosen, so values derived from it do too; a failed
+    // save puts back the value it replaced.
+    apply: (ctx, id, value, _signal, scope) => {
+      const key = rowId(id, scope);
+      const chosen = id === WORKSPACE ? shownValue(id, value) : inheritChoice(value);
+      const replaced = committed.get(key);
+      committed.set(key, chosen);
+      return apply(ctx, id, value, settingScope(scope)).then((result) => {
+        if (Result.isFailure(result) && committed.get(key) === chosen) {
+          if (replaced === undefined) committed.delete(key);
+          else committed.set(key, replaced);
+        }
         return result;
-      }),
-    displayValue: (_ctx, id, scope) => committed.get(rowId(id, scope)),
+      });
+    },
+    displayValue: (_ctx, id, scope) => shownRowValue(id, scope),
     open,
   });
 }

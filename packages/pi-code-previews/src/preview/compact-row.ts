@@ -1,6 +1,7 @@
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   managerActivityColor,
@@ -36,6 +37,11 @@ export type CompactRowInput = {
   timingEnabled?: boolean;
   animationFrame?: number | undefined;
   expanded?: boolean;
+  /**
+   * The width of the collapsed row this expanded heading replaces. The heading keeps the counter
+   * alternative that row keeps there, though its frame leaves it fewer columns.
+   */
+  collapsedWidth?: number | undefined;
 };
 
 // Which way a delivered message went; failures and attention keep their own icons.
@@ -119,7 +125,19 @@ function compactRowSubject({ expanded, summary }: CompactRowInput): string {
   );
 }
 
-export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: number) {
+/** A laid-out compact row and the counter alternative it shows, if any. */
+export interface CompactRowLayout {
+  readonly row: string;
+  readonly issueShown: boolean;
+  readonly subjectComplete: boolean;
+  readonly counter?: string | undefined;
+}
+
+export function layoutCompactRow(
+  input: CompactRowInput,
+  theme: Theme,
+  width: number,
+): CompactRowLayout {
   if (width <= 0) return { row: "", issueShown: false, subjectComplete: false };
   const { summary } = input;
   const duration = compactRowDuration(input);
@@ -130,20 +148,34 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
           theme.fg("muted", text),
         )
       : [];
+  const candidates = input.issueLabel ? [input.issueLabel] : muted(summary.counters);
+  const collapsedCounter =
+    input.collapsedWidth === undefined
+      ? undefined
+      : layoutCompactRow(
+          { ...input, expanded: false, collapsedWidth: undefined },
+          theme,
+          input.collapsedWidth,
+        ).counter;
+  const kept = Option.getOrUndefined(
+    Arr.findFirstIndex(candidates, (candidate) => candidate === collapsedCounter),
+  );
   const { row, counter, subjectComplete } = layoutCompactHeader(
     compactRowPrefix(input, theme),
     compactRowSubject(input),
-    input.issueLabel ? [input.issueLabel] : muted(summary.counters),
+    kept === undefined ? candidates : Arr.drop(candidates, kept),
     [...muted(summary.metadata), summary.showTiming ? undefined : timing],
     width,
     theme.fg("dim", " · "),
     summary.showTiming ? timing : undefined,
     summary.pathSubject ? "path" : "prose",
+    kept !== undefined,
   );
   return {
     row,
     issueShown: input.issueLabel !== undefined && counter === input.issueLabel,
     subjectComplete,
+    counter,
   };
 }
 

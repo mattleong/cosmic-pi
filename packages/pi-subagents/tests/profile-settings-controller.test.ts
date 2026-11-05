@@ -448,6 +448,25 @@ describe("profile settings controller", () => {
     ).not.toHaveProperty("nesting");
   });
 
+  effectTest("a Global save shows at once in Project's inherited values", function* () {
+    const fixture = setup();
+    const running = fixture.settings("");
+    yield* step(() => vi.waitFor(() => expect(fixture.overlays).toHaveLength(1)));
+    // Past Writer workspace and Session, Global opens on its delegation row, whose choices start
+    // on its inherited value; two rows down is encouraged.
+    press(fixture, "j", "j", "\r", "\r", "j", "j", "\r");
+    yield* step(settleHostPromises);
+    expect(fixture.managerActions.patchDelegation).toHaveBeenCalledWith(
+      expect.objectContaining({ delegation: "encouraged" }),
+    );
+    // Back at the scope list, Project opens with the delegation it now inherits.
+    press(fixture, "\u001b", "j", "\r");
+    const rendered = Arr.join(fixture.overlays[0]?.render(120) ?? [], "\n");
+    expect(rendered).toMatch(/Delegation\s+inherit \(encouraged\)/u);
+    press(fixture, "\u001b", "\u001b");
+    yield* step(() => running);
+  });
+
   effectTest("rechecks Project trust before a Project delegation write", function* () {
     const fixture = setup();
     onNextInspection(fixture, () => fixture.setProjectTrusted(false));

@@ -39,7 +39,7 @@ import {
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { summarizeStart } from "./compact-start-summary.ts";
 import { profileRow } from "./render-management.ts";
-import { cardShowsError } from "./render-run-cards.ts";
+import { cardShowsError, cardShowsQuestion } from "./render-run-cards.ts";
 import { formatRunRoute } from "../ui/run-presentation.ts";
 
 function cardCounters(
@@ -348,15 +348,18 @@ function summarizeModels(
     });
   const [only] = details.profiles;
   // One requested profile reads as the model its launch would take.
-  const counters = [
+  const lead =
     only && details.profiles.length === 1
       ? profileRow(only, details).route
-      : countLabel(details.profiles.length, "profile"),
+      : countLabel(details.profiles.length, "profile");
+  const counters = [
+    lead,
+    ...(disabled ? [`${disabled} disabled`] : []),
+    ...(unavailable ? [`${unavailable} unavailable`] : []),
+    ...(agents.length > 0 ? [countLabel(agents.length, "custom agent")] : []),
   ];
-  if (disabled) counters.push(`${disabled} disabled`);
-  if (unavailable) counters.push(`${unavailable} unavailable`);
-  if (agents.length > 0) counters.push(countLabel(agents.length, "custom agent"));
-  summary.counters = [Arr.join(counters, " · ")];
+  // A narrow row keeps at least the profile count or the single route.
+  summary.counters = counters.length > 1 ? [Arr.join(counters, " · "), lead] : [lead];
   if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
     summary.outcome = "warning";
   return summary;
@@ -470,10 +473,13 @@ function summarizeDetails(
     ...compactRunIssues(cards, {
       quietHistory,
       // An await draws each target's words: its report, failure, or question.
-      ...(details.action === "await" && { showsError: cardShowsError, questionsNoticed: true }),
+      ...(details.action === "await" && {
+        showsError: cardShowsError,
+        showsQuestion: cardShowsQuestion,
+      }),
     }),
   );
-  issues.push(...compactAttentionIssues(asking, { questionsNoticed: true }));
+  issues.push(...compactAttentionIssues(asking));
   labelChangesToReview(summary, cards);
   const severity = compactIssueSeverity(issues);
   if (severity === "error") summary.outcome = "error";

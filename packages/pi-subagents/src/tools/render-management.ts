@@ -18,7 +18,7 @@ import type {
   SubagentProfileCandidateCard,
   SubagentProfileRouteCard,
 } from "./details-schema.ts";
-import { COLLAPSED_AGENT_TEXT_ROWS, expandedRowsBody } from "../ui/agent-text.ts";
+import { COLLAPSED_AGENT_TEXT_ROWS, expandedRowsBody, factRowLines } from "../ui/agent-text.ts";
 import { cardFactLines, stateGroupLines } from "./render-run-cards.ts";
 
 type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
@@ -140,13 +140,18 @@ const agentRow = (agent: AgentRouteCard, details: ModelsToolDetails): RouteRow =
   };
 };
 
-const routeRowLine = (row: RouteRow, width: number, theme: Theme): string =>
-  clipToWidth(
-    `${theme.fg(row.attention ? "warning" : "muted", "•")} ${theme.fg("toolTitle", sanitizeTerminalLine(row.name))}${theme.fg(
-      row.attention ? "warning" : "muted",
-      ` · ${sanitizeTerminalLine(row.route)}`,
-    )}${theme.fg("muted", ` · ${row.writeIntent}${row.source ? ` · ${row.source}` : ""}`)}`,
+const routeRowLines = (row: RouteRow, width: number, theme: Theme, expanded: boolean): string[] =>
+  factRowLines(
+    [
+      ["•", row.attention ? "warning" : "muted"],
+      [" "],
+      [sanitizeTerminalLine(row.name), "toolTitle"],
+      [` · ${sanitizeTerminalLine(row.route)}`, row.attention ? "warning" : "muted"],
+      [` · ${row.writeIntent}${row.source ? ` · ${row.source}` : ""}`, "muted"],
+    ],
     width,
+    theme,
+    expanded,
   );
 
 const eligibleCount = (candidates: ReadonlyArray<SubagentProfileCandidateCard>): string =>
@@ -229,7 +234,7 @@ export const renderProfileRoutesComponent = (
     const hidden = rows.length - shown.length;
     return [
       ...(rows.length === 0 ? [theme.fg("muted", "No profile routes were recorded")] : []),
-      ...Arr.map(shown, (row) => routeRowLine(row, safeWidth, theme)),
+      ...Arr.flatMap(shown, (row) => routeRowLines(row, safeWidth, theme, expanded)),
       ...(hidden > 0
         ? [
             clipToWidth(
@@ -266,7 +271,7 @@ export const renderCompactResultComponent = (
   note?: string | false,
 ): Component => {
   const rows = (width: number): string[] => [
-    ...stateGroupLines(details.cards, width, theme),
+    ...stateGroupLines(details.cards, width, theme, expanded),
     ...(note ? [clipToWidth(theme.fg("dim", note), width)] : []),
   ];
   if (!expanded) return renderComponent(rows);

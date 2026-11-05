@@ -6,7 +6,12 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { directoryName, distinctSessionLabels, SESSION_STATE_LABELS } from "./identity.ts";
+import {
+  directoryName,
+  distinctSessionLabels,
+  SESSION_STATE_GLYPHS,
+  SESSION_STATE_LABELS,
+} from "./identity.ts";
 import type { ListedSession, SessionListContract } from "./tools/contract.ts";
 
 export const INTERCOM_COMMAND = "intercom";
@@ -22,13 +27,14 @@ export interface IntercomCommandHost {
 }
 
 // Notifications wrap at the terminal edge without a hanging indent, so each line stays short
-// enough for a narrow pane: an indented label and state, and a two-line hint.
+// enough for a narrow pane: an indented status glyph, label, and state, as session_list shows
+// them, and a two-line hint.
 const listedLine = (session: ListedSession, label: string): string => {
   const directory = directoryName(session.cwd);
   const named = session.name !== undefined && Str.isNonEmpty(Str.trim(session.name));
   return Arr.join(
     [
-      `  ${label}`,
+      `  ${SESSION_STATE_GLYPHS[session.state]} ${label}`,
       SESSION_STATE_LABELS[session.state],
       ...(named && directory !== "" ? [`in ${directory}`] : []),
       ...(session.duplicate ? ["duplicate id"] : []),

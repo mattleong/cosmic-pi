@@ -74,6 +74,12 @@ export function elideSubject(text: string, width: number, kind: CompactSubjectKi
   return kind === "path" ? middleElide(text, width) : endElide(text, width);
 }
 
+/**
+ * Lays out `identity subject · counter`, choosing the first counter alternative that leaves the
+ * subject 12 columns. `keepCounter` instead shortens the subject to as little as one character to
+ * keep a counter; an expanded heading passes it with the alternatives from the collapsed row's
+ * choice on, so both keep the same words at one terminal width.
+ */
 export function layoutCompactHeader(
   identity: string,
   subject: string,
@@ -83,6 +89,7 @@ export function layoutCompactHeader(
   separator = " · ",
   timing?: string,
   subjectKind: CompactSubjectKind = "prose",
+  keepCounter = false,
 ) {
   const counters = Arr.filter(candidateCounters, (value) => Str.isNonEmpty(Str.trim(value)));
   const extra = counters.length
@@ -99,10 +106,12 @@ export function layoutCompactHeader(
       subjectComplete: !subject,
     };
   const subjectWidth = visibleWidth(subject);
-  const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
-  const counterBudget = remaining - subjectMinimum;
+  const subjectMinimum = (room: number) => (subject ? 1 + Math.min(room, subjectWidth) : 0);
+  const counterBudget = remaining - subjectMinimum(12);
+  // A kept counter leaves the subject one character and its ellipsis.
+  const keptBudget = keepCounter ? remaining - subjectMinimum(2) : counterBudget;
   const counter = Option.getOrUndefined(
-    Arr.findFirst(counters, (value) => visibleWidth(`${separator}${value}`) <= counterBudget),
+    Arr.findFirst(counters, (value) => visibleWidth(`${separator}${value}`) <= keptBudget),
   );
   const counterText = counter === undefined ? "" : `${separator}${counter}`;
   const counterWidth = visibleWidth(counterText);

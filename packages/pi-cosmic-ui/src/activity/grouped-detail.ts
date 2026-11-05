@@ -5,7 +5,7 @@ import * as Str from "effect/String";
 import { countLabel, formatRelativeAge } from "pi-cosmic-core/display";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { joinInline } from "../manager/chrome.ts";
-import { detailFieldRows, type ListDetailField } from "../manager/list-detail-shell.ts";
+import type { ListDetailField } from "../manager/list-detail-shell.ts";
 import { managerTone } from "../manager/style.ts";
 import { activityActionKeys } from "./action-keys.ts";
 import { activityStatus } from "./attention.ts";
@@ -21,6 +21,7 @@ import { activityAgentIdentity, activityElapsed, activitySpan } from "./row-line
  */
 export type ActivityDetailBlock =
   | { readonly kind: "text"; readonly text: string }
+  | { readonly kind: "fields"; readonly fields: ReadonlyArray<ListDetailField> }
   | { readonly kind: "facts"; readonly text: string }
   | { readonly kind: "markdown"; readonly text: string };
 
@@ -64,7 +65,7 @@ export function groupedDetail(options: GroupedDetailOptions): readonly ActivityD
   if (selected.type === "member") return sourceDetail(options, selected);
   return [
     text(heading(theme, Arr.join(selected.breadcrumbs, " › "), options.focused)),
-    ...Arr.map(detailFieldRows(theme, sectionFields(selected.summary)), text),
+    { kind: "fields", fields: sectionFields(selected.summary) },
     spacer,
     text(theme.fg("dim", "Select an item to see its output and actions.")),
   ];
@@ -183,10 +184,10 @@ function sourceDetail(
       ? [
           spacer,
           text(theme.fg("muted", theme.bold("Technical"))),
-          ...Arr.map(
-            detailFieldRows(theme, technicalFields(row, context, loaded?.technical ?? [])),
-            text,
-          ),
+          {
+            kind: "fields" as const,
+            fields: technicalFields(row, context, loaded?.technical ?? []),
+          },
         ]
       : []),
     ...actionBlocks(theme, row, options.actionPage),

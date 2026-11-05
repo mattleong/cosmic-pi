@@ -110,6 +110,8 @@ export function withCodePreviewMessageShell<T = unknown>(
 class MessageShell implements Component {
   private drawn: Component | undefined;
   private cache: { readonly width: number; readonly rows: string[] } | undefined;
+  // The width the collapsed row would get, which an expanded compact heading's counter follows.
+  private renderWidth: number | undefined;
   private readonly message: CodePreviewMessage;
   private readonly policy: SharedPresentation;
   private readonly options: MessageRenderOptions;
@@ -132,6 +134,7 @@ class MessageShell implements Component {
 
   render(width: number): string[] {
     if (this.cache?.width === width) return this.cache.rows;
+    this.renderWidth = width;
     let rows: string[];
     try {
       this.drawn ??= this.compose();
@@ -164,7 +167,13 @@ class MessageShell implements Component {
       ...(compact
         ? [
             renderCompactRow(
-              { name: message.name, phase: "settled", summary, expanded },
+              {
+                name: message.name,
+                phase: "settled",
+                summary,
+                expanded,
+                collapsedWidth: expanded ? this.renderWidth : undefined,
+              },
               theme,
               width,
             ),
@@ -213,7 +222,7 @@ class MessageShell implements Component {
       if (body) rest.addChild(body);
       const shell = new BorderedToolCall(theme);
       shell.setContent(heading, rest, {}, statusBorderColor(status, false), undefined);
-      shell.setExpandFallback((_, rows) => hint !== undefined && !showsAffordance(rows));
+      shell.setExpandFallback((_, rows) => (showsAffordance(rows) ? undefined : hint));
       return shell;
     }
     const shell =

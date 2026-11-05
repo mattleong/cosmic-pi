@@ -1,4 +1,5 @@
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { beforeAll, describe, it } from "@effect/vitest";
 import { homedir } from "node:os";
 import * as Arr from "effect/Array";
@@ -74,6 +75,22 @@ const listing: SessionListContract = {
   omitted: 0,
 };
 
+// A long name and directory wrap a row between whole facts.
+const longDirectory: SessionListContract = {
+  ...contractEnvelope,
+  tool: SESSION_TOOL.list,
+  sessions: [
+    {
+      sessionId: "01a19957-15d8-7047-8e3f-7bccf1353038",
+      name: "checkout redesign review",
+      cwd: `${home}/dev/clients/acme-corporation/platform/web-frontend`,
+      state: "busy",
+      duplicate: true,
+    },
+  ],
+  omitted: 0,
+};
+
 // Real session ids are UUIDv7: sessions started together share a prefix, not a suffix.
 const noSessions: SessionListContract = {
   ...contractEnvelope,
@@ -108,11 +125,13 @@ const sameRepository: SessionListContract = {
   omitted: 0,
 };
 
-const textFrame = (title: string, text: string): string[] => [
-  `── ${title}`,
-  ...Str.split(text, "\n"),
-  "",
-];
+/** Notices Pi draws one column in; wrapped here at a phone's and a desktop's notice width. */
+const noticeFrames = (title: string, notice: string): string[] =>
+  Arr.flatMap([55, 178], (width) => [
+    `── ${title} · ${width + 2} cols`,
+    ...Arr.flatMap(Str.split(notice, "\n"), (line) => wrapTextWithAnsi(line, width)),
+    "",
+  ]);
 
 const sent = (disposition: "woken" | "queued" | "held"): SessionSendDetails => ({
   ...contractEnvelope,
@@ -210,6 +229,12 @@ const scenarios = [
     tool: SESSION_TOOL.list,
     args: {},
     result: result(listText(sameRepository), sameRepository),
+  },
+  {
+    title: "listed session with a long name and directory",
+    tool: SESSION_TOOL.list,
+    args: {},
+    result: result(listText(longDirectory), longDirectory),
   },
   {
     title: "sent to an idle session",
@@ -358,6 +383,16 @@ describe.skipIf(!directory)("presentation gallery", () => {
               args: { to: web.sessionId, message },
               phase: "running",
             }),
+            ...galleryFrames(listed[1]!, {
+              title: `${style} · sending a long message`,
+              args: { to: web.sessionId, message: longMessage },
+              phase: "running",
+            }),
+            ...galleryFrames(listed[2]!, {
+              title: `${style} · reading a session a list already named`,
+              args: { to: web.sessionId },
+              phase: "running",
+            }),
             ...galleryMessageFrames(renderIntercomMessage, {
               title: `${style} · message from another session`,
               message: inboundMessage(inbound.text),
@@ -409,10 +444,13 @@ describe.skipIf(!directory)("presentation gallery", () => {
         }
       }
       lines.push(
-        ...textFrame("/intercom help", overview),
-        ...textFrame("/intercom list · sessions sharing a repository", listReport(sameRepository)),
-        ...textFrame("/intercom list · every state", listReport(listing)),
-        ...textFrame("/intercom list · none", listReport({ ...listing, sessions: [] })),
+        ...noticeFrames("/intercom help", overview),
+        ...noticeFrames(
+          "/intercom list · sessions sharing a repository",
+          listReport(sameRepository),
+        ),
+        ...noticeFrames("/intercom list · every state", listReport(listing)),
+        ...noticeFrames("/intercom list · none", listReport({ ...listing, sessions: [] })),
       );
       yield* writeGallerySection(directory, "pi-intercom", lines);
     }),

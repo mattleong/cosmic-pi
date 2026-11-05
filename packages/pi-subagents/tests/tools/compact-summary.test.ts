@@ -319,13 +319,11 @@ describe("waiting and held runs", () => {
       expect(summary?.outcome).toBe("attention");
       expect(severities(summary?.issues)).not.toContain("warning");
     }
-    // The question arrives in its own notice, so the awaited run's heading doesn't repeat it.
+    // Every surface quotes the question the run asked.
     const question = asking.question?.message ?? "";
     expect(
-      Arr.some(awaitOf(asking)?.issues ?? [], (issue) =>
-        Str.includes(question)(`${issue.message}\n${issue.detail ?? ""}`),
-      ),
-    ).toBe(false);
+      Arr.some(awaitOf(asking)?.issues ?? [], (issue) => Str.includes(question)(issue.message)),
+    ).toBe(true);
     // A question from a run the wait didn't target still reaches the caller as attention.
     const target = view({ id: "target", state: "running" });
     const beside = summarize(

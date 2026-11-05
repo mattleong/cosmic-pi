@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -146,7 +147,10 @@ interface ProfileTableRow {
   readonly profile: ProfileId;
   readonly selected: boolean;
   readonly model: string;
+  /** The reasoning label, `inherit (low)` where the profile doesn't pin one. */
   readonly effort: string;
+  /** The bare level a narrow list shows instead, such as `low`. */
+  readonly shortEffort: string;
   readonly fallbacks: number;
   /** Whether this profile changed during the visit, so its row carries the unsaved marker. */
   readonly edited: boolean;
@@ -162,6 +166,8 @@ const profileTableRows = (
       ? state.draft
       : loadProfileRouteDraft(state.inspection, state.target, profile);
     const first = draft.kind === "invalid" ? undefined : draft.candidates[0];
+    const fast =
+      first && candidateFastModeApplied(first, state.parentModel) ? theme.fg("warning", " ⚡") : "";
     return {
       profile,
       selected: selected && !state.saveFocused,
@@ -173,9 +179,12 @@ const profileTableRows = (
             ? "invalid"
             : "disabled",
       ),
-      // The list names the reasoning level; the editor pane says when it is the profile default.
+      // An inherited level reads `inherit (low)` like the editor pane, unless the list is narrow.
       effort: first
-        ? `${theme.fg("muted", candidateEffortLevel(profile, first, state.parentEffort))}${candidateFastModeApplied(first, state.parentModel) ? theme.fg("warning", " ⚡") : ""}`
+        ? `${theme.fg("muted", candidateEffortLabel(profile, first, state.parentEffort))}${fast}`
+        : "",
+      shortEffort: first
+        ? `${theme.fg("muted", candidateEffortLevel(profile, first, state.parentEffort))}${fast}`
         : "",
       fallbacks: Math.max(0, draft.candidates.length - 1),
       edited: state.editedProfiles?.has(profile) ?? false,
@@ -200,20 +209,34 @@ const PROFILE_COLUMNS = [
 const fallbackLabel = (count: number, compact: boolean): string =>
   count === 0 ? "" : compact ? `+${count}` : `+${count} fallback${count === 1 ? "" : "s"}`;
 
-const effortCell = (effort: string, fallbacks: string, compact: boolean): string =>
-  compact && fallbacks ? `${effort} ${fallbacks}` : effort;
+/**
+ * How much a list gives up to keep its models whole: first the fallback column, which becomes a
+ * bare `+1`, then `inherit (…)` around an inherited reasoning level.
+ */
+type ProfileTableFit = "full" | "compact" | "short";
+
+const PROFILE_TABLE_FITS = [
+  "full",
+  "compact",
+  "short",
+] as const satisfies ReadonlyArray<ProfileTableFit>;
+
+const effortCell = (row: ProfileTableRow, fallbacks: string, fit: ProfileTableFit): string => {
+  const effort = fit === "short" ? row.shortEffort : row.effort;
+  return fit !== "full" && fallbacks ? `${effort} ${fallbacks}` : effort;
+};
 
 const profileTableCells = (
   row: ProfileTableRow,
   marked: boolean,
-  compact: boolean,
+  fit: ProfileTableFit,
 ): ReadonlyArray<string> => {
-  const fallbacks = fallbackLabel(row.fallbacks, compact);
+  const fallbacks = fallbackLabel(row.fallbacks, fit !== "full");
   return [
     `${row.profile}${marked ? " ●" : ""}`,
     row.model,
-    effortCell(row.effort, fallbacks, compact),
-    compact ? "" : fallbacks,
+    effortCell(row, fallbacks, fit),
+    fit === "full" ? fallbacks : "",
   ];
 };
 
@@ -223,13 +246,13 @@ const profileTableCells = (
  */
 const profileTableNaturalWidth = (
   rows: ReadonlyArray<ProfileTableRow>,
-  compact = false,
+  fit: ProfileTableFit = "full",
 ): number => {
   const marked = Arr.some(rows, (row) => row.edited);
   const shown = Arr.filterMap(PROFILE_COLUMNS, (column, index) => {
     const widest = Math.max(
       0,
-      ...Arr.map(rows, (row) => visibleWidth(profileTableCells(row, marked, compact)[index] ?? "")),
+      ...Arr.map(rows, (row) => visibleWidth(profileTableCells(row, marked, fit)[index] ?? "")),
     );
     return widest === 0 ? Result.failVoid : Result.succeed(Math.max(column.minWidth, widest));
   });
@@ -247,10 +270,14 @@ const profileTableLines = (
 ): ReadonlyArray<string> => {
   const rows = profileTableRows(state, theme);
   const marked = Arr.some(rows, (row) => row.edited);
-  const compact = profileTableNaturalWidth(rows) > width;
+  const fit = Option.getOrElse(
+    Arr.findFirst(PROFILE_TABLE_FITS, (each) => profileTableNaturalWidth(rows, each) <= width),
+    () => "short" as const,
+  );
+  const compact = fit !== "full";
   // The shared table leaves out a column with no cells, such as fallbacks when there are none.
   const table = managerTable(
-    Arr.map(rows, (row) => profileTableCells(row, marked, compact)),
+    Arr.map(rows, (row) => profileTableCells(row, marked, fit)),
     PROFILE_COLUMNS,
     width - PROFILE_CURSOR_WIDTH,
   );
@@ -265,7 +292,7 @@ const profileTableLines = (
     return `${row.selected ? LIST_CURSOR : " "} ${table.row([
       identity + marker,
       row.model,
-      effortCell(row.effort, fallbacks, compact),
+      effortCell(row, fallbacks, fit),
       compact ? "" : fallbacks,
     ])}`;
   });

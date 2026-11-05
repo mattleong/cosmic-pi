@@ -587,7 +587,7 @@ export const AgentToolDetailsSchema = Schema.Union([
         state: AgentDetailsStateSchema,
         textStatus: Schema.Literals(["text", "none"]),
         truncated: Schema.Boolean,
-        source: Schema.optionalKey(Schema.Literals(["assistant", "report", "error"])),
+        source: Schema.optionalKey(Schema.Literals(["assistant", "report", "error", "question"])),
         /** A run's status card issues: attention, warnings, failure, cleanup, and its worktree. */
         issues: Schema.optionalKey(AgentReadIssuesSchema),
         /** A bounded display copy of the latest message, report, or failure. */

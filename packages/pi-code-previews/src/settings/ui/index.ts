@@ -42,7 +42,7 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
     label: "Read previews",
     description: "File content visibility and collapsed read size.",
     summarize: (settings) =>
-      `${formatOnOff(settings.readContentPreview)} · ${settings.readCollapsedLines} lines`,
+      `content ${formatOnOff(settings.readContentPreview)} · ${settings.readCollapsedLines} lines`,
     ids: ["readContentPreview", "readCollapsedLines"],
   },
   {
@@ -50,7 +50,7 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
     label: "Write previews",
     description: "Write content/diff visibility and collapsed write content size.",
     summarize: (settings) =>
-      `${formatOnOff(settings.writeContentPreview)} · ${settings.writeCollapsedLines} lines`,
+      `content ${formatOnOff(settings.writeContentPreview)} · ${settings.writeCollapsedLines} lines`,
     ids: ["writeContentPreview", "writeCollapsedLines"],
   },
   {
@@ -58,7 +58,7 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
     label: "Edit diff previews",
     description: "Edit diff visibility, backgrounds, word emphasis, and collapsed size.",
     summarize: (settings) =>
-      `${formatOnOff(settings.editDiffPreview)} · ${settings.diffIntensity} bg · words ${settings.wordEmphasis}`,
+      `diff ${formatOnOff(settings.editDiffPreview)} · ${settings.diffIntensity} bg · words ${settings.wordEmphasis}`,
     ids: ["diffIntensity", "wordEmphasis", "editDiffPreview", "editCollapsedLines"],
   },
   {
@@ -74,13 +74,6 @@ const OUTPUT_PREVIEW_GROUPS: SettingsGroupDefinition[] = [
       "lsResultPreview",
       "pathListCollapsedLines",
     ],
-  },
-  {
-    name: "bashPreviews",
-    label: "Bash previews",
-    description: "Successful bash output visibility.",
-    summarize: (settings) => formatOnOff(settings.bashResultPreview),
-    ids: ["bashResultPreview"],
   },
 ];
 
@@ -109,6 +102,7 @@ const SETTINGS_CATEGORY_GROUPS: readonly SettingsGroupDefinition[] = [
     summarize: (settings) =>
       `read ${formatOnOff(settings.readContentPreview)} · write ${formatOnOff(settings.writeContentPreview)} · edit ${formatOnOff(settings.editDiffPreview)} · bash ${formatOnOff(settings.bashResultPreview)}`,
     groups: OUTPUT_PREVIEW_GROUPS,
+    ids: ["bashResultPreview"],
   },
   {
     name: "warningsSafety",
@@ -177,12 +171,13 @@ function createSettingsGroupItemFromDefinition(
       createSettingsGroupSubmenu({
         title: definition.label,
         description: definition.description,
-        items: () =>
-          definition.groups
-            ? Arr.map(definition.groups, (group) =>
-                createSettingsGroupItemFromDefinition(group, getCurrent, onSettingChange, theme),
-              )
-            : Arr.map(definition.ids ?? [], (id) => createSettingItem(getCurrent(), id, theme)),
+        // Nested groups come first, then the group's own settings.
+        items: () => [
+          ...Arr.map(definition.groups ?? [], (group) =>
+            createSettingsGroupItemFromDefinition(group, getCurrent, onSettingChange, theme),
+          ),
+          ...Arr.map(definition.ids ?? [], (id) => createSettingItem(getCurrent(), id, theme)),
+        ],
         onChange: onSettingChange,
         done,
         summary: () => definition.summarize(getCurrent()),

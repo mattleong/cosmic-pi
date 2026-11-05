@@ -3,7 +3,7 @@ import type {
   Theme,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -19,7 +19,7 @@ import {
   type ExpandedField,
 } from "pi-code-previews";
 import { countLabel, formatBytes } from "pi-cosmic-core/display";
-import { clipToWidth, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
+import { clipToWidth, wrapFacts } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderExpansionAffordance,
@@ -50,6 +50,7 @@ import {
 import {
   distinctSessionLabels,
   knownAddresseeSubject,
+  SESSION_STATE_GLYPHS,
   SESSION_STATE_LABELS,
   sessionSubject,
   type SessionNames,
@@ -130,20 +131,13 @@ const STATE_COLORS = {
   unreachable: "warning",
 } as const satisfies Record<ListedSession["state"], "muted" | "accent" | "warning">;
 
-/**
- * Each listed session's status glyph: idle is done with its turn, busy was working when the list
- * was taken, unavailable and not answering couldn't confirm their state, and unreachable failed.
- */
-const STATE_GLYPHS = {
-  idle: { glyph: SUITE_STATUS_GLYPHS.succeeded, color: "success" },
-  busy: { glyph: SUITE_STATUS_GLYPHS.neutral, color: "accent" },
-  unavailable: { glyph: SUITE_STATUS_GLYPHS.uncertain, color: "warning" },
-  unresponsive: { glyph: SUITE_STATUS_GLYPHS.uncertain, color: "warning" },
-  unreachable: { glyph: SUITE_STATUS_GLYPHS.failed, color: "error" },
-} as const satisfies Record<
-  ListedSession["state"],
-  { readonly glyph: string; readonly color: "success" | "accent" | "warning" | "error" }
->;
+const STATE_GLYPH_COLORS = {
+  idle: "success",
+  busy: "accent",
+  unavailable: "warning",
+  unresponsive: "warning",
+  unreachable: "error",
+} as const satisfies Record<ListedSession["state"], "success" | "accent" | "warning" | "error">;
 
 type ListDetails = Extract<SessionToolDetails, { readonly tool: "session_list" }>;
 
@@ -152,8 +146,8 @@ type ListDetails = Extract<SessionToolDetails, { readonly tool: "session_list" }
  * Columns after the glyph hang beneath the label when the row wraps.
  */
 const listedRow = (session: ListedSession, label: string, theme: Theme, expanded: boolean) => {
-  const { glyph, color } = STATE_GLYPHS[session.state];
-  return `${theme.fg(color, glyph)} ${Arr.join(
+  const glyph = theme.fg(STATE_GLYPH_COLORS[session.state], SESSION_STATE_GLYPHS[session.state]);
+  return `${glyph} ${Arr.join(
     [
       theme.fg("toolOutput", label),
       theme.fg(STATE_COLORS[session.state], SESSION_STATE_LABELS[session.state]),
@@ -163,8 +157,6 @@ const listedRow = (session: ListedSession, label: string, theme: Theme, expanded
     theme.fg("dim", " · "),
   )}`;
 };
-
-const LISTED_ROW_HANG = 2;
 
 const NO_SESSIONS = Str.capitalize(NO_OTHER_SESSIONS);
 
@@ -181,16 +173,10 @@ const listExpanded = (details: ListDetails, theme: Theme, compact: boolean): Com
   const label = (index: number) => labels[index] ?? "";
   const rows = composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
-    const hang = Fn.pipe(" ", Str.repeat(Math.min(LISTED_ROW_HANG, width - 1)));
     return [
+      // Rows wrap between whole facts, hanging beneath the label.
       ...Arr.flatMap(details.sessions, (session, index) =>
-        Arr.map(
-          wrapTextWithAnsi(
-            listedRow(session, label(index), theme, true),
-            Math.max(1, width - LISTED_ROW_HANG),
-          ),
-          (row, line) => (line === 0 ? row : `${hang}${row}`),
-        ),
+        wrapFacts(listedRow(session, label(index), theme, true), width),
       ),
       ...(details.omitted > 0 ? [theme.fg("muted", `and ${details.omitted} more`)] : []),
     ];

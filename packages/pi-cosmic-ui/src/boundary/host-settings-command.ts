@@ -17,7 +17,9 @@ import {
   type SettingsOptionDescriptor,
 } from "pi-cosmic-core/settings-completion";
 import { dispatchSettingsCommand } from "pi-cosmic-core/settings-dispatch";
-import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
+import { clipText } from "pi-cosmic-core/display";
+import { extensionCommandOverview, type ExtensionSubcommand } from "pi-cosmic-core/host-command";
+import { joinInline, wrapFacts } from "../manager/chrome.ts";
 import type { HostKeybindingSource } from "../manager/key-labels.ts";
 import type { FullScreenKeymapOptions } from "../manager/keymap.ts";
 import {
@@ -83,18 +85,24 @@ export interface SettingsCommandOptions<Config> {
   readonly descriptors: ReadonlyArray<
     Pick<SettingsOptionDescriptor<Config>, "id" | "description" | "values" | "currentValue"> & {
       readonly openValues?: boolean | undefined;
-      /** The row's human name, used when confirming a change; falls back to the id. */
+      /** The row's human name, used in help, status, and confirmations; falls back to the id. */
       readonly label?: string | undefined;
     }
   >;
   readonly examples: ReadonlyArray<string>;
   readonly notes?: ((ctx: ExtensionContext) => ReadonlyArray<string>) | undefined;
+  /** A fact appended to a command-line change's confirmation, such as `applies after /reload`. */
+  readonly confirmationNote?: string | undefined;
   readonly scopes?: ReadonlyArray<SettingsCommandScope> | undefined;
   readonly scopeBlocked?:
     | ((ctx: ExtensionContext, scope: string) => string | undefined)
     | undefined;
   readonly config: (ctx: ExtensionContext) => Config | undefined;
-  readonly status: (ctx: ExtensionContext) => string | Promise<string>;
+  /**
+   * The `status` text; build it with `settingsStatusText`. Defaults to one `Label: value (id)`
+   * row per descriptor.
+   */
+  readonly status?: ((ctx: ExtensionContext) => string | Promise<string>) | undefined;
   readonly onInvoke?: (ctx: ExtensionContext) => void;
   readonly signal?: "required" | "optional";
   readonly apply: (
@@ -118,6 +126,12 @@ export interface SettingsCommandOptions<Config> {
 
 export interface SettingsSession<Config> {
   readonly config: () => Config | undefined;
+  /**
+   * Saves one setting. A successful change posts no notice; `show` receives the value that
+   * persisted, also after the picker closed, and returns `false` for a change a newer one
+   * superseded so its failure isn't reported twice. It must not publish to a closed surface.
+   * Without `show`, the change confirms with a `Label: value` notice like a command-line change.
+   */
   readonly apply: (
     id: string,
     value: string,
@@ -139,6 +153,75 @@ interface SettingsListContent {
   readonly afterInput?: (() => void) | undefined;
   readonly onList?: ((list: SettingsList) => void) | undefined;
 }
+
+// Pi draws notices one column in, leads a warning or error with its level, and doesn't
+// hang-indent its own wraps, so settings text keeps every line within the command-help width and
+// hangs its continuation rows.
+const NOTICE_COLUMNS = 55;
+const NOTICE_HANGING = "  ";
+const DESCRIPTION_INDENT = "    ";
+type NoticeLevel = "info" | "warning" | "error";
+const NOTICE_PREFIX_COLUMNS = { info: 0, warning: "Warning: ".length, error: "Error: ".length };
+
+/**
+ * Wraps each line of notice text within 55 columns, less the `Warning: ` or `Error: ` Pi puts
+ * before the first line, hanging continuations under the line's indent.
+ */
+export const wrapNoticeText = (text: string, level: NoticeLevel = "info"): string =>
+  Arr.join(
+    Arr.flatMap(Str.split(text, "\n"), (line, index) => {
+      const width = NOTICE_COLUMNS - (index === 0 ? NOTICE_PREFIX_COLUMNS[level] : 0);
+      if (line.length <= width) return [Str.trimEnd(line)];
+      const indent = /^ */u.exec(line)?.[0] ?? "";
+      return Arr.map(
+        wrapFacts(Str.trim(line), width - indent.length, NOTICE_HANGING),
+        (row) => `${indent}${row}`,
+      );
+    }),
+    "\n",
+  );
+
+export interface SettingsStatusRow {
+  readonly id: string;
+  /** The row's human name; falls back to the id. */
+  readonly label?: string | undefined;
+  readonly value?: string | undefined;
+}
+
+export interface SettingsStatusSection {
+  readonly title?: string | undefined;
+  readonly rows: ReadonlyArray<SettingsStatusRow>;
+}
+
+/** One setting as help and status name it: `Label: value (id)`. */
+export const settingsStatusLine = (row: SettingsStatusRow): string => {
+  const valued =
+    row.value === undefined ? (row.label ?? row.id) : `${row.label ?? row.id}: ${row.value}`;
+  return row.label === undefined ? valued : `${valued} (${row.id})`;
+};
+
+/**
+ * The `/<ext> settings status` text: a title, then `Label: value (id)` rows grouped under
+ * optional section titles, then notes, all wrapped for a 57-column phone.
+ */
+export const settingsStatusText = (options: {
+  readonly title: string;
+  readonly sections: ReadonlyArray<SettingsStatusSection>;
+  readonly notes?: ReadonlyArray<string> | undefined;
+}): string =>
+  wrapNoticeText(
+    Arr.join(
+      [
+        options.title,
+        ...Arr.flatMap(options.sections, (section) => [
+          ...(section.title === undefined ? [] : [section.title]),
+          ...Arr.map(section.rows, (row) => `  ${settingsStatusLine(row)}`),
+        ]),
+        ...(options.notes ?? []),
+      ],
+      "\n",
+    ),
+  );
 
 const guardedKeybindingMatcher = (
   keybindings: HostKeybindingSource | undefined,
@@ -194,6 +277,9 @@ export const withInvocationAuthority = (
   };
 };
 
+// Leaves room for `Warning: Unknown setting: ` on a 55-column notice line.
+const UNKNOWN_SETTING_COLUMNS = 28;
+
 export function settingsSubcommand<Config>(
   options: SettingsCommandOptions<Config>,
 ): ExtensionSubcommand {
@@ -204,8 +290,9 @@ export function settingsSubcommand<Config>(
   const scopeNames = Arr.map(scopes, (scope) => scope.name);
   const unavailable = `${title} settings aren't available right now`;
   const { isCurrent } = options;
-  const notify = (ctx: ExtensionContext, message: string, level: "info" | "warning" | "error") => {
-    if (isCurrent()) notifyAtHostBoundary(ctx, message, level);
+  // Every notice, including a consumer's status or failure text, fits a 57-column phone.
+  const notify = (ctx: ExtensionContext, message: string, level: NoticeLevel) => {
+    if (isCurrent()) notifyAtHostBoundary(ctx, wrapNoticeText(message, level), level);
   };
   const readConfig = (ctx: ExtensionContext) =>
     invokeHostCallback(() => options.config(ctx), undefined);
@@ -274,7 +361,17 @@ export function settingsSubcommand<Config>(
             else
               notify(
                 ctx,
-                `${scopes.length > 0 && scope ? `${Str.capitalize(scope)} · ` : ""}${descriptor?.label ?? id}: ${current}`,
+                Arr.join(
+                  wrapFacts(
+                    joinInline([
+                      scopes.length > 0 && scope ? Str.capitalize(scope) : undefined,
+                      `${descriptor?.label ?? id}: ${current}`,
+                      options.confirmationNote,
+                    ]),
+                    NOTICE_COLUMNS,
+                  ),
+                  "\n",
+                ),
                 "info",
               );
             if (isCurrent())
@@ -309,7 +406,7 @@ export function settingsSubcommand<Config>(
             id,
             value,
             optionalSignal ? capturedHostSignal(ctx) : captured.signal,
-            show ? (shown) => active && show(shown) : undefined,
+            show,
             scope,
           )
         : Promise.resolve();
@@ -328,15 +425,17 @@ export function settingsSubcommand<Config>(
               value,
               (shown) => {
                 if (latest.get(row) !== token) return false;
-                invokeHostCallback(() => {
-                  show(shown);
-                  tui.requestRender();
-                }, undefined);
+                // A closed picker publishes nothing, but its failures still warn.
+                if (active)
+                  invokeHostCallback(() => {
+                    show(shown);
+                    tui.requestRender();
+                  }, undefined);
                 return true;
               },
               scope,
             ).catch(() => {
-              if (active && latest.get(row) === token) notify(ctx, unavailable, "warning");
+              if (latest.get(row) === token) notify(ctx, unavailable, "warning");
             });
           };
           const withGroups = withSettingsGroupChildren(items, managerSettingsTheme(theme), change);
@@ -378,22 +477,36 @@ export function settingsSubcommand<Config>(
   };
 
   const scopeToken = scopes.length > 0 ? `[${Arr.join(scopeNames, "|")}] ` : "";
-  const showHelp = (ctx: ExtensionContext) => {
+  const label = (id: string) =>
+    Option.getOrUndefined(Arr.findFirst(descriptors, (entry) => entry.id === id))?.label;
+  const currentValues = (ctx: ExtensionContext) => {
     const cfg = readConfig(ctx);
+    return Arr.map(descriptors, (descriptor) => ({
+      id: descriptor.id,
+      label: descriptor.label,
+      description: descriptor.description,
+      value: cfg ? invokeHostCallback(() => descriptor.currentValue(cfg), undefined) : undefined,
+    }));
+  };
+  const showHelp = (ctx: ExtensionContext) => {
     const notes = invokeHostCallback(() => options.notes?.(ctx) ?? [], []);
+    const overview = extensionCommandOverview(command, options.description, [
+      { name: "", description: "Open the settings list" },
+      { name: `${scopeToken}<id> <value>`, description: "Change one setting" },
+      { name: "status", description: "Show effective values" },
+      { name: "help", description: "Show this help" },
+    ]);
     const lines = [
-      `${title} settings`,
-      ...Arr.map(
-        descriptors,
-        (descriptor) =>
-          `  ${descriptor.id}${cfg ? ` = ${descriptor.currentValue(cfg)}` : ""}  — ${descriptor.description}`,
-      ),
+      overview,
       "",
-      "Usage:",
-      `  /${command}  Open the settings list`,
-      `  /${command} ${scopeToken}<id> <value>  Change one setting`,
-      `  /${command} status  Show effective values`,
-      `  /${command} help  Show this help`,
+      "Settings:",
+      ...Arr.flatMap(currentValues(ctx), (row) => [
+        `  ${settingsStatusLine(row)}`,
+        ...Arr.map(
+          wrapFacts(row.description, NOTICE_COLUMNS - DESCRIPTION_INDENT.length, ""),
+          (line) => `${DESCRIPTION_INDENT}${line}`,
+        ),
+      ]),
       "",
       "Examples:",
       ...Arr.map(options.examples, (example) => `  /${command} ${example}`),
@@ -401,6 +514,28 @@ export function settingsSubcommand<Config>(
     ];
     notify(ctx, Arr.join(lines, "\n"), "info");
   };
+  const defaultStatus = (ctx: ExtensionContext) =>
+    settingsStatusText({
+      title: `${title} settings`,
+      sections: [{ rows: currentValues(ctx) }],
+    });
+  // A value's allowed forms, when they're a short list worth naming.
+  const valueForm = (id: string) => {
+    const descriptor = Option.getOrUndefined(
+      Arr.findFirst(descriptors, (entry) => entry.id === id),
+    );
+    const values = descriptor?.values ? Arr.join(descriptor.values, "|") : "";
+    return values && values.length <= 32 ? values : "<value>";
+  };
+  // `Add a value: <command>`, with the command on its own line when both don't fit.
+  const correctForm = (lead: string, form: string) =>
+    `${lead} ${form}`.length <= NOTICE_COLUMNS - NOTICE_PREFIX_COLUMNS.warning
+      ? `${lead} ${form}`
+      : `${lead}\n  ${form}`;
+  const scopeArgument = (args: string) =>
+    Option.getOrUndefined(
+      Arr.findFirst(scopeNames, (name) => Str.split(Str.trim(args), /\s+/u)[0] === name),
+    );
 
   const handle = (args: string, ctx: ExtensionContext) => {
     if (!isCurrent()) return;
@@ -412,7 +547,9 @@ export function settingsSubcommand<Config>(
         Help: () => showHelp(ctx),
         Status: () =>
           Promise.resolve()
-            .then(() => (isCurrent() ? options.status(ctx) : undefined))
+            .then(() =>
+              isCurrent() ? (options.status ? options.status(ctx) : defaultStatus(ctx)) : undefined,
+            )
             .then(
               (text) => {
                 if (text !== undefined) notify(ctx, text, "info");
@@ -420,19 +557,30 @@ export function settingsSubcommand<Config>(
               },
               () => notify(ctx, unavailable, "warning"),
             ),
-        Invalid: (invalid) =>
-          notify(
+        Invalid: (invalid) => {
+          const unknown = (id: string) =>
+            `Unknown setting: ${clipText(id, UNKNOWN_SETTING_COLUMNS)}\nSee the setting ids: /${command} help`;
+          const scope = scopeArgument(args);
+          const scoped = scope === undefined ? "" : `${scope} `;
+          return notify(
             ctx,
             Match.value(invalid).pipe(
               Match.discriminatorsExhaustive("reason")({
                 "invalid-value": ({ id, allowedValues }) =>
-                  `${id} must be one of: ${Arr.join(allowedValues, ", ")}`,
-                "missing-value": () => `Usage: /${command} ${scopeToken}<id> <value>`,
-                "unknown-setting": ({ id }) => `Unknown setting: ${id}`,
+                  `${label(id) ?? id} (${id}) must be one of: ${Arr.join(allowedValues, ", ")}`,
+                "missing-value": ({ id }) => {
+                  if (id && !Arr.some(descriptors, (entry) => entry.id === id)) return unknown(id);
+                  return correctForm(
+                    id ? "Add a value:" : "Add a setting and value:",
+                    `/${command} ${scoped}${id || "<id>"} ${id ? valueForm(id) : "<value>"}`,
+                  );
+                },
+                "unknown-setting": ({ id }) => unknown(id),
               }),
             ),
             "warning",
-          ),
+          );
+        },
         Apply: ({ id, value, scope }) => {
           const captured = captureSignal(ctx);
           if (!captured) return notify(ctx, unavailable, "warning");

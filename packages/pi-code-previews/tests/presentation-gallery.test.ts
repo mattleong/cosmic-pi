@@ -12,7 +12,14 @@ import { stripAnsi } from "pi-cosmic-core";
 import { registerCodePreviewsCommand } from "../src/commands/register";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { authoredTextLines, expandedText, withCodePreviewMessageShell } from "../index";
+import {
+  authoredTextLines,
+  expandedBody,
+  expandedDetails,
+  expandedFields,
+  expandedText,
+  withCodePreviewMessageShell,
+} from "../index";
 import {
   captureRegistrations,
   galleryDirectory,
@@ -195,6 +202,10 @@ const StatusDemoArgs = Schema.Struct({
   queued: Schema.optionalKey(Schema.Literal(true)),
   outcome: Schema.optionalKey(Schema.Literals(["queued", "paused", "returned"])),
   metadata: Schema.optionalKey(Schema.String),
+  /** The summary's first counter, which a heading shows beside its glyph. */
+  counter: Schema.optionalKey(Schema.String),
+  /** Facts the expanded row shows in its `Details` section. */
+  details: Schema.optionalKey(Schema.Array(Schema.String)),
   /** A state the collapsed result states above its output, as a task's `running` does. */
   state: Schema.optionalKey(Schema.String),
   expandLabel: Schema.optionalKey(Schema.Union([Schema.String, Schema.Literal(false)])),
@@ -235,6 +246,7 @@ const statusDemo = () =>
           ...(args.path && { pathSubject: true }),
           ...(args.waiting && { waiting: true }),
           ...(args.queued && { queued: true }),
+          ...(args.counter !== undefined && { counters: [args.counter] }),
           ...(metadata !== undefined && { metadata: [metadata] }),
           ...(args.expandLabel !== undefined && { expandLabel: args.expandLabel }),
           ...(args.messageIcon && { messageIcon: args.messageIcon }),
@@ -254,12 +266,20 @@ const statusDemo = () =>
       },
       expandedContent: {
         renderCall: () => new Container(),
-        renderResult: (result, _options, theme) => {
+        renderResult: (result, _options, theme, context) => {
           const lines = Arr.filter(
             Arr.map(result.content, (part) => (part.type === "text" ? part.text : "[image]")),
             Str.isNonEmpty,
           );
-          return lines.length === 0 ? new Container() : expandedText(theme, "Output", lines);
+          const details = statusDemoArgs(context.args).details ?? [];
+          return expandedBody(
+            lines.length === 0 ? undefined : expandedText(theme, "Output", lines),
+            expandedFields(
+              theme,
+              Arr.map(Arr.take(details, 1), (line) => ({ label: "Route", lines: [line] })),
+            ),
+            expandedDetails(theme, details),
+          );
         },
       },
     },
@@ -1147,6 +1167,7 @@ const scenarios: ReadonlyArray<
       'Invalid arguments for tool "read": Expected \',\' or \'}\' after property value in JSON at position 28 (line 1 column 29)\n\nReceived arguments:\n{"path":"/project/src/a.ts" "offset":120}',
     ),
     isError: true,
+    border: true,
   },
   {
     tool: "grep",
@@ -1461,6 +1482,51 @@ const scenarios: ReadonlyArray<
     result: text("Paused by the user"),
   },
   {
+    tool: "status_demo",
+    title: "a waiting row's state line uses its first counter",
+    args: { subject: "Release checklist", waiting: true, counter: "needs your input" },
+    result: text("Asked 4 questions"),
+    phase: "running",
+  },
+  {
+    tool: "status_demo",
+    title: "long facts wrap between whole facts, never after a separator",
+    args: {
+      subject: "auth review",
+      details: [
+        "auth-review: agent-1 · reviewer → openai-codex/gpt-5.6-sol:high · 84k tokens · $0.61 · 4m 30s",
+        "Saved to .pi/generated-images/openai-image-2026-09-27T10-00-00-000Z-ig_0a1b2c3d.png",
+        "  task-0000000011 · /project/packages/pi-code-previews · pid 48633",
+      ],
+    },
+    result: text("Reviewed 7 files"),
+  },
+  {
+    tool: "bash",
+    title: "bash streaming a long log shows its latest lines",
+    args: { command: "pnpm test" },
+    result: text(
+      Arr.join(
+        Arr.map(Arr.range(1, 12), (index) => `✓ tests/suite-${index}.test.ts (3 tests)`),
+        "\n",
+      ),
+    ),
+    phase: "running",
+    border: true,
+  },
+  {
+    tool: "bash",
+    title: "bash output longer than the preview names the hidden lines",
+    args: { command: "pnpm lint" },
+    result: text(
+      Arr.join(
+        Arr.map(Arr.range(1, 14), (index) => `src/file-${index}.ts: ok`),
+        "\n",
+      ),
+    ),
+    border: true,
+  },
+  {
     tool: "grep",
     title: "grep in a deeply nested directory",
     args: {
@@ -1518,8 +1584,10 @@ const commandOverviewFrames = Effect.fn("Gallery.commandOverviewFrames")(functio
         run = (args) =>
           definition.handler(
             args,
+            // Outside the TUI, health posts its report as a notice rather than a panel.
             extensionContextFixture({
               hasUI: true,
+              mode: "rpc",
               ui: { notify: (message: string) => void notices.push(message) },
             }),
           );
@@ -1527,15 +1595,24 @@ const commandOverviewFrames = Effect.fn("Gallery.commandOverviewFrames")(functio
     }),
   );
   const invoke = run;
-  if (invoke) yield* Effect.promise(() => invoke(""));
-  const notice = notices[0] ?? "";
-  return Arr.flatMap([180, 57], (width) => [
-    `── /code-previews help · ${width} cols`,
-    ...Arr.flatMap(Str.split(notice, "\n"), (line) =>
-      Arr.map(Arr.chunksOf(Arr.fromIterable(` ${line}`), width), Arr.join("")),
-    ),
-    "",
-  ]);
+  if (invoke) {
+    yield* Effect.promise(() => invoke(""));
+    yield* Effect.promise(() => invoke("health"));
+  }
+  return Arr.flatMap(
+    [
+      ["help", notices[0] ?? ""],
+      ["health", notices[1] ?? ""],
+    ] as const,
+    ([command, notice]) =>
+      Arr.flatMap([180, 57], (width) => [
+        `── /code-previews ${command} · ${width} cols`,
+        ...Arr.flatMap(Str.split(notice, "\n"), (line) =>
+          Arr.map(Arr.chunksOf(Arr.fromIterable(` ${line}`), width), Arr.join("")),
+        ),
+        "",
+      ]),
+  );
 });
 
 /** `/code-previews settings` › Enabled tools, with two previews off and one tool owned elsewhere. */
@@ -1557,14 +1634,25 @@ function enabledToolsFrames(): string[] {
       plainTheme,
     );
     const tools = Option.getOrThrow(Arr.findFirst(items, (item) => item.id === "tools"));
-    const submenu = tools.submenu?.(tools.currentValue, () => undefined);
-    return Arr.flatMap([100, 57], (width) => [
-      `── /code-previews settings › Enabled tools (row value ${tools.currentValue}) · ${width} cols`,
-      ...Arr.map(submenu?.render(width) ?? [], (line) =>
-        Fn.pipe(stripAnsi(line), Str.replace(/\s+$/u, "")),
-      ),
-      "",
-    ]);
+    const outputs = Option.getOrThrow(
+      Arr.findFirst(items, (item) => item.id === "group:outputPreviews"),
+    );
+    return Arr.flatMap(
+      [
+        [tools, `Enabled tools (row value ${tools.currentValue})`],
+        [outputs, `Output previews (row value ${outputs.currentValue})`],
+      ] as const,
+      ([item, title]) => {
+        const submenu = item.submenu?.(item.currentValue, () => undefined);
+        return Arr.flatMap([100, 57], (width) => [
+          `── /code-previews settings › ${title} · ${width} cols`,
+          ...Arr.map(submenu?.render(width) ?? [], (line) =>
+            Fn.pipe(stripAnsi(line), Str.replace(/\s+$/u, "")),
+          ),
+          "",
+        ]);
+      },
+    );
   } finally {
     setCodePreviewToolStatus("grep", { state: "installed" });
   }
@@ -1582,6 +1670,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
           ["compact", undefined],
           ["preview", undefined],
           ["compact", "border"],
+          ["preview", "border"],
         ] as const) {
           const tools = registered(style, background);
           tools.set("fallback", withCodePreviewRenderers({ name: "fallback" }, {}));

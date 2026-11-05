@@ -52,7 +52,7 @@ const settingDescriptors = [
     id: "enabled",
     label: "Custom footer",
     description:
-      "Disable to use Pi's default footer. Item visibility still applies to provider status.",
+      "Off uses Pi's default footer. Items hidden here stay hidden from its status line too.",
     values: BooleanSettingSchema.literals,
     currentValue: (config: ResolvedCosmicUiConfig) => settingOnOff(config.footer.enabled),
     change: (value: string): CosmicUiSettingChange | undefined => {
@@ -120,19 +120,6 @@ export function registerSettingsCommand(
       descriptors: settingDescriptors,
       examples: ["density compact", "visible:git off"],
       config: () => options.config(),
-      status: () => {
-        const config = options.config();
-        return Arr.join(
-          [
-            "Cosmic UI settings",
-            ...Arr.map(
-              settingDescriptors,
-              (descriptor) => `  ${descriptor.id} = ${descriptor.currentValue(config)}`,
-            ),
-          ],
-          "\n",
-        );
-      },
       onInvoke: options.updateContext,
       apply: (_ctx, id, value, signal) => {
         const change = Option.getOrUndefined(

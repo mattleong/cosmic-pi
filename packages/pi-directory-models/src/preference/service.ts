@@ -57,7 +57,7 @@ const readWarning = (reason: DirectoryModelStoreError["reason"], identified: Dir
 const THINKING_LEVEL_WARNING =
   "The thinking level saved for this directory is invalid, so Pi kept its current level\nPick one with /thinking to replace it";
 const IDENTIFY_WARNING =
-  "Couldn't resolve this directory's path, so its model isn't remembered in this session";
+  "Couldn't resolve this directory's path, so its model isn't remembered in this session\nCheck that the directory still exists, then start a session with /new to try again";
 export const WRITE_WARNING = "Couldn't save the model for this directory";
 const writeWarning = (identified: DirectoryIdentity) =>
   `${WRITE_WARNING}\nCheck that ${shownPath(identified)} can be written`;
@@ -120,7 +120,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
           return recovered(
             preferenceFromSelectedModel(pi, canonicalCwd, selected),
             "current",
-            "Couldn't read Pi's current model, so it wasn't saved for this directory",
+            "Couldn't read Pi's current model, so it wasn't saved for this directory\nPick it again with /model to save it",
           );
         });
 

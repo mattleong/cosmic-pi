@@ -101,6 +101,40 @@ describe("subagents doctor", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("names the provider to sign in to when Pi knows none of a route's models", () =>
+    Effect.gen(function* () {
+      const agentDirectory = yield* temporaryDirectory("doctor-");
+      const checks = yield* doctor({
+        pi: extensionApiFixture(),
+        ctx: doctorContext(),
+        agentDirectory,
+        activityViewAvailable: false,
+        projectTrusted: true,
+      }).pipe(
+        Effect.provide(
+          Layer.merge(
+            profileLayerFor({
+              ...config,
+              profileSets: {
+                doctor: {
+                  profiles: {
+                    oracle: { ...pi("missing"), model: "elsewhere/missing" },
+                  },
+                },
+              },
+            }),
+            registry([]),
+          ),
+        ),
+      );
+      const oracle = Option.getOrUndefined(
+        Arr.findFirst(checks, (item) => item.label === "Profile oracle"),
+      );
+      expect(oracle?.status).toBe("failed");
+      expect(oracle?.detail).toContain("/login elsewhere");
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("probes distinct routes concurrently, at most four at a time", () =>
     Effect.gen(function* () {
       const agentDirectory = yield* temporaryDirectory("doctor-");

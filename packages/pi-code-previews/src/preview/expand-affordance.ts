@@ -81,8 +81,9 @@ export function compactExpandLabel(
 
 /**
  * What expanding a collapsed preview row reveals. Preview bodies show their arguments and output,
- * so without a declaration only issues kept for expansion (`details`) or a result the collapsed
- * body leaves out (`output`, or `error` for a failure) count.
+ * so without a declaration only a result the collapsed body leaves out (`output`, or `error` for a
+ * failure) or else issues kept for expansion (`details`) count. Like a compact row, a hidden result
+ * names the affordance before issue detail does.
  */
 export function previewExpandLabel(
   summary: CompactSummary,
@@ -91,8 +92,8 @@ export function previewExpandLabel(
 ): string | undefined {
   const label = declared(summary);
   if (label !== undefined) return label === false ? undefined : label;
-  if (hidesIssueDetail(summary)) return "details";
-  return showsContent(result) && !resultShown ? contentLabel(summary) : undefined;
+  if (showsContent(result) && !resultShown) return contentLabel(summary);
+  return hidesIssueDetail(summary) ? "details" : undefined;
 }
 
 /** Whether drawn rows show anything. */

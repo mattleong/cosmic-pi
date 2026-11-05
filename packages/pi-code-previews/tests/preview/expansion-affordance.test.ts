@@ -143,6 +143,8 @@ test.each([
   ["paused", "Paused by the user", 0],
   ["running", "The dev server keeps running on port 5173", 1],
   ["running", "0/2 finished · 2 running", 0],
+  // A running call nested in a section states its own state, not the row's.
+  ["running", "  Calls\n    ⠋ read source.ts", 1],
 ] as const)(
   "an expanded preview %s row states its state once with body %j",
   (state, body, lines) => {
@@ -167,6 +169,55 @@ test.each([
     expect(stateLines).toHaveLength(lines);
   },
 );
+
+test("an expanded waiting preview row states the words its compact heading shows", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+  const harness = createToolPresentationHarness(
+    heldTool(
+      () => ({ subject: "release", waiting: true, counters: ["needs your input"] }),
+      "Asked 4 questions",
+    ),
+  );
+  harness.call({ path: "a.ts" }, { expanded: true, executionStarted: true });
+  harness.result(textResult("Asked 4 questions"), { expanded: true, isPartial: true });
+  const text = Str.toLowerCase(stripAnsi(Arr.join(harness.render(), "\n")));
+  expect(text).toContain("needs your input");
+  expect(text).not.toContain("waiting for reply");
+});
+
+const failedRead = (phase: string): CompactSummary => ({
+  subject: "a.ts",
+  issues: [{ severity: "error", code: "demo", message: "Couldn't read", detail: "ENOENT" }],
+  ...(phase === "settled" && { outcome: "error" }),
+});
+
+test("a failure the collapsed preview body leaves out offers its error, as compact does", () => {
+  const labels = Arr.map(styles, (style) => {
+    applyPresentationSettings({ toolCallCollapsedStyle: style });
+    const harness = createToolPresentationHarness(tool(failedRead, { result: "empty" }));
+    harness.call({ path: "a.ts" });
+    harness.result(textResult("ENOENT: no such file"), { isError: true });
+    return Arr.map(affordances(Arr.join(harness.render(), "\n")), Str.trim);
+  });
+  expect(labels[0]).toHaveLength(1);
+  expect(labels[1]).toEqual(labels[0]);
+});
+
+test("a bordered preview row names what expansion reveals in its corner", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallBackground: "border" });
+  const harness = createToolPresentationHarness(
+    tool(() => ({ subject: "check", outcome: "returned", expandLabel: "checks" }), {
+      result: "empty",
+    }),
+  );
+  harness.call({ path: "a.ts" });
+  harness.result(textResult("12 checks passed"));
+  const corner = Arr.findFirst(
+    Str.split(stripAnsi(Arr.join(harness.render(), "\n")), "\n"),
+    (row) => Str.startsWith("╰")(Str.trim(row)),
+  );
+  expect(Option.getOrThrow(corner)).toContain("checks");
+});
 
 const renderNote = (content: string) =>
   withCodePreviewMessageShell((_message, _options, theme) => ({

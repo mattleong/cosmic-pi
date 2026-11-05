@@ -49,14 +49,13 @@ export function injectProviderPayload(
   return { ...event.payload, service_tier: FAST_SERVICE_TIER };
 }
 
-export function fastDebugLines(ctx: ExtensionContext, snapshot: FastSnapshot): string[] {
+/** Fast-mode diagnostics as `Name: value` facts; the setting itself and the model show elsewhere. */
+export function fastDiagnosticLines(ctx: ExtensionContext, snapshot: FastSnapshot): string[] {
   return [
-    `Fast mode: ${snapshot.desiredActive ? "on" : "off"}`,
-    `Fast active: ${isFastActive(ctx, snapshot) ? "yes" : "no"}`,
-    `Current model: ${currentModelKey(ctx)}`,
-    `Supported model: ${supportsFast(ctx) ? "yes" : "no"}`,
-    `Configured service_tier: ${FAST_SERVICE_TIER}`,
-    `Last injected: ${
+    `Active: ${isFastActive(ctx, snapshot) ? "yes" : "no"}`,
+    `Model supported: ${supportsFast(ctx) ? "yes" : "no"}`,
+    `Service tier: ${FAST_SERVICE_TIER}`,
+    `Last fast request: ${
       snapshot.lastInjectedModel
         ? Arr.join(
             Arr.filter(

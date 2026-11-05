@@ -1,7 +1,8 @@
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { lastIndexOfFrom } from "pi-cosmic-core/text-scan";
@@ -145,6 +146,114 @@ const closeUpMarker = (clipped: string, marker: string): string => {
   }
   if (!trimmed || head.length === 0) return clipped;
   return `${head}${reset ? STYLE_RESET : ""}${Fn.pipe(clipped, Str.slice(at))}`;
+};
+
+const FACT_ARROW = " → ";
+
+// Splits one word too wide for a row after its `/` separators, then after `-`, `_`, or `.`, then
+// anywhere, so a long path breaks between directories and names. The first row takes what fits
+// in `firstWidth` and may be empty.
+const breakWideWord = (word: string, firstWidth: number, restWidth: number): string[] => {
+  const tokens = Arr.flatMap(Str.split(word, /(?<=\/)/u), (segment) =>
+    visibleWidth(segment) <= restWidth ? [segment] : Str.split(segment, /(?<=[-_.])/u),
+  );
+  const rows: string[] = [];
+  let current = "";
+  for (const token of tokens) {
+    if (visibleWidth(`${current}${token}`) <= (rows.length === 0 ? firstWidth : restWidth)) {
+      current = `${current}${token}`;
+      continue;
+    }
+    if (current || rows.length === 0) rows.push(current);
+    if (visibleWidth(token) <= restWidth) current = token;
+    else {
+      const chunks = wrapTextWithAnsi(token, restWidth);
+      rows.push(...chunks.slice(0, -1));
+      current = Option.getOrElse(Arr.last(chunks), () => "");
+    }
+  }
+  if (current) rows.push(current);
+  return rows;
+};
+
+// A separator glyph stays with the word after it, so no row ends with `→` or `·`.
+const wrapUnits = (text: string): string[] => {
+  const units: string[] = [];
+  for (const word of Str.split(text, " ")) {
+    const previous = Option.getOrUndefined(Arr.last(units));
+    if (previous === "→" || previous === "·") units[units.length - 1] = `${previous} ${word}`;
+    else units.push(word);
+  }
+  return units;
+};
+
+// Greedy word wrap whose first row may be wider than the rest.
+const wrapWords = (text: string, firstWidth: number, restWidth: number): string[] => {
+  const rows: string[] = [];
+  let current = "";
+  const limit = () => (rows.length === 0 ? firstWidth : restWidth);
+  for (const word of wrapUnits(text)) {
+    if (!current && !word && rows.length > 0) continue;
+    const candidate = current ? `${current} ${word}` : word;
+    if (visibleWidth(candidate) <= limit()) {
+      current = candidate;
+      continue;
+    }
+    if (visibleWidth(word) <= restWidth) {
+      if (current) rows.push(current);
+      current = word;
+      continue;
+    }
+    // A word too wide for any row fills the current one first.
+    const room = current ? limit() - visibleWidth(current) - 1 : limit();
+    const [head = "", ...tail] = breakWideWord(word, Math.max(0, room), restWidth);
+    const filled = head && current ? `${current} ${head}` : head || current;
+    if (tail.length === 0) {
+      current = filled;
+      continue;
+    }
+    if (filled) rows.push(filled);
+    rows.push(...tail.slice(0, -1));
+    current = Option.getOrElse(Arr.last(tail), () => "");
+  }
+  if (current || rows.length === 0) rows.push(current);
+  return rows;
+};
+
+/**
+ * Wraps `·`-joined facts between whole facts, so no `·` or `→` ends a line; every line after the
+ * first hangs under it. A fact too wide for a line breaks before its `→`, which then leads the
+ * continuation (`→ provider/model`); a part still too wide breaks between words, then after a
+ * `/`. Widths of 8 or less drop the hanging indent. Pass plain text and style the lines.
+ */
+export const wrapFacts = (facts: string, width: number, hangingIndent = "  "): string[] => {
+  const hanging = width > 8 ? hangingIndent : "";
+  const room = Math.max(1, width - visibleWidth(hanging));
+  const pieces = Arr.flatMap(Str.split(facts, INLINE_SEPARATOR), (fact) => {
+    if (visibleWidth(fact) <= room) return [{ text: fact, join: INLINE_SEPARATOR }];
+    const [first, ...rest] = Str.split(fact, FACT_ARROW);
+    return [
+      { text: first, join: INLINE_SEPARATOR },
+      ...Arr.map(rest, (part) => ({ text: `→ ${part}`, join: " " })),
+    ];
+  });
+  const lines: string[] = [];
+  let current = "";
+  const limit = () => (lines.length === 0 ? width : room);
+  for (const piece of pieces) {
+    const candidate = current ? `${current}${piece.join}${piece.text}` : piece.text;
+    if (visibleWidth(candidate) <= limit()) {
+      current = candidate;
+      continue;
+    }
+    if (current) lines.push(current);
+    // An over-wide piece starts its own line; the facts after it keep packing onto its last row.
+    const rows = wrapWords(piece.text, limit(), room);
+    lines.push(...rows.slice(0, -1));
+    current = Option.getOrElse(Arr.last(rows), () => "");
+  }
+  if (current) lines.push(current);
+  return Arr.map(lines, (line, index) => (index === 0 ? line : `${hanging}${line}`));
 };
 
 // visibleWidth caches and has an ASCII fast path; truncateToWidth segments any non-ASCII text.

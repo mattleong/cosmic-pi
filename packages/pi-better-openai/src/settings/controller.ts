@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import type { ExtensionCommand } from "pi-cosmic-core";
 import {
+  settingsStatusText,
   settingsSubcommand,
   withInvocationAuthority,
   type SettingsCommandOwner,
@@ -27,7 +28,8 @@ export interface SettingsControllerOptions {
   readonly config: () => ResolvedConfig | undefined;
   readonly updateContext: (ctx: ExtensionContext) => void;
   readonly updateFooter: (ctx: ExtensionContext) => void;
-  readonly formatDebugStatus: (ctx: ExtensionContext) => string;
+  /** Facts the setting rows don't show, after them in `status` and in Diagnostics' Debug info. */
+  readonly diagnosticLines: (ctx: ExtensionContext) => ReadonlyArray<string>;
   readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
   readonly resetFastRoutingTransport: (ctx: ExtensionContext) => void;
   readonly captureAuthority: () => () => boolean;
@@ -46,7 +48,7 @@ export function registerSettingsController(
     config,
     updateContext,
     updateFooter,
-    formatDebugStatus,
+    diagnosticLines,
     fastProjection,
     resetFastRoutingTransport,
     run,
@@ -79,7 +81,23 @@ export function registerSettingsController(
       descriptors,
       examples: ["fast.enabled on", "usage.refreshIntervalMs 30s"],
       config,
-      status: formatDebugStatus,
+      status: (ctx) => {
+        const cfg = config();
+        if (!cfg) throw new Error("Better OpenAI hasn't started");
+        return settingsStatusText({
+          title: "Better OpenAI settings",
+          sections: [
+            {
+              rows: Arr.map(descriptors, (descriptor) => ({
+                id: descriptor.id,
+                label: descriptor.label,
+                value: descriptor.currentValue(cfg),
+              })),
+            },
+          ],
+          notes: diagnosticLines(ctx),
+        });
+      },
       onInvoke: updateContext,
       signal: "optional",
       apply: (ctx, id, value, signal) =>

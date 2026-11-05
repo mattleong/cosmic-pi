@@ -19,6 +19,8 @@ import {
   getEditOperations,
   getEditPreviewOperations,
   getPathArg,
+  numericArg,
+  stringArg,
 } from "../../data/args";
 import { getEditDiff, getTextContent } from "../../data/results";
 import { codePreviewSettings } from "../../../config/state";
@@ -37,7 +39,7 @@ import { summarizeDiff } from "../../../diff/summary";
 import { formatDiffPreview } from "./diff-preview";
 import { expandedSection } from "../../../preview/expanded-section";
 import { expandedFields, type ExpandedField } from "../../../preview/expanded-body";
-import { headingShowedSubject } from "../../../preview/heading-coverage";
+import { headingIsOwnCall, headingShowedSubject } from "../../../preview/heading-coverage";
 import { normalizeShellCommandWhitespace } from "../../shell-command";
 import { argumentsStreaming, pathPreviewLanguage, renderContentPreview } from "./preview-text";
 import { readResultBody } from "./read-result";
@@ -319,24 +321,36 @@ function fieldLabel(key: string): string {
 interface OptionField extends ExpandedField {
   /** The call's target, which a heading that shows its whole subject already states. */
   readonly target: boolean;
+  /** An option the tool's own preview heading states exactly, such as grep's glob and limit. */
+  readonly previewHeading: boolean;
 }
 
-/** Labeled argument fields, without the target once the heading has shown the whole subject. */
+/**
+ * Labeled argument fields, without the target once the heading has shown the whole subject, and
+ * without options the tool's own preview heading states.
+ */
 function optionFields(
   theme: Theme,
   fields: readonly OptionField[],
   state: RendererState,
 ): Component {
-  let drawn: { readonly targets: boolean; readonly body: Component } | undefined;
+  let drawn:
+    | { readonly targets: boolean; readonly own: boolean; readonly body: Component }
+    | undefined;
   return {
     render(width) {
       const targets = !headingShowedSubject(state);
-      if (drawn?.targets !== targets)
+      const own = headingIsOwnCall(state);
+      if (drawn?.targets !== targets || drawn.own !== own)
         drawn = {
           targets,
+          own,
           body: expandedFields(
             theme,
-            Arr.filter(fields, (field) => targets || !field.target),
+            Arr.filter(
+              fields,
+              (field) => (targets || !field.target) && !(own && field.previewHeading),
+            ),
           ),
         };
       return drawn.body.render(width);
@@ -374,8 +388,26 @@ function builtinOptionFields(
         : Predicate.isString(value) || Predicate.isNumber(value)
           ? String(value)
           : (JSON.stringify(value) ?? "");
-    return [{ label: fieldLabel(key), lines: [text], target: isTarget }];
+    return [
+      {
+        label: fieldLabel(key),
+        lines: [text],
+        target: isTarget,
+        previewHeading: previewHeadingStates(tool, key, hostObject(args)),
+      },
+    ];
   });
+}
+
+/** Whether the tool's own preview heading states an option, as grep's glob and limit. */
+function previewHeadingStates(
+  tool: BuiltinCompactTool,
+  key: string,
+  args: HostObject | undefined,
+): boolean {
+  if (tool !== "grep") return false;
+  if (key === "glob") return stringArg(args, "glob") !== "";
+  return key === "limit" && Boolean(numericArg(args, "limit"));
 }
 
 function commandBody(

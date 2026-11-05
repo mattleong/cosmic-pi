@@ -3,6 +3,7 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { clipText } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import type { ListedSession, SessionView } from "./tools/contract.ts";
 
 /** Longest session name or directory a heading or list row shows before clipping with `…`. */
@@ -19,6 +20,18 @@ export const SESSION_STATE_LABELS: Record<ListedSession["state"], string> = {
   unresponsive: "not answering",
   unreachable: "unreachable",
 };
+
+/**
+ * Each listed state's status glyph: idle is done with its turn, busy was working when the list was
+ * taken, unavailable and not answering couldn't confirm their state, and unreachable failed.
+ */
+export const SESSION_STATE_GLYPHS = {
+  idle: SUITE_STATUS_GLYPHS.succeeded,
+  busy: SUITE_STATUS_GLYPHS.neutral,
+  unavailable: SUITE_STATUS_GLYPHS.uncertain,
+  unresponsive: SUITE_STATUS_GLYPHS.uncertain,
+  unreachable: SUITE_STATUS_GLYPHS.failed,
+} as const satisfies Record<ListedSession["state"], string>;
 
 type SessionIdentity = Pick<SessionView, "sessionId" | "name" | "cwd">;
 

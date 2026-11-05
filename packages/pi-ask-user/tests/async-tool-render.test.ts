@@ -17,7 +17,12 @@ type ResultDetails = Parameters<typeof renderAsyncResult>[0]["details"];
 type MessageInput = Parameters<typeof renderAsyncMessage>[0];
 
 const output = (component: Component) => Arr.join(component.render(240), "\n");
-const callContext = (expanded = false) => ({ expanded, state: {}, isPartial: true });
+const callContext = (expanded = false) => ({
+  expanded,
+  state: {},
+  isPartial: true,
+  executionStarted: false,
+});
 const outcome = {
   outcome: "submitted",
   answers: [

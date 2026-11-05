@@ -1,4 +1,4 @@
-import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
@@ -20,6 +20,7 @@ export interface SettingsHarnessOptions {
   readonly captureAuthority?: () => () => boolean;
   readonly loadMenu?: () => PromiseLike<typeof import("../src/settings/menu.ts")>;
   readonly signal?: () => AbortSignal | undefined;
+  readonly diagnosticLines?: (ctx: ExtensionContext) => ReadonlyArray<string>;
 }
 
 /** `/openai settings` against fake config and fast-mode services, on a fake custom surface. */
@@ -67,7 +68,7 @@ export function settingsHarnessWith(
       config: () => currentConfig,
       updateContext: vi.fn(),
       updateFooter: vi.fn(),
-      formatDebugStatus: () => "diagnostics",
+      diagnosticLines: options.diagnosticLines ?? (() => ["Current model: none"]),
       fastProjection: MutableRef.make(initialFastSnapshot()),
       resetFastRoutingTransport: vi.fn(),
       run: (effect, signal) => Effect.runPromise(effect.pipe(Effect.provide(services)), { signal }),

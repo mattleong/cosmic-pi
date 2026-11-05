@@ -123,6 +123,7 @@ import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-com
 import type { DoctorCheck } from "../src/application/doctor.ts";
 import { showDoctorReport } from "../src/settings/doctor-report.ts";
 import { registerSubagentApplication } from "../src/application/register.ts";
+import { registerSubagentManagerCommand } from "../src/settings/controller.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import {
   subagentServiceDouble,
@@ -871,7 +872,9 @@ const agentScenarios = Effect.all([
   agentScenario(
     "child waiting on its parent's reply",
     { tool: "agent_read", args: { agentIds: ["agent-6"] } },
-    read([runReadout(dbMigration, "Which seed file should I extend?")]),
+    read([
+      runReadout(dbMigration, "Migration 0007 is written; one question before the seed data."),
+    ]),
   ),
   agentScenario(
     "one worker not found",
@@ -1372,6 +1375,20 @@ const receiptScenarios: ReadonlyArray<ToolScenario> = [
           requestId: "q-1",
           message:
             "Should I also update the migration in db/0007.sql, or leave it for a follow-up?",
+        },
+      }),
+    ],
+    { attentionRequired: true },
+  ),
+  awaited(
+    "worker asks a long question",
+    [
+      view({
+        state: "waiting_for_parent",
+        question: {
+          requestId: "q-2",
+          message:
+            "The 0007 migration renames sessions.token to sessions.refresh_token, and three services still read the old column.\n\nShould I add a compatibility view for one release, or update the services in this change?",
         },
       }),
     ],
@@ -2456,7 +2473,10 @@ const profileSaveDialogLines = Effect.fn("SubagentGallery.profileSaveDialogLines
   return lines;
 });
 
-/** `/subagents settings` through the registered command: the scope groups, then one opened. */
+/**
+ * `/subagents settings` through the registered command: the scope groups, one opened, a Global
+ * change that Project's inherited rows follow at once, and `settings status`.
+ */
 const settingsLines = Effect.fn("SubagentGallery.settingsLines")(function* () {
   const agentDirectory = yield* step(() =>
     nodeFsPromises.mkdtemp(nodePath.join(tmpdir(), "pi-subagents-gallery-")),
@@ -2483,13 +2503,16 @@ const settingsLines = Effect.fn("SubagentGallery.settingsLines")(function* () {
   });
   const surface = fakeCustomSurfaceHost();
   const mounted = deferredPromise();
+  const notices: string[] = [];
   const ctx = sessionContextFixture({
     mode: "tui",
     hasUI: true,
     isProjectTrusted: () => true,
     ui: {
       setStatus: () => undefined,
-      notify: () => undefined,
+      notify: (message) => {
+        notices.push(message);
+      },
       custom: (factory, options) => {
         const opened = surface.custom(factory, options);
         queueMicrotask(() => {
@@ -2512,14 +2535,86 @@ const settingsLines = Effect.fn("SubagentGallery.settingsLines")(function* () {
       "",
     ]);
   const lines = [...frames("scope groups")];
-  // Writer workspace, then the Session group, which opens on its first row.
+  // Past Writer workspace and Session, the Global group opens on its first row.
   for (const key of ["j", "j", "\r"]) surface.editor?.handleInput?.(key);
   lines.push(...frames("the Global group opened"));
+  // Global's delegation moves from encouraged to orchestration; Project inherits it at once.
+  for (const key of ["\r", "j", "\r"]) surface.editor?.handleInput?.(key);
+  const globalFile = nodePath.join(agentDirectory, "pi-subagents.json");
+  for (let turn = 0; turn < 200; turn += 1) {
+    const saved = yield* step(() => nodeFsPromises.readFile(globalFile, "utf8"));
+    if (Str.includes("orchestration")(saved)) break;
+    yield* step(eventLoopTurn);
+  }
+  yield* settle(() => Promise.resolve());
+  lines.push(...frames("Global delegation changed"));
+  surface.editor?.handleInput?.("\u001b");
+  lines.push(...frames("scope groups after the Global change"));
+  for (const key of ["j", "\r"]) surface.editor?.handleInput?.(key);
+  lines.push(...frames("the Project group inherits the change"));
   for (const key of ["\u001b", "\u001b"]) surface.editor?.handleInput?.(key);
   yield* Fiber.join(picker);
+  notices.length = 0;
+  yield* step(
+    () => host.commands.get("subagents")?.handler("settings status", ctx) ?? Promise.resolve(),
+  );
+  lines.push("── subagents settings · settings status · 57 cols", ...notices, "");
   yield* settle(() => host.emit("session_shutdown", ctx));
   return lines;
 });
+
+/** The writer workspace row while worktrees in the checkout wait on apply or discard. */
+const unresolvedWorkspaceLines = Effect.fn("SubagentGallery.unresolvedWorkspaceLines")(
+  function* () {
+    const host = recordingExtensionHost({});
+    registerSubagentManagerCommand(
+      host.pi,
+      subagentCommandActionsFixture({
+        inspectProfiles: () =>
+          Promise.resolve(
+            profileSettingsInspection({
+              globalDocument: { version: 6, defaultProfileSet: "review", profileSets: {} },
+              projectDocument: undefined,
+              projectTrusted: false,
+            }),
+          ),
+        inspectWriterWorkspace: () =>
+          Promise.resolve({ mode: "worktree" as const, unresolvedWorkspaceCount: 2 }),
+      }),
+    );
+    const surface = fakeCustomSurfaceHost();
+    const mounted = deferredPromise();
+    const ctx = sessionContextFixture({
+      mode: "tui",
+      hasUI: true,
+      isProjectTrusted: () => false,
+      ui: {
+        setStatus: () => undefined,
+        notify: () => undefined,
+        custom: (factory, options) => {
+          const opened = surface.custom(factory, options);
+          queueMicrotask(() => {
+            surface.mount();
+            mounted.resolve();
+          });
+          return opened;
+        },
+      },
+    });
+    const picker = yield* step(
+      () => host.commands.get("subagents")?.handler("settings", ctx) ?? Promise.resolve(),
+    ).pipe(Effect.forkScoped);
+    yield* step(() => mounted.promise);
+    const lines = Arr.flatMap([100, 57], (width) => [
+      `── subagents settings · worktrees wait on apply or discard · ${width} cols`,
+      ...Arr.map(surface.editor?.render(width) ?? [], (line) => Str.trimEnd(line)),
+      "",
+    ]);
+    surface.editor?.handleInput?.("\u001b");
+    yield* Fiber.join(picker);
+    return lines;
+  },
+);
 
 const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = [
   { label: "Pi", status: "ok", detail: "version 1.5.0" },
@@ -2534,7 +2629,8 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = [
   {
     label: "Profile oracle",
     status: "failed",
-    detail: "No API key for openai-codex; run /login, then try again",
+    detail:
+      "Pi doesn't know openai-codex/gpt-6-luna or isn't signed in to its provider; run /login openai-codex, or check the model name",
   },
   {
     label: ".worktreeinclude",
@@ -2757,6 +2853,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...profileSetPickerLines(),
         ...(yield* profileSaveDialogLines()),
         ...(yield* Effect.scoped(settingsLines())),
+        ...(yield* Effect.scoped(unresolvedWorkspaceLines())),
         ...(yield* Effect.scoped(doctorLines())),
       );
       yield* writeGallerySection(directory, "pi-subagents", lines);

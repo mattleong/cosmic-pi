@@ -10,6 +10,7 @@ import {
 
 export type SettingsUiItemId = CodePreviewEditableSettingId | "settingsFile";
 
+/** One setting's single name, used on every surface: rows, lock reasons, health, and status. */
 export interface SettingItemDefinition {
   label: string;
   description: string;
@@ -56,13 +57,13 @@ export const SETTING_ITEM_DEFINITIONS = {
     values: ["10", "20", "40", "80"],
   },
   readContentPreview: {
-    label: "Read content preview",
+    label: "Read content",
     description:
       "Show file contents in read results. Turn off to hide collapsed output while still allowing expanded output.",
     values: ON_OFF_VALUES,
   },
   writeContentPreview: {
-    label: "Write code preview",
+    label: "Write content",
     description:
       "Show write content and write diffs. Turn off to hide collapsed code previews while still allowing expanded output.",
     values: ON_OFF_VALUES,
@@ -73,7 +74,7 @@ export const SETTING_ITEM_DEFINITIONS = {
     values: ["10", "20", "40", "80"],
   },
   editDiffPreview: {
-    label: "Edit diff preview",
+    label: "Edit diff",
     description:
       "Show proposed and applied edit diffs. Turn off to hide collapsed diff previews while still allowing expanded output.",
     values: ON_OFF_VALUES,
@@ -90,19 +91,19 @@ export const SETTING_ITEM_DEFINITIONS = {
     values: ["10", "15", "25", "40", "80"],
   },
   grepResultPreview: {
-    label: "Grep result preview",
+    label: "Grep results",
     description:
       "Show grep matches in tool results. Turn off to hide collapsed output while still allowing expanded output.",
     values: ON_OFF_VALUES,
   },
   findResultPreview: {
-    label: "Find result preview",
+    label: "Find results",
     description:
       "Show find paths in tool results. Turn off to hide collapsed output while still allowing expanded output.",
     values: ON_OFF_VALUES,
   },
   lsResultPreview: {
-    label: "Ls result preview",
+    label: "Ls entries",
     description:
       "Show ls entries in tool results. Turn off to hide collapsed output while still allowing expanded output.",
     values: ON_OFF_VALUES,
@@ -118,7 +119,7 @@ export const SETTING_ITEM_DEFINITIONS = {
     values: ON_OFF_VALUES,
   },
   bashResultPreview: {
-    label: "Bash result preview",
+    label: "Bash output",
     description:
       "Show successful bash output. Turn off to hide collapsed output while still allowing expanded output, running state, and errors.",
     values: ON_OFF_VALUES,

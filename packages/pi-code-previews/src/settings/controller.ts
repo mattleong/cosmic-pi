@@ -12,6 +12,7 @@ import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import {
   openSettingsList,
+  settingsStatusText,
   settingsSubcommand,
   withInvocationAuthority,
   type SettingsCommandOwner,
@@ -34,8 +35,8 @@ import { SETTING_ITEM_DEFINITIONS, type SettingItemDefinition } from "./ui/regis
 
 const SCRIPTED_SETTINGS = Arr.flatMap(CODE_PREVIEW_SETTING_KEYS, (id) => {
   if (id === "tools") return [];
-  const { description, values }: SettingItemDefinition = SETTING_ITEM_DEFINITIONS[id];
-  return [{ id, description, ...(values && { values: [...values] }) }];
+  const { label, description, values }: SettingItemDefinition = SETTING_ITEM_DEFINITIONS[id];
+  return [{ id, label, description, ...(values && { values: [...values] }) }];
 });
 
 const config = (): CodePreviewSettings | undefined =>
@@ -91,17 +92,19 @@ function codePreviewSettingsCommand(
     status: (ctx) => {
       const current = config();
       if (!current) return "Code Previews settings aren't available right now";
-      return Arr.join(
-        [
-          "Code Previews settings",
-          ...Arr.map(
-            SCRIPTED_SETTINGS,
-            (setting) => `  ${setting.id} = ${formatSettingValue(current, setting.id)}`,
-          ),
-          `Settings file: ${formatDisplayPath(getSettingsPath(), ctx.cwd)}`,
+      return settingsStatusText({
+        title: "Code Previews settings",
+        sections: [
+          {
+            rows: Arr.map(SCRIPTED_SETTINGS, (setting) => ({
+              id: setting.id,
+              label: setting.label,
+              value: formatSettingValue(current, setting.id),
+            })),
+          },
         ],
-        "\n",
-      );
+        notes: [`Settings file: ${formatDisplayPath(getSettingsPath(), ctx.cwd)}`],
+      });
     },
     apply: (ctx, id, value, signal) => {
       operationSignal = signal;

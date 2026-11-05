@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { SafeFile } from "pi-cosmic-core";
 import { SubagentBackendRegistry } from "../backend/service.ts";
@@ -20,7 +21,7 @@ import {
   gitVersionSupported,
   MINIMUM_GIT_VERSION,
 } from "../boundary/git-installation.ts";
-import { PROFILE_IDS } from "../profiles/model.ts";
+import { PROFILE_IDS, type SkippedProfileCandidate } from "../profiles/model.ts";
 import type { ProfileCandidateAttempt, ProfileResolution } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { InvalidSubagentRequestError } from "../run/errors.ts";
@@ -72,11 +73,37 @@ interface RouteCheck {
   readonly prefix: string;
 }
 
+/**
+ * A route Pi has no model for because none of its candidates is known or signed in: each model,
+ * then how to sign in to its provider, such as `run /login openai-codex`.
+ */
+const unknownModelsDetail = (
+  skipped: ReadonlyArray<SkippedProfileCandidate>,
+): string | undefined => {
+  if (skipped.length === 0 || !Arr.every(skipped, (entry) => entry.code === "pi_model_unknown"))
+    return undefined;
+  const models = Arr.dedupe(Arr.map(skipped, (entry) => entry.candidate.model));
+  const providers = Arr.dedupe(
+    Arr.filterMap(models, (model) => {
+      const [provider, ...rest] = Str.split(model, "/");
+      return rest.length > 0 && provider ? Result.succeed(provider) : Result.failVoid;
+    }),
+  );
+  const login = Arr.join(
+    Arr.map(providers, (provider) => `/login ${provider}`),
+    " or ",
+  );
+  return `Pi doesn't know ${Arr.join(models, ", ")} or isn't signed in to ${models.length === 1 ? "its" : "their"} provider; ${login ? `run ${login}, or ` : ""}check the model name`;
+};
+
 const routeOutcome = (
   { label, plan, prefix }: RouteCheck,
   failures: ReadonlyMap<string, string | undefined>,
 ): DoctorCheck => {
-  if (plan.kind === "failed") return check(label, "failed", plan.message);
+  if (plan.kind === "failed") {
+    const unknown = unknownModelsDetail(plan.skippedCandidates);
+    return check(label, "failed", unknown === undefined ? plan.message : `${prefix}${unknown}`);
+  }
   const [first] = plan.attempts;
   if (!first) return check(label, "failed", "no eligible route");
   const failure = failures.get(attemptKey(first));

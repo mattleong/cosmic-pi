@@ -5,7 +5,7 @@ import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type * as Types from "effect/Types";
-import { managerLayoutTier, type ManagerLayoutTier, clipToWidth } from "./chrome.ts";
+import { managerLayoutTier, type ManagerLayoutTier, clipToWidth, wrapFacts } from "./chrome.ts";
 import { FullScreenKeymap, pageSteps } from "./keymap.ts";
 import {
   clampListIndex,
@@ -184,16 +184,35 @@ export interface ListDetailField {
   readonly tone?: Parameters<Theme["fg"]>[0];
 }
 
+// Narrower than this, a field's value moves beneath its label rather than squeeze its column.
+const MIN_FIELD_VALUE_WIDTH = 16;
+
+/**
+ * `Label  value` rows with labels in one column. Given a width, a long value wraps between whole
+ * facts under its own column, so no row ends with `·` or `→`.
+ */
 export const detailFieldRows = (
   theme: Pick<Theme, "fg">,
   fields: ReadonlyArray<ListDetailField>,
+  width?: number,
 ): ReadonlyArray<string> => {
   const labelWidth = Math.max(10, ...Arr.map(fields, (field) => visibleWidth(field.label)));
-  return Arr.map(
-    fields,
-    (field) =>
-      `${theme.fg("dim", padListDetailRow(field.label, labelWidth))}  ${theme.fg(field.tone ?? "text", field.value)}`,
-  );
+  const column = labelWidth + 2;
+  return Arr.flatMap(fields, (field) => {
+    const label = theme.fg("dim", padListDetailRow(field.label, labelWidth));
+    const tone = (text: string) => theme.fg(field.tone ?? "text", text);
+    if (width === undefined) return [`${label}  ${tone(field.value)}`];
+    if (width - column < MIN_FIELD_VALUE_WIDTH)
+      return [
+        theme.fg("dim", field.label),
+        ...Arr.map(wrapFacts(field.value, Math.max(1, width - 2), ""), (line) => `  ${tone(line)}`),
+      ];
+    const [first = "", ...rest] = wrapFacts(field.value, width - column, "");
+    return [
+      `${label}  ${tone(first)}`,
+      ...Arr.map(rest, (line) => `${Fn.pipe(" ", Str.repeat(column))}${tone(line)}`),
+    ];
+  });
 };
 
 const framedRow = (frame: ListDetailFrame, line: string, inner: number, pane?: ListDetailPane) => {

@@ -1,12 +1,13 @@
-import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TUnknown } from "typebox";
-import { Container, Text } from "@earendil-works/pi-tui";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import {
   escapeControlChars,
   expandedAuthoredText,
+  expandedSection,
   expandedText,
   getTextContent,
   previewIssuesSlot,
@@ -18,6 +19,7 @@ import {
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { quoteText } from "pi-cosmic-core/message-text";
 import { stripTerminalControls } from "pi-cosmic-core/security";
+import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderToolHeader,
@@ -136,10 +138,24 @@ export const contactParentCompactSummary: CompactSummaryProvider = ({
     return parentReplyText(result) === undefined
       ? undefined
       : { ...summary, counters: ["answered"], outcome: "success", expandLabel: "reply" };
-  const receipt = decodeReceipt(result);
-  if (receipt?.content[0]?.text !== `Parent received ${request.kind}.`) return undefined;
+  if (!isReceipt(request.kind, decodeReceipt(result))) return undefined;
   return { ...summary, counters: ["received"], outcome: warning ? "warning" : "success" };
 };
+
+/** Whether a decoded result is the parent's receipt for progress or a warning. */
+const isReceipt = (kind: string, receipt: typeof ReceiptSchema.Type | undefined): boolean =>
+  receipt?.content[0]?.text === `Parent received ${kind}.`;
+
+/**
+ * Delivered progress reads `✓ Received`, as the shell's expanded status line states it. A warning's
+ * issue carries its state, so its receipt shows no line collapsed or expanded.
+ */
+const receivedLine = (theme: Theme): Component =>
+  new Text(
+    `${theme.fg("success", managerStateGlyph("done"))} ${theme.fg("muted", "Received")}`,
+    0,
+    0,
+  );
 
 const MESSAGE_LABELS = { progress: "Progress", warning: "Warning", question: "Question" } as const;
 
@@ -216,6 +232,13 @@ export const contactParentRenderers = {
               rows: COLLAPSED_REPLY_LINES,
             }),
           );
+    const kind = contactRequest(context.args)?.kind;
+    if (!context.isError && kind !== undefined && isReceipt(kind, decodeReceipt(result)))
+      return kind === "warning"
+        ? new Container()
+        : options.expanded
+          ? expandedSection(theme, undefined, receivedLine(theme))
+          : receivedLine(theme);
     const text = stripTerminalControls(getTextContent(result.content));
     return textResultBody(
       theme,

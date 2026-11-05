@@ -25,6 +25,7 @@ const PATH_LISTS = {
     emptyMarker: PATH_LIST_EMPTY_OUTPUT.find,
     emptyLabel: (output: string) => output || "No files found",
     footerNoun: "paths",
+    footerItem: { singular: "path" },
   },
   ls: {
     previewEnabled: () => codePreviewSettings.lsResultPreview,
@@ -32,6 +33,7 @@ const PATH_LISTS = {
     emptyMarker: PATH_LIST_EMPTY_OUTPUT.ls,
     emptyLabel: () => "Empty directory",
     footerNoun: "entries",
+    footerItem: { singular: "entry", plural: "entries" },
   },
 };
 
@@ -88,7 +90,7 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
         pathList.lines,
         limit,
         theme,
-        config.footerNoun,
+        config.footerItem,
         pathList.renderChunk,
       );
       return withAgentNotes(new Text(text, 0, 0), theme, notes);

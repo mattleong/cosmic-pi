@@ -47,7 +47,12 @@ import { renderCompactResultComponent, renderProfileRoutesComponent } from "./re
 import { formatAwaitCounters, renderAwaitProgressComponent } from "./render-await.ts";
 import { textResultBody } from "./render-preview.ts";
 import { cardBlockLines, cardFactLines } from "./render-run-cards.ts";
-import { expandedFactDetails, expandedRowsBody, indentedBody } from "../ui/agent-text.ts";
+import {
+  expandedFactDetails,
+  expandedRowsBody,
+  factRowLines,
+  indentedBody,
+} from "../ui/agent-text.ts";
 import { renderStartReceiptComponent } from "./render-start.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
@@ -220,6 +225,7 @@ const renderPartialStartAwait = (
     details.awaitUntil,
     theme,
     hierarchy,
+    expanded,
   );
   return expanded ? indentedBody(theme, progress) : progress;
 };
@@ -240,7 +246,7 @@ const renderAwaitResult = (
   const rows = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
     return [
-      clipToWidth(theme.fg("muted", counters), safeWidth),
+      ...factRowLines([[counters, "muted"]], safeWidth, theme, expanded),
       ...cardBlockLines(targets, safeWidth, theme, expanded),
       // Details too large for their reports keep the rest; the agent still received every report.
       ...(details.contentOmitted ? [clipToWidth(theme.fg("dim", OMITTED_NOTE), safeWidth)] : []),
@@ -407,7 +413,7 @@ const renderWorkspacePreview = (
   const raw = view ? undefined : rawResultSection(result.content, theme);
   const expandable = view ? view.body !== undefined || view.facts.length > 0 : raw !== undefined;
   const lineRows = (width: number) =>
-    line ? [clipToWidth(theme.fg("muted", line), Math.max(1, width))] : [];
+    line ? factRowLines([[line, "muted"]], Math.max(1, width), theme, expanded) : [];
   if (expanded && expandable)
     return expandedBody(
       indentedBody(theme, renderComponent(lineRows)),

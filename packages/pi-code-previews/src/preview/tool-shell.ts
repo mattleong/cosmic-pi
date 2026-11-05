@@ -195,9 +195,9 @@ function previewAffordance<TArgs, TDetails, TState extends object>(
       const { state } = context;
       shell.setExpandFallback((call, result) => {
         const current = frames.latestFor(state);
-        if (!current) return false;
+        if (!current) return undefined;
         const shown = frames.currentResult(current) ? result : undefined;
-        return label(current, [...call, ...result], shown) !== undefined;
+        return label(current, [...call, ...result], shown);
       });
       return shell;
     },

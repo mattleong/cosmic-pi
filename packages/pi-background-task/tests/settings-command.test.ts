@@ -18,6 +18,7 @@ import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
 import { BackgroundTaskConfigError } from "../src/config/store.ts";
 import { taskSettingsSubcommand, type TaskSettingsActions } from "../src/settings/task-settings.ts";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
+import { BACKGROUND_TASK_SETTINGS } from "../src/config/options.ts";
 
 const SPOOFED_SHELL = "/bin/\u001b[31mzsh\nspoof = injected";
 
@@ -243,8 +244,8 @@ describe("/tasks settings", () => {
       );
       yield* macrotask;
       expect(h.isOpen()).toBe(true);
-      // The Global group's first row shows its own `off`; its list offers on, off, then the
-      // inherited default.
+      // The Global group's first row shows its own `off`; its list offers the inherited default,
+      // then on and off, so moving past `off` wraps to `inherit (on)`.
       h.input("\r");
       h.input("\r");
       h.input("j");
@@ -257,6 +258,74 @@ describe("/tasks settings", () => {
       h.close();
       yield* Effect.promise(() => h.opened);
     }),
+  );
+
+  it.effect(
+    "a global save shows at once in the project's inherited rows, choices, and summary",
+    () =>
+      Effect.gen(function* () {
+        const h = pickerHarness(true);
+        yield* macrotask;
+        expect(h.isOpen()).toBe(true);
+        const line = (label: string) =>
+          Fn.pipe(
+            Arr.findFirst(Str.split(h.screen(), "\n"), (entry) =>
+              Fn.pipe(Str.trim(Str.replace(/^›/u, "")(entry)), Str.startsWith(label)),
+            ),
+            Option.getOrElse(() => ""),
+          );
+        const limits = Option.getOrThrow(
+          Arr.findFirst(BACKGROUND_TASK_SETTINGS, (setting) => setting.id === "maxRunning"),
+        ).values;
+        // The list leads with `inherit (8)`, so the steps down to 16 are its index plus one.
+        const steps = limits.indexOf("16") + 1;
+        expect(steps).toBeGreaterThan(0);
+        // Global's running limit, from inherited 8 to 16.
+        h.input("\r");
+        h.input("j");
+        h.input("\r");
+        for (const _ of Arr.range(1, steps)) h.input("j");
+        h.input("\r");
+        yield* macrotask;
+        expect(h.write).toHaveBeenLastCalledWith(
+          { cwd: "/project", scope: "global" },
+          "maxRunning",
+          16,
+        );
+        h.input("\u001b");
+        expect(line("Project")).toContain("16 running");
+        // The project row inherits the new value, and its choices lead with it.
+        h.input("j");
+        h.input("\r");
+        expect(line("Running at once")).toContain("inherit (16)");
+        h.input("j");
+        h.input("\r");
+        expect(line("(•)")).toContain("inherit (16)");
+        h.input("\u001b");
+        h.input("\u001b");
+        // Restoring Global's inheritance shows the default again everywhere.
+        h.input("k");
+        h.input("\r");
+        h.input("j");
+        h.input("\r");
+        for (const _ of Arr.range(1, steps)) h.input("k");
+        h.input("\r");
+        yield* macrotask;
+        expect(h.write).toHaveBeenLastCalledWith(
+          { cwd: "/project", scope: "global" },
+          "maxRunning",
+          undefined,
+        );
+        h.input("\u001b");
+        expect(line("Global")).toContain("8 running");
+        expect(line("Project")).toContain("8 running");
+        h.input("j");
+        h.input("\r");
+        expect(line("Running at once")).toContain("inherit (8)");
+        h.input("\u001b");
+        h.close();
+        yield* Effect.promise(() => h.opened);
+      }),
   );
 
   it.effect("a scope's summary resolves the values it inherits", () =>
@@ -349,7 +418,10 @@ describe("/tasks settings", () => {
       h.choose();
       yield* macrotask;
       expect(h.write).toHaveBeenCalledTimes(2);
-      expect(h.notify).toHaveBeenCalled();
+      // A successful change posts nothing; the new invocation's Global row shows the saved value.
+      const [, , saved] = h.write.mock.calls[1] ?? [];
+      expect(h.screen()).toContain(`${String(saved)} running`);
+      expect(h.notify).not.toHaveBeenCalled();
       h.close();
       yield* Effect.promise(() => reopened);
     }),

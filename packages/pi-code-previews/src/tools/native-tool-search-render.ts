@@ -81,8 +81,8 @@ export function createNativeToolSearchRenderers(
     const label = receipt
       ? `${countLabel(receipt.loaded.length, "tool")} listed`
       : context.isError
-        ? "Error"
-        : "Output";
+        ? "error"
+        : "output";
     return safeContent(
       () => new Text(renderExpansionAffordance(label, false, theme), 0, 0),
       plainRows(`${label} · expand`, 1),

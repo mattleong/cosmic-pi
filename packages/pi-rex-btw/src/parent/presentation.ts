@@ -42,13 +42,15 @@ const ISSUES: Record<ParentReadFailure["failure"], CompactIssue> = {
     severity: "error",
     code: "parent_conversation:missing",
     message: "The parent conversation is no longer available",
-    detail: "Its session file was moved or deleted, so this side session can't see the parent.",
+    detail:
+      "Its session file was moved or deleted, so this side session can't see the parent. Run /btw in the parent session again to open one that can.",
   },
   unreadable: {
     severity: "error",
     code: "parent_conversation:unreadable",
     message: "Couldn't read the parent conversation",
-    detail: "Its session file isn't a regular file this session can open.",
+    detail:
+      "Its session file isn't a regular file this session can open. Run /btw in the parent session again to open one that can.",
   },
 };
 

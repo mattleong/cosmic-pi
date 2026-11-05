@@ -4,6 +4,7 @@ import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { wrapFacts } from "pi-cosmic-ui/manager";
 import { escapeControlChars } from "../shared/terminal-text";
 import { wrapPlainText } from "../shared/text-wrap";
 import { authoredTextLines } from "./authored-text";
@@ -32,19 +33,30 @@ const MIN_VALUE_WIDTH = 16;
 
 const pad = (width: number): string => Fn.pipe(" ", Str.repeat(width));
 
-/** A plain line wrapped to `width` and drawn in its tone; long paths break after a separator. */
+const plainParts = (text: string): string[] =>
+  Str.split(
+    escapeControlChars(Fn.pipe(text, Str.replaceAll("\r\n", "\n"), Str.replaceAll("\t", "  "))),
+    "\n",
+  );
+
+/**
+ * A plain line wrapped to `width` and drawn in its tone; long paths break after a separator. A
+ * line of facts wraps between whole `·` facts with continuation rows hanging two columns, so no
+ * row ends with `·` or `→`.
+ */
 const wrappedLine = (
   theme: BodyTheme,
   line: ExpandedLine,
   tone: ExpandedTone,
   width: number,
+  facts = false,
 ): string[] => {
   const text = Predicate.isString(line) ? line : line.text;
   const color = Predicate.isString(line) ? tone : line.tone;
-  const plain = Fn.pipe(text, Str.replaceAll("\r\n", "\n"), Str.replaceAll("\t", "  "));
-  return Arr.flatMap(Str.split(escapeControlChars(plain), "\n"), (part) =>
-    Arr.map(wrapPlainText(part, Math.max(1, width)), (row) =>
-      row === "" ? "" : theme.fg(color, row),
+  return Arr.flatMap(plainParts(text), (part) =>
+    Arr.map(
+      facts ? wrapFacts(part, Math.max(1, width)) : wrapPlainText(part, Math.max(1, width)),
+      (row) => (row === "" ? "" : theme.fg(color, row)),
     ),
   );
 };
@@ -89,7 +101,7 @@ export function expandedFields(theme: BodyTheme, fields: ReadonlyArray<ExpandedF
     return Arr.flatMap(shown, (field) => {
       const label = theme.fg("muted", escapeControlChars(field.label));
       const values = Arr.flatMap(field.lines, (line) =>
-        wrappedLine(theme, line, "toolOutput", stacked ? width - 2 : width - column),
+        wrappedLine(theme, line, "toolOutput", stacked ? width - 2 : width - column, true),
       );
       if (stacked) return [label, ...Arr.map(values, (value) => `  ${value}`)];
       const labelPad = pad(Math.max(0, column - visibleWidth(field.label)));
@@ -136,7 +148,8 @@ export function expandedAuthoredText(
 
 /**
  * The expanded-only `Details` section: technical facts such as IDs, routes, paths, and usage, one
- * dim line each. Leading spaces nest a fact beneath the one before it.
+ * dim line each. Leading spaces nest a fact beneath the one before it; a wrapped line breaks between
+ * whole `·` facts and hangs two columns beneath its first row.
  */
 export function expandedDetails(
   theme: BodyTheme,
@@ -148,9 +161,8 @@ export function expandedDetails(
   const rows = cachedComponent((width) =>
     Arr.flatMap(facts, (line) => {
       const nested = Math.min(line.length - Str.trimStart(line).length, Math.max(0, width - 2));
-      const wrapped = wrappedLine(theme, Str.trim(line), "dim", width - nested - 2);
-      // Continuation rows hang two columns beneath their fact's first row.
-      return Arr.map(wrapped, (row, index) => `${pad(nested + (index === 0 ? 0 : 2))}${row}`);
+      const wrapped = wrappedLine(theme, Str.trim(line), "dim", width - nested, true);
+      return Arr.map(wrapped, (row) => `${pad(nested)}${row}`);
     }),
   );
   return expandedSection(theme, label, rows);

@@ -3,15 +3,22 @@ import { Container, Text, visibleWidth, type Component } from "@earendil-works/p
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { expandedArguments, expandedSection, previewIssuesSlot } from "pi-code-previews";
 import { failureMessage, restatesText } from "pi-cosmic-core/message-text";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { clipToWidth, INLINE_SEPARATOR, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
+import {
+  clipToWidth,
+  INLINE_SEPARATOR,
+  SUITE_STATUS_GLYPHS,
+  wrapFacts,
+} from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderExpansionAffordance,
   renderToolHeader,
+  toolRunningLine,
   toolStatusLine,
   type ToolHeader,
 } from "pi-cosmic-ui/tool";
@@ -20,7 +27,7 @@ import type {
   AskUserAsyncRequest,
   AskUserRequest,
 } from "../questionnaire/schema.ts";
-import { appendPacked, appendWrapped, titleLabel } from "./layout.ts";
+import { appendWrapped, titleLabel } from "./layout.ts";
 import {
   requestArguments,
   type ReplayedAnswer,
@@ -174,8 +181,7 @@ export function answersBody(
           ? [answerLine]
           : [answerLine, fit(`  ${theme.fg("dim", `Note: ${note.text}`)}`)];
       });
-      if (cut)
-        rows.push(clipToWidth(renderExpansionAffordance("Full answers", false, theme), width));
+      if (cut) rows.push(clipToWidth(renderExpansionAffordance("answers", false, theme), width));
       last = { width, rows };
       return rows;
     },
@@ -196,19 +202,15 @@ const rawResultSection = (theme: Theme, text: string, isError: boolean): Compone
 const restatesIssue = (raw: string, isError: boolean): boolean =>
   isError && restatesText(raw, failureMessage(raw, ""));
 
-// A fact list wraps between its `·`-separated parts, so an ID never breaks across lines.
+// A fact list wraps between whole facts, so no line ends with a separator.
 const detailsSection = (theme: Theme, facts: readonly string[]): Component =>
   expandedSection(
     theme,
     "Details",
     widthRows((width) => {
-      const lines: string[] = [];
-      for (const fact of facts)
-        appendPacked(lines, Str.split(stripTerminalControls(fact), INLINE_SEPARATOR), width, {
-          separator: INLINE_SEPARATOR,
-          style: (text) => theme.fg("dim", text),
-        });
-      return lines;
+      return Arr.flatMap(facts, (fact) =>
+        Arr.map(wrapFacts(stripTerminalControls(fact), width), (line) => theme.fg("dim", line)),
+      );
     }),
   );
 
@@ -226,9 +228,17 @@ function requestRows(request: RequestView, theme: Theme, width: number): string[
     const note = MODE_NOTES[question.mode ?? "single"];
     append(
       "",
-      `${theme.fg("muted", `${titleLabel(question.title)}:`)} ${theme.fg("text", stripTerminalControls(question.prompt))}${note ? theme.fg("dim", ` · ${note}`) : ""}`,
+      `${theme.fg("muted", `${titleLabel(question.title)}:`)} ${theme.fg("text", stripTerminalControls(question.prompt))}`,
       2,
     );
+    // The mode note is a fact of its own: it follows the prompt whole, or hangs beneath it, so no
+    // line ends with its separator.
+    if (note) {
+      const last = lines.length - 1;
+      const joined = `${lines[last] ?? ""}${theme.fg("dim", `${INLINE_SEPARATOR}${note}`)}`;
+      if (visibleWidth(joined) <= width) lines[last] = joined;
+      else append("  ", theme.fg("dim", note));
+    }
     Arr.forEach(question.choices ?? [], (choice, index) => {
       const description = choice.description
         ? ` — ${stripTerminalControls(choice.description)}`
@@ -294,14 +304,37 @@ export const pendingRequest = (
   context: Pick<RenderContext, "isPartial">,
 ): Component => (context.isPartial ? requestSection(theme, args) : emptyBody());
 
+// Rows whose call has reported progress or a result, keyed by the row's shared renderer state.
+const reportedRows = new WeakSet<object>();
+
+/** Records that a row's result renderer drew, so its call no longer spins in its place. */
+export const markReported = (context: Partial<Pick<RenderContext, "state">>): void => {
+  const state: unknown = context.state;
+  if (Predicate.isObject(state)) reportedRows.add(state);
+};
+
 export function callBody(
   header: ToolHeader,
   args: QuestionnaireArgs,
   theme: Theme,
-  context: Pick<RenderContext, "expanded" | "state" | "isPartial">,
+  context: Pick<RenderContext, "expanded" | "state" | "isPartial" | "executionStarted">,
 ): Component {
   const heading = new Text(renderToolHeader(header, theme), 0, 0);
-  if (!context.expanded) return heading;
+  // A started call spins until it reports where its questions stand, as its expanded row does.
+  if (!context.expanded) {
+    const state: unknown = context.state;
+    const row = Predicate.isObject(state) ? state : undefined;
+    const running = context.executionStarted && context.isPartial;
+    return stacked([
+      heading,
+      previewIssuesSlot(context),
+      composeToolComponent((width) =>
+        width >= 1 && running && !(row !== undefined && reportedRows.has(row))
+          ? [clipToWidth(toolRunningLine(theme), width)]
+          : [],
+      ),
+    ]);
+  }
   return stacked([
     heading,
     previewIssuesSlot(context),

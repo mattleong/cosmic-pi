@@ -1,9 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
-import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth, managerActivityColor, type ManagerStatusColor } from "pi-cosmic-ui/manager";
@@ -15,6 +14,7 @@ import {
   COLLAPSED_AGENT_TEXT_ROWS,
   expandedFactDetails,
   expandedRowsBody,
+  factRowLines,
 } from "../ui/agent-text.ts";
 import { agentFactLines, savedAgentFactLines } from "../ui/run-facts.ts";
 import {
@@ -23,6 +23,7 @@ import {
   runStateSnapshotGlyph,
   SNAPSHOT_RUNNING_GLYPH,
 } from "../ui/run-state.ts";
+import { quotesWhole } from "./compact-run-issues.ts";
 import type { AgentToolDetails } from "./details-schema.ts";
 
 type ListDetails = Extract<AgentToolDetails, { readonly action: "agent_list" }>;
@@ -108,27 +109,33 @@ export const renderSendResult = (
   );
 };
 
-const listRow = (
+/** One agent: collapsed, a clipped row; expanded, its whole task wraps beneath its name. */
+const listRowLines = (
   entry: NonNullable<ListDetails["entries"]>[number],
   width: number,
   theme: Theme,
-): string => {
+  expanded: boolean,
+): string[] => {
   const { glyph, tone, label } = agentStatePresentation(entry.state);
-  const indent = Fn.pipe(
-    "  ",
-    Str.repeat(entry.kind === "main" ? 0 : Math.max(0, (entry.depth ?? 1) - 1)),
-  );
-  const name = theme.fg("toolTitle", sanitizeTerminalLine(entry.name));
+  const indent = 2 * (entry.kind === "main" ? 0 : Math.max(0, (entry.depth ?? 1) - 1));
   // A question or a pause is the run's own state, in its tone; other statuses flag a problem.
   const statusTone =
     entry.state === "waiting_for_parent" || entry.state === "paused" ? tone : "warning";
-  const status = entry.status
-    ? theme.fg(statusTone, ` · ${sanitizeTerminalLine(entry.status)}`)
-    : entry.kind === "main"
-      ? theme.fg("muted", ` · ${label}`)
-      : "";
-  const task = entry.task ? theme.fg("muted", ` · ${sanitizeTerminalLine(entry.task)}`) : "";
-  return clipToWidth(`${indent}${theme.fg(tone, glyph)} ${name}${status}${task}`, width);
+  return factRowLines(
+    [
+      [glyph, tone],
+      [" "],
+      [sanitizeTerminalLine(entry.name), "toolTitle"],
+      entry.status
+        ? [` · ${sanitizeTerminalLine(entry.status)}`, statusTone]
+        : [entry.kind === "main" ? ` · ${label}` : "", "muted"],
+      [entry.task ? ` · ${sanitizeTerminalLine(entry.task)}` : "", "muted"],
+    ],
+    width,
+    theme,
+    expanded,
+    { indent, hang: visibleWidth(`${glyph} `) },
+  );
 };
 
 /** Undefined when saved details carry no entries; their content then renders as text. */
@@ -148,7 +155,7 @@ export const renderListResult = (
     const hidden = details.agentCount - shown.length;
     return [
       ...(entries.length === 0 ? [theme.fg("muted", "No matching agents")] : []),
-      ...Arr.map(shown, (entry) => listRow(entry, safeWidth, theme)),
+      ...Arr.flatMap(shown, (entry) => listRowLines(entry, safeWidth, theme, expanded)),
       ...(hidden > 0
         ? [
             clipToWidth(
@@ -171,7 +178,12 @@ export const renderListResult = (
   );
 };
 
-const READ_SOURCE_NOTES = { report: "report", error: "failure", assistant: undefined } as const;
+const READ_SOURCE_NOTES = {
+  report: "report",
+  error: "failure",
+  assistant: undefined,
+  question: undefined,
+} as const;
 
 /** Undefined when saved details carry no display copies; their content then renders as text. */
 export const renderReadResult = (
@@ -193,6 +205,10 @@ export const renderReadResult = (
       agent.source === undefined || (agent.source === "error" && agent.state === "failed")
         ? undefined
         : READ_SOURCE_NOTES[agent.source];
+    // A question is its issue's quote; expansion adds the whole of a long one.
+    const hidden =
+      agent.source === "question" &&
+      (!expanded || agent.text === undefined || quotesWhole(agent.text));
     return {
       glyph,
       tone,
@@ -201,13 +217,13 @@ export const renderReadResult = (
         Arr.filter([label, source], (part) => part !== undefined),
         " · ",
       ),
-      text: agent.text,
+      text: hidden ? undefined : agent.text,
       notes: [
         ...(agent.notes ?? []),
         ...(agent.text === undefined && !agent.notes?.length
           ? [agent.source === "report" ? "Report saved to a file" : "No message yet"]
           : []),
-        ...(agent.textCut ? ["Shown up to its display limit"] : []),
+        ...(agent.textCut && !hidden ? ["Shown up to its display limit"] : []),
       ],
     };
   });

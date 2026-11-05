@@ -8,6 +8,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import type * as Path from "effect/Path";
 import * as Str from "effect/String";
 import {
@@ -17,7 +18,11 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import { stripTerminalControls as sanitizeTerminalText } from "pi-cosmic-core/security";
+import {
+  sanitizeTerminalLine,
+  stripTerminalControls as sanitizeTerminalText,
+} from "pi-cosmic-core/security";
+import { clipToWidth } from "pi-cosmic-ui/manager";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { type BackgroundTaskService } from "../task/service.ts";
@@ -82,6 +87,14 @@ const headingSubtitle = (
     Arr.filter([backgroundTaskActionLabel(args.action), subject], Str.isNonEmpty),
     " ",
   );
+};
+
+/** A named start's command; an unnamed start's heading already shows it. */
+const pendingStartCommand = (args: Partial<BackgroundTaskToolInput>): string | undefined => {
+  if (args.action !== "start" || !Predicate.isString(args.name) || Str.trim(args.name) === "")
+    return undefined;
+  const command = Predicate.isString(args.command) ? sanitizeTerminalLine(args.command) : "";
+  return Str.trim(command) === "" ? undefined : command;
 };
 
 const resultText = (content: Parameters<typeof getTextContent>[0]): string =>
@@ -186,12 +199,22 @@ export function registerBackgroundTaskTool(
           ? [toolRunningLine(theme)]
           : [],
       );
+      // Until a start reports, a collapsed row whose heading names the task shows its command,
+      // as the started row will.
+      const { expanded } = context;
+      const command = composeToolComponent((width) => {
+        const pending = pendingStartCommand(args);
+        return width >= 1 && isPartial && !expanded && pending !== undefined
+          ? [clipToWidth(theme.fg("dim", pending), width)]
+          : [];
+      });
       // Issues follow the heading, so an expanded preview row reuses only the heading above them.
       const body = new Container();
       body.addChild(heading);
       body.addChild(previewIssuesSlot(context));
       body.addChild(running);
-      if (context.expanded) body.addChild(renderBackgroundTaskRequest(args, theme, !isPartial));
+      body.addChild(command);
+      if (expanded) body.addChild(renderBackgroundTaskRequest(args, theme, !isPartial));
       return body;
     },
     renderResult(result, { isPartial, expanded }, theme, context) {

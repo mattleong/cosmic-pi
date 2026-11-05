@@ -30,7 +30,7 @@ Keys:
 
 Behavior:
 
-- An unpinned value reads as the value it inherits on every surface: `inherit (anthropic/claude-opus-5-5)` for the parent's model (the profile table drops the provider) and `inherit (low)` for the profile's default reasoning, as a picker row too, beside the pinned levels. Pickers keep unavailable configured models on cancellation, which is silent and changes nothing.
+- An unpinned value reads as the value it inherits on every surface: `inherit (anthropic/claude-opus-5-5)` for the parent's model (the profile table drops the provider) and `inherit (low)` for the profile's default reasoning, as a picker row too, ahead of the pinned levels. The profile table keeps `inherit (low)` unless its models would clip, then shows the bare level. Pickers keep unavailable configured models on cancellation, which is silent and changes nothing.
 - Edits auto-save serially. Conflicts refresh without retrying, and a failed refresh blocks edits until reopening. Catalog cancellation, disposal, and activation replacement suppress late continuations.
 
 ### Undo during an editor visit
@@ -57,7 +57,7 @@ The Saved profiles tab groups sets by Project and Global. Untrusted Project rows
 
 ## Delegation settings
 
-`/subagents settings` edits the delegation mode in Session, Global, or trusted Project scope with the same precedence and timing as nesting. Each scope is one group row whose value lists what that scope sets itself, or `inherit`; opening it lists the scope's delegation and nesting rows.
+`/subagents settings` edits the delegation mode in Session, Global, or trusted Project scope with the same precedence and timing as nesting. Each scope is one group row whose value lists the values that scope applies; opening it lists the scope's delegation and nesting rows, each with its `inherit (value)` choice first. Rows and summaries derive from the latest choices, so a Global change shows at once in Project's inherited values.
 
 - `normal` leaves the system prompt unchanged. `encouraged` and `orchestration` replace the `agent_start` guideline that decides when to delegate and add a `subagent_delegation` prompt section.
 - Pi rebuilds prompt options before every run, so switching needs no cleanup. Only the root session applies the mode; nested children keep default guidance, and no mode restricts tools.
@@ -70,7 +70,7 @@ The Saved profiles tab groups sets by Project and Global. Untrusted Project rows
 
 ## Writer workspace default
 
-The writer workspace default has its own unscoped setting. It changes later launches, including after `/tree`, and new sessions, never running writers or existing workspaces, and the settings show how many workspaces in this checkout remain unresolved. Worktree hooks, like the rest of the saved configuration, load at activation; `/tree` keeps the activation's hooks, and edits apply after `/reload`.
+The writer workspace default has its own unscoped setting. It changes later launches, including after `/tree`, and new sessions, never running writers or existing workspaces, and the settings say how many worktrees in this checkout still wait on apply or discard, and to ask the agent to review them. Worktree hooks, like the rest of the saved configuration, load at activation; `/tree` keeps the activation's hooks, and edits apply after `/reload`.
 
 ## Custom agents
 

@@ -71,7 +71,7 @@ export const presentIntercomMessage: CodePreviewMessagePresenter = (message, opt
         expandedBody(
           expandedText(
             theme,
-            "Message",
+            undefined,
             Str.split(sessionText(contentText(envelope?.content)), "\n"),
           ),
           details(),
@@ -84,7 +84,7 @@ export const presentIntercomMessage: CodePreviewMessagePresenter = (message, opt
     collapsed: () =>
       textBody(text, theme, false, options.collapsedStyle === "preview" ? PREVIEW_BODY_INDENT : 0),
     expanded: () =>
-      expandedBody(expandedAuthoredText(theme, "Message", sessionText(text)), details()),
+      expandedBody(expandedAuthoredText(theme, undefined, sessionText(text)), details()),
   };
 };
 

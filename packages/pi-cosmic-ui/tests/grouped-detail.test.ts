@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { groupedDetail } from "../src/activity/grouped-detail.ts";
+import { groupedDetail, type ActivityDetailBlock } from "../src/activity/grouped-detail.ts";
 import { groupedActivityTree } from "../src/activity/grouped-tree.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { activityRow } from "./support/activity.ts";
+
+const blockText = (block: ActivityDetailBlock): string =>
+  block.kind === "fields"
+    ? Arr.join(
+        Arr.map(block.fields, (field) => `${field.label} ${field.value}`),
+        "\n",
+      )
+    : block.text;
 
 describe("grouped activity detail", () => {
   it("sanitizes technical identifiers for display without rewriting their identity", () => {
@@ -25,10 +33,7 @@ describe("grouped activity detail", () => {
       actionPage: 0,
       technical: true,
     });
-    const text = Arr.join(
-      Arr.map(blocks, (block) => block.text),
-      "\n",
-    );
+    const text = Arr.join(Arr.map(blocks, blockText), "\n");
     expect(text).not.toContain("\u001b");
     expect(text).not.toContain("\u0007");
     expect(text).not.toContain("\r");
@@ -58,7 +63,7 @@ describe("grouped activity detail", () => {
             actionPage: 0,
             technical,
           }),
-          (block) => block.text,
+          blockText,
         ),
         "\n",
       );

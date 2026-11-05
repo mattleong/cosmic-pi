@@ -77,6 +77,19 @@ export function enabledToolsSummary(
   return count === 0 ? "none" : count === total ? "all" : `${count} of ${total}`;
 }
 
+/** What turning a tool's preview on draws, shown as its toggle's description. */
+const TOOL_PREVIEW_PURPOSES = {
+  bash: "Draws bash calls with the highlighted command and its output.",
+  read: "Draws read calls with syntax-highlighted file content.",
+  write: "Draws write calls with the new content or its diff.",
+  edit: "Draws edit calls as diffs of the proposed changes.",
+  grep: "Draws grep calls with their matches.",
+  find: "Draws find calls as lists of paths.",
+  ls: "Draws ls calls as lists of entries.",
+  codemode: "Draws codemode programs with their source and the tools each one called.",
+  tool_search: "Draws tool_search calls with the tools they list.",
+} as const satisfies Record<CodePreviewToolName, string>;
+
 function createToolToggleItems(
   enabledTools: ReadonlySet<CodePreviewToolName>,
   statuses: Map<CodePreviewToolName, CodePreviewToolStatus>,
@@ -105,10 +118,9 @@ function createToolToggleItems(
       };
     }
     const description = Match.value(status?.state).pipe(
-      Match.when("installed", () => "Preview renderer available."),
       Match.when("registration-error", () => "Write hook registration failed; retry with /reload."),
       Match.when("unavailable", () => "Tool is not available; previews never enable it."),
-      Match.orElse(() => "Takes effect after /reload."),
+      Match.orElse(() => TOOL_PREVIEW_PURPOSES[tool]),
     );
     return {
       id,

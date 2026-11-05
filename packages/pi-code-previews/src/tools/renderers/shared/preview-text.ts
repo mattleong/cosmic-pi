@@ -95,7 +95,7 @@ export function renderContentPreview(options: {
     (hidden): WrappedCodeRow => ({ text: hiddenLinesMarker(theme, hidden), continuation: "" }),
   );
   let footer = "";
-  if (rendered.hidden > 0) footer += showingFooter(theme, rendered.shown, preview.total, "lines");
+  if (rendered.hidden > 0) footer += showingFooter(theme, preview.total - rendered.shown, "line");
   if (skipHighlight) footer += previewFooter(theme, options.skipHighlightLabel);
   if (rendered.lines.length === 0)
     return new Text(theme.fg("muted", options.emptyLabel) + footer, 0, 0);
@@ -110,7 +110,7 @@ export function renderSelectedOutputLines(
   rawLines: string[],
   limit: number,
   theme: Theme,
-  noun: string,
+  noun: { readonly singular: string; readonly plural?: string },
   renderChunk: (chunk: string[]) => string[],
 ): string {
   const preview = renderChunkedPreviewEntries(
@@ -120,7 +120,7 @@ export function renderSelectedOutputLines(
   );
   const text = Arr.join(preview.lines, "\n");
   if (preview.hidden === 0) return text;
-  return text + showingFooter(theme, preview.shown, rawLines.length, noun);
+  return text + showingFooter(theme, rawLines.length - preview.shown, noun.singular, noun.plural);
 }
 
 function renderChunkedPreviewEntries<T, Row>(

@@ -14,10 +14,11 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { failureMessage } from "pi-cosmic-core/message-text";
-import { isProjectTrusted, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import {
+  settingsStatusText,
   settingsSubcommand,
   withInvocationAuthority,
   type SettingsCommandOwner,
@@ -142,54 +143,69 @@ function createTaskSettingsSubcommand(
   isCurrent: () => boolean,
   owner: SettingsCommandOwner,
 ): ExtensionSubcommand {
+  // Each scope's own values as the list shows them, such as `16` or `inherit`, kept current by
+  // every save so inherited labels and summaries derive from the latest values.
   const known = new Map<string, string>();
+  // Only the picker reads every scope, so only it can name what an inherited value resolves to.
+  let scopesRead = false;
+
+  // A scope's own value, or undefined when it inherits.
+  const ownValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting) => {
+    const own = known.get(rowKey(scope, setting.id));
+    return own === undefined || inheritChoice(own) === INHERIT ? undefined : own;
+  };
+  // What `inherit` resolves to in each scope: the default globally, else the global value.
+  const inheritedValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting): string =>
+    scope === "project"
+      ? effectiveValue("global", setting)
+      : settingDisplayValue(setting, DEFAULT_BACKGROUND_TASK_CONFIG[setting.id]);
+  // The value in effect for a scope: its own, else what it inherits.
+  const effectiveValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting): string =>
+    ownValue(scope, setting) ?? inheritedValue(scope, setting);
+  // A row's value: the scope's own, else `inherit (8)` naming the value it inherits now.
+  const rowValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting): string =>
+    ownValue(scope, setting) ?? settingInherited(inheritedValue(scope, setting));
 
   const pickerItems = (
     config: BackgroundTaskConfig,
     files: ReadonlyArray<ScopeFile>,
   ): SettingsSurfaceItem[] => {
-    const globalOwn = Option.getOrUndefined(
-      Arr.findFirst(files, (file) => file.scope === "global" && "own" in file),
-    );
     const listed = Arr.filter(BACKGROUND_TASK_SETTINGS, (setting) => setting.values.length > 0);
-    // What `inherit` resolves to in each scope: the default globally, else the global value.
-    const inheritedValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting) => {
-      const global = globalOwn && "own" in globalOwn ? globalOwn.own[setting.id] : undefined;
-      return settingDisplayValue(
-        setting,
-        scope === "project" && global !== undefined
-          ? global
-          : DEFAULT_BACKGROUND_TASK_CONFIG[setting.id],
-      );
-    };
+    scopesRead = true;
+    for (const file of files) {
+      if (!("own" in file)) continue;
+      for (const setting of listed) {
+        const stored = file.own[setting.id];
+        known.set(
+          rowKey(file.scope, setting.id),
+          stored === undefined ? INHERIT : settingDisplayValue(setting, stored),
+        );
+      }
+    }
+    // Derived each time its group opens, so a project row names the global value saved last.
+    // The group already says changes apply after /reload; a row doesn't repeat it.
     const settingRow = (
       scope: TaskSettingsScope,
-      own: Partial<BackgroundTaskConfig>,
       setting: BackgroundTaskSetting,
     ): SettingsSurfaceItem => {
-      const stored = own[setting.id];
       const inherited = settingInherited(inheritedValue(scope, setting));
-      const currentValue = stored === undefined ? inherited : settingDisplayValue(setting, stored);
-      known.set(rowKey(scope, setting.id), currentValue);
-      const values = [...setting.values, inherited];
+      const currentValue = rowValue(scope, setting);
       return {
         id: rowKey(scope, setting.id),
         label: setting.label,
-        description: `${setting.description} ${sessionValueSentence(setting, sessionValue(config, setting))} Applies after /reload.`,
+        description: `${setting.description} ${sessionValueSentence(setting, sessionValue(config, setting))}`,
         currentValue,
-        values: values.includes(currentValue) ? values : [currentValue, ...values],
+        values: [
+          inherited,
+          ...(currentValue === inherited || setting.values.includes(currentValue)
+            ? []
+            : [currentValue]),
+          ...setting.values,
+        ],
       };
     };
-    // The value in effect for a scope: its own, else the global one for a project, else the default.
-    const effectiveValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting): string => {
-      const own = known.get(rowKey(scope, setting.id));
-      if (own !== undefined && inheritChoice(own) !== INHERIT) return own;
-      return scope === "project"
-        ? effectiveValue("global", setting)
-        : settingDisplayValue(setting, DEFAULT_BACKGROUND_TASK_CONFIG[setting.id]);
-    };
     const ownsValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting) =>
-      inheritChoice(known.get(rowKey(scope, setting.id)) ?? INHERIT) !== INHERIT;
+      ownValue(scope, setting) !== undefined;
     // A scope's value: the values in effect that matter most, then the others it sets itself, such
     // as `on · 16 running · 1 MB per task · 5s grace`.
     const summary = (scope: TaskSettingsScope) => () => {
@@ -214,7 +230,7 @@ function createTaskSettingsSubcommand(
     // Each scope is one group row, so the list reads by scope instead of repeating it.
     return Arr.map(files, (file): SettingsSurfaceItem => {
       if ("problem" in file) return unavailableScopeRow(file.scope, file.problem);
-      const children = Arr.map(listed, (setting) => settingRow(file.scope, file.own, setting));
+      const children = () => Arr.map(listed, (setting) => settingRow(file.scope, setting));
       const scopeSummary = summary(file.scope);
       return {
         id: `group:${file.scope}`,
@@ -245,6 +261,8 @@ function createTaskSettingsSubcommand(
       `Scope defaults to global; ${INHERIT} removes a scope's own value.`,
       "Changes take effect after /reload.",
     ],
+    // The picker's groups already say so; a command-line change's confirmation does too.
+    confirmationNote: "applies after /reload",
     scopes: SCOPES,
     scopeBlocked: (ctx, scope) =>
       scope === "project" && !isProjectTrusted(ctx) ? UNTRUSTED : undefined,
@@ -252,16 +270,19 @@ function createTaskSettingsSubcommand(
     status: () => {
       const config = actions.config();
       if (!config) throw new Error("Background Tasks hasn't started");
-      return Arr.join(
-        [
-          "Background Tasks settings (as this session started)",
-          ...Arr.map(
-            BACKGROUND_TASK_SETTINGS,
-            (setting) => `  ${setting.id} = ${sessionValue(config, setting) || "default"}`,
-          ),
+      return settingsStatusText({
+        title: "Background Tasks settings",
+        sections: [
+          {
+            rows: Arr.map(BACKGROUND_TASK_SETTINGS, (setting) => ({
+              id: setting.id,
+              label: setting.label,
+              value: sessionValue(config, setting) || "default",
+            })),
+          },
         ],
-        "\n",
-      );
+        notes: ["Values as this session started; changes apply after /reload."],
+      });
     },
     apply: (ctx, id, value, _signal, requested) => {
       const setting = settingDescriptor(id);
@@ -282,9 +303,13 @@ function createTaskSettingsSubcommand(
           }),
       );
     },
-    displayValue: (_ctx, id, scope) => known.get(rowKey(scopeOf(scope), id)),
-    afterApply: (ctx) =>
-      notifyAtHostBoundary(ctx, "Background task settings apply after /reload", "info"),
+    displayValue: (_ctx, id, scope) => {
+      const setting = settingDescriptor(id);
+      const key = rowKey(scopeOf(scope), id);
+      return setting && scopesRead && known.has(key)
+        ? rowValue(scopeOf(scope), setting)
+        : known.get(key);
+    },
     open: (ctx, session) => {
       const config = actions.config();
       if (!config) return Promise.resolve(OwnedSurfaceOutcome.Blocked());

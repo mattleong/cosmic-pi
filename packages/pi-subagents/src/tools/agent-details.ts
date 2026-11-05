@@ -144,11 +144,17 @@ const boundedReadIssue = ({ severity, code, message, detail }: CompactIssue): Co
   ...(detail !== undefined && { detail: clipText(detail, MAX_AGENT_READ_ISSUE_TEXT_CHARS) }),
 });
 
-/** `errorShown`: the read's text is the run's failure, which its issue then doesn't repeat. */
-const readIssues = (run: SubagentRunView, errorShown: boolean): ReadonlyArray<CompactIssue> => {
+/** The read's text is the run's failure or question, which its issue then doesn't repeat whole. */
+const readIssues = (
+  run: SubagentRunView,
+  shown: { readonly error: boolean; readonly question: boolean },
+): ReadonlyArray<CompactIssue> => {
   const { finalText: _finalText, ...card } = projectSubagentRunCard(run);
   return Arr.map(
-    compactRunIssues([card], { showsError: () => errorShown }).slice(0, MAX_AGENT_READ_ISSUES),
+    compactRunIssues([card], {
+      showsError: () => shown.error,
+      showsQuestion: () => shown.question,
+    }).slice(0, MAX_AGENT_READ_ISSUES),
     boundedReadIssue,
   );
 };
@@ -212,11 +218,21 @@ export const readDetails = (
     version: AGENT_DETAILS_VERSION,
     action: AGENT_TOOL_NAME.read,
     agents: Arr.map(result.agents, (readout) => {
-      const text = displayText(readout);
+      // A run waiting on its parent shows the question it asked, as every other surface does.
+      const attention = readout.kind === "run" ? runAttention(readout.run) : undefined;
+      const question = attention?.kind === "question" ? attention.message : undefined;
+      const source =
+        readout.kind !== "run" ? undefined : question === undefined ? readout.source : "question";
+      const text = question ?? displayText(readout);
       const words = noticeText(text, budget);
       const hasReportFile = readout.kind === "run" && readout.reportFile !== undefined;
       const issues =
-        readout.kind === "run" ? readIssues(readout.run, readout.source === "error") : [];
+        readout.kind === "run"
+          ? readIssues(readout.run, {
+              error: source === "error",
+              question: question !== undefined,
+            })
+          : [];
       const notes = readout.kind === "run" ? runReadNotes(readout.run, now) : [];
       const runFacts = readout.kind === "run" ? runReadFacts(readout, now) : [];
       return {
@@ -225,9 +241,7 @@ export const readDetails = (
         state: readout.state,
         textStatus: text === undefined ? "none" : "text",
         truncated: readout.truncated,
-        ...(readout.kind === "run" &&
-          (text !== undefined || hasReportFile) &&
-          readout.source !== undefined && { source: readout.source }),
+        ...((text !== undefined || hasReportFile) && source !== undefined && { source }),
         ...(issues.length > 0 && { issues: [...issues] }),
         ...(words && { text: words.text }),
         ...(words !== undefined && (words.cut || readout.truncated) && { textCut: true }),

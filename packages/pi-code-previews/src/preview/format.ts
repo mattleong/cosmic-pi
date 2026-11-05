@@ -83,8 +83,14 @@ export function metadata(theme: Theme, parts: Array<string | undefined>): string
   return present.length ? theme.fg("dim", ` · ${Arr.join(present, " · ")}`) : "";
 }
 
-export function showingFooter(theme: Theme, shown: number, total: number, label: string): string {
-  return `\n${renderExpansionAffordance(`Showing ${shown} of ${total} ${label}`, false, theme)}`;
+/** The affordance beneath a clipped preview, naming what it hides: `▸ 12 more lines`. */
+export function showingFooter(
+  theme: Theme,
+  hidden: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return `\n${renderExpansionAffordance(countLabel(hidden, `more ${singular}`, `more ${plural}`), false, theme)}`;
 }
 
 export function previewFooter(theme: Theme, text: string): string {

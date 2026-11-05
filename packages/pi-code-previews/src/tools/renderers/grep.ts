@@ -60,14 +60,19 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
       const skipHighlight = shouldSkipHighlight(output);
       const { args, invalidate } = renderContext;
       const render = (active: boolean) => {
-        let text = renderSelectedOutputLines(rawLines, limit, theme, "grep output lines", (chunk) =>
-          renderGrepOutputLines(
-            Arr.join(chunk, "\n"),
-            theme,
-            hostObject(args),
-            invalidate,
-            active && !skipHighlight,
-          ),
+        let text = renderSelectedOutputLines(
+          rawLines,
+          limit,
+          theme,
+          { singular: "output line" },
+          (chunk) =>
+            renderGrepOutputLines(
+              Arr.join(chunk, "\n"),
+              theme,
+              hostObject(args),
+              invalidate,
+              active && !skipHighlight,
+            ),
         );
         if (skipHighlight)
           text += previewFooter(theme, "Syntax highlighting skipped for large grep output");

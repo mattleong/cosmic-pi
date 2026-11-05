@@ -49,7 +49,6 @@ import { OpenAICompactionService } from "./compaction/service.ts";
 import { OpenAIConfigService, type OpenAIConfigError } from "./config/store.ts";
 import type { ResolvedConfig } from "./config/schema.ts";
 import {
-  fastDebugLines,
   fastStateText,
   inactiveForModelMessage,
   initialFastSnapshot,
@@ -80,7 +79,7 @@ import {
   openAIUsageStatusText,
 } from "./ui/primitives.ts";
 import { OpenAIUsageService, sessionNotStarted } from "./usage/controller.ts";
-import { formatDebug } from "./usage/debug.ts";
+import { diagnosticLines } from "./settings/diagnostics.ts";
 import { usageProjectionRef, resetProjection } from "./usage/projection.ts";
 
 const FAST_ID = "fast";
@@ -355,28 +354,20 @@ export function betterOpenAIWithDependencies(
       return runHostCommand(update, "fast mode", ctx, signal);
     },
   });
-  const formatDebugStatus = (ctx: ExtensionContext) => {
-    const cfg = config();
-    return Arr.join(
-      [
-        ...fastDebugLines(ctx, MutableRef.get(fastProjection)),
-        `Footer usage: ${cosmicUi.isVisible("openai.usage") ? "auto" : "off"} (Cosmic UI)`,
-        `OpenAI compaction: ${cfg.compaction.enabled ? "on" : "off"}${projectionMismatch ? ` (unavailable: ${projectionMismatch})` : ""}`,
-        "",
-        formatDebug(projection, ctx),
-        "",
-        `Image tool: ${cfg.image.enabled ? "on" : "off"}`,
-        `Image save: ${cfg.image.defaultSave}`,
-        `Config: ${cfg.configPath}`,
-      ],
-      "\n",
-    );
-  };
+  const diagnostics = (ctx: ExtensionContext) =>
+    diagnosticLines({
+      ctx,
+      configPath: config().configPath,
+      fast: MutableRef.get(fastProjection),
+      usage: MutableRef.get(projection),
+      footerUsageVisible: cosmicUi.isVisible("openai.usage"),
+      compactionUnavailable: projectionMismatch,
+    });
   registerSettingsController(command, {
     config: () => MutableRef.get(configProjection),
     updateContext,
     updateFooter,
-    formatDebugStatus,
+    diagnosticLines: diagnostics,
     fastProjection,
     resetFastRoutingTransport: providerTransport.request,
     captureAuthority: slot.captureAuthority,

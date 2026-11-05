@@ -78,7 +78,7 @@ export const uncertainIssue = (
   severity: "warning",
   code: `${details.tool}:delivery_uncertain`,
   message: "The message may not have arrived",
-  detail: `${Str.capitalize(UNCERTAIN_TEXT[details.reason])}, so it may or may not have received the message.`,
+  detail: `${Str.capitalize(UNCERTAIN_TEXT[details.reason])}, so it may or may not have received the message. Look for it in that session before sending it again.`,
 });
 
 /** Delivery worth a word: a woken session reading the message at once is the plain case. */
@@ -89,8 +89,10 @@ const pending = (
   to: string | undefined,
   names: SessionNames | undefined,
 ): CompactSummary => {
-  if (tool === SESSION_TOOL.list) return { subject: "sessions" };
-  return { subject: knownAddresseeSubject(to, names) };
+  // Until it settles, expansion shows only what the collapsed row does: a send's message, whose
+  // clipped quote names its own hidden lines.
+  if (tool === SESSION_TOOL.list) return { subject: "sessions", expandLabel: false };
+  return { subject: knownAddresseeSubject(to, names), expandLabel: false };
 };
 
 /** What an empty listing says, in a compact heading and a preview body alike. */

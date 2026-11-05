@@ -52,6 +52,17 @@ export const settingOnOff = (value: boolean): "on" | "off" => (value ? "on" : "o
 /** An inherited value shows what actually applies: `inherit (on)`. */
 export const settingInherited = (effective: string): string => `inherit (${effective})`;
 
+/** Whether a choice is a scope's inherit choice, bare (`inherit`) or naming its value. */
+export const isInheritedSettingValue = (value: string): boolean =>
+  value === "inherit" ||
+  (Fn.pipe(value, Str.startsWith("inherit (")) && Fn.pipe(value, Str.endsWith(")")));
+
+/** Every choice list leads with its inherit choice, then the values a scope can set itself. */
+export const inheritChoiceFirst = (values: ReadonlyArray<string>): string[] => [
+  ...Arr.filter(values, isInheritedSettingValue),
+  ...Arr.filter(values, (value) => !isInheritedSettingValue(value)),
+];
+
 // pi-tui appends its own key hint to every SettingsList; the shared surface owns one hint line.
 const PI_TUI_SETTINGS_HINT = "Enter/Space to change";
 const PI_TUI_SCROLL_POSITION = /^\s*\((\d+)\/(\d+)\)\s*$/u;
@@ -138,13 +149,37 @@ const withClippedValueMarker = (
  * should set `kind: "setting"` so Enter reads `Enter Change`.
  *
  * In a `SettingsSession.picker`, a group row may list its rows as `children` instead of building a
- * submenu: the picker opens them as a nested list and saves them like top-level rows. `summary`
- * supplies the group's value after the nested list closes.
+ * submenu: the picker opens them as a nested list and saves them like top-level rows. Children
+ * given as a function are derived again each time the group opens, so rows whose labels or choices
+ * depend on another group's values, such as `inherit (16)`, show that group's latest save.
+ * `summary` supplies the group's value; the surface reads it again whenever it draws, so every
+ * group row reflects a save made anywhere in the picker.
  */
 export type SettingsSurfaceItem = SettingItem & {
   readonly kind?: "setting" | "group";
-  readonly children?: ReadonlyArray<SettingsSurfaceItem> | undefined;
+  readonly children?:
+    | ReadonlyArray<SettingsSurfaceItem>
+    | (() => ReadonlyArray<SettingsSurfaceItem>)
+    | undefined;
   readonly summary?: (() => string) | undefined;
+};
+
+/** Shows each group row's current summary; a summary that throws keeps the row's last value. */
+const refreshGroupSummaries = (
+  items: ReadonlyArray<SettingsSurfaceItem>,
+  update: (id: string, value: string) => void,
+): void => {
+  for (const item of items) {
+    const { summary } = item;
+    if (!summary) continue;
+    let current: string | undefined;
+    try {
+      current = summary();
+    } catch {
+      current = undefined;
+    }
+    if (current !== undefined && current !== item.currentValue) update(item.id, current);
+  }
 };
 
 interface SettingsChoiceSubmenuOptions {
@@ -169,22 +204,22 @@ class SettingsChoiceSubmenu implements Component {
   private readonly keymap = new FullScreenKeymap();
   private index: number;
 
+  private readonly values: ReadonlyArray<string>;
+
   constructor(options: SettingsChoiceSubmenuOptions) {
     this.options = options;
+    this.values = inheritChoiceFirst(options.values);
     this.index = Math.max(
       0,
       Option.getOrElse(
-        Arr.findFirstIndex(options.values, (value) => value === options.current),
+        Arr.findFirstIndex(this.values, (value) => value === options.current),
         () => 0,
       ),
     );
   }
 
   private get visible(): number {
-    return Math.max(
-      1,
-      Math.min(this.options.maxVisible ?? CHOICE_MAX_VISIBLE, this.options.values.length),
-    );
+    return Math.max(1, Math.min(this.options.maxVisible ?? CHOICE_MAX_VISIBLE, this.values.length));
   }
 
   settingsHint(expanded: boolean): string {
@@ -209,7 +244,8 @@ class SettingsChoiceSubmenu implements Component {
   render(width: number): string[] {
     const safeWidth = Math.max(0, Math.floor(width));
     if (safeWidth === 0) return [];
-    const { theme, values, current, title, description } = this.options;
+    const { theme, current, title, description } = this.options;
+    const { values } = this;
     const visible = this.visible;
     const start = Math.max(
       0,
@@ -230,7 +266,7 @@ class SettingsChoiceSubmenu implements Component {
     const resolution = this.keymap.resolve(data, { mode: "navigation" });
     const action = Predicate.isTagged(resolution, "Action") ? resolution.action : undefined;
     const kb = getKeybindings();
-    const last = this.options.values.length - 1;
+    const last = this.values.length - 1;
     const page = this.visible;
     if (kb.matches(data, "tui.select.up") || action === "up")
       this.index = this.index === 0 ? last : this.index - 1;
@@ -243,7 +279,7 @@ class SettingsChoiceSubmenu implements Component {
     else if (matchesKey(data, Key.home) || action === "first") this.index = 0;
     else if (matchesKey(data, Key.end) || action === "last") this.index = last;
     else if (kb.matches(data, "tui.select.confirm") || data === " " || action === "forward") {
-      const value = this.options.values[this.index];
+      const value = this.values[this.index];
       this.options.done(value === this.options.current ? undefined : value);
     } else if (kb.matches(data, "tui.select.cancel") || action === "cancel" || action === "back")
       this.options.done(undefined);
@@ -360,6 +396,11 @@ class SettingsGroupSubmenu extends Container {
     return settingsListHint(this.list, { level: "nested", expanded });
   }
 
+  override render(width: number): string[] {
+    refreshGroupSummaries(this.options.items(), (id, value) => this.list.updateValue(id, value));
+    return super.render(width);
+  }
+
   handleInput(data: string): void {
     const motion = groupMotion(data);
     if (motion && moveSettingsList(this.list, motion)) return;
@@ -407,23 +448,37 @@ export const withSettingsGroupChildren = (
   Arr.map(items, (item): SettingsSurfaceItem => {
     const { children } = item;
     if (!children) return item;
-    const rows = Arr.map(children, (child): SettingsSurfaceItem => ({ ...child }));
+    const copy = (source: ReadonlyArray<SettingsSurfaceItem>) =>
+      Arr.map(source, (child): SettingsSurfaceItem => ({ ...child }));
+    let rows = Predicate.isFunction(children) ? [] : copy(children);
+    // A save shows in the rows of the group that is open when it settles.
     const show = (id: string) => (shown: string) => {
       for (const row of rows) if (row.id === id) row.currentValue = shown;
+    };
+    const open = (): SettingsSurfaceItem[] => {
+      if (!Predicate.isFunction(children)) return rows;
+      try {
+        rows = copy(children());
+      } catch {
+        // Rows that can't be derived again keep the ones last shown.
+      }
+      return rows;
     };
     return {
       ...item,
       kind: "group",
-      submenu: (_value, done) =>
-        createSettingsGroupSubmenu({
+      submenu: (_value, done) => {
+        const opened = open();
+        return createSettingsGroupSubmenu({
           title: item.label,
           description: item.description,
-          items: () => rows,
+          items: () => opened,
           onChange: (id, value) => change(id, value, show(id)),
           done,
           summary: item.summary,
           listTheme,
-        }),
+        });
+      },
     };
   });
 
@@ -443,6 +498,14 @@ interface SettingsListSurfaceOptions {
 export const createSettingsListSurface = (options: SettingsListSurfaceOptions) => {
   const container = new Container();
   container.addChild(options.header);
+  // Group rows read their summaries as they draw, so a save in any group shows in all of them.
+  const surface: Component = {
+    render: (width) => {
+      refreshGroupSummaries(options.items, (id, value) => list.updateValue(id, value));
+      return container.render(width);
+    },
+    invalidate: () => container.invalidate(),
+  };
   const list: SettingsList = new SettingsList(
     withSettingChoiceLists(options.items, options.listTheme),
     options.height,
@@ -458,5 +521,5 @@ export const createSettingsListSurface = (options: SettingsListSurfaceOptions) =
     filterable: true,
   });
   container.addChild(adapter);
-  return { list, surface: settingsSurfaceBridge(adapter, container, options.bridge) };
+  return { list, surface: settingsSurfaceBridge(adapter, surface, options.bridge) };
 };

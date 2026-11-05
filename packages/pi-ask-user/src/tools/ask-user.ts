@@ -19,6 +19,7 @@ import {
   cancelledLine,
   emptyBody,
   expandedResult,
+  markReported,
   pendingRequest,
   stacked,
   type RenderContext,
@@ -89,6 +90,7 @@ export function registerAskUserTool(
       return callBody({ title: "Ask user", subtitle: callTitles(args) }, args, theme, context);
     },
     renderResult(result, options, theme, context) {
+      markReported(context);
       if (options.isPartial)
         return new Text(
           decodePresentation(result.details) === "open"

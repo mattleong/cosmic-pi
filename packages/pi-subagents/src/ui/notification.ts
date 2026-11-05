@@ -17,7 +17,7 @@ import {
   agentTextLines,
   bodyIndent,
   expandedRowsBody,
-  hangingLines,
+  factRowLines,
   indentedBody,
   indentedLines,
 } from "./agent-text.ts";
@@ -293,17 +293,25 @@ const stoppedBody = (
   };
 };
 
-const peersBody = (details: PeerDetails, theme: Theme, expanded: boolean, indent: number) => {
-  const pad = Str.repeat(indent)(" ");
-  return {
+const peersBody = (details: PeerDetails, theme: Theme, expanded: boolean, indent: number) =>
+  ({
     // Collapsed, each peer keeps one clipped row; expanded, its whole task wraps beneath it.
-    rows: (width: number) => {
-      const row = (peer: PeerDetails["peers"][number]) =>
-        `${theme.fg("toolTitle", sanitizeTerminalLine(peer.name))}${theme.fg("muted", ` · ${sanitizeTerminalLine(peer.ownership)} · ${sanitizeTerminalLine(peer.state)}${peer.task ? ` · ${sanitizeTerminalLine(peer.task)}` : ""}`)}`;
-      return expanded
-        ? Arr.flatMap(details.peers, (peer) => hangingLines(row(peer), width, indent))
-        : Arr.map(details.peers.slice(0, 3), (peer) => clipToWidth(`${pad}${row(peer)}`, width));
-    },
+    rows: (width: number) =>
+      Arr.flatMap(expanded ? details.peers : details.peers.slice(0, 3), (peer) =>
+        factRowLines(
+          [
+            [sanitizeTerminalLine(peer.name), "toolTitle"],
+            [
+              ` · ${sanitizeTerminalLine(peer.ownership)} · ${sanitizeTerminalLine(peer.state)}${peer.task ? ` · ${sanitizeTerminalLine(peer.task)}` : ""}`,
+              "muted",
+            ],
+          ],
+          width,
+          theme,
+          expanded,
+          { indent },
+        ),
+      ),
     facts: [
       ...(details.ownership ? [`This agent: ${details.ownership}`] : []),
       ...Arr.flatMap(details.peers, (peer) => agentFactLines(peer.name, [peer.id])),
@@ -312,8 +320,7 @@ const peersBody = (details: PeerDetails, theme: Theme, expanded: boolean, indent
     ...((details.ownership !== undefined || details.peers.length > 0) && {
       expandLabel: details.peers.length > 3 ? countLabel(details.peers.length, "peer") : "details",
     }),
-  } satisfies NoticeBody;
-};
+  }) satisfies NoticeBody;
 
 /** The body a notice shows below its heading; undefined when its details carry no display copy. */
 const noticeBody = (

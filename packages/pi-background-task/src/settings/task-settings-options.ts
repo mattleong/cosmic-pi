@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
 import { completeSettingsArguments } from "pi-cosmic-core/settings-completion";
+import { isInheritedSettingValue } from "pi-cosmic-ui/manager/settings-surface";
 import {
   BACKGROUND_TASK_SETTINGS,
   formatSettingValue,
@@ -28,12 +28,11 @@ export const sessionValue = (
 
 /** `inherit (on)` and other inherited labels mean `inherit` when chosen. */
 export const inheritChoice = (value: string): string =>
-  value === INHERIT || (Str.startsWith(`${INHERIT} (`)(value) && Str.endsWith(")")(value))
-    ? INHERIT
-    : value;
+  isInheritedSettingValue(value) ? INHERIT : value;
 
 export const TASK_SETTING_DESCRIPTORS = Arr.map(BACKGROUND_TASK_SETTINGS, (setting) => ({
   id: setting.id,
+  label: setting.label,
   description: setting.description,
   ...(setting.commandValues.length > 0 && { values: [...setting.commandValues, INHERIT] }),
   openValues: setting.openValues,

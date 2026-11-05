@@ -257,8 +257,10 @@ describe("tool results", () => {
         for (const { expanded, text } of frames) {
           const plain = stripAnsi(text);
           expect(plain, input.tool).not.toMatch(AGENT_PROCEDURES);
+          // A waiting run reads as its question; another run as its latest words.
+          if (input.tool === "agent_read") expect(plain).toContain(asking.question?.message);
           if (input.tool === "agent_read" && (style === "preview" || expanded))
-            expect(plain).toContain("Which seed file?");
+            expect(plain).toContain("Halfway there.");
           if (input.tool === "agent_send" && style === "preview")
             expect(plain).toContain(asking.name);
         }

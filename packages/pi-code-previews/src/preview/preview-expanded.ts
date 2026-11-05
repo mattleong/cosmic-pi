@@ -24,7 +24,7 @@ import {
 } from "./preview-issues";
 import { getCodePreviewAnimationFrame, withLastComponent } from "./tool-timing";
 import { layoutPreviewHeading } from "./preview-heading";
-import { recordHeadingSubject } from "./heading-coverage";
+import { recordHeadingSubject, recordOwnCallHeading } from "./heading-coverage";
 import { borderState } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
 import { compactHold, compactSingleLine, compactStatusIcon } from "./compact-row";
@@ -159,6 +159,7 @@ function headingRows(
 ): string[] {
   const rows = own?.heading(width);
   // A preview heading wraps rather than clips, so it shows the whole subject.
+  recordOwnCallHeading(state, rows !== undefined);
   if (rows) {
     recordHeadingSubject(state, true);
     return rows;
@@ -283,14 +284,18 @@ const HELD_STATES = {
 } as const;
 type HeldState = keyof typeof HELD_STATES;
 
-// Indentation, tree branches, and box rules before a row's own text.
-const ROW_LEAD = /^[\s│├└┌┬─╭╰]+/u;
+// Indentation and box rules before a row's own text.
+const ROW_LEAD = /^[\s│┌┬─╭╰]+/u;
+// A tree branch leads a child's row, which states the child's state rather than the row's own.
+const CHILD_BRANCH = /^\s*[├└]/u;
 
 /**
- * Whether a row states the held state: it begins with the state's glyph, opens with the state word
- * capitalized (`Paused by the user`) or a count of it (`1 paused`, `0/2 running`), or holds a later
- * `·`-separated fact that begins with the word (`auth-review · waiting for reply`). Prose that only
- * mentions the word, even at the start of a wrapped line, doesn't state the row's state.
+ * Whether a row states the held state: at the body's own column, it begins with the state's glyph;
+ * at any depth, it opens with the state word capitalized (`Paused by the user`) or a count of it
+ * (`1 paused`, `0/2 running`), or holds a later `·`-separated fact that begins with the word
+ * (`auth-review · waiting for reply`). A nested row led by a glyph, such as a program's running
+ * call, and a tree branch state a child's state, not the row's. Prose that only mentions the word,
+ * even at the start of a wrapped line, doesn't state the row's state.
  */
 function statesHeld(rows: readonly string[], state: HeldState): boolean {
   const { word, glyphs } = HELD_STATES[state];
@@ -298,8 +303,11 @@ function statesHeld(rows: readonly string[], state: HeldState): boolean {
   const opening = new RegExp(`^(?:${sentenceCase(word)}|\\d+(?:/\\d+)? ${word})${end}`, "u");
   const fact = new RegExp(`^(?:\\d+(?:/\\d+)? )?${word}${end}`, "iu");
   return Arr.some(rows, (row) => {
-    const plain = Str.replace(ROW_LEAD, "")(stripTerminalControls(row));
-    if (Arr.some(glyphs, (glyph) => Str.startsWith(`${glyph} `)(plain))) return true;
+    const raw = stripTerminalControls(row);
+    if (CHILD_BRANCH.test(raw)) return false;
+    const plain = Str.replace(ROW_LEAD, "")(raw);
+    const own = raw.length - Str.trimStart(raw).length <= BODY_INDENT.length;
+    if (own && Arr.some(glyphs, (glyph) => Str.startsWith(`${glyph} `)(plain))) return true;
     const [first, ...rest] = Str.split(plain, " · ");
     return opening.test(first) || Arr.some(rest, (segment) => fact.test(Str.trim(segment)));
   });
@@ -309,7 +317,8 @@ function statesHeld(rows: readonly string[], state: HeldState): boolean {
  * A preview heading carries no status glyph, so an expanded preview row states the row's state on
  * its own line, which exists only so the state never disappears on expansion. Issues carry state,
  * so a row that shows any has no line, except a cancelled row whose collapsed `Cancelled` they
- * replace. A live, waiting, queued, or paused row says so unless its heading or body already does;
+ * replace. A live row says so, and a waiting, queued, or paused row says so in its first counter or
+ * else first metadata, unless its heading or body already does;
  * a cancelled, unconfirmed, or other settled row keeps the fact its collapsed row states and the
  * expanded row doesn't. The glyph is the state's own: a settled receipt is never marked as a
  * warning.
@@ -318,7 +327,10 @@ function previewStatusRows(input: StatusInput, width: number): string[] {
   const { value, theme, issues, expanded } = input;
   if (issues.length > 0 && !cancelledLineReplaced(input, width)) return [];
   const { status, summary } = value;
-  const metadata = sentenceCase(compactSingleLine(summary?.metadata?.[0] ?? ""));
+  // The state words a compact heading shows beside its glyph: the first counter, else metadata.
+  const stateWords = sentenceCase(
+    compactSingleLine(summary?.counters?.[0] ?? summary?.metadata?.[0] ?? ""),
+  );
   // A live or held state the heading or body already states needs no line. A phrase such as
   // `Needs your input` counts wherever it appears; the bare state word only as `statesHeld` finds it.
   const unstated = (state: HeldState, text: string) =>
@@ -326,7 +338,7 @@ function previewStatusRows(input: StatusInput, width: number): string[] {
     (Str.toLowerCase(text) !== HELD_STATES[state].word && statesFact(expanded, text))
       ? undefined
       : text;
-  const said = (state: HeldState, fallback: string) => unstated(state, metadata || fallback);
+  const said = (state: HeldState, fallback: string) => unstated(state, stateWords || fallback);
   const hold = status === "pending" || status === "running" ? compactHold(summary) : undefined;
   const line = Match.value(status).pipe(
     Match.when(

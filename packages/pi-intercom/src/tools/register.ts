@@ -17,6 +17,7 @@ import {
   SessionReadContractSchema,
   type SessionRefusal,
   type SessionToolDetails,
+  type SessionView,
 } from "./contract.ts";
 import {
   prepareSessionListArguments,
@@ -89,8 +90,9 @@ export function registerSessionTools(
   runner: SessionToolRunner,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
-  // Sessions results named, so a later call can name its addressee before it settles.
+  // Sessions results or resolved ids named, so a call can name its addressee before it settles.
   const names = sessionNameCache();
+  const resolved = (session: SessionView) => names.remember([session]);
   const remember = <Result extends AgentToolResult<SessionToolDetails>>(result: Result): Result => {
     const { details } = result;
     if (details?.tool === SESSION_TOOL.list) names.remember(details.sessions);
@@ -153,7 +155,7 @@ export function registerSessionTools(
           settle(
             runner,
             signal,
-            sendToSession(args.to, args.message),
+            sendToSession(args.to, args.message, resolved),
             (details) => ({ content: [{ type: "text", text: sendText(details) }], details }),
             (refusal) => refusedResult(SESSION_TOOL.send, args.to, refusal),
           ).then(remember),
@@ -182,7 +184,7 @@ export function registerSessionTools(
           settle(
             runner,
             signal,
-            readSession(args.to),
+            readSession(args.to, resolved),
             (details) => ({
               content: [{ type: "text", text: readText(details) }],
               details,

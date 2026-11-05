@@ -249,7 +249,7 @@ function renderEditCallPreview(
     operations.length > 1 ? theme.fg("muted", ` · ${operations.length} edit blocks`) : "";
   let text = `${theme.fg("muted", "proposed edit")}${counts}${blocks}\n${Arr.join(sections, "\n")}`;
   if (shown < operations.length)
-    text += showingFooter(theme, shown, operations.length, "edit blocks");
+    text += showingFooter(theme, operations.length - shown, "edit block");
   return new FullWidthDiffText(text, theme, settings.diffIntensity);
 }
 

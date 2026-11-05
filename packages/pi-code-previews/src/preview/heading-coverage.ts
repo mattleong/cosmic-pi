@@ -11,3 +11,16 @@ export const recordHeadingSubject = (state: WeakKey, complete: boolean): void =>
 
 /** False until a heading has drawn, so a body never drops input on a guess. */
 export const headingShowedSubject = (state: WeakKey): boolean => subjectShown.get(state) === true;
+
+/**
+ * Whether a row's expanded heading is the tool's own collapsed preview call, which may show input
+ * beyond the subject, such as grep's glob and limit. Keyed by the row's renderer state.
+ */
+const ownCallShown = new WeakMap<WeakKey, boolean>();
+
+export const recordOwnCallHeading = (state: WeakKey, own: boolean): void => {
+  ownCallShown.set(state, own);
+};
+
+/** False until a heading has drawn, so a body never drops input on a guess. */
+export const headingIsOwnCall = (state: WeakKey): boolean => ownCallShown.get(state) === true;

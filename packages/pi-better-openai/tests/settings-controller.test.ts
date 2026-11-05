@@ -5,6 +5,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { formatDuration } from "pi-cosmic-core";
 import { deferredPromise } from "pi-cosmic-core/testing";
@@ -35,7 +36,7 @@ const beginRefreshWrite = Effect.gen(function* () {
   component.handleInput?.(input.enter);
   component.handleInput?.(input.down);
   component.handleInput?.(input.enter);
-  expect(renderedRow(component, "Refresh interval")).toContain("2m");
+  expect(renderedRow(component, "Usage refresh")).toContain("2m");
   return { h, write, closed, component };
 });
 
@@ -161,6 +162,27 @@ describe("Better OpenAI settings controller", () => {
       component.handleInput?.(input.escape);
       component.handleInput?.(input.escape);
       yield* Effect.promise(() => closed);
+    }),
+  );
+
+  it.effect("status names every setting with its value before the diagnostics", () =>
+    Effect.gen(function* () {
+      const h = settingsHarness({ diagnosticLines: () => ["Current model: openai/gpt-5.5"] });
+      yield* Effect.promise(() => h.invoke("status"));
+      const text: unknown = h.notify.mock.lastCall?.[0];
+      const level: unknown = h.notify.mock.lastCall?.[1];
+      expect(level).toBe("info");
+      const shown = Str.split(Predicate.isString(text) ? text : "", "\n");
+      for (const id of ["fast.enabled", "image.enabled", "usage.refreshIntervalMs"])
+        expect(Arr.some(shown, (line) => Fn.pipe(line, Str.includes(`(${id})`)))).toBe(true);
+      expect(
+        Arr.findFirstIndex(shown, (line) => Fn.pipe(line, Str.includes("(image.timeoutMs)"))),
+      ).toEqual(
+        Option.map(
+          Arr.findFirstIndex(shown, (line) => line === "Current model: openai/gpt-5.5"),
+          (index) => index - 1,
+        ),
+      );
     }),
   );
 });

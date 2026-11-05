@@ -20,6 +20,8 @@ Shared helpers implement most of this. Use them instead of writing separators, h
 | Expansion affordance            | `renderExpansionAffordance`, `toolExpandHint`                                                                                                                                                                                                  | `pi-cosmic-ui/tool`                                                                    |
 | Expanded tool bodies            | `expandedBody`, `expandedFields`, `expandedText`, `expandedDetails`, … ([layout](tool-presentation.md#expanded-body-layout))                                                                                                                   | `pi-code-previews`                                                                     |
 | Durations, times, sizes, counts | `formatDuration`, `formatRelativeAge`, `formatClockTime`, `formatBytes`, `countLabel`                                                                                                                                                          | `pi-cosmic-core/display`                                                               |
+| Wrapping a line of facts        | `wrapFacts(facts, width, hangingIndent)` (breaks between whole facts, then before `→`, then after `/`)                                                                                                                                         | `pi-cosmic-ui/manager`                                                                 |
+| Settings command text           | `settingsSubcommand` (help, errors, confirmations), `settingsStatusText`, `wrapNoticeText`                                                                                                                                                     | `pi-cosmic-ui/boundary/host-settings-command`                                          |
 | Width-safe clipping             | `clipToWidth` (closes up the space before `…`)                                                                                                                                                                                                 | `pi-cosmic-ui/manager`                                                                 |
 
 Every surface must read well at both a desktop terminal (180×56) and a phone client (57×46). Check both widths in the presentation gallery, and add a 57-column scenario for every surface you change.
@@ -71,7 +73,7 @@ Every surface must read well at both a desktop terminal (180×56) and a phone cl
 - Mark the focused row with `›` (`LIST_CURSOR`) in every list, picker, and tree. Never let a pi-tui default such as `→` stand in for it.
 - Use `[ ]`/`[x]` for multi-select and `( )`/`(•)` for single-select (`selectionMarker`).
 - A picker that chooses a value marks every row `( )` and the current value `(•)`, so the current value stays visible while the cursor moves: settings choice lists do this, and `SearchableSelectPage` does it when given `markedValue`. Action and navigation lists carry no marker. Don't repeat the marker as `(current)` text.
-- A picker's inherit row reads `( ) inherit (value)` with the value it would apply, such as `( ) inherit (low)` or `( ) inherit (claude-bridge/claude-opus-5-5)`. It is the only row that names the inherited value: no `(profile default)` row repeating another row, and no `Current Pi model →` label.
+- A picker's inherit row reads `( ) inherit (value)` with the value it would apply, such as `( ) inherit (low)` or `( ) inherit (claude-bridge/claude-opus-5-5)`. It is the only row that names the inherited value: no `(profile default)` row repeating another row, and no `Current Pi model →` label. It comes first in every choice list, before the pinned values.
 - Show scroll position as `n of N` or `n–m of N`.
 - An empty list says what will appear there, such as `Subagents, tasks, and questions appear here.`, not just that nothing has happened yet.
 
@@ -152,6 +154,10 @@ Some Code Previews tool headings carry a per-tool icon, such as `📖 read`. The
 - A nested list is titled with the label of the row that opened it (`Fast mode`, `Image tool`, `Global`).
 - A picker lists an inherited value as its own row, `( ) inherit (low)`, beside the pinned values, never as a `(profile default)` row that repeats one of them. A narrow column drops an inherited model's provider, `inherit (claude-opus-5-5)`, rather than clip it.
 - A row's description names the session's value as a sentence: `On in this session.`, `This session uses 1 MB.`
+- A setting's label names it without its group, since help, status, and confirmations show it alone. Facts no row shows, such as diagnostics, follow the rows as titled sections of `Name: value` lines.
+- A saved change shows at once everywhere it is visible: after a save, every inherited `inherit (value)` label, choice list, and group summary that depends on it reflects the new value within the same invocation. A group whose rows depend on another group's values passes `children` as a function; the shared surface re-derives the rows when the group opens and re-reads every group `summary` each time it draws.
+- `createSettingsChoiceSubmenu` puts inherit choices first; owners don't order them. A table cell may drop `inherit (…)` around a value only when keeping it would clip the table's main column.
+- An interactive surface posts no notice for a successful change; the row shows the new value. A failed change warns and restores the saved value, even when it settles after the surface closed. A command-line change (`/<ext> settings <id> <value>`) confirms with `Label: value`, led by its scope and followed by a note when it has one: `Global · Running at once: 16 · applies after /reload`.
 - Values read as people say them: `Shared checkout`, not `shared-checkout`. Sizes and durations use `formatBytes` and `formatDuration` (`256 KB`, `2s`, `inherit (256 KB)`), and units stay out of labels. Accept the same forms as input, and treat a bare number as the setting's own unit.
 - Enter says what it does, and the hint names it:
   - On a boolean it toggles and saves: `Enter Toggle`.
@@ -173,6 +179,7 @@ A bare `/<command>` without its own handler shows one overview, built by `regist
 - Every line stays within 55 columns, because Pi draws notices one column in and doesn't hang-indent its own wraps. If any aligned line would be wider, the whole list switches to a stacked form: the command on its own line, and its description on the next line indented four columns, wrapping with the same indent. Nothing wraps flush-left at 57 columns.
 - Notes such as examples (`overviewNotes`) follow the list verbatim.
 - An unknown subcommand warns `Unknown /<name> command: <sub>` and then shows the same overview; `registerExtensionCommand` does this. Never warn with a bare `Usage:` line. When a known subcommand gets wrong arguments, say what is wrong and show the correct form, such as `Add a prompt: /openai image <prompt>`.
+- `/<ext> settings help`, `status`, and their errors follow the same rules; the settings shell builds them. Help opens with the overview, then lists each setting as `Label: value (id)` with its description beneath, indented four columns. Status lists the same `Label: value (id)` rows (`settingsStatusText`), never raw `id = value`. A missing value reads `Add a value: /openai settings fast.enabled on|off`, and an unknown setting says where the ids are: `See the setting ids: /openai settings help`.
 - Subcommand descriptions also serve as autocomplete text. Pi's autocomplete shows only about 21 columns of description at 57 columns, so keep every autocomplete description within about 20 columns (`Footer settings`, `Show renderer health`), in sentence case, with no trailing period. Put detail in the settings surface or the overview notes, not the description.
 
 ## Panels, tables, and long text
@@ -183,7 +190,8 @@ A bare `/<command>` without its own handler shows one overview, built by `regist
 
 ## Tool rows
 
-- A collapsed row that has more shows `▸ label · C-o Expand`, naming the configured expand key in the suite key format (`renderExpansionAffordance`). Never hard-code the shortcut or write `ctrl+o to expand`.
+- A collapsed row that has more shows `▸ label · C-o Expand`, naming the configured expand key in the suite key format (`renderExpansionAffordance`). Never hard-code the shortcut or write `ctrl+o to expand`. In border mode the corner shows the whole `▸ label · C-o Expand`.
+- The label is a lowercase noun phrase naming what expansion reveals: `error`, `output`, `18 more lines`, `2 more tasks · 1 failed`, `answers`. Never a sentence (`Showing 8 of 10 tasks`) or Title Case (`Error`, `Full answers`). A label standing in for hidden rows names what they hold, including failures.
 - Producers declare what expansion reveals and the Code Previews shell draws the affordance, in compact and preview styles alike. A tool row sets `expandLabel` on its compact summary, or `false` when expansion adds nothing; a message sets `expandLabel` on its message presenter. Set it wherever expansion reveals retained content, such as details, prompts, identities, full conversations, or questions, including running calls whose arguments are hidden. Never draw the affordance by hand. See [tool presentation](tool-presentation.md).
 - In preview style, a message's body, sent or received, indents two columns under its `Message → name` or `Reply ← name` heading.
 - Every workspace tool expands into one layout: the body indents two columns under the heading, labeled sections use the Code Previews style, and technical facts close in a dim `Details` section. Build it with the `pi-code-previews` helpers described in [expanded body layout](tool-presentation.md#expanded-body-layout).
@@ -194,6 +202,12 @@ A bare `/<command>` without its own handler shows one overview, built by `regist
 - An empty listing says so once, in the same words: its compact counter and its preview body both read `no active tasks`, and it shows no expansion affordance.
 - A collapsed row never wraps a path. Show the display path when it fits, otherwise its file name, shortened in the middle if still too wide; the full path belongs in expanded Details.
 - A paused run is stated by its `‖` row; don't add an `ℹ … is paused` issue.
+- A list of sessions, agents, or tasks starts each row with the same status glyph on every surface: tool rows, expanded bodies, and command notices.
+- A stand-in for hidden rows sits where the rows are hidden and names them: a log's middle `▸ 18 more lines`, a tail's leading `▸ 6 earlier lines`, a list's trailing `▸ 2 more tasks · 1 failed`.
+- A started call's collapsed preview row shows its live state (`⠋ Running…`) until it first reports, matching its expanded row.
+- A received message's expanded body has no section label; the heading already says what it is.
+- In an expanded view, a row of `·`-joined facts wraps with `wrapFacts` and is never clipped; only collapsed rows clip.
+- A run's pending question is an attention issue that quotes it, `name asks: …`, on every surface that raises it. A body that also draws the run shows only its state, adding the rest of the question only when the quote was cut.
 - A call waiting on the user once its question is on screen sets `waiting` and reads `needs your input`; a call waiting on an agent's reply reads `waiting for reply`. Both show `?`. A queued request shows `○`, and a call that returned because a run paused shows `‖`.
 
 ## Time
@@ -214,7 +228,7 @@ A bare `/<command>` without its own handler shows one overview, built by `regist
 
 ## Errors and agent text
 
-- Normal states, such as a feature paused for the current model or data that isn't available for this model, are info notices. Warnings are for failures. Every warning names the thing involved (for example, the saved `provider/model`) and its next step, using the real Pi command that fixes it (`/login <provider>`, `/model`, `/thinking`, `/new`), never a vague "choose one".
+- Normal states, such as a feature paused for the current model or data that isn't available for this model, are info notices. Warnings are for failures. Every warning names the thing involved (for example, the saved `provider/model`) and its next step, using the real Pi command that fixes it (`/login <provider>`, `/model`, `/thinking`, `/new`, `/btw`), never a vague "choose one" and never a tool only the agent can call.
 
 - A collapsed issue is one short human sentence, such as "File not found", "Rate limited by provider", or "Exited with code 2: missing semicolon". Raw diagnostics, stack frames, and endpoints appear only in expanded detail. See [Issues](tool-presentation.md#issues).
 - Agent-authored text, such as reports and results, renders markdown the way Pi renders assistant text. Inline code is styled, not shown with raw backticks.
@@ -226,7 +240,7 @@ A bare `/<command>` without its own handler shows one overview, built by `regist
 - Token counts read `23k tokens` wherever there is room, on every surface; the abbreviation `tok` is only a narrow-width fallback. Two surfaces in the same pane never use different words for the same count. Rates read the same way: `~50 tokens/s`, whole numbers from 10 up and one decimal below (`~7.4 tokens/s`).
 - Count summaries use the Unicode minus `−` (U+2212): `+4 −2`, `+48 −7`. Diff line prefixes inside diff bodies stay ASCII `+` and `-`.
 - A line standing in for rows that don't fit says how many and what they hold, with no separator stranded after the ellipsis: `… 9 more · 1 needs your input · 3 running`.
-- A line of facts wraps between whole facts, so no line ends with `·` or `→`. A fact too wide for its line breaks before its `→`, which then leads the continuation: `researcher` above `→ claude-bridge/claude-sonnet-5-5:medium`.
+- A line of facts wraps between whole facts, so no line ends with `·` or `→`. A fact too wide for its line breaks before its `→`, which then leads the continuation: `researcher` above `→ claude-bridge/claude-sonnet-5-5:medium`. Facts after a broken fact keep packing onto its last line.
 - Wrapped lines use a hanging indent. Truncation uses `…`. Nothing is cut mid-word without an ellipsis, and a cut at a word boundary closes up before it (`Approve…`, not `Approve …`).
 
 ## Waiting and delivery words

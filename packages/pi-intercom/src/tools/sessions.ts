@@ -220,11 +220,24 @@ const retryingWhileReloading = <A, E, R>(attempt: Effect.Effect<A, E, R>): Effec
     ),
   );
 
+/** Told which session an id names as soon as it resolves, before the call settles. */
+export type OnResolved = (session: SessionView) => void;
+
+const resolveNamed = Effect.fn("IntercomTools.resolveNamed")(function* (
+  to: string,
+  onResolved: OnResolved | undefined,
+) {
+  const record = yield* resolvePeer(to);
+  if (onResolved) yield* Effect.sync(() => onResolved(viewOf(record)));
+  return record;
+});
+
 const deliverTo = Effect.fn("IntercomTools.deliverTo")(function* (
   to: string,
   message: InboundMessage,
+  onResolved: OnResolved | undefined,
 ) {
-  const record = yield* resolvePeer(to);
+  const record = yield* resolveNamed(to, onResolved);
   const session = viewOf(record);
   const delivered = yield* deliverMessage(record, message).pipe(Effect.result);
   if (Result.isSuccess(delivered))
@@ -258,16 +271,25 @@ const deliverTo = Effect.fn("IntercomTools.deliverTo")(function* (
  * connection lost after the request went out leaves the outcome uncertain: the recipient may have
  * taken it, so it is never retried.
  */
-export const sendToSession = Effect.fn("IntercomTools.send")(function* (to: string, text: string) {
+export const sendToSession = Effect.fn("IntercomTools.send")(function* (
+  to: string,
+  text: string,
+  onResolved?: OnResolved,
+) {
   if (text.length > MAX_MESSAGE_CHARS)
     return yield* SessionToolRefusal.make({ code: "session_message_too_long" });
   const self = yield* IntercomSession.use((session) => session.record);
   const messageId = yield* Effect.sync(() => synchronousRandomHex(MESSAGE_ID_BYTES));
-  return yield* retryingWhileReloading(deliverTo(to, { from: viewOf(self), messageId, text }));
+  return yield* retryingWhileReloading(
+    deliverTo(to, { from: viewOf(self), messageId, text }, onResolved),
+  );
 });
 
-const readFrom = Effect.fn("IntercomTools.readFrom")(function* (to: string) {
-  const record = yield* resolvePeer(to);
+const readFrom = Effect.fn("IntercomTools.readFrom")(function* (
+  to: string,
+  onResolved: OnResolved | undefined,
+) {
+  const record = yield* resolveNamed(to, onResolved);
   const last = yield* readLastMessage(record).pipe(
     Effect.catch((error) => unanswered(record, error)),
   );
@@ -280,6 +302,9 @@ const readFrom = Effect.fn("IntercomTools.readFrom")(function* (to: string) {
 });
 
 /** The latest assistant text of the session with id `to`; reading never changes the session. */
-export const readSession = Effect.fn("IntercomTools.read")(function* (to: string) {
-  return yield* retryingWhileReloading(readFrom(to));
+export const readSession = Effect.fn("IntercomTools.read")(function* (
+  to: string,
+  onResolved?: OnResolved,
+) {
+  return yield* retryingWhileReloading(readFrom(to, onResolved));
 });

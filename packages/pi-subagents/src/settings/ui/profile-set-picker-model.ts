@@ -137,7 +137,7 @@ const emptyScopeNote = (scope: SubagentConfigScope): ProfileSetPickerEntry => ({
   kind: "scope-note",
   key: `${scope}:empty`,
   scope,
-  label: `No ${SCOPE_LABELS[scope]} sets saved`,
+  label: `No ${Str.toLowerCase(SCOPE_LABELS[scope])} sets saved`,
   description: "Save the current session here to add one",
 });
 

@@ -69,3 +69,24 @@ test("controls in field values are made visible instead of reaching the terminal
   ]).render(80);
   assert.ok(!Arr.some(rows, Str.includes("\u001b")));
 });
+
+test("a wrapped line of facts breaks between whole facts and never ends with a separator", () => {
+  const facts =
+    "auth-review: agent-1 · reviewer → openai-codex/gpt-5.6-sol:high · 84k tokens · $0.61 · 4m 30s";
+  const body = expandedBody(
+    expandedDetails(plainTheme, [facts]),
+    expandedFields(plainTheme, [{ label: "Run", lines: [facts] }]),
+  );
+  for (const width of [100, 57, 40]) {
+    const rows = Arr.map(body.render(width), Str.trimEnd);
+    assert.ok(
+      Arr.every(rows, (row) => !/[·→]$/u.test(row)),
+      `no row ends with a separator at ${width}`,
+    );
+    for (const fact of ["84k tokens", "$0.61", "4m 30s"])
+      assert.ok(
+        Arr.some(rows, (row) => Str.includes(fact)(row)),
+        `${fact} stays whole at ${width}`,
+      );
+  }
+});

@@ -2,7 +2,10 @@ import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 
-import { Container, Text } from "@earendil-works/pi-tui";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { countLabel } from "pi-cosmic-core/display";
+import { renderExpansionAffordance, toolRunningLine } from "pi-cosmic-ui/tool";
 import { trimSingleTrailingNewline } from "../../preview/format";
 import { codePreviewSettings } from "../../config/state";
 import { hostObject, ownField, type HostObject } from "../../shared/untrusted-value";
@@ -28,6 +31,23 @@ function shouldHideBashResult(args: HostObject | undefined): boolean {
   );
 }
 
+// Streaming output a collapsed running row shows: its latest lines, as a terminal would.
+const STREAMING_TAIL_LINES = 5;
+
+/** A running call's latest output beneath its running line, naming the earlier lines it hides. */
+function streamingTail(lines: readonly string[], theme: Theme): Component {
+  const tail = lines.slice(-STREAMING_TAIL_LINES);
+  const earlier = lines.length - tail.length;
+  const rows = [
+    toolRunningLine(theme),
+    ...Arr.map(tail, (line) => theme.fg("muted", escapeControlChars(line))),
+    ...(earlier > 0
+      ? [renderExpansionAffordance(countLabel(earlier, "earlier line"), false, theme)]
+      : []),
+  ];
+  return new Text(Arr.join(rows, "\n"), 0, 0);
+}
+
 export function bashPreviewRenderers(): PreviewRenderers {
   return {
     renderCall(args, theme, renderContext) {
@@ -50,23 +70,22 @@ export function bashPreviewRenderers(): PreviewRenderers {
     },
 
     renderResult: (result, { expanded, isPartial }, theme, renderContext) => {
-      const prelude = renderResultPrelude({ isPartial, theme });
-      if (prelude) return prelude;
-      if (
-        !expanded &&
-        !renderContext.isError &&
-        shouldHideBashResult(hostObject(renderContext.args))
-      )
-        return renderHiddenPreviewExpandHint(renderContext.state, theme, "output");
       const output = trimSingleTrailingNewline(getTextContent(result.content));
       const lines = output ? Str.split(output, "\n") : [];
+      const hidden = !renderContext.isError && shouldHideBashResult(hostObject(renderContext.args));
+      if (isPartial && !expanded && !hidden && Arr.some(lines, (line) => Str.trim(line) !== ""))
+        return streamingTail(lines, theme);
+      const prelude = renderResultPrelude({ isPartial, theme });
+      if (prelude) return prelude;
+      if (!expanded && hidden)
+        return renderHiddenPreviewExpandHint(renderContext.state, theme, "output");
       const { lines: rawLines, notice } = splitShellNotice(
         renderContext.isError ? withoutShellStatus(lines) : lines,
       );
       const limit = expanded ? rawLines.length : 8;
       const color = renderContext.isError ? "error" : "muted";
       const text = rawLines.length
-        ? renderSelectedOutputLines(rawLines, limit, theme, "output lines", (chunk) =>
+        ? renderSelectedOutputLines(rawLines, limit, theme, { singular: "output line" }, (chunk) =>
             Arr.map(chunk, (line) => theme.fg(color, escapeControlChars(line))),
           )
         : theme.fg("muted", "No output");

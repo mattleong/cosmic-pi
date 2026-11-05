@@ -106,10 +106,13 @@ export function frameBorderShell(
 const RESET_ANSI = "\x1b[0m";
 
 /**
- * Whether a collapsed frame without a hint of its own offers expansion, given the rows its call and
- * result slots drew.
+ * What a collapsed frame without a slot's label reveals on expansion, given the rows its call and
+ * result slots drew; undefined when it offers no expansion.
  */
-export type BorderExpandFallback = (call: readonly string[], result: readonly string[]) => boolean;
+export type BorderExpandFallback = (
+  call: readonly string[],
+  result: readonly string[],
+) => string | undefined;
 
 export class BorderedToolCall implements Component {
   private readonly body = new Container();
@@ -145,7 +148,7 @@ export class BorderedToolCall implements Component {
     this.cache = undefined;
   }
 
-  /** Labels the frame's corner with the expand hint when no slot labeled it and this says so. */
+  /** Labels the frame's corner with this label when no slot labeled it. */
   setExpandFallback(fallback: BorderExpandFallback | undefined): void {
     this.expandFallback = fallback;
     this.cache = undefined;
@@ -178,15 +181,21 @@ export class BorderedToolCall implements Component {
     const timing = this.timingLabel ? ` ${this.theme.fg("muted", this.timingLabel)} ` : "";
     const call = this.call?.render(innerWidth) ?? [];
     const result = this.result?.render(innerWidth) ?? [];
-    const label =
-      this.expandLabel ??
-      (this.expandFallback?.(call, result) ? this.theme.fg("muted", toolExpandHint()) : undefined);
-    const expand = label ? ` ${label} ` : "";
+    const label = this.expandLabel ?? this.expandFallback?.(call, result);
+    const expand = label === undefined ? "" : this.cornerAffordance(label, innerWidth);
     return [
       renderBorder(width, border, "╭", "╮", timing),
       ...Arr.map([...call, ...result], (line) => this.frameLine(line, innerWidth, border)),
       renderBorder(width, border, "╰", "╯", expand),
     ];
+  }
+
+  /** `▸ label · C-o Expand` in the bottom corner, or only the key hint where the label can't fit. */
+  private cornerAffordance(label: string, innerWidth: number): string {
+    const full = ` ${renderExpansionAffordance(label, false, this.theme)} `;
+    return visibleWidth(full) + 2 <= innerWidth
+      ? full
+      : ` ${this.theme.fg("muted", toolExpandHint())} `;
   }
 
   private frameLine(line: string, innerWidth: number, border: (value: string) => string): string {
@@ -229,9 +238,8 @@ export function hiddenPreviewExpandHintForShell(
   const shellState = borderState({ state });
   const slot = shellState.codePreviewBorderCurrentSlot;
   if (slot !== "call" && slot !== "result") return renderExpansionAffordance(label, false, theme);
-  const corner = theme.fg("muted", toolExpandHint());
-  if (slot === "call") shellState.codePreviewBorderCallExpandLabel = corner;
-  else shellState.codePreviewBorderResultExpandLabel = corner;
+  if (slot === "call") shellState.codePreviewBorderCallExpandLabel = label;
+  else shellState.codePreviewBorderResultExpandLabel = label;
   return "";
 }
 

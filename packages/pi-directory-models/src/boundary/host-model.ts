@@ -50,7 +50,10 @@ export function captureContextModel(host: DirectoryModelHost): SelectedModel | u
   return invokeHostCallback(host.currentModel, undefined);
 }
 
-const thinkingReadError = hostError("thinking", "Couldn't read Pi's thinking level");
+const thinkingReadError = hostError(
+  "thinking",
+  "Couldn't read Pi's thinking level, so it wasn't saved for this directory\nPick it again with /thinking to save it",
+);
 
 const readThinkingLevel = (
   pi: ExtensionAPI,
@@ -90,14 +93,17 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
     try: host.currentModel,
     catch: hostError(
       "read",
-      "Couldn't read Pi's current model, so the saved model wasn't restored",
+      `Couldn't read Pi's current model, so ${saved}, saved for this directory, wasn't restored\nPick it with /model to use it`,
     ),
   });
   const switching = current?.provider !== preference.provider || current.id !== preference.model;
   if (switching) {
     const model = yield* Effect.try({
       try: () => host.findModel(preference.provider, preference.model),
-      catch: hostError("find", "Couldn't read Pi's model list, so the saved model wasn't restored"),
+      catch: hostError(
+        "find",
+        `Couldn't read Pi's model list, so ${saved}, saved for this directory, wasn't restored\nPick it with /model to use it`,
+      ),
     });
     if (!model)
       return yield* hostError(

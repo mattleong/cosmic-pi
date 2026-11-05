@@ -396,6 +396,18 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: { wait: () => Effect.succeed(taskWait(finished, "completed")) },
   },
   {
+    title: "wait completed with more output than its collapsed tail",
+    input: { action: "wait", id: "task-0000000008", until: "exit" },
+    service: {
+      wait: () =>
+        Effect.succeed(
+          taskWait(finished, "completed", {
+            recent: slice("task-0000000008", "exited", requestLog.slice(0, 10), { from: 0 }),
+          }),
+        ),
+    },
+  },
+  {
     title: "wait completed with a failure",
     input: { action: "wait", id: "task-0000000001", until: "exit" },
     service: {
@@ -493,6 +505,17 @@ const scenarios: ReadonlyArray<Scenario> = [
     title: "list with a task named like an error",
     input: { action: "list", state: "completed" },
     service: { list: () => Effect.succeed([errorNamed, finished]) },
+  },
+  {
+    title: "list whose rows wrap between whole facts",
+    input: { action: "list" },
+    service: {
+      list: () =>
+        Effect.succeed([
+          { ...timedOut, command: "pnpm db:migrate --schema=packages/api/prisma/schema.prisma" },
+          running,
+        ]),
+    },
   },
   {
     title: "list of many tasks",
@@ -746,7 +769,12 @@ type ScopeFiles = Parameters<typeof taskSettingsSubcommand>[0]["read"];
  */
 const settingsLines = (
   read: ScopeFiles,
-  options: { readonly prefix?: string; readonly explore?: boolean } = {},
+  options: {
+    readonly prefix?: string;
+    readonly explore?: boolean;
+    /** Saves Global's running limit as 16, then restores its inheritance, in one invocation. */
+    readonly live?: boolean;
+  } = {},
 ): Effect.Effect<string[]> =>
   Effect.gen(function* () {
     setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
@@ -775,6 +803,29 @@ const settingsLines = (
         "",
       ]);
     const lines = [...frames("scope groups")];
+    const press = (...keys: string[]) => {
+      for (const key of keys) surface.editor?.handleInput?.(key);
+    };
+    if (options.live) {
+      // Global, its running limit, then 16: the list leads with `inherit (8)`, then 4, 8, 16.
+      press("\r", "j", "\r", "j", "j", "j", "\r");
+      yield* macrotask;
+      press("\u001b");
+      lines.push(...frames("after saving Global's limit as 16"));
+      press("j", "\r");
+      lines.push(...frames("the Project group after Global's save"));
+      press("j", "\r");
+      lines.push(...frames("Project's running choices after Global's save"));
+      press("\u001b", "\u001b", "k", "\r", "j", "\r", "k", "k", "k", "\r");
+      yield* macrotask;
+      press("\u001b");
+      lines.push(...frames("after restoring Global's inheritance"));
+      press("j", "\r");
+      lines.push(...frames("the Project group after restoring Global"));
+      press("\u001b", "\u001b");
+      yield* Effect.promise(() => opened);
+      return lines;
+    }
     if (!options.explore) {
       surface.editor?.handleInput?.("\u001b");
       yield* Effect.promise(() => opened);
@@ -878,6 +929,10 @@ describe.skipIf(!directory)("presentation gallery", () => {
           { explore: true },
         )),
         ...(yield* settingsLines(() => Promise.resolve({}), { prefix: "default files · " })),
+        ...(yield* settingsLines(() => Promise.resolve({}), {
+          prefix: "one invocation · ",
+          live: true,
+        })),
         ...(yield* settingsLines(
           (location) => Promise.resolve(location.scope === "global" ? { enabled: false } : {}),
           { prefix: "tasks off globally · " },

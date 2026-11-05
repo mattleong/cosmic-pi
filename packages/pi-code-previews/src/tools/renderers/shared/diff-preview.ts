@@ -24,7 +24,7 @@ export function formatDiffPreview(
       ? renderPlainDiff(diff, theme, limit, lineNumbers)
       : renderSyntaxHighlightedDiff(diff, lang, theme, limit, options.invalidate, lineNumbers);
   if (options.totalLines > limit)
-    text += showingFooter(theme, limit, options.totalLines, `${noun} lines`);
+    text += showingFooter(theme, options.totalLines - limit, `${noun} line`);
   if (syntaxHighlightSkipped)
     text += previewFooter(theme, `Syntax highlighting skipped for large ${noun}`);
   return text;

@@ -386,6 +386,31 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
     }),
   );
 
+  it.effect("names the addressee as soon as its id resolves, before the call settles", () =>
+    Effect.gen(function* () {
+      const shared = yield* sharedAgentDirectory();
+      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
+      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
+      yield* sessionRuntime(
+        { sessionId: "session-b", name: "web work", cwd: "/project" },
+        "From b.",
+        shared.fallbackRoot,
+      );
+      const resolved: Array<{ readonly sessionId: string; readonly name?: string }> = [];
+      const remember = (session: { readonly sessionId: string; readonly name?: string }) => {
+        resolved.push(session);
+      };
+
+      yield* sendToSession("session-b", "Hello.", remember).pipe(Effect.provide(a.context));
+      yield* readSession("session-b", remember).pipe(Effect.provide(a.context));
+
+      expect(resolved).toMatchObject([
+        { sessionId: "session-b", name: "web work" },
+        { sessionId: "session-b", name: "web work" },
+      ]);
+    }),
+  );
+
   it.effect("reads another session's latest assistant text without disturbing it", () =>
     Effect.gen(function* () {
       const { a, b } = yield* twoSessions;
