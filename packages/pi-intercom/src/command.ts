@@ -50,8 +50,6 @@ const listedLines = (session: ListedSession, label: string): ReadonlyArray<strin
 
 // A notice can't know its width, so a long session name ends at a word boundary in its list.
 const NOTICE_LABEL_CHARS = 40;
-/** A cut example keeps whole words, however much room that gives up. */
-const WHOLE_WORDS = 1;
 
 const howToMessage = (example: string | undefined): ReadonlyArray<string> => [
   "To message one, ask your agent, for example:",
@@ -60,8 +58,8 @@ const howToMessage = (example: string | undefined): ReadonlyArray<string> => [
 ];
 
 /**
- * The example names the shortest reachable session as a user would type it: whole, or for a name
- * the list cuts, its leading whole words without the cut mark.
+ * The example names the shortest reachable session as a user would type it. A name the list cuts
+ * isn't one the user could type, so the example then uses a generic name.
  */
 const exampleLabel = (sessions: ReadonlyArray<ListedSession>): string | undefined => {
   const labels = distinctSessionLabels(sessions);
@@ -75,9 +73,11 @@ const exampleLabel = (sessions: ReadonlyArray<ListedSession>): string | undefine
   const shortest = Arr.reduce(candidates, undefined, (best: string | undefined, label) =>
     best === undefined || label.length < best.length ? label : best,
   );
-  return shortest === undefined
+  return shortest === undefined ||
+    Str.includes("…")(shortest) ||
+    endElide(shortest, NOTICE_LABEL_CHARS) !== shortest
     ? undefined
-    : Str.replace(/…$/u, "")(endElide(shortest, NOTICE_LABEL_CHARS, WHOLE_WORDS));
+    : shortest;
 };
 
 const reachable = (session: ListedSession): boolean =>

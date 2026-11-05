@@ -26,6 +26,8 @@ interface ExtensionCommandBare {
   readonly text?: boolean | undefined;
   /** What bare `/<name>` does, listed first in the overview, such as "Open background tasks". */
   readonly description?: string | undefined;
+  /** What bare `/<name>` accepts, listed beside it in the overview, such as `[question]`. */
+  readonly arguments?: string | undefined;
 }
 
 interface ExtensionCommandOptions {
@@ -162,7 +164,12 @@ export function registerExtensionCommand(
     extensionCommandOverview(
       name,
       description,
-      [...(bare?.description ? [{ name: "", description: bare.description }] : []), ...withHelp()],
+      [
+        ...(bare?.description
+          ? [{ name: "", description: bare.description, arguments: bare.arguments }]
+          : []),
+        ...withHelp(),
+      ],
       overviewNotes,
     );
   pi.registerCommand(name, {

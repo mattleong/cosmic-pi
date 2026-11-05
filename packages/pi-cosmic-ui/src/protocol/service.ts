@@ -43,7 +43,6 @@ const GIT_STATUS_KEYS = [
   "behind",
   "linesAdded",
   "linesRemoved",
-  "linesChanged",
 ] as const satisfies ReadonlyArray<keyof FooterGitStatus>;
 const sameGitStatus = (left: FooterGitStatus | undefined, right: FooterGitStatus | undefined) =>
   left === right ||

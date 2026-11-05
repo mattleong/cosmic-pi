@@ -65,6 +65,8 @@ test("receipt and query inspection reject inherited data, accessors, and throwin
     query: "query\u001b[2J\n" + Fn.pipe("padding ", Str.repeat(1000)),
   });
   assert.ok(subject.length <= 160);
+  // A long query ends at a whole word.
+  assert.match(subject, / padding…$/u);
   for (const control of ["\u001b", "\n", "\r"])
     assert.equal(Fn.pipe(subject, Str.includes(control)), false);
   for (const query of ["", " \t", "\u0007", "\u001b[2J"])

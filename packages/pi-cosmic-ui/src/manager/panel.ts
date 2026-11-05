@@ -9,6 +9,7 @@ import {
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import {
@@ -18,7 +19,7 @@ import {
   listDetailFrame,
   type ListDetailFrame,
 } from "./list-detail-shell.ts";
-import { clipToWidth, joinInline, wrapWords } from "./chrome.ts";
+import { clipToWidth, INLINE_SEPARATOR, joinInline, wrapWords } from "./chrome.ts";
 import { FullScreenKeymap, pageSteps, type FullScreenAction } from "./keymap.ts";
 import {
   framedKeyHintBar,
@@ -46,9 +47,38 @@ const leadingSpaces = (line: string): number => line.length - Fn.pipe(line, Str.
 const ESCAPE = "\u001b";
 
 /**
+ * Wraps plain `·`-joined facts between whole facts before it breaks inside one, so a row breaks at
+ * `… compact` / `· changes apply after /reload`. A fact that starts a row leads with `· `.
+ */
+const wrapPlainFacts = (text: string, firstWidth: number, restWidth: number): string[] => {
+  const rows: string[] = [];
+  let current = "";
+  const limit = () => (rows.length === 0 ? firstWidth : restWidth);
+  let leading = true;
+  for (const fact of Str.split(text, INLINE_SEPARATOR)) {
+    if (current) {
+      const candidate = `${current}${INLINE_SEPARATOR}${fact}`;
+      if (visibleWidth(candidate) <= limit()) {
+        current = candidate;
+        continue;
+      }
+      rows.push(current);
+      current = "";
+    }
+    const parts = wrapWords(leading ? fact : `· ${fact}`, limit(), restWidth);
+    leading = false;
+    rows.push(...parts.slice(0, -1));
+    current = Option.getOrElse(Arr.last(parts), () => "");
+  }
+  if (current || rows.length === 0) rows.push(current);
+  return rows;
+};
+
+/**
  * Wraps one line, indenting continuation rows beneath the line's own indentation. Plain text wraps
- * like `wrapFacts`, so a label keeps a readable part of a wide name beside it and the name breaks
- * after `/`, `-`, `_`, or `.` before it breaks mid-word; styled text wraps at word boundaries.
+ * between `·`-joined facts first, then like `wrapFacts`, so a label keeps a readable part of a wide
+ * name beside it and the name breaks after `/`, `-`, `_`, or `.` before it breaks mid-word; styled
+ * text wraps at word boundaries.
  */
 export const wrapWithHangingIndent = (line: string, width: number): ReadonlyArray<string> => {
   const safeWidth = Math.max(1, Math.floor(width));
@@ -64,7 +94,7 @@ export const wrapWithHangingIndent = (line: string, width: number): ReadonlyArra
     );
   const leading = Fn.pipe(" ", Str.repeat(lead));
   return Arr.map(
-    wrapWords(Str.trimStart(line), Math.max(1, safeWidth - lead), wrapWidth),
+    wrapPlainFacts(Str.trimStart(line), Math.max(1, safeWidth - lead), wrapWidth),
     (part, index) => (index === 0 ? `${leading}${part}` : `${indent}${part}`),
   );
 };

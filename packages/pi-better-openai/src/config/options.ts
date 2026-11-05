@@ -6,6 +6,7 @@ import * as Str from "effect/String";
 import { formatDuration } from "pi-cosmic-core/display";
 import {
   decodeSettingUpdate,
+  oneOfRule,
   type SettingsOptionDescriptor,
 } from "pi-cosmic-core/settings-completion";
 import type { ResolvedConfig } from "./schema.ts";
@@ -25,12 +26,6 @@ const NonBlankStringSchema = Schema.String.check(
 export const ON_OFF_VALUES = ["on", "off"] as const;
 export const ON_OFF_RULE = "must be on or off";
 const DURATION_RULE = "must be a duration such as 30s or 2m";
-/** `must be png, jpeg, or webp`: the rule for a setting that takes one of a few words. */
-const oneOfRule = (values: readonly string[]) => {
-  const [last = "", ...rest] = Arr.reverse(values);
-  if (rest.length === 0) return `must be ${last}`;
-  return `must be ${Arr.join(Arr.reverse(rest), ", ")}${rest.length > 1 ? "," : ""} or ${last}`;
-};
 export const formatOnOff = (value: boolean): string => (value ? "on" : "off");
 
 /** `on`/`off`, also accepting `true`/`false` and any letter case. */

@@ -64,12 +64,15 @@ describe("application settings commands", () => {
     yield* command("settings writerWorkspace worktree");
     // /tree keeps the session's base configuration instead of rereading it.
     yield* settle(() => host.emit("session_tree", ctx));
-    notify.mockClear();
-    yield* command("settings status");
-    expect(notify).toHaveBeenCalledWith(
-      expect.stringMatching(/Worktree \(writerWorkspace\)/u),
-      expect.anything(),
-    );
+    // Status and help both show the value in effect.
+    for (const args of ["settings status", "settings help"]) {
+      notify.mockClear();
+      yield* command(args);
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringMatching(/Worktree \(writerWorkspace\)/u),
+        expect.anything(),
+      );
+    }
     yield* settle(() => host.emit("session_shutdown", ctx));
   });
 });

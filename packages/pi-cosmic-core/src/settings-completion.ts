@@ -144,6 +144,16 @@ export interface SettingsOptionDescriptor<Config = unknown> {
   readonly currentValue: (config: Config) => string;
 }
 
+/**
+ * The rule for a setting that takes one of a few words, phrased to follow its name: `must be on or
+ * off`, `must be png, jpeg, or webp`. Every rejected list value reads this way.
+ */
+export const oneOfRule = (values: ReadonlyArray<string>): string => {
+  const [last = "", ...rest] = Arr.reverse(values);
+  if (rest.length === 0) return `must be ${last}`;
+  return `must be ${Arr.join(Arr.reverse(rest), ", ")}${rest.length > 1 ? "," : ""} or ${last}`;
+};
+
 export const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
 export const FiniteNumberFromJsonSchema = Schema.fromJsonString(Schema.Finite);
 

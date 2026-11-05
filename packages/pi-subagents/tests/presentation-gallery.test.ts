@@ -2662,7 +2662,7 @@ const profileSaveDialogLines = Effect.fn("SubagentGallery.profileSaveDialogLines
 
 /**
  * `/subagents settings` through the registered command: the scope groups, one opened, a Global
- * change that Project's inherited rows follow at once, and `settings status`.
+ * change that Project's inherited rows follow at once, `settings status`, and `settings help`.
  */
 const settingsLines = Effect.fn("SubagentGallery.settingsLines")(function* () {
   const agentDirectory = yield* step(() =>
@@ -2746,6 +2746,11 @@ const settingsLines = Effect.fn("SubagentGallery.settingsLines")(function* () {
     () => host.commands.get("subagents")?.handler("settings status", ctx) ?? Promise.resolve(),
   );
   lines.push("── subagents settings · settings status · 57 cols", ...notices, "");
+  notices.length = 0;
+  yield* step(
+    () => host.commands.get("subagents")?.handler("settings help", ctx) ?? Promise.resolve(),
+  );
+  lines.push("── subagents settings · settings help · 57 cols", ...notices, "");
   yield* settle(() => host.emit("session_shutdown", ctx));
   return lines;
 });

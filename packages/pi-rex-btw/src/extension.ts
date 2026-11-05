@@ -126,7 +126,12 @@ export default function rexBtw(pi: ExtensionAPI): void {
   registerExtensionCommand(pi, {
     name: BTW_COMMAND,
     description: "Ask a side question in a new Rex pane",
-    bare: { handler: open, text: true, description: "Open a side conversation" },
+    bare: {
+      handler: open,
+      text: true,
+      description: "Open a side conversation",
+      arguments: "[question]",
+    },
     overviewNotes: [
       "Add a question to ask it as it opens, for example:",
       "  /btw why does the cart test fail?",

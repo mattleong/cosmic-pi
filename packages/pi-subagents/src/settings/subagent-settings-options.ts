@@ -67,6 +67,11 @@ export const SCOPES = [
   { name: "project", description: "This trusted project" },
 ] as const;
 
+/** Each setting's value in effect, as status's "In effect" section and help show it. */
+export type SubagentSettingValues = Readonly<
+  Record<typeof WORKSPACE | typeof DELEGATION | NestingField, string>
+>;
+
 export const WORKSPACE_DESCRIPTION =
   "Default for writers that don't set isolation. Saved for new sessions.";
 
@@ -76,14 +81,14 @@ export const SUBAGENT_SETTING_DESCRIPTORS = [
     label: WORKSPACE_LABEL,
     description: WORKSPACE_DESCRIPTION,
     values: [...WRITER_WORKSPACE_MODES],
-    currentValue: () => "",
+    currentValue: (values: SubagentSettingValues) => values[WORKSPACE],
   },
   {
     id: DELEGATION,
     label: DELEGATION_LABEL,
     description: DELEGATION_DESCRIPTION,
     values: [INHERIT, ...DELEGATION_MODES],
-    currentValue: () => "",
+    currentValue: (values: SubagentSettingValues) => values[DELEGATION],
   },
   ...Arr.map(NESTING_FIELD_IDS, (field) => ({
     id: field,
@@ -91,7 +96,7 @@ export const SUBAGENT_SETTING_DESCRIPTORS = [
     description: NESTING_FIELDS[field].description,
     values: [INHERIT, ...NESTING_FIELDS[field].presets],
     openValues: true,
-    currentValue: () => "",
+    currentValue: (values: SubagentSettingValues) => values[field],
   })),
 ];
 

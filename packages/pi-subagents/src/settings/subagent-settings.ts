@@ -13,11 +13,13 @@ import {
   WORKSPACE_DESCRIPTION,
   WORKSPACE_LABEL,
   type NestingField,
+  type SubagentSettingValues,
 } from "./subagent-settings-options.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
@@ -27,6 +29,8 @@ import { settingInherited, type SettingsSurfaceItem } from "pi-cosmic-ui/manager
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
+import { dispatchSettingsCommand } from "pi-cosmic-core/settings-dispatch";
+import { hasCustomSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { countLabel } from "pi-cosmic-core/display";
 import {
   settingsStatusText,
@@ -262,6 +266,29 @@ const shownValue = (id: string, value: string): string => {
   return mode === undefined ? value : WRITER_WORKSPACE_LABELS[mode];
 };
 
+/** Each setting's value in effect for this session. */
+const inEffectValues = (
+  workspace: WriterWorkspaceInspection,
+  inspection: ProfileSettingsInspection,
+): SubagentSettingValues => {
+  const effective = inspection.session.effectiveConfig;
+  return {
+    [WORKSPACE]: WRITER_WORKSPACE_LABELS[workspace.mode],
+    [DELEGATION]: effective.delegation,
+    maxDirectChildren: String(effective.nesting.maxDirectChildren),
+    maxDepth: String(effective.nesting.maxDepth),
+    maxActiveRuns: String(effective.nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS),
+  };
+};
+
+/** Whether the shared shell answers with help: `help`, or a bare call without a custom surface. */
+const showsHelp = (args: string, ctx: ExtensionCommandContext) =>
+  Match.value(dispatchSettingsCommand(args, SUBAGENT_SETTING_DESCRIPTORS, [])).pipe(
+    Match.tag("Help", () => true),
+    Match.tag("OpenInteractive", () => !hasCustomSurface(ctx)),
+    Match.orElse(() => false),
+  );
+
 export function subagentSettingsSubcommand(actions: SubagentCommandActions): ExtensionSubcommand {
   return withInvocationAuthority(actions.captureAuthority, (isCurrent, owner) =>
     subagentSettingsCommand(actions, isCurrent, owner),
@@ -379,12 +406,7 @@ function subagentSettingsCommand(
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
         const effective = inspection.session.effectiveConfig;
-        const inEffect = {
-          [DELEGATION]: effective.delegation,
-          maxDirectChildren: String(effective.nesting.maxDirectChildren),
-          maxDepth: String(effective.nesting.maxDepth),
-          maxActiveRuns: String(effective.nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS),
-        } as const satisfies Record<typeof DELEGATION | NestingField, string>;
+        const inEffect = inEffectValues(workspace, inspection);
         const row = (id: typeof DELEGATION | NestingField, value: string) => ({
           id,
           label: SCOPED_SETTING_LABELS[id],
@@ -397,11 +419,7 @@ function subagentSettingsCommand(
             {
               title: "In effect",
               rows: [
-                {
-                  id: WORKSPACE,
-                  label: WORKSPACE_LABEL,
-                  value: WRITER_WORKSPACE_LABELS[workspace.mode],
-                },
+                { id: WORKSPACE, label: WORKSPACE_LABEL, value: inEffect[WORKSPACE] },
                 ...Arr.map(SCOPED_SETTING_IDS, (id) => row(id, inEffect[id])),
               ],
             },
@@ -461,7 +479,7 @@ function subagentSettingsCommand(
     return scopedRow(opened, settingScope(scope), id).currentValue;
   };
 
-  const open = (ctx: ExtensionCommandContext, session: SettingsSession<undefined>) => {
+  const open = (ctx: ExtensionCommandContext, session: SettingsSession<SubagentSettingValues>) => {
     if (!actions.isAvailable()) return Promise.resolve({ _tag: "Blocked" as const });
     const trusted = isProjectTrusted(ctx);
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
@@ -524,7 +542,24 @@ function subagentSettingsCommand(
     return applyNesting(ctx, id, value, scope);
   };
 
-  return settingsSubcommand<undefined>({
+  // Help lists each setting's value in effect; the shared shell reads it synchronously, so it is
+  // loaded just before help shows and dropped after.
+  let helpValues: SubagentSettingValues | undefined;
+  const loadHelpValues = (ctx: ExtensionCommandContext): Promise<void> =>
+    actions.isAvailable()
+      ? Promise.all([
+          actions.inspectWriterWorkspace(),
+          actions.inspectProfiles(isProjectTrusted(ctx)),
+        ]).then(
+          ([workspace, inspection]) => {
+            helpValues = inEffectValues(workspace, inspection);
+            return undefined;
+          },
+          () => undefined,
+        )
+      : Promise.resolve();
+
+  const subcommand = settingsSubcommand<SubagentSettingValues>({
     owner: saveOwner,
     root: "subagents",
     isCurrent,
@@ -545,7 +580,7 @@ function subagentSettingsCommand(
     scopes: SCOPES,
     scopeBlocked: (ctx, scope) =>
       scope === "project" && !isProjectTrusted(ctx) ? UNTRUSTED : undefined,
-    config: () => undefined,
+    config: () => helpValues,
     status: statusText,
     // Rows show a change as soon as it is chosen, so values derived from it do too; a save that
     // fails or can't run puts back the value it replaced, and open groups derive their rows again.
@@ -573,4 +608,15 @@ function subagentSettingsCommand(
     displayValue: (_ctx, id, scope) => shownRowValue(id, scope),
     open,
   });
+  return {
+    ...subcommand,
+    handler: (args, ctx) =>
+      showsHelp(args, ctx)
+        ? loadHelpValues(ctx)
+            .then(() => subcommand.handler(args, ctx))
+            .finally(() => {
+              helpValues = undefined;
+            })
+        : subcommand.handler(args, ctx),
+  };
 }

@@ -21,7 +21,7 @@ import {
   type ResolvedCosmicUiConfig,
 } from "../../src/config/schema.ts";
 import { createFooterComponent } from "../../src/footer/component.ts";
-import type { FooterGitStatus } from "../../src/footer/git.ts";
+import { applyGitNumstat, type FooterGitStatus } from "../../src/footer/git.ts";
 import { TextPanelComponent } from "../../src/manager/panel.ts";
 import {
   createSettingsGroupSubmenu,
@@ -58,7 +58,6 @@ const gitStatus: FooterGitStatus = {
   behind: 0,
   linesAdded: 4,
   linesRemoved: 2,
-  linesChanged: 0,
 };
 
 const usage: CosmicFooterContribution = {
@@ -87,7 +86,28 @@ const footerContext = (): ExtensionContext =>
     getContextUsage: () => ({ tokens: 84_000, contextWindow: 400_000, percent: 21 }),
   });
 
-const footerFrames = (density: FooterDensity): string[] => {
+// A tree where most changed files replace lines: the footer shows git's own totals, as
+// `git diff --shortstat HEAD` reports them.
+const replacedLinesGitStatus: FooterGitStatus = applyGitNumstat(
+  {
+    staged: 0,
+    modified: 346,
+    untracked: 23,
+    conflicts: 0,
+    ahead: 0,
+    behind: 0,
+    linesAdded: 0,
+    linesRemoved: 0,
+  },
+  Arr.join(["15000\t4224\tsrc/a.ts", "217\t246\tsrc/b.ts", "-\t-\tlogo.png"], "\n"),
+);
+
+const footerFrames = (
+  density: FooterDensity,
+  title = `${density} density`,
+  status = gitStatus,
+  widths: ReadonlyArray<number> = [180, 140, 100, 72, 57, 40],
+): string[] => {
   const ctx = footerContext();
   const defaults = defaultResolvedCosmicUiConfig();
   const config: ResolvedCosmicUiConfig = { ...defaults, footer: { ...defaults.footer, density } };
@@ -110,14 +130,14 @@ const footerFrames = (density: FooterDensity): string[] => {
         cacheWrite: 12_400,
         cost: 0.08,
       },
-      gitStatus,
+      gitStatus: status,
       pullRequestNumber: 1742,
       pullRequestUrl: undefined,
       homeDirectory: "/Users/dev",
     }),
   });
-  return Arr.flatMap([180, 140, 100, 72, 57, 40], (width) => [
-    `── Footer · ${density} density · ${width} cols`,
+  return Arr.flatMap(widths, (width) => [
+    `── Footer · ${title} · ${width} cols`,
     ...component.render(width),
     "",
   ]);
@@ -546,7 +566,24 @@ const panelFrames = (): string[] => {
     ],
     done: () => undefined,
   });
+  // `/code-previews health` as its TUI panel: a row of facts breaks at `·` before between words.
+  const health = new TextPanelComponent({
+    title: "Code Previews health",
+    theme: plainTheme,
+    lines: [
+      "Tool rows",
+      "  Collapsed tool calls: compact · changes apply after /reload",
+      "  Tool call background: on · changes apply after /reload",
+      "  Tool call timing: on",
+      "Tools",
+      "  bash: off · turns on after /reload",
+      "  grep: previewed",
+    ],
+    done: () => undefined,
+  });
   const lines = [
+    ...frame("Panel · health facts wrap between facts", (width) => health.render(width), 57),
+    ...frame("Panel · health facts wrap between facts", (width) => health.render(width), 100),
     ...frame("Panel · wide hyphenated name", (width) => hyphenated.render(width), 57),
     ...frame("Panel · wide hyphenated name", (width) => hyphenated.render(width), 140),
     ...frame("Panel · fits, wraps long lines", (width) => fits.render(width), 60),
@@ -710,6 +747,7 @@ export const sharedSurfaceGalleryLines = (): string[] => {
     ...footerFrames("comfortable"),
     ...footerFrames("compact"),
     ...footerFrames("auto"),
+    ...footerFrames("auto", "replaced lines (git totals)", replacedLinesGitStatus, [180, 57]),
     ...cosmicUiSettingsFrames(),
     ...groupedSettingsFrames(),
     ...scopedSettingsFrames(),

@@ -8,6 +8,7 @@ import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { failureMessage, isAgentGuidance } from "pi-cosmic-core/message-text";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { CompactSummaryProvider } from "./compact-summary";
+import { endElide, FACT_CUT_SLACK } from "../preview/compact-header";
 import { argumentFailureIssue } from "./argument-failure";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";
 import {
@@ -38,9 +39,18 @@ export function nativeToolSearchReceipt(
   return decodeReceipt({ loaded });
 }
 
+const MAX_QUERY_CHARS = 512;
+const MAX_SUBJECT_CHARS = 160;
+
+/** The query on one line, cut at a word boundary when long, so the heading never ends mid-word. */
 export function nativeToolSearchSubject(args: HostContainer | undefined): string {
   const query = ownString(args, "query");
-  return query === undefined ? "" : visibleDiagnosticLine(Fn.pipe(query, Str.slice(0, 512)), 160);
+  if (query === undefined) return "";
+  const line = visibleDiagnosticLine(
+    Fn.pipe(query, Str.slice(0, MAX_QUERY_CHARS)),
+    MAX_QUERY_CHARS,
+  );
+  return endElide(line, MAX_SUBJECT_CHARS, FACT_CUT_SLACK);
 }
 
 export const nativeToolSearchSummary: CompactSummaryProvider = ({

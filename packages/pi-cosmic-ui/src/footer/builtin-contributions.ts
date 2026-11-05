@@ -147,7 +147,6 @@ const GIT_LINE_STATS = [
   ["linesAdded", "+"],
   // Count summaries use the Unicode minus; ASCII `-` stays a diff line prefix.
   ["linesRemoved", "−"],
-  ["linesChanged", "~"],
 ] as const satisfies ReadonlyArray<readonly [keyof FooterGitStatus, string]>;
 
 const gitContributions = (

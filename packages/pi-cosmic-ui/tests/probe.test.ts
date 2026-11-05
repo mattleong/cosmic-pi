@@ -34,7 +34,8 @@ describe("repository probe", () => {
       const { git, pullRequest } = yield* probe;
       expect(yield* git("/secret/project/not-recorded", () => true)).toMatchObject({
         modified: 1,
-        linesAdded: 3,
+        linesAdded: 4,
+        linesRemoved: 1,
       });
       expect(yield* pullRequest("/secret/project/not-recorded")).toEqual({
         number: 17,

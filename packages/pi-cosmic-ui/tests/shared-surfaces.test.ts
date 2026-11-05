@@ -265,6 +265,18 @@ describe("text panel", () => {
     ).toContain(name);
   });
 
+  it("breaks a row of facts between whole facts before it breaks between words", () => {
+    const panel = new TextPanelComponent({
+      title: "Panel",
+      theme: plainTheme,
+      lines: ["  Collapsed tool calls: compact · changes apply after /reload"],
+      done: () => undefined,
+    });
+    const body = Arr.map(panel.render(57), (line) => Str.trim(Str.replace(/│/gu, "")(line)));
+    expect(body).toContain("Collapsed tool calls: compact");
+    expect(body).toContain("· changes apply after /reload");
+  });
+
   it("wraps long lines instead of clipping them", () => {
     const words = Array.from({ length: 20 }, (_, index) => `word${index}`);
     const panel = new TextPanelComponent({

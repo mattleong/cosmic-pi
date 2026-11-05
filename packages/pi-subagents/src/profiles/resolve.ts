@@ -73,7 +73,8 @@ interface ProfileResolutionFailure {
   readonly message: string;
   /**
    * The failure without its subject or closing period, for a row already labeled with the profile
-   * or agent, such as `disabled` or `no eligible candidate · Pi model … does not support fast mode`.
+   * or agent, such as `disabled` or `no eligible options · Pi model … does not support fast mode;
+   * change the route with /subagents profiles worker`.
    */
   readonly problem: string;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
@@ -280,13 +281,13 @@ const resolveKnownProfileRoute = (
       : `${subject} has no eligible candidate.${skippedReasons}`,
     problem: forkUnavailable
       ? "copies this conversation, so it needs a saved session with at least one message"
-      : Arr.join(
+      : `${Arr.join(
           [
-            "no eligible candidate",
+            "no eligible options",
             ...Arr.map(skippedCandidates, (candidate) => clause(candidate.reason)),
           ],
           " · ",
-        ),
+        )}; change the route with /subagents profiles ${profile}`,
     skippedCandidates,
   };
 };

@@ -12,7 +12,6 @@ export interface FooterGitStatus {
   behind: number;
   linesAdded: number;
   linesRemoved: number;
-  linesChanged: number;
 }
 
 const CONFLICT_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
@@ -33,7 +32,6 @@ export function parseGitStatus(output: string): FooterGitStatus | undefined {
     behind: Number(Option.getOrUndefined(Fn.pipe(header, Str.match(/\bbehind (\d+)/)))?.[1] ?? 0),
     linesAdded: 0,
     linesRemoved: 0,
-    linesChanged: 0,
   };
 
   for (const line of lines) {
@@ -55,10 +53,10 @@ export function parseGitStatus(output: string): FooterGitStatus | undefined {
   return status;
 }
 
+/** Totals lines added and removed as `git diff --shortstat` does; binary files count no lines. */
 export function applyGitNumstat(status: FooterGitStatus, output: string): FooterGitStatus {
   let linesAdded = 0;
   let linesRemoved = 0;
-  let linesChanged = 0;
   for (const line of Str.split(output, /\r?\n/)) {
     if (!line) continue;
     const [rawAdded, rawRemoved] = Str.split(line, "\t");
@@ -66,12 +64,10 @@ export function applyGitNumstat(status: FooterGitStatus, output: string): Footer
     const added = Number(rawAdded);
     const removed = Number(rawRemoved);
     if (!Number.isFinite(added) || !Number.isFinite(removed)) continue;
-    const changed = Math.min(added, removed);
-    linesChanged += changed;
-    linesAdded += added - changed;
-    linesRemoved += removed - changed;
+    linesAdded += added;
+    linesRemoved += removed;
   }
-  return { ...status, linesAdded, linesRemoved, linesChanged };
+  return { ...status, linesAdded, linesRemoved };
 }
 
 const GIT_STATUS_PARTS = [
@@ -83,12 +79,15 @@ const GIT_STATUS_PARTS = [
   ["behind", "↓", "behind"],
 ] as const satisfies ReadonlyArray<readonly [keyof FooterGitStatus, string, string]>;
 
-/** `~1 ?1` compactly, or `~1 modified ?1 untracked` when labeled. */
+/**
+ * `~1 ?1` compactly, or `1 modified · 1 untracked` when labeled: a label replaces its sign, so a
+ * wide footer never shows `~` before a count, where it would read as "about".
+ */
 export function formatGitStatus(status: FooterGitStatus, labeled = false): string {
   return Arr.join(
     Arr.flatMap(GIT_STATUS_PARTS, ([key, sign, label]) =>
-      status[key] ? [`${sign}${status[key]}${labeled ? ` ${label}` : ""}`] : [],
+      status[key] ? [labeled ? `${status[key]} ${label}` : `${sign}${status[key]}`] : [],
     ),
-    " ",
+    labeled ? " · " : " ",
   );
 }

@@ -14,6 +14,7 @@ import {
 } from "pi-cosmic-core/host-session";
 import {
   completeSettingsArguments,
+  oneOfRule,
   type SettingsOptionDescriptor,
 } from "pi-cosmic-core/settings-completion";
 import { dispatchSettingsCommand } from "pi-cosmic-core/settings-dispatch";
@@ -612,7 +613,7 @@ export function settingsSubcommand<Config>(
             Match.value(invalid).pipe(
               Match.discriminatorsExhaustive("reason")({
                 "invalid-value": ({ id, allowedValues }) =>
-                  invalidValue(id, `must be one of: ${Arr.join(allowedValues, ", ")}`),
+                  invalidValue(id, oneOfRule(allowedValues)),
                 "missing-value": ({ id }) => {
                   if (id && !Arr.some(descriptors, (entry) => entry.id === id)) return unknown(id);
                   return correctForm(

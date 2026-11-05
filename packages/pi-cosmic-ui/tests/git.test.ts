@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import * as Arr from "effect/Array";
-import { applyGitNumstat, parseGitStatus } from "../src/footer/git.ts";
+import { applyGitNumstat, formatGitStatus, parseGitStatus } from "../src/footer/git.ts";
 
 describe("git footer status", () => {
   test("summarizes staged, modified, untracked, conflicted, and diverged files", () => {
@@ -26,17 +26,22 @@ describe("git footer status", () => {
       behind: 1,
       linesAdded: 0,
       linesRemoved: 0,
-      linesChanged: 0,
     });
   });
 
-  test("classifies numstat replacements separately from pure additions and removals", () => {
+  test("totals numstat lines as git's shortstat does, counting replaced lines on both sides", () => {
     const status = parseGitStatus("## main\n M first.ts\n M second.ts\n")!;
     const withLines = applyGitNumstat(
       status,
       Arr.join(["10\t4\tfirst.ts", "2\t7\tsecond.ts", "-\t-\timage.png"], "\n"),
     );
 
-    expect(withLines).toMatchObject({ linesAdded: 6, linesRemoved: 5, linesChanged: 6 });
+    expect(withLines).toMatchObject({ linesAdded: 12, linesRemoved: 11 });
+  });
+
+  test("labels modified files in words, never with a `~` that reads as about", () => {
+    const status = parseGitStatus("## main\n M first.ts\n?? new.ts\n")!;
+
+    expect(formatGitStatus(status, true)).not.toContain("~");
   });
 });

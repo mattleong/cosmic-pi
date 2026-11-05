@@ -228,6 +228,7 @@ export {
   decodeSettingUpdate,
   FiniteNumberFromJsonSchema,
   InvalidSettingError,
+  oneOfRule,
   type SettingsOptionDescriptor,
 } from "./src/settings-completion.ts";
 export { dispatchSettingsCommand, SettingsCommandDispatch } from "./src/settings-dispatch.ts";
