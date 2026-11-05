@@ -15,12 +15,15 @@ export interface SettingItemDefinition {
   label: string;
   description: string;
   values?: readonly [string, ...string[]];
+  /** What a free-form value must be, phrased to follow the label, as a rejected value states it. */
+  rule?: string;
 }
 
 export const SETTING_ITEM_DEFINITIONS = {
   shikiTheme: {
     label: "Syntax theme",
     description: "Theme used for Shiki syntax highlighting in code previews.",
+    rule: "must be a Shiki theme name, such as dark-plus or github-dark",
   },
   diffIntensity: {
     label: "Diff background",

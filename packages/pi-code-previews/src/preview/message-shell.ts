@@ -17,7 +17,8 @@ import { renderCompactIssues } from "./compact-issues";
 import { layoutExpandedCompactHeading, renderCompactRow } from "./compact-row";
 import { renderCompactAffordance } from "./compact-quote";
 import { showsAffordance } from "./expand-affordance";
-import { recordHeadingSubject } from "./heading-coverage";
+import { drawWithBodyLabel } from "./expanded-section";
+import { headingWrapped, recordHeadingSubject } from "./heading-coverage";
 import { previewHeadingRow, wrappedPreviewHeading } from "./preview-heading";
 import { statusBackground } from "./self-background";
 
@@ -204,11 +205,16 @@ class MessageShell implements Component {
         compact || expanded ? ROW_INDENT : "",
       ),
     ]);
-    const body = expanded
+    const content = expanded
       ? message.expanded
         ? message.expanded(this.headingState)
         : message.collapsed?.()
       : message.collapsed?.();
+    // A delivered message's unlabeled words would share the column of a wrapped heading's rows.
+    const body =
+      expanded && content && message.summary.messageIcon !== undefined
+        ? labeledBeneathWrappedHeading(content, this.headingState)
+        : content;
     const shown = new Container();
     // A collapsed compact message is a bare compact row, as a collapsed compact tool row is.
     if (compact && !expanded) {
@@ -277,6 +283,20 @@ class MessageShell implements Component {
       ? undefined
       : declared;
   }
+}
+
+/**
+ * A message body whose unlabeled section is labeled `Message` beneath a heading that wrapped, as a
+ * `bash` result is labeled `Output`: the heading's continuation rows hang at the body's column.
+ */
+function labeledBeneathWrappedHeading(body: Component, headingState: WeakKey): Component {
+  return {
+    render: (width) =>
+      drawWithBodyLabel(headingWrapped(headingState) ? "Message" : undefined, () =>
+        body.render(width),
+      ),
+    invalidate: () => body.invalidate(),
+  };
 }
 
 /** A body beneath a compact row, indented as the row's issues are. */

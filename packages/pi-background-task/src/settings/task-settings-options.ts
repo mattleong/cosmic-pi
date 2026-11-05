@@ -43,6 +43,8 @@ export const TASK_SETTING_DESCRIPTORS = Arr.map(BACKGROUND_TASK_SETTINGS, (setti
   description: setting.description,
   ...(setting.commandValues.length > 0 && { values: [...setting.commandValues, INHERIT] }),
   openValues: setting.openValues,
+  // The missing-value hint names the same placeholder as the row's description.
+  ...(setting.kind === "path" && { valuePlaceholder: "<path>" }),
   currentValue: (config: BackgroundTaskConfig) => sessionValue(config, setting),
 }));
 

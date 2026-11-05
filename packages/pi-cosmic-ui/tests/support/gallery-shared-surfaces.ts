@@ -116,7 +116,7 @@ const footerFrames = (density: FooterDensity): string[] => {
       homeDirectory: "/Users/dev",
     }),
   });
-  return Arr.flatMap([140, 100, 72, 57, 40], (width) => [
+  return Arr.flatMap([180, 140, 100, 72, 57, 40], (width) => [
     `── Footer · ${density} density · ${width} cols`,
     ...component.render(width),
     "",
@@ -536,7 +536,19 @@ const panelFrames = (): string[] => {
     done: () => undefined,
     exit: "nested",
   });
+  // A wide hyphenated name starts beside its label and breaks after a hyphen, never mid-word.
+  const hyphenated = new TextPanelComponent({
+    title: "Subagents doctor",
+    theme: plainTheme,
+    lines: [
+      "✗ Agent billing-and-invoicing-migration-review-follow-up-for-the-legacy-ledger-export-v2: global · profile reviewer · disabled",
+      "✓ Pi: version 1.5.0",
+    ],
+    done: () => undefined,
+  });
   const lines = [
+    ...frame("Panel · wide hyphenated name", (width) => hyphenated.render(width), 57),
+    ...frame("Panel · wide hyphenated name", (width) => hyphenated.render(width), 140),
     ...frame("Panel · fits, wraps long lines", (width) => fits.render(width), 60),
     ...frame("Panel · scrollable", (width) => scrolling.render(width), 60),
   ];

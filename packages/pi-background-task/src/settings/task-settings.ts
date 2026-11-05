@@ -14,7 +14,6 @@ import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { failureMessage } from "pi-cosmic-core/message-text";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -45,6 +44,7 @@ import {
   type BackgroundTaskSetting,
   type BackgroundTaskSettingDescriptor,
 } from "../config/options.ts";
+import { saveFailureMessage } from "./save-failure.ts";
 
 export interface TaskSettingsActions {
   readonly captureAuthority: () => () => boolean;
@@ -307,13 +307,7 @@ function createTaskSettingsSubcommand(
           known.set(rowKey(scope, setting.id), shown);
           return Result.succeed(undefined);
         },
-        (cause: unknown) =>
-          Result.fail({
-            message: `Couldn't save background tasks settings: ${failureMessage(
-              cause instanceof Error ? cause.message : "",
-              "unknown error",
-            )}`,
-          }),
+        (cause: unknown) => Result.fail({ message: saveFailureMessage(cause, ctx.cwd) }),
       );
     },
     displayValue: (_ctx, id, scope) => {

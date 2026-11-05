@@ -8,6 +8,7 @@ import {
   isProjectTrusted,
   notifyAtHostBoundary,
 } from "pi-cosmic-core/host-session";
+import { clipText } from "pi-cosmic-core/display";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import {
@@ -35,9 +36,12 @@ import { SETTING_ITEM_DEFINITIONS, type SettingItemDefinition } from "./ui/regis
 
 const SCRIPTED_SETTINGS = Arr.flatMap(CODE_PREVIEW_SETTING_KEYS, (id) => {
   if (id === "tools") return [];
-  const { label, description, values }: SettingItemDefinition = SETTING_ITEM_DEFINITIONS[id];
-  return [{ id, label, description, ...(values && { values: [...values] }) }];
+  const { label, description, values, rule }: SettingItemDefinition = SETTING_ITEM_DEFINITIONS[id];
+  return [{ id, label, description, rule, ...(values && { values: [...values] }) }];
 });
+
+// A rejected value is quoted only as far as a notice can show it.
+const REJECTED_VALUE_COLUMNS = 24;
 
 const config = (): CodePreviewSettings | undefined =>
   hasCodePreviewSessionCapability() ? codePreviewSettings : undefined;
@@ -115,7 +119,11 @@ function codePreviewSettingsCommand(
       const previous = codePreviewSettings;
       const updated = updateSetting(previous, id, value);
       if (!setting || formatSettingValue(updated, setting.id) !== value)
-        return Promise.resolve(Result.fail({ message: `${id} can't be set to ${value}` }));
+        return Promise.resolve(
+          Result.fail({
+            message: `${id} ${setting?.rule ?? `can't be set to ${clipText(value, REJECTED_VALUE_COLUMNS)}`}`,
+          }),
+        );
       const options = loadOptions(ctx);
       return loadPanel()
         .then((panel) => {
@@ -131,7 +139,7 @@ function codePreviewSettingsCommand(
         })
         .then(
           () => Result.succeed(undefined),
-          (cause: unknown) => Result.fail({ message: formatSettingsSaveError(cause) }),
+          (cause: unknown) => Result.fail({ message: formatSettingsSaveError(cause, ctx.cwd) }),
         );
     },
     open: (ctx, session) => {

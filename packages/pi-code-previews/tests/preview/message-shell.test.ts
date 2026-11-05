@@ -6,6 +6,9 @@ import { stripAnsi } from "pi-cosmic-core";
 import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  expandedAuthoredText,
+  expandedBody,
+  expandedDetails,
   headingShowedSubject,
   withCodePreviewMessageShell,
   type CodePreviewMessagePresenter,
@@ -62,6 +65,19 @@ const subjectBody =
       render: () => (headingShowedSubject(headingState) ? ["BODY"] : ["BODY", "SUBJECT AGAIN"]),
       invalidate: () => undefined,
     }),
+  });
+
+/** A delivered message: its words unlabeled, then the sender's IDs. */
+const delivered =
+  (sender: string): CodePreviewMessagePresenter =>
+  (_message, _options, theme) => ({
+    name: "session_message",
+    summary: { subject: sender, outcome: "returned", messageIcon: "received" },
+    expanded: () =>
+      expandedBody(
+        expandedAuthoredText(theme, undefined, "Please rerun the tests"),
+        expandedDetails(theme, ["session-1"]),
+      ),
   });
 
 const STYLES = ["compact", "preview"] as const;
@@ -147,6 +163,21 @@ describe("message shell", () => {
     // An expanded preview heading wraps a subject of any length whole.
     expect(repeats("preview", "A short subject")).toBe(false);
     expect(repeats("preview", long)).toBe(false);
+  });
+
+  it("labels a delivered message's words beneath a heading that wraps", () => {
+    const labeled = (style: "compact" | "preview", sender: string) =>
+      withPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: "off" }, () =>
+        Arr.some(
+          Str.split(draw(withCodePreviewMessageShell(delivered(sender)), true, message, 57), "\n"),
+          (row) => Str.trim(row) === "Message",
+        ),
+      );
+    const long = "checkout redesign review for the acme platform team and billing";
+    for (const style of STYLES) {
+      expect(labeled(style, "web")).toBe(false);
+      expect(labeled(style, long)).toBe(true);
+    }
   });
 
   it("falls back to the message's text when a presenter or body throws", () => {

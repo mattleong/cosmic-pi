@@ -229,8 +229,12 @@ const wrapUnits = (text: string): string[] => {
   return units;
 };
 
-// Greedy word wrap whose first row may be wider than the rest.
-const wrapWords = (text: string, firstWidth: number, restWidth: number): string[] => {
+/**
+ * Greedy word wrap of plain text whose first row may be wider than the rest. A word too wide for a
+ * row breaks after its `/`, then after `-`, `_`, or `.`, then anywhere, and starts beside the words
+ * before it when a readable part of it fits there.
+ */
+export const wrapWords = (text: string, firstWidth: number, restWidth: number): string[] => {
   const rows: string[] = [];
   let current = "";
   const limit = () => (rows.length === 0 ? firstWidth : restWidth);

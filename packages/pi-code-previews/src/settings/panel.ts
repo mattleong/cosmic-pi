@@ -157,7 +157,7 @@ export function createCodePreviewSettingsModel({
       if (id === "resetToDefaults") settle(list, () => false);
       // A later panel change to the same setting already saved the user's newest value.
       if (revision !== changeRevision && isSettingsSuperseded(cause)) return;
-      notify(formatSettingsSaveError(cause), "warning");
+      notify(formatSettingsSaveError(cause, loadOptions.projectCwd ?? ""), "warning");
     });
   };
   const routeBoundChange = (id: string, value: string): void => {

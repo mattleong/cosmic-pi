@@ -8,7 +8,7 @@ import { wrapFacts } from "pi-cosmic-ui/manager";
 import { escapeControlChars } from "../shared/terminal-text";
 import { wrapPlainText } from "../shared/text-wrap";
 import { authoredTextLines } from "./authored-text";
-import { expandedSection } from "./expanded-section";
+import { expandedSection, unlabeledSection } from "./expanded-section";
 
 /** Theme colors an expanded body draws plain text in. */
 export type ExpandedTone = "toolOutput" | "muted" | "dim" | "error" | "warning" | "success";
@@ -30,6 +30,8 @@ const LABEL_GAP = 2;
 const MIN_LABEL_WIDTH = 12;
 // Narrower values stack beneath their label instead of wrapping a few columns at a time.
 const MIN_VALUE_WIDTH = 16;
+// A value that wraps onto more rows than this in the value column stacks beneath its label.
+const MAX_VALUE_ROWS = 3;
 
 const pad = (width: number): string => Fn.pipe(" ", Str.repeat(width));
 
@@ -93,7 +95,8 @@ const linesComponent = (
 
 /**
  * Labeled facts in a shared label column, indented beneath the heading. Wrapped values hang at the
- * value column; when the value column would be too narrow, each value stacks beneath its label.
+ * value column; when the value column would be too narrow, each value stacks beneath its label, as
+ * does a value that would wrap onto more than three rows there, such as a long command.
  */
 export function expandedFields(theme: BodyTheme, fields: ReadonlyArray<ExpandedField>): Component {
   const shown = Arr.filter(fields, (field) => field.lines.length > 0);
@@ -105,19 +108,24 @@ export function expandedFields(theme: BodyTheme, fields: ReadonlyArray<ExpandedF
     );
     const column = labelWidth + LABEL_GAP;
     const stacked = width - column < MIN_VALUE_WIDTH;
+    const wrapped = (field: ExpandedField, room: number) =>
+      Arr.flatMap(field.lines, (line) => wrappedLine(theme, line, "toolOutput", room, true));
     return Arr.flatMap(shown, (field) => {
       const label = theme.fg("muted", escapeControlChars(field.label));
-      const values = Arr.flatMap(field.lines, (line) =>
-        wrappedLine(theme, line, "toolOutput", stacked ? width - 2 : width - column, true),
-      );
-      if (stacked) return [label, ...Arr.map(values, (value) => `  ${value}`)];
+      const beside = stacked ? [] : wrapped(field, width - column);
+      const own = Arr.flatMap(field.lines, (line) =>
+        plainParts(Predicate.isString(line) ? line : line.text),
+      ).length;
+      const wraps = beside.length > MAX_VALUE_ROWS && beside.length > own;
+      if (stacked || wraps)
+        return [label, ...Arr.map(wrapped(field, width - 2), (value) => `  ${value}`)];
       const labelPad = pad(Math.max(0, column - visibleWidth(field.label)));
-      return Arr.map(values, (value, index) =>
+      return Arr.map(beside, (value, index) =>
         index === 0 ? `${label}${labelPad}${value}` : `${pad(column)}${value}`,
       );
     });
   });
-  return expandedSection(theme, undefined, rows);
+  return unlabeledSection(theme, rows);
 }
 
 /**

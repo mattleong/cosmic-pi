@@ -36,6 +36,7 @@ import {
 import { issueMessageStyleProblems } from "../../testing";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
+import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 
 const isJsonDocumentError = Schema.is(JsonDocumentError);
 
@@ -664,4 +665,25 @@ it.effect("loads publish which files were ignored and which fields were invalid"
       ]);
     }),
   );
+});
+
+it("a failed save names its cause in words, the file as notices show it, and a next step", () => {
+  const home = nodeDisplayHomeDirectory();
+  const file = `${home}/.pi/agent/code-previews.json`;
+  const denied = Object.assign(new Error(`EACCES: permission denied, open '${file}'`), {
+    code: "EACCES",
+    path: file,
+  });
+  const written = JsonDocumentError.make({
+    operation: "write",
+    path: file,
+    message: "Unable to write temporary JSON document.",
+  });
+  for (const cause of [denied, written]) {
+    const notice = formatSettingsSaveError(cause, "/project");
+    assert.ok(!Str.includes("EACCES")(notice), notice);
+    assert.ok(!Str.includes("JSON document")(notice), notice);
+    assert.ok(!Str.includes(home)(notice), notice);
+    assert.ok(Str.includes("~/.pi/agent/code-previews.json")(notice), notice);
+  }
 });

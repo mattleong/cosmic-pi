@@ -227,6 +227,35 @@ describe("/tasks settings", () => {
     }),
   );
 
+  it.effect("a failed save names its file without Node's raw error text", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const path = "/project/.pi/extensions/pi-background-task.json";
+      h.write.mockImplementationOnce(() =>
+        Promise.reject(
+          BackgroundTaskConfigError.make({ operation: "write", path, message: "Unable to write." }),
+        ),
+      );
+      h.write.mockImplementationOnce(() =>
+        Promise.reject(
+          Object.assign(new Error(`EACCES: permission denied, open '${path}'`), {
+            code: "EACCES",
+            path,
+          }),
+        ),
+      );
+      yield* h.run("project maxRunning 16");
+      yield* h.run("project maxRunning 16");
+      const errors = Arr.filter(h.notify.mock.calls, ([, level]) => level === "error");
+      expect(errors).toHaveLength(2);
+      for (const [message] of errors) {
+        expect(message).toContain("pi-background-task.json");
+        expect(message).not.toContain("EACCES");
+        expect(message).not.toContain("Unable to write");
+      }
+    }),
+  );
+
   it.effect("status before the session starts warns instead of failing", () =>
     Effect.gen(function* () {
       const h = harness({ started: false });

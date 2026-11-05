@@ -26,7 +26,7 @@ const openaiApply = (id: string, value: string) => {
     return Result.fail(InvalidSettingError.make({ id, message: `${id} must be on or off` }));
   if (id === "usage.refreshIntervalMs" && !/^\d+[sm]$/u.test(value))
     return Result.fail(
-      InvalidSettingError.make({ id, message: `${id} can't be set to ${clipText(value, 24)}` }),
+      InvalidSettingError.make({ id, message: `${id} must be a duration such as 30s or 2m` }),
     );
   return Result.succeed(undefined);
 };
@@ -34,7 +34,7 @@ const tasksApply = (id: string, value: string) => {
   if (id === "logBufferBytesPerTask" && value === "2MiB")
     return Result.fail({
       message:
-        "Couldn't save background tasks settings: EACCES: permission denied, open '~/.pi/agent/extensions/pi-background-task.json'",
+        "Couldn't save background tasks settings: permission denied\nCheck that you can write to ~/.pi/agent/extensions/pi-background-task.json",
     });
   if (id === "logBufferBytesPerTask" && !/^\d+(?:KiB|MiB)$/u.test(value))
     return Result.fail({

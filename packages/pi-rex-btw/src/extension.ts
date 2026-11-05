@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
+import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import {
   captureSessionHost,
   invokeHostCallback,
@@ -88,40 +89,48 @@ export default function rexBtw(pi: ExtensionAPI): void {
     onStartFailure: ({ ctx }) => notify(ctx, "Rex BTW couldn't start", "warning"),
   });
 
-  pi.registerCommand(BTW_COMMAND, {
-    description: "Ask a side question in a new Rex pane: /btw [question]",
-    handler: (args, ctx) => {
-      if (invokeHostCallback(() => ctx.mode, undefined) !== "tui") {
-        notify(ctx, "Open Pi in an interactive terminal to use /btw", "warning");
-        return Promise.resolve();
-      }
-      if (!slot.isActive()) {
-        notify(ctx, REX_UNAVAILABLE_MESSAGE, "error");
-        return Promise.resolve();
-      }
-      const trimmed = Str.trim(args);
-      const prompt = trimmed === "" ? undefined : trimmed;
-      const problem = prompt === undefined ? undefined : promptProblem(prompt);
-      if (problem !== undefined) {
-        notify(ctx, problem, "error");
-        return Promise.resolve();
-      }
-      const request = captureRequest(pi, ctx, prompt);
-      // A pane that can't read this conversation can't answer about it, so none opens.
-      if (request.parent === undefined) {
-        notify(ctx, unreadableParentMessage(ctx), "warning");
-        return Promise.resolve();
-      }
-      const isCurrent = slot.captureAuthority();
-      return slot.run(RexBtw.use((btw) => btw.open(request))).then(
-        () => undefined,
-        (cause: unknown) => {
-          if (isCurrent())
-            notify(ctx, isRexBtwError(cause) ? cause.message : "Couldn't open a BTW pane", "error");
-          return undefined;
-        },
-      );
-    },
+  /** Opens a side pane, asking `args` there when given; `/btw help` never reaches it. */
+  const open = (args: string, ctx: ExtensionCommandContext): Promise<void> => {
+    if (invokeHostCallback(() => ctx.mode, undefined) !== "tui") {
+      notify(ctx, "Open Pi in an interactive terminal to use /btw", "warning");
+      return Promise.resolve();
+    }
+    if (!slot.isActive()) {
+      notify(ctx, REX_UNAVAILABLE_MESSAGE, "error");
+      return Promise.resolve();
+    }
+    const trimmed = Str.trim(args);
+    const prompt = trimmed === "" ? undefined : trimmed;
+    const problem = prompt === undefined ? undefined : promptProblem(prompt);
+    if (problem !== undefined) {
+      notify(ctx, problem, "error");
+      return Promise.resolve();
+    }
+    const request = captureRequest(pi, ctx, prompt);
+    // A pane that can't read this conversation can't answer about it, so none opens.
+    if (request.parent === undefined) {
+      notify(ctx, unreadableParentMessage(ctx), "warning");
+      return Promise.resolve();
+    }
+    const isCurrent = slot.captureAuthority();
+    return slot.run(RexBtw.use((btw) => btw.open(request))).then(
+      () => undefined,
+      (cause: unknown) => {
+        if (isCurrent())
+          notify(ctx, isRexBtwError(cause) ? cause.message : "Couldn't open a BTW pane", "error");
+        return undefined;
+      },
+    );
+  };
+
+  registerExtensionCommand(pi, {
+    name: BTW_COMMAND,
+    description: "Ask a side question in a new Rex pane",
+    bare: { handler: open, text: true, description: "Open a side conversation" },
+    overviewNotes: [
+      "Add a question to ask it as it opens, for example:",
+      "  /btw why does the cart test fail?",
+    ],
   });
 
   pi.on("session_start", (_event, ctx) => {

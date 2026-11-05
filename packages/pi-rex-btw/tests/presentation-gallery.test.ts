@@ -135,8 +135,8 @@ const scenarios = [
 ] as const;
 
 /**
- * `/btw` in a session whose conversation a pane couldn't read: no pane opens, and the notice says
- * why, drawn one column in as Pi draws notices.
+ * `/btw` notices, drawn one column in as Pi draws them: its help, and a session whose conversation
+ * a pane couldn't read, where no pane opens and the notice says why.
  */
 const refusalLines = (): Effect.Effect<string[]> =>
   Effect.gen(function* () {
@@ -146,10 +146,15 @@ const refusalLines = (): Effect.Effect<string[]> =>
     const lines: string[] = [];
     try {
       const cases = [
-        ["a session that was never saved", undefined],
-        ["a session with no messages yet", "/nonexistent/session.jsonl"],
+        ["/btw help · overview", "help", undefined],
+        ["/btw notice · a session that was never saved", "what changed?", undefined],
+        [
+          "/btw notice · a session with no messages yet",
+          "what changed?",
+          "/nonexistent/session.jsonl",
+        ],
       ] as const;
-      for (const [label, sessionFile] of cases) {
+      for (const [label, args, sessionFile] of cases) {
         const notices: string[] = [];
         const host = recordingExtensionHost({}, { registerFlag() {}, getFlag: () => undefined });
         const ctx = extensionContextFixture({
@@ -164,13 +169,11 @@ const refusalLines = (): Effect.Effect<string[]> =>
         });
         rexBtw(host.pi);
         yield* Effect.promise(() => Promise.resolve(host.emit("session_start", ctx)));
-        yield* Effect.promise(() =>
-          Promise.resolve(host.commands.get("btw")?.handler("what changed?", ctx)),
-        );
+        yield* Effect.promise(() => Promise.resolve(host.commands.get("btw")?.handler(args, ctx)));
         yield* Effect.promise(() => Promise.resolve(host.emit("session_shutdown", ctx)));
         for (const width of [100, 57])
           lines.push(
-            `── /btw notice · ${label} · ${width} cols`,
+            `── ${label} · ${width} cols`,
             ...Arr.flatMap(notices, (notice) =>
               Arr.map(new Text(plainTheme.fg("warning", notice), 1, 0).render(width), Str.trimEnd),
             ),

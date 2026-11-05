@@ -39,6 +39,7 @@ import {
 } from "../src/run/agent-messaging.ts";
 import { executeAgentActionEffect } from "../src/tools/execute-agents.ts";
 import { subagentActivityDetail, subagentActivityItems } from "../src/ui/run-activity.ts";
+import { NoticeDetailsSchema } from "../src/ui/notice-details.ts";
 import { normalizeRpcEvent } from "../src/backend/local-pi-events.ts";
 import { finishToolSessionEvent, startToolSessionEvent } from "../src/run/session-events.ts";
 import {
@@ -123,7 +124,7 @@ import { eventLoopTurn, settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
-import { gitProbeCheck, type DoctorCheck } from "../src/application/doctor.ts";
+import { gitProbeCheck, invalidAgentCheck, type DoctorCheck } from "../src/application/doctor.ts";
 import { WORKTREE_INCLUDE_RULE } from "../src/boundary/git-worktree-include.ts";
 import { resolveProfilePlan, type ProfileResolutionEnvironment } from "../src/profiles/resolve.ts";
 import { nodeExecutableProblem } from "../src/boundary/node-executable.ts";
@@ -146,6 +147,7 @@ import * as Fn from "effect/Function";
 import { CURSOR_MARKER, getKeybindings } from "@earendil-works/pi-tui";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
 import * as Str from "effect/String";
+import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 
 type ToolScenario = GalleryScenario & { readonly tool: string };
@@ -1736,6 +1738,21 @@ const notified = (title: string, notification: SubagentNotification) => {
   return Arr.map(messages, (message): GalleryMessageScenario => ({ title, message }));
 };
 
+/**
+ * A notice whose report copy is shortened to its first lines for the gallery, which would
+ * otherwise print the whole 16K-character copy expanded; its notes stay as the notifier wrote them.
+ */
+const galleryExcerpt = (cut: GalleryMessageScenario): GalleryMessageScenario => {
+  const details = Schema.decodeUnknownSync(NoticeDetailsSchema)(cut.message.details);
+  if (details.kind !== "completed") return cut;
+  const runs = Arr.map(details.runs ?? [], (run) =>
+    run.text === undefined
+      ? run
+      : { ...run, text: `${Arr.join(Arr.take(Str.split(run.text, "\n"), 6), "\n")}…` },
+  );
+  return { ...cut, message: { ...cut.message, details: { ...details, runs } } };
+};
+
 const completion = (
   run: SubagentRunView,
   overrides: Partial<SubagentCompletionNotification> = {},
@@ -1835,6 +1852,24 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
       completion({ ...authReview, finalText: "The refresh flow is safe." }),
     ],
   }),
+  ...Arr.map(
+    notified("a report longer than the notice can show, with no saved file", {
+      type: "completed",
+      runs: [
+        completion(docsSweep, {
+          finalText: Arr.join(
+            [
+              "Found 1,200 stale references to `refreshToken()`:",
+              "",
+              ...Arr.makeBy(1_200, (index) => `- docs/page-${index}.md:${index + 1}`),
+            ],
+            "\n",
+          ),
+        }),
+      ],
+    }),
+    galleryExcerpt,
+  ),
   ...notified("one worker fails with a next candidate", {
     type: "completed",
     runs: [completion(migrationReview, { nextCandidate: migrationReview.nextCandidate })],
@@ -2847,11 +2882,7 @@ const problemDoctorChecks = (nodeProblem: string): ReadonlyArray<DoctorCheck> =>
       status: "failed",
       detail: `global · profile reviewer · ${routeProblem("reviewer", config, environment)}`,
     },
-    {
-      label: "Agents (project)",
-      status: "failed",
-      detail: "invalid object, so every agent it could declare fails closed",
-    },
+    invalidAgentCheck({ scope: "project" }, config),
     {
       label: ".worktreeinclude",
       status: "warning",

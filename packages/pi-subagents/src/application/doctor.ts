@@ -19,6 +19,7 @@ import {
   describeWorktreeInclude,
   WORKTREE_INCLUDE_RULE,
 } from "../boundary/git-worktree-include.ts";
+import type { ResolvedSubagentConfig } from "../config/options.ts";
 import { WORKTREE_HOOK_EVENTS } from "../config/schema.ts";
 import {
   gitInstallationProbe,
@@ -26,10 +27,12 @@ import {
   MINIMUM_GIT_VERSION,
   type GitInstallationProbe,
 } from "../boundary/git-installation.ts";
+import type { InvalidCustomAgent } from "../profiles/agents.ts";
 import { PROFILE_IDS, type SkippedProfileCandidate } from "../profiles/model.ts";
 import type { ProfileCandidateAttempt, ProfileResolution } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { InvalidSubagentRequestError } from "../run/errors.ts";
+import { homeDisplayPath } from "../ui/display-path.ts";
 
 type DoctorStatus = "ok" | "warning" | "failed";
 
@@ -168,7 +171,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
       : check(
           "Configuration",
           "warning",
-          `profile set ${setName}; invalid fields (ignored, clamped, or failed closed): ${Arr.join(config.diagnostics, ", ")}`,
+          `profile set ${setName}; invalid fields (ignored, clamped, or set to their safest value): ${Arr.join(config.diagnostics, ", ")}`,
         ),
     input.projectTrusted
       ? check("Project settings", "ok", "trusted; project configuration applies")
@@ -210,20 +213,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
     ),
   );
   checks.push(...Arr.map(routes, (route) => routeOutcome(route, failures)));
-  for (const invalid of config.invalidAgents)
-    checks.push(
-      invalid.name === undefined
-        ? check(
-            `Agents (${invalid.scope})`,
-            "failed",
-            "invalid object, so every agent it could declare fails closed",
-          )
-        : check(
-            `Agent ${invalid.name}`,
-            "failed",
-            `invalid ${invalid.scope} entry; it fails closed until repaired`,
-          ),
-    );
+  checks.push(...Arr.map(config.invalidAgents, (invalid) => invalidAgentCheck(invalid, config)));
 
   const writable = yield* fileSystem.access(input.agentDirectory, { writable: true }).pipe(
     Effect.as(true),
@@ -272,6 +262,27 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
     );
   return checks;
 });
+
+/** An agent entry, or a whole `agents` object, that can't decode, and the file to repair. */
+export const invalidAgentCheck = (
+  invalid: InvalidCustomAgent,
+  config: Pick<ResolvedSubagentConfig, "globalConfigPath" | "projectConfigPath">,
+): DoctorCheck => {
+  const file = homeDisplayPath(
+    invalid.scope === "project" ? config.projectConfigPath : config.globalConfigPath,
+  );
+  return invalid.name === undefined
+    ? check(
+        `Agents (${invalid.scope})`,
+        "failed",
+        `invalid agents object, so none of its agents can start until you repair ${file}`,
+      )
+    : check(
+        `Agent ${invalid.name}`,
+        "failed",
+        `invalid ${invalid.scope} entry, so it can't start until you repair ${file}`,
+      );
+};
 
 // Creation reads the same file, so a file it would refuse warns here.
 const worktreeIncludeCheck = (cwd: string): Effect.Effect<DoctorCheck, never, SafeFile> =>

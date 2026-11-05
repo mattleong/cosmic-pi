@@ -12,6 +12,7 @@ import { expandedArguments, expandedSection } from "../../preview/expanded-secti
 import { previewHeadingText } from "../../preview/heading-wrap";
 import { headingIsOwnCall, headingShowedSubject } from "../../preview/heading-coverage";
 import { compactSingleLine } from "../../preview/compact-row";
+import { previewIssuesSlot } from "../../preview/preview-issues";
 import { escapeControlChars, replaceSgrSequences } from "../../shared/terminal-text";
 import { withCodePreviewRenderers } from "../../tools/cooperative-tools";
 import { getFallbackResultText } from "../../tools/data/results";
@@ -193,6 +194,8 @@ export function createWebAccessRenderers(
         if (!context.expanded) return heading;
         const body = new Container();
         body.addChild(heading);
+        // Expanded, the row's issues indent with the body beneath the heading.
+        body.addChild(expandedSection(theme, undefined, previewIssuesSlot(context)));
         if (!(Predicate.isObject(args) && Rec.isEmptyRecord(args)))
           body.addChild(
             unlessHeadingShowsOnlyArgument(

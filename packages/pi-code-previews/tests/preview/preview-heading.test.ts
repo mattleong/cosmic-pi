@@ -110,3 +110,20 @@ test("a wrapped heading keeps a direction arrow with the name it points at", () 
     );
   }
 });
+
+test("a name too wide for a row breaks after a hyphen rather than inside a word", () => {
+  const name = "billing-and-invoicing-migration-review-follow-up-for-the-legacy-ledger-export-v2";
+  for (const width of [57, 40, 24]) {
+    const rows = Arr.map(wrapPreviewHeading(`agent_message ${name}`, width), (line) =>
+      Str.trim(stripAnsi(line)),
+    );
+    expect(Arr.join(rows, "")).toBe(`agent_message ${name}`);
+    for (const line of rows.slice(0, -1)) expect(Str.endsWith("-")(line)).toBe(true);
+  }
+  // A path whose directory is too wide breaks after its `/` before inside the name.
+  const path = Arr.map(wrapPreviewHeading("Status packages/pi-code-previews/src", 16), (line) =>
+    Str.trim(stripAnsi(line)),
+  );
+  expect(path[0]).toBe("Status packages/");
+  expect(path[1]).toBe("pi-code-");
+});

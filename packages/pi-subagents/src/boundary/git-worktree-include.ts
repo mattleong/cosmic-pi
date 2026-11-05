@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Order from "effect/Order";
-import { clipText } from "pi-cosmic-core/display";
+import { clipText, countLabel, formatBytes } from "pi-cosmic-core/display";
 import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import {
@@ -33,7 +33,7 @@ const MAX_INCLUDED_BYTES = 64 * 1024 * 1024;
 
 const tooMuchIncluded = (operation: string, files: number, bytes: number) =>
   workspaceRefusal(operation, ".worktreeinclude matches too many files to copy.", {
-    rule: `.worktreeinclude copies at most ${MAX_INCLUDED_FILES} files and ${MAX_INCLUDED_BYTES / 1024 / 1024} MiB into each isolated tree; it matched ${files} files of ${Math.ceil(bytes / 1024)} KiB`,
+    rule: `.worktreeinclude copies at most ${MAX_INCLUDED_FILES} files and ${formatBytes(MAX_INCLUDED_BYTES)} into each isolated tree; it matched ${countLabel(files, "file")} of ${formatBytes(bytes)}`,
     remedy:
       "Narrow the patterns in the checkout's .worktreeinclude to small local files such as .env. Install dependencies with a WorktreeCreate hook instead.",
   });
@@ -57,7 +57,7 @@ const parseWorktreeInclude = (text: string): ReadonlyArray<string> =>
   });
 
 /** What a usable `.worktreeinclude` is, as a clause after its name. */
-export const WORKTREE_INCLUDE_RULE = `a regular file of at most ${MAX_WORKTREE_INCLUDE_BYTES / 1024} KiB with at most ${MAX_WORKTREE_INCLUDE_PATTERNS} patterns of at most ${MAX_WORKTREE_INCLUDE_PATTERN_CHARS} characters, without control characters`;
+export const WORKTREE_INCLUDE_RULE = `a regular file of at most ${formatBytes(MAX_WORKTREE_INCLUDE_BYTES)} with at most ${MAX_WORKTREE_INCLUDE_PATTERNS} patterns of at most ${MAX_WORKTREE_INCLUDE_PATTERN_CHARS} characters, without control characters`;
 
 /**
  * The patterns of `root`'s `.worktreeinclude`, or none when it has no such file. A file that

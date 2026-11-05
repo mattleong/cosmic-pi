@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import {
   authoredTextLines,
   captureCodePreviewPresentationPolicy,
+  expandedAuthoredText,
   expandedBody,
   expandedDetails,
   expandedFields,
@@ -417,6 +418,38 @@ const countedMessage = withCodePreviewMessageShell((message, _options, theme) =>
   expandLabel: "report",
 }));
 
+/** A message from a sender whose long name wraps its expanded heading, then the sender's IDs. */
+const namedSenderMessage = (sender: string) =>
+  withCodePreviewMessageShell((message, _options, theme) => ({
+    name: "session_message",
+    label: "Session message",
+    summary: { subject: sender, outcome: "returned", messageIcon: "received" },
+    collapsed: () => new Text(messageText(message.content), 0, 0),
+    expanded: () =>
+      expandedBody(
+        expandedAuthoredText(theme, undefined, messageText(message.content)),
+        expandedDetails(theme, ["session-7f3a · ~/dev/web"]),
+      ),
+    expandLabel: "details",
+  }));
+
+/** A task notice whose labeled facts include a command too long for the value column. */
+const longFieldMessage = withCodePreviewMessageShell((message, _options, theme) => ({
+  name: "background_task",
+  label: "Background task",
+  summary: { subject: "verify", metadata: ["finished in 2s"], outcome: "success" },
+  collapsed: () => new Text(messageText(message.content), 0, 0),
+  expanded: () =>
+    expandedBody(
+      expandedFields(theme, [
+        { label: "Command", lines: [EXTREME_COMMAND] },
+        { label: "Notify", lines: ["when it finishes"] },
+      ]),
+      expandedText(theme, "Output", [messageText(message.content)]),
+    ),
+  expandLabel: "output",
+}));
+
 /** A message whose collapsed words end in their own affordance, so the shell adds no second one. */
 const longStatusMessage = withCodePreviewMessageShell((message, _options, theme) => ({
   name: "status_message",
@@ -458,6 +491,17 @@ const scenarios: ReadonlyArray<
     },
     phase: "pending",
     narrow: true,
+  },
+  {
+    tool: "tool_search",
+    title: "native tool search heading wraps a long query",
+    args: {
+      query:
+        "Find tools that read, search, and summarize project documentation, architecture notes, and release checklists",
+      limit: 8,
+    },
+    phase: "pending",
+    views: EXTREME_VIEWS,
   },
   {
     tool: "tool_search",
@@ -2049,6 +2093,49 @@ describe.skipIf(!directory)("presentation gallery", () => {
                   display: true,
                   timestamp: 0,
                 },
+              }),
+              ...galleryMessageFrames(
+                namedSenderMessage(
+                  "checkout redesign review for the acme platform team and billing",
+                ),
+                {
+                  title: `${style} · a wrapped message heading labels the message beneath it`,
+                  message: {
+                    role: "custom",
+                    customType: "session_message",
+                    content: "Can you rerun the web tests after my API change?",
+                    display: true,
+                    timestamp: 0,
+                  },
+                  views: EXTREME_VIEWS,
+                },
+              ),
+              ...galleryMessageFrames(
+                namedSenderMessage(
+                  "billing-and-invoicing-migration-review-follow-up-for-the-legacy-ledger-export-v2",
+                ),
+                {
+                  title: `${style} · a long hyphenated name breaks after a hyphen`,
+                  message: {
+                    role: "custom",
+                    customType: "session_message",
+                    content: "The refresh test fixtures moved to tests/auth/fixtures.",
+                    display: true,
+                    timestamp: 0,
+                  },
+                  views: EXTREME_VIEWS,
+                },
+              ),
+              ...galleryMessageFrames(longFieldMessage, {
+                title: `${style} · a field too long for the value column stacks beneath its label`,
+                message: {
+                  role: "custom",
+                  customType: "background_task",
+                  content: "ok",
+                  display: true,
+                  timestamp: 0,
+                },
+                views: EXTREME_VIEWS,
               }),
               ...galleryMessageFrames(longStatusMessage, {
                 title: `${style} · clipped message keeps one affordance`,

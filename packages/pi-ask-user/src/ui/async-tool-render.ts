@@ -180,7 +180,9 @@ function collapsedRows(
   if (list) {
     // Hidden and failed questionnaires have their own issues: how to resume them, and the failure.
     const counted = Arr.filter(states, (entry) => entry !== "hidden" && entry !== "failed");
-    return counted.length === 0 ? emptyBody() : pendingState(stateCounts(counted), counted);
+    return counted.length === 0
+      ? emptyBody()
+      : pendingState(stateCounts(counted, counted.length < states.length), counted);
   }
   const [state] = states;
   if (state === "cancelled") return cancelledLine(theme);

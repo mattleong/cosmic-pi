@@ -16,6 +16,8 @@ import { waitUntil } from "./helpers.ts";
 export interface SettingsHarnessOptions {
   readonly configDocument?: JsonObject;
   readonly updateSetting?: () => Promise<void>;
+  /** Saves through this instead, so a gallery can show a decoder's rule or a store failure. */
+  readonly updateSettingEffect?: OpenAIConfigService["Service"]["updateSetting"];
   readonly hostCustom?: ExtensionUIContext["custom"];
   readonly captureAuthority?: () => () => boolean;
   readonly loadMenu?: () => PromiseLike<typeof import("../src/settings/menu.ts")>;
@@ -49,8 +51,12 @@ export function settingsHarnessWith(
     Layer.succeed(OpenAIConfigService, {
       get: Effect.sync(() => currentConfig),
       observe: () => Effect.void,
-      updateSetting: () =>
-        options.updateSetting ? Effect.promise(options.updateSetting) : Effect.void,
+      updateSetting: (id, value) =>
+        options.updateSettingEffect
+          ? options.updateSettingEffect(id, value)
+          : options.updateSetting
+            ? Effect.promise(options.updateSetting)
+            : Effect.void,
       persistFast: (_desiredActive, afterCommit) => afterCommit,
       readConfigDocument: Effect.sync(() => options.configDocument ?? {}),
     }),

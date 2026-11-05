@@ -3,6 +3,7 @@ import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import { describe, expect, it, vi } from "vitest";
 import {
+  completionNoticeDetails,
   hostNotifier,
   type SubagentCompletionNotification,
 } from "../src/boundary/host-notifier.ts";
@@ -29,6 +30,9 @@ const completion = (
 ): SubagentCompletionNotification => ({ id, name, generation: 1, outcome: "completed", ...extra });
 
 const steer = { deliverAs: "steer", triggerTurn: true };
+
+const noticeWarnings = (details: ReturnType<typeof completionNoticeDetails>) =>
+  details.kind === "completed" ? details.warnings : undefined;
 
 describe("subagent host notifier", () => {
   it("steers a completed report into the active orchestration run", () => {
@@ -155,6 +159,19 @@ describe("subagent host notifier", () => {
     });
     expect(clipped.content().length).toBeLessThanOrEqual(MAX_NOTIFICATION_CHARS);
     expect(clipped.content()).toContain("agent_worktree");
+  });
+
+  it("counts a report too long to save in full as a warning, as tool rows do", () => {
+    const notice = (complete: boolean) =>
+      completionNoticeDetails([
+        completion("agent-1", "reader", {
+          finalText: "## Read report",
+          finalTextTruncation: { retainedChars: 14, originalChars: 2_000_000, originalLines: 9 },
+          reportArchive: { path: "/state/agent-1.md", chars: 1_048_576, lines: 9, complete },
+        }),
+      ]);
+    expect(noticeWarnings(notice(false))).toBe(1);
+    expect(noticeWarnings(notice(true))).toBe(0);
   });
 
   it("does not retain raw outcome secrets in custom-message metadata", () => {

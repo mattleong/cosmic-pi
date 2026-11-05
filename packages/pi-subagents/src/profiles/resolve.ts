@@ -73,11 +73,21 @@ interface ProfileResolutionFailure {
   readonly message: string;
   /**
    * The failure without its subject or closing period, for a row already labeled with the profile
-   * or agent, such as `disabled` or `no eligible candidate: Pi model … does not support fast mode`.
+   * or agent, such as `disabled` or `no eligible candidate · Pi model … does not support fast mode`.
    */
   readonly problem: string;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
+
+/** Why a model can't run at an explicitly required effort, naming the efforts it does support. */
+export const unsupportedEffortReason = (
+  model: string,
+  effort: string,
+  supported: ReadonlyArray<string>,
+): string =>
+  `Pi model ${model} doesn't support effort ${effort} (${
+    supported.length > 0 ? `it supports ${Arr.join(supported, ", ")}` : "it has no effort levels"
+  }).`;
 
 /** A sentence as a clause: without its closing period. */
 const clause = (sentence: string): string => Str.replace(/\.$/u, "")(Str.trimEnd(sentence));
@@ -182,7 +192,7 @@ const resolveCandidate = (
     if (hardEffort !== undefined && supportedEfforts && !supportedEfforts.includes(hardEffort))
       return skipCandidate(
         "pi_effort_unsupported",
-        `Pi model ${resolvedModel} does not support required effort ${hardEffort}; supported efforts: ${Arr.join(supportedEfforts, ", ") || "none"}.`,
+        unsupportedEffortReason(resolvedModel, hardEffort, supportedEfforts),
       );
     if (candidate.openaiFastMode && !supportsSubagentFastMode(resolvedModel))
       return skipCandidate(
@@ -195,7 +205,7 @@ const resolveCandidate = (
   if (candidate.context === "fork" && !environment.forkAvailable)
     return skipCandidate(
       "fork_context_unavailable",
-      "Forked context requires a persisted parent session with a stable leaf.",
+      "Copying this conversation needs a saved session with at least one message.",
     );
 
   if (candidate.model === "parent") {
@@ -266,18 +276,17 @@ const resolveKnownProfileRoute = (
     kind: "failed",
     code: forkUnavailable ? "fork_context_unavailable" : "profile_no_eligible_model",
     message: forkUnavailable
-      ? `${subject} requires forked context, but the parent session has no stable persisted leaf.`
+      ? `${subject} copies this conversation, which needs a saved session with at least one message.`
       : `${subject} has no eligible candidate.${skippedReasons}`,
     problem: forkUnavailable
-      ? "forked context unavailable: the parent session has no stable persisted leaf"
-      : `no eligible candidate${
-          skippedCandidates.length > 0
-            ? `: ${Arr.join(
-                Arr.map(skippedCandidates, (candidate) => clause(candidate.reason)),
-                "; ",
-              )}`
-            : ""
-        }`,
+      ? "copies this conversation, so it needs a saved session with at least one message"
+      : Arr.join(
+          [
+            "no eligible candidate",
+            ...Arr.map(skippedCandidates, (candidate) => clause(candidate.reason)),
+          ],
+          " · ",
+        ),
     skippedCandidates,
   };
 };
@@ -299,8 +308,8 @@ export function resolveProfilePlan(
   const route = config.profiles[profile];
   if (route.candidates.length === 0) {
     const invalid = (scope: "global" | "project", file: string): readonly [string, string] => [
-      `Profile ${profile} has an invalid ${scope} route and fails closed; repair ${homeDisplayPath(file)}.`,
-      `invalid ${scope} route, so it fails closed; repair ${homeDisplayPath(file)}`,
+      `Profile ${profile} has an invalid ${scope} route, so it can't start until you repair ${homeDisplayPath(file)}.`,
+      `invalid ${scope} route, so it can't start until you repair ${homeDisplayPath(file)}`,
     ];
     const sessionRemedy = "clear it in /subagents profiles to reveal the loaded persistent route";
     // The launch's sentence, and the same problem for a row already labeled with the profile.

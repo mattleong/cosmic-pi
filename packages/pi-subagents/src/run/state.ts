@@ -164,7 +164,7 @@ const savedFileText = (label: string, archive: SubagentReportArchive): string =>
  */
 export const reportFileText = (archive: SubagentReportArchive): string =>
   savedFileText(
-    archive.complete ? "Read the full report" : "Read the report, cut at the 1 MiB archive limit",
+    archive.complete ? "Read the full report" : "Read the report, cut at the 1 MB archive limit",
     archive,
   );
 

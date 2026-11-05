@@ -28,6 +28,8 @@ import { makeResolvedConfig, testModel } from "./helpers.ts";
 import { input, settingsHarnessWith, type SettingsHarnessOptions } from "./settings-harness.ts";
 import { formatUsageDetails, formatUsageStatus, type UsageSnapshot } from "../src/usage/format.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
+import { prepareSettingUpdate } from "../src/config/options.ts";
+import { OpenAIConfigError } from "../src/config/store.ts";
 import { registerImagePresentation, textPart } from "./image-fixtures.ts";
 
 // Under the real home directory, so the gallery shows paths as users see them: `~/…`.
@@ -301,12 +303,24 @@ const settingsLines = Effect.gen(function* () {
   ];
 });
 
+// The real decoder judges these, so each rejection states its setting's rule.
+const decoded: SettingsHarnessOptions["updateSettingEffect"] = (id, value) =>
+  Effect.asVoid(prepareSettingUpdate(id, value));
+
 /** `/openai settings help` and `status` notices, as the settings command posts them. */
 const settingsCommandLines = Effect.gen(function* () {
   const lines: string[] = [];
-  const posted = (title: string, command: string, compactionUnavailable?: string) =>
+  const posted = (
+    title: string,
+    command: string,
+    compactionUnavailable?: string,
+    updateSettingEffect?: SettingsHarnessOptions["updateSettingEffect"],
+  ) =>
     Effect.gen(function* () {
-      const h = settingsHarness({ diagnosticLines: diagnosticsFor(compactionUnavailable) });
+      const h = settingsHarness({
+        diagnosticLines: diagnosticsFor(compactionUnavailable),
+        ...(updateSettingEffect && { updateSettingEffect }),
+      });
       yield* Effect.promise(() => h.invoke(command));
       const notice: unknown = h.notify.mock.lastCall?.[0];
       lines.push(...noticeFrames(title, Predicate.isString(notice) ? notice : "(nothing shown)"));
@@ -319,6 +333,27 @@ const settingsCommandLines = Effect.gen(function* () {
     "Better OpenAI's pi-ai 0.74.0 doesn't match Pi's 0.75.1",
   );
   yield* posted("/openai settings image.outputFormat png", "image.outputFormat png");
+  for (const command of [
+    "usage.refreshIntervalMs abc",
+    "image.timeoutMs soon",
+    "image.outputFormat gif",
+    "image.defaultSave desktop",
+    "compaction.enabled maybe",
+  ])
+    yield* posted(`/openai settings ${command} · rejected`, command, undefined, decoded);
+  yield* posted(
+    "/openai settings usage.showResetTimes off · save failed",
+    "usage.showResetTimes off",
+    undefined,
+    () =>
+      Effect.fail(
+        OpenAIConfigError.make({
+          operation: "write",
+          path: agentPath("extensions/pi-better-openai.json"),
+          message: "Unable to write Better OpenAI configuration.",
+        }),
+      ),
+  );
   return lines;
 });
 

@@ -178,7 +178,8 @@ export function registerExtensionCommand(
       const [head = "", rest = ""] = /^(\S+)\s*([\s\S]*)$/u.exec(trimmed)?.slice(1) ?? [];
       const subcommand = subcommands.get(head);
       if (subcommand) return settle(() => subcommand.handler(rest, ctx));
-      if (head === HELP_SUBCOMMAND.name) return notify(overview(), "info");
+      // A free-text command keeps `help me debug X` as its text; only a lone `help` asks for the overview.
+      if (head === HELP_SUBCOMMAND.name && !(bare?.text && rest)) return notify(overview(), "info");
       return bare?.text
         ? settle(() => bare.handler(trimmed, ctx))
         : notify(unknownSubcommandText(name, head, overview()), "warning");

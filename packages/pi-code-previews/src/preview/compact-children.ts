@@ -153,13 +153,18 @@ function omissionRows(
   const failed = hiddenFailed > 0 ? `${hiddenFailed} failed` : "";
   const dim = (row: string) => theme.fg("dim", row);
   const error = (row: string) => theme.fg("error", row);
-  const single = branch + dim(more) + (failed ? ` (${error(failed)})` : "");
+  const single = branch + dim(more) + (failed ? `${dim(" · ")}${error(failed)}` : "");
   if (visibleWidth(single) <= width) return [single];
   const spaces = Fn.pipe(" ", Str.repeat(visibleWidth(branch)));
   const rows = wrapHanging(more, width, branch, spaces, 8, { style: dim });
+  // A fact that moves to its own row starts with its separator.
+  const continued = `· ${failed}`;
   return failed
     ? rows.concat(
-        wrapHanging(failed, width, spaces, spaces, visibleWidth(failed), { style: error }),
+        wrapHanging(continued, width, spaces, spaces, visibleWidth(continued), {
+          style: (row) =>
+            Str.startsWith("· ")(row) ? `${dim("· ")}${error(Str.slice(2)(row))}` : error(row),
+        }),
       )
     : rows;
 }

@@ -59,7 +59,7 @@ const THINKING_LEVEL_WARNING =
 const IDENTIFY_WARNING =
   "Couldn't resolve this directory's path, so its model isn't remembered in this session\nCheck that the directory still exists, then start a session with /new to try again";
 const writeWarningAt = (shown: string) =>
-  `Couldn't save the model for this directory\nCheck that ${shown} can be written`;
+  `Couldn't save the model for this directory\nCheck that you can write to ${shown}`;
 const writeWarning = (identified: DirectoryIdentity) => writeWarningAt(shownPath(identified));
 /**
  * A save that failed before its file was known names the folder that holds every preference file,

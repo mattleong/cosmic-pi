@@ -9,6 +9,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { stripAnsi } from "pi-cosmic-core/security";
 import { plainTheme } from "pi-cosmic-core/testing";
@@ -239,6 +240,29 @@ describe("text panel", () => {
     const shown = Arr.join(panel.render(40), "\n");
     expect(shown).toContain("code-previews.json");
     expect(shown).toContain("/agent/");
+  });
+
+  it("starts a wide hyphenated name beside its label and breaks it after a hyphen", () => {
+    const name = "billing-and-invoicing-migration-review-follow-up-for-the-legacy-ledger-export-v2";
+    const panel = new TextPanelComponent({
+      title: "Panel",
+      theme: plainTheme,
+      lines: [`✗ Agent ${name}: disabled`],
+      done: () => undefined,
+    });
+    const body = Arr.map(panel.render(57), (line) => Str.trim(Str.replace(/│/gu, "")(line)));
+    const first = Option.getOrThrow(Arr.findFirst(body, (line) => Str.startsWith("✗ Agent")(line)));
+    expect(first).not.toBe("✗ Agent");
+    const parts = Arr.filter(body, (line) => /[a-z]-/u.test(line));
+    expect(Arr.every(Arr.take(parts, parts.length - 1), (line) => Str.endsWith("-")(line))).toBe(
+      true,
+    );
+    expect(
+      Arr.join(
+        Arr.map(parts, (line) => Str.replace(/^✗ Agent /u, "")(line)),
+        "",
+      ),
+    ).toContain(name);
   });
 
   it("wraps long lines instead of clipping them", () => {

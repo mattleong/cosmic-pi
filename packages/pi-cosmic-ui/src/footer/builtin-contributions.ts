@@ -16,10 +16,16 @@ import { formatGitStatus, type FooterGitStatus } from "./git.ts";
 import type { FooterHostProjection } from "../boundary/host-footer-projection.ts";
 import type { FooterTotals } from "../boundary/host-usage.ts";
 
-function basename(path: string): string {
-  const normalized = Fn.pipe(path, Str.replace(/\/$/, ""));
-  const start = Option.getOrElse(Fn.pipe(normalized, Str.lastIndexOf("/")), () => -1) + 1;
-  return Fn.pipe(normalized, Str.slice(start)) || normalized;
+/**
+ * A short working directory that stays rooted: `~/web` directly under home, otherwise its root and
+ * last component around `…` (`~/…/cosmic-pi`, `/…/web`), never a bare basename.
+ */
+export function compactLocation(location: string): string {
+  const normalized = location.length > 1 ? Fn.pipe(location, Str.replace(/\/+$/u, "")) : location;
+  const parts = Str.split(normalized, "/");
+  // `/srv` and `~/web` already show only their root and last component.
+  if (parts.length <= 2) return normalized;
+  return `${parts[0] ?? ""}/…/${Option.getOrElse(Arr.last(parts), () => "")}`;
 }
 
 const DEFAULT_STATUS_REGION = "details" as const;
@@ -83,7 +89,7 @@ const identityContributions = (
       id: "location",
       region: "identity",
       text: `⌂ ${location}`,
-      compactText: `⌂ ${basename(location)}`,
+      compactText: `⌂ ${compactLocation(location)}`,
       tone: "normal",
       color: "accent",
       priority: 100,

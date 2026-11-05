@@ -3,9 +3,10 @@ import { endElide } from "pi-code-previews";
 import { countLabel } from "pi-cosmic-core/display";
 import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { registerExtensionCommand } from "pi-cosmic-core/host-command";
+import { wrapNoticeText } from "pi-cosmic-ui/boundary/host-settings-command";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import {
   distinctSessionLabels,
@@ -49,14 +50,35 @@ const listedLines = (session: ListedSession, label: string): ReadonlyArray<strin
 
 // A notice can't know its width, so a long session name ends at a word boundary in its list.
 const NOTICE_LABEL_CHARS = 40;
-
-// Keeps the example on one 55-column notice line; a longer label ends at a word boundary.
-const EXAMPLE_LABEL_CHARS = 18;
+/** A cut example keeps whole words, however much room that gives up. */
+const WHOLE_WORDS = 1;
 
 const howToMessage = (example: string | undefined): ReadonlyArray<string> => [
   "To message one, ask your agent, for example:",
-  `  "Ask the ${example === undefined ? "web" : endElide(example, EXAMPLE_LABEL_CHARS)} session to run its tests"`,
+  // Wrapped within the notice width, so a long name stays whole rather than cut.
+  wrapNoticeText(`  "Ask the ${example ?? "web"} session to run its tests"`),
 ];
+
+/**
+ * The example names the shortest reachable session as a user would type it: whole, or for a name
+ * the list cuts, its leading whole words without the cut mark.
+ */
+const exampleLabel = (sessions: ReadonlyArray<ListedSession>): string | undefined => {
+  const labels = distinctSessionLabels(sessions);
+  const reachableAt = Arr.filterMap(sessions, (session, index) =>
+    reachable(session) ? Result.succeed(index) : Result.failVoid,
+  );
+  const candidates = Arr.map(
+    reachableAt.length > 0 ? reachableAt : Arr.map(sessions, (_session, index) => index),
+    (index) => labels[index] ?? "",
+  );
+  const shortest = Arr.reduce(candidates, undefined, (best: string | undefined, label) =>
+    best === undefined || label.length < best.length ? label : best,
+  );
+  return shortest === undefined
+    ? undefined
+    : Str.replace(/…$/u, "")(endElide(shortest, NOTICE_LABEL_CHARS, WHOLE_WORDS));
+};
 
 const reachable = (session: ListedSession): boolean =>
   session.state === "idle" || session.state === "busy";
@@ -65,7 +87,6 @@ export const listReport = (result: SessionListContract): string => {
   const total = result.sessions.length + result.omitted;
   if (total === 0) return "No other live Pi sessions";
   const labels = distinctSessionLabels(result.sessions, NOTICE_LABEL_CHARS);
-  const example = Arr.findFirstIndex(result.sessions, reachable);
   return Arr.join(
     [
       countLabel(total, "other live session"),
@@ -73,7 +94,7 @@ export const listReport = (result: SessionListContract): string => {
         listedLines(session, labels[index] ?? ""),
       ),
       ...(result.omitted > 0 ? [`  and ${result.omitted} more`] : []),
-      ...howToMessage(Option.isSome(example) ? labels[example.value] : labels[0]),
+      ...howToMessage(exampleLabel(result.sessions)),
     ],
     "\n",
   );

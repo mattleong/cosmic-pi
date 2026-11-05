@@ -8,35 +8,75 @@ import { fallbackArguments } from "../tools/data/args";
 import { type HostValue } from "../shared/untrusted-value";
 import { wrapPlainText } from "../shared/text-wrap";
 
+/**
+ * The label an unlabeled section takes while a message shell draws a delivered message's body
+ * beneath a heading whose wrapped rows hang at the body's column. Drawing is synchronous, so it
+ * applies only inside {@link drawWithBodyLabel}, and never to a section nested in another.
+ */
+let bodyLabel: string | undefined;
+
+export function drawWithBodyLabel<A>(label: string | undefined, draw: () => A): A {
+  const outer = bodyLabel;
+  bodyLabel = label;
+  try {
+    return draw();
+  } finally {
+    bodyLabel = outer;
+  }
+}
+
 export function expandedSection(
   theme: Pick<Theme, "fg">,
   label: string | undefined,
   ...children: Component[]
 ): Component {
+  return section(theme, label, true, children);
+}
+
+/** A section that never takes a body label, such as labeled fields. */
+export function unlabeledSection(theme: Pick<Theme, "fg">, ...children: Component[]): Component {
+  return section(theme, undefined, false, children);
+}
+
+function section(
+  theme: Pick<Theme, "fg">,
+  label: string | undefined,
+  takesBodyLabel: boolean,
+  children: readonly Component[],
+): Component {
   const content = new Container();
   for (const child of children) content.addChild(child);
   // Children that cache their rows return the same arrays, so unchanged content is not re-indented.
   let cached:
-    | { readonly width: number; readonly parts: readonly string[][]; readonly rows: string[] }
+    | {
+        readonly width: number;
+        readonly label: string | undefined;
+        readonly parts: readonly string[][];
+        readonly rows: string[];
+      }
     | undefined;
   return {
     render(width) {
       if (width <= 0) return [];
-      const indent = Math.min(label ? 4 : 2, Math.max(0, width - 2));
-      const parts = Arr.map(content.children, (child) => child.render(width - indent));
+      const shown = label ?? (takesBodyLabel ? bodyLabel : undefined);
+      const indent = Math.min(shown ? 4 : 2, Math.max(0, width - 2));
+      const parts = drawWithBodyLabel(undefined, () =>
+        Arr.map(content.children, (child) => child.render(width - indent)),
+      );
       if (
         cached?.width === width &&
+        cached.label === shown &&
         Arr.every(parts, (part, index) => part === cached?.parts[index])
       )
         return cached.rows;
-      const heading = label ? [clipToWidth(`  ${theme.fg("muted", label)}`, width, "")] : [];
+      const heading = shown ? [clipToWidth(`  ${theme.fg("muted", shown)}`, width, "")] : [];
       const pad = Fn.pipe(" ", Str.repeat(indent));
       const rows = heading.concat(
         Arr.flatMap(parts, (lines) =>
           Arr.map(lines, (line) => (line === "" ? "" : `${pad}${line}`)),
         ),
       );
-      cached = { width, parts, rows };
+      cached = { width, label: shown, parts, rows };
       return rows;
     },
     invalidate() {

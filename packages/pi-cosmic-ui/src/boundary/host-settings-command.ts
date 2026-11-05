@@ -89,6 +89,8 @@ export interface SettingsCommandOptions<Config> {
       "id" | "label" | "description" | "values" | "currentValue"
     > & {
       readonly openValues?: boolean | undefined;
+      /** The missing-value hint's placeholder when the values aren't a short list, such as `<path>`. */
+      readonly valuePlaceholder?: string | undefined;
     }
   >;
   readonly examples: ReadonlyArray<string>;
@@ -568,7 +570,7 @@ export function settingsSubcommand<Config>(
       Arr.findFirst(descriptors, (entry) => entry.id === id),
     );
     const values = descriptor?.values ? Arr.join(descriptor.values, "|") : "";
-    return values && values.length <= 32 ? values : "<value>";
+    return values && values.length <= 32 ? values : (descriptor?.valuePlaceholder ?? "<value>");
   };
   // `Add a value: <command>`, with the command on its own line when both don't fit.
   const correctForm = (lead: string, form: string) =>

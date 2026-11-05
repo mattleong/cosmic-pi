@@ -114,3 +114,22 @@ test("a wrapped Details line never continues in a nested fact's column", () => {
     }
   }
 });
+
+test("a value that would wrap past three rows beside its label stacks beneath it", () => {
+  const command = Arr.join(
+    Arr.makeBy(20, (index) => `--include=package-${index}`),
+    " ",
+  );
+  const rows = expandedFields(plainTheme, [
+    { label: "Command", lines: [command] },
+    { label: "Notify", lines: ["when it finishes"] },
+  ]).render(57);
+  const label = Option.getOrThrow(Arr.findFirst(rows, Str.includes("Command")));
+  assert.equal(Str.trim(label), "Command");
+  assert.deepEqual(
+    Arr.filter(words(rows), (word) => Str.startsWith("--")(word)),
+    Str.split(command, " "),
+  );
+  // A short value still sits beside its label.
+  assert.ok(Arr.some(rows, (row) => Str.includes("Notify")(row) && Str.includes("when")(row)));
+});

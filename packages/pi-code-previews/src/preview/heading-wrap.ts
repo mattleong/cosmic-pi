@@ -18,6 +18,8 @@ interface Atom {
   spaced: boolean;
   /** Whether the atom is part of a `·` fact after the first separator. */
   fact?: boolean;
+  /** Whether the atom starts a name too wide for a row, split after its `-`, `_`, or `.`. */
+  wideName?: boolean;
 }
 
 // Styling sequences, `ESC [ … m`, which take no width.
@@ -99,6 +101,37 @@ function atoms(text: string): Atom[] {
   return joined;
 }
 
+// Where a name too wide for a row may break, as `wrapFacts` breaks one.
+const NAME_BREAKS: ReadonlySet<string> = new Set(["-", "_", "."]);
+
+/**
+ * A word too wide for a row split after each `-`, `_`, or `.` when every part then fits a row, as
+ * `wrapFacts` breaks a long name; otherwise it stays whole and breaks mid-word where a row ends.
+ * Such a name after a path's `/` starts a row, so the path breaks after its directory first.
+ */
+const nameParts = (atom: Atom, room: number): Atom[] => {
+  if (atomWidth(atom) <= room) return [atom];
+  const parts: Atom[] = [];
+  let pending: Item[] = [];
+  const finish = () => {
+    parts.push({
+      items: pending,
+      spaced: parts.length === 0 && atom.spaced,
+      fact: atom.fact === true,
+      wideName: parts.length === 0,
+    });
+    pending = [];
+  };
+  for (const item of atom.items) {
+    pending.push(item);
+    if (NAME_BREAKS.has(item.text)) finish();
+  }
+  const last = parts.at(-1);
+  if (Arr.some(pending, (item) => item.width > 0)) finish();
+  else last?.items.push(...pending);
+  return parts.length > 1 && Arr.every(parts, (part) => atomWidth(part) <= room) ? parts : [atom];
+};
+
 /**
  * A fact's width from its first atom through the path parts that follow it without a space, so a
  * fact that fits on a row moves to the next one whole rather than breaking after a `/`.
@@ -116,7 +149,7 @@ const factWidth = (all: readonly Atom[], start: number): number => {
 /**
  * A styled preview heading wrapped to `width`: between words, or after a `/` in a long path, with
  * continuation rows hanging two columns in. A `·` fact that fits on a row stays whole; a word wider
- * than a row breaks mid-word.
+ * than a row breaks after `-`, `_`, or `.` when every part fits a row, else mid-word.
  */
 export function wrapPreviewHeading(text: string, width: number): string[] {
   if (width <= 0) return [];
@@ -139,13 +172,14 @@ export function wrapPreviewHeading(text: string, width: number): string[] {
     row.push(item);
     used += item.width;
   };
-  const all = atoms(text);
+  const all = Arr.flatMap(atoms(text), (atom) => nameParts(atom, width - hang.length));
   for (const [index, atom] of all.entries()) {
     const gap = atom.spaced && used > 0 ? 1 : 0;
     const size = atomWidth(atom);
     const whole = atom.fact === true && atom.spaced ? factWidth(all, index) : size;
     const moves = whole > size && whole <= width - hang.length && used + gap + whole > available();
-    if (used > 0 && (moves || used + gap + size > available())) newRow();
+    const afterSlash = atom.wideName === true && !atom.spaced;
+    if (used > 0 && (moves || afterSlash || used + gap + size > available())) newRow();
     else if (gap) place({ text: " ", width: 1 });
     for (const item of atom.items) place(item);
   }

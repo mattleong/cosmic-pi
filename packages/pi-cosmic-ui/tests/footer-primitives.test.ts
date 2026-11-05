@@ -19,6 +19,7 @@ import {
   plainTheme,
 } from "pi-cosmic-core/testing";
 import { defaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
+import { compactLocation } from "../src/footer/builtin-contributions.ts";
 import { createFooterComponent } from "../src/footer/component.ts";
 import { clipToWidth } from "../src/manager/chrome.ts";
 import type { CosmicFooterTextContribution } from "../src/protocol/protocol.ts";
@@ -181,6 +182,17 @@ it("re-renders host changes behind unchanged identities, and the theme after inv
   marker = "#";
   component.invalidate();
   expect(text()).toContain("#⎇ feature");
+});
+
+it.each([
+  ["~/projects/cosmic-pi", "~/…/cosmic-pi"],
+  ["~/web", "~/web"],
+  ["~", "~"],
+  ["/srv", "/srv"],
+  ["/srv/apps/web/", "/…/web"],
+  ["/", "/"],
+] as const)("keeps the compact directory %j rooted as %j", (location, compact) => {
+  expect(compactLocation(location)).toBe(compact);
 });
 
 it.each([

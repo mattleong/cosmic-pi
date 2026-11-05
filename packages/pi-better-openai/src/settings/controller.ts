@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import { InvalidSettingError } from "pi-cosmic-core/settings-completion";
 import {
   formatOnOff,
+  ON_OFF_RULE,
   ON_OFF_VALUES,
   OnOffSchema,
   SETTINGS_OPTION_DESCRIPTORS,
@@ -23,6 +24,7 @@ import type { ResolvedConfig } from "../config/schema.ts";
 import type { FastSnapshot } from "../fast/controller.ts";
 import { FastModeService } from "../fast/service.ts";
 import { OpenAIConfigService } from "../config/store.ts";
+import { saveFailureMessage } from "./save-failure.ts";
 
 export interface SettingsControllerOptions {
   readonly config: () => ResolvedConfig | undefined;
@@ -107,7 +109,7 @@ export function registerSettingsController(
               return yield* OpenAIConfigService.use((service) => service.updateSetting(id, value));
             const desired = yield* Schema.decodeEffect(OnOffSchema)(value).pipe(
               Effect.mapError(() =>
-                InvalidSettingError.make({ id, message: `${id} must be on or off` }),
+                InvalidSettingError.make({ id, message: `${id} ${ON_OFF_RULE}` }),
               ),
             );
             yield* FastModeService.use((service) => service.setDesired(ctx, desired));
@@ -115,7 +117,12 @@ export function registerSettingsController(
               if (isCurrent()) resetFastRoutingTransport(ctx);
             });
             return undefined;
-          }).pipe(Effect.result),
+          }).pipe(
+            Effect.catchTag("OpenAIConfigError", (error) =>
+              Effect.fail({ message: saveFailureMessage(error, ctx.cwd) }),
+            ),
+            Effect.result,
+          ),
           signal,
         ),
       afterApply: updateFooter,

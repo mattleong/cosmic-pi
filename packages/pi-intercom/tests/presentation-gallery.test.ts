@@ -531,6 +531,10 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...noticeFrames("/intercom list · every state", listReport(listing)),
         ...noticeFrames("/intercom list · a long name and directory", listReport(longDirectory)),
         ...noticeFrames("/intercom list · a 63-character name", listReport(longNamedListing)),
+        ...noticeFrames(
+          "/intercom list · only a 63-character name",
+          listReport({ ...longNamedListing, sessions: longNamedListing.sessions.slice(0, 1) }),
+        ),
         ...noticeFrames("/intercom list · none", listReport({ ...listing, sessions: [] })),
       );
       yield* writeGallerySection(directory, "pi-intercom", lines);

@@ -46,6 +46,7 @@ import {
 } from "../profiles/model.ts";
 import {
   resolveProfileOverridePlan,
+  unsupportedEffortReason,
   type ProfileCandidateAttempt,
   type ProfileResolutionEnvironment,
   type ProfileResolutionPlan,
@@ -139,7 +140,7 @@ const resolvePiModel = Effect.fn("HostProfileResolution.resolvePiModel")(functio
   if (effortWasExplicit && !supportedEfforts.includes(effort))
     return yield* InvalidSubagentRequestError.make({
       code: "pi_effort_unsupported",
-      message: `Pi model ${modelId} does not support required effort ${effort}; supported efforts: ${Arr.join(supportedEfforts, ", ") || "none"}.`,
+      message: unsupportedEffortReason(modelId, effort, supportedEfforts),
     });
   const authSource = registry.getProviderAuthStatus(model.provider).source;
   if (authSource !== "runtime") return { model: modelId };
@@ -456,7 +457,7 @@ const plannedCandidate = Effect.fn("HostProfileResolution.plannedCandidate")(fun
   if (attempt.effectiveContext === "fork" && (!parent.sessionFile || !parent.leafId))
     return yield* InvalidSubagentRequestError.make({
       code: "fork_context_unavailable",
-      message: "Forked context requires a persisted parent session with a stable leaf.",
+      message: "Copying this conversation needs a saved session with at least one message.",
     });
   const routeContinuation = freezeSnapshot({
     candidates: input.routeCandidates,
@@ -606,7 +607,7 @@ const launchedAgent = (
     lookup.kind === "invalid"
       ? InvalidSubagentRequestError.make({
           code: "agent_invalid",
-          message: `Agent ${name} is invalid and fails closed\n\nRepair its entry under agents in ${homeDisplayPath(lookup.scope === "project" ? config.projectConfigPath : config.globalConfigPath)}, then reload. /subagents doctor lists the invalid fields.`,
+          message: `Agent ${name} is invalid, so it can't start\n\nRepair its entry under agents in ${homeDisplayPath(lookup.scope === "project" ? config.projectConfigPath : config.globalConfigPath)}, then reload. /subagents doctor lists the invalid fields.`,
         })
       : InvalidSubagentRequestError.make({
           code: "agent_unknown",

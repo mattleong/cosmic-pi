@@ -6,8 +6,10 @@ saves no child sessions, and never closes panes.
 ## Ownership and boundaries
 
 - [Extension](src/extension.ts) registers the command and the child's parent reference, and owns
-  the per-session runtime slot. It captures the model, thinking level, and parent session when the
-  command runs, and only notifies the session that issued the command.
+  the per-session runtime slot. The command uses the shared registration, so `/btw help` shows the
+  overview and opens nothing; any other text becomes the side question. It captures the model,
+  thinking level, and parent session when the command runs, and only notifies the session that
+  issued the command.
 - [BTW service](src/btw.ts) chooses the anchor pane and remembers, in memory only, the newest BTW
   pane so later panes stack beside it. Commands are serialized.
 - [Rex client](src/rex.ts) owns the CLI transport: fixed argument arrays, an allowlisted

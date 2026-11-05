@@ -13,7 +13,11 @@ import {
 describe("decodeSettingUpdate", () => {
   const decodeSetting = decodeSettingUpdate<{ compact: boolean }>([
     { id: "usage.enabled", decoder: BooleanFromJsonSchema },
-    { id: "usage.refreshIntervalMs", decoder: FiniteNumberFromJsonSchema },
+    {
+      id: "usage.refreshIntervalMs",
+      decoder: FiniteNumberFromJsonSchema,
+      rule: "must be a duration such as 30s or 2m",
+    },
     { id: "compact", decoder: BooleanFromJsonSchema },
   ]);
 
@@ -36,6 +40,14 @@ describe("decodeSettingUpdate", () => {
       const long = yield* Effect.flip(decodeSetting("compact", Str.repeat(449)("x")));
       expect(long.message).toMatch(/^compact /u);
       expect(long.message.length).toBeLessThan(60);
+    }),
+  );
+
+  it.effect("states a descriptor's own rule when it rejects a value", () =>
+    Effect.gen(function* () {
+      const rejected = yield* Effect.flip(decodeSetting("usage.refreshIntervalMs", "abc"));
+      expect(rejected.message).toMatch(/^usage\.refreshIntervalMs /u);
+      expect(rejected.message).toContain("must be a duration such as 30s or 2m");
     }),
   );
 });

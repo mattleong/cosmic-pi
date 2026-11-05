@@ -136,6 +136,11 @@ export interface SettingsOptionDescriptor<Config = unknown> {
   readonly description: string;
   readonly values?: readonly string[] | undefined;
   readonly decoder: Schema.Decoder<boolean | number | string>;
+  /**
+   * What a free-form value must be, phrased to follow the setting's name, such as
+   * `must be a duration such as 30s or 2m`. A rejected value states it in place of the generic wording.
+   */
+  readonly rule?: string | undefined;
   readonly currentValue: (config: Config) => string;
 }
 
@@ -143,7 +148,7 @@ export const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
 export const FiniteNumberFromJsonSchema = Schema.fromJsonString(Schema.Finite);
 
 export const decodeSettingUpdate = <Config>(
-  descriptors: ReadonlyArray<Pick<SettingsOptionDescriptor<Config>, "id" | "decoder">>,
+  descriptors: ReadonlyArray<Pick<SettingsOptionDescriptor<Config>, "id" | "decoder" | "rule">>,
 ) =>
   Effect.fn("Settings.decodeSettingUpdate")(function* (id: string, rawValue: string) {
     const descriptor = Option.getOrUndefined(
@@ -151,14 +156,13 @@ export const decodeSettingUpdate = <Config>(
     );
     if (!descriptor)
       return yield* InvalidSettingError.make({ id, message: `Unknown setting: ${id}` });
-    // Leads with the id so the settings shell can name the setting: `Label (id) can't be set to …`.
+    // Leads with the id so the settings shell can name the setting: `Label (id) <rule>`.
+    const rule =
+      descriptor.rule === undefined || Str.isEmpty(Str.trim(descriptor.rule))
+        ? `can't be set to ${clipText(Str.trim(rawValue), REJECTED_VALUE_COLUMNS)}`
+        : Str.trim(descriptor.rule);
     const parsedValue = yield* Schema.decodeEffect(descriptor.decoder)(rawValue).pipe(
-      Effect.mapError(() =>
-        InvalidSettingError.make({
-          id,
-          message: `${id} can't be set to ${clipText(Str.trim(rawValue), REJECTED_VALUE_COLUMNS)}`,
-        }),
-      ),
+      Effect.mapError(() => InvalidSettingError.make({ id, message: `${id} ${rule}` })),
     );
     const separator = Fn.pipe(id, Str.indexOf("."));
     if (Option.isNone(separator))

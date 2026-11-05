@@ -14,7 +14,7 @@ import type {
   SubagentWorkspaceOutcome,
 } from "../run/model.ts";
 import { indentQuestionLines, proposalGuidance } from "../tools/format.ts";
-import { completionNoticeRuns } from "../ui/notice-facts.ts";
+import { completionNoticeRuns, reportPartlySaved } from "../ui/notice-facts.ts";
 import { displayName, noticeName, noticeText, type NoticeDetails } from "../ui/notice-details.ts";
 import {
   formatRunBlocks,
@@ -180,7 +180,10 @@ export const completionNoticeDetails = (
   ids: Arr.map(runs, (run) => run.id),
   total: runs.length,
   failed: Arr.filter(runs, (run) => run.outcome === "failed").length,
-  warnings: Arr.filter(runs, (run) => Boolean(Str.trim(run.warning ?? ""))).length,
+  warnings: Arr.filter(
+    runs,
+    (run) => Boolean(Str.trim(run.warning ?? "")) || reportPartlySaved(run),
+  ).length,
   ...(runs.length === 1 && runs[0] !== undefined && { name: displayName(runs[0].name) }),
   runs: completionNoticeRuns(runs),
 });

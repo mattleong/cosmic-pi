@@ -23,6 +23,14 @@ const NonBlankStringSchema = Schema.String.check(
 );
 
 export const ON_OFF_VALUES = ["on", "off"] as const;
+export const ON_OFF_RULE = "must be on or off";
+const DURATION_RULE = "must be a duration such as 30s or 2m";
+/** `must be png, jpeg, or webp`: the rule for a setting that takes one of a few words. */
+const oneOfRule = (values: readonly string[]) => {
+  const [last = "", ...rest] = Arr.reverse(values);
+  if (rest.length === 0) return `must be ${last}`;
+  return `must be ${Arr.join(Arr.reverse(rest), ", ")}${rest.length > 1 ? "," : ""} or ${last}`;
+};
 export const formatOnOff = (value: boolean): string => (value ? "on" : "off");
 
 /** `on`/`off`, also accepting `true`/`false` and any letter case. */
@@ -73,6 +81,7 @@ export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolve
     values: ON_OFF_VALUES,
     description: "Keep fast mode on or off in new sessions.",
     decoder: OnOffSchema,
+    rule: ON_OFF_RULE,
   },
 ];
 export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
@@ -84,6 +93,7 @@ export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<R
     description:
       "Use OpenAI native compaction when Pi triggers compaction for OpenAI Responses models.",
     decoder: OnOffSchema,
+    rule: ON_OFF_RULE,
   },
 ];
 export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
@@ -94,6 +104,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
     values: ["15s", "30s", "1m", "2m", "5m", "10m"],
     description: "How often usage refreshes.",
     decoder: DurationMillisecondsSchema,
+    rule: DURATION_RULE,
   },
   {
     id: "usage.showOnlyOnSubscriptionModels",
@@ -102,6 +113,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
     values: ON_OFF_VALUES,
     description: "Show usage only when the current OpenAI model signs in with a subscription plan.",
     decoder: OnOffSchema,
+    rule: ON_OFF_RULE,
   },
   {
     id: "usage.showResetTimes",
@@ -110,6 +122,7 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
     values: ON_OFF_VALUES,
     description: "Show when each usage window resets.",
     decoder: OnOffSchema,
+    rule: ON_OFF_RULE,
   },
 ];
 const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
@@ -120,6 +133,7 @@ const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfi
     values: ON_OFF_VALUES,
     description: "Allow image requests from the openai_image tool and /openai image.",
     decoder: OnOffSchema,
+    rule: ON_OFF_RULE,
   },
   {
     id: "image.defaultModel",
@@ -127,6 +141,7 @@ const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfi
     currentValue: (cfg) => cfg.image.defaultModel,
     description: "Codex model that runs image requests when the current model isn't OpenAI Codex.",
     decoder: NonBlankStringSchema,
+    rule: "must name a model",
   },
   {
     id: "image.defaultSave",
@@ -135,6 +150,7 @@ const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfi
     values: IMAGE_SAVE_MODES,
     description: "Where generated images are saved by default.",
     decoder: ImageSaveModeSchema,
+    rule: oneOfRule(IMAGE_SAVE_MODES),
   },
   {
     id: "image.outputFormat",
@@ -143,6 +159,7 @@ const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfi
     values: IMAGE_OUTPUT_FORMATS,
     description: "Generated image file format.",
     decoder: ImageOutputFormatSchema,
+    rule: oneOfRule(IMAGE_OUTPUT_FORMATS),
   },
   {
     id: "image.timeoutMs",
@@ -151,6 +168,7 @@ const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfi
     values: ["30s", "1m", "2m", "3m", "5m"],
     description: "How long an image request may take.",
     decoder: DurationMillisecondsSchema,
+    rule: DURATION_RULE,
   },
 ];
 export const imageSettingDescriptors = (

@@ -328,7 +328,7 @@ function summarizeModels(
         code: `profile:${profile.id}:unavailable`,
         message: `${profile.id} profile has ${invalid ? "invalid settings" : "no eligible options"}`,
         detail: invalid
-          ? "Its configuration is invalid, so it fails closed. /subagents doctor lists the invalid fields."
+          ? "Its configuration is invalid, so it can't start until repaired. /subagents doctor lists the invalid fields."
           : unavailableRouteDetail(profile.candidates),
       });
     } else if (profile.candidates.length === 0) disabled++;
@@ -348,7 +348,7 @@ function summarizeModels(
       severity: "warning",
       code: "agents:invalid",
       message: "Some custom agents are invalid",
-      detail: `${countLabel(invalidAgents.length, "invalid agent entry", "invalid agent entries")} ${invalidAgents.length === 1 ? "fails" : "fail"} closed; /subagents doctor lists the invalid fields.`,
+      detail: `${countLabel(invalidAgents.length, "invalid agent entry", "invalid agent entries")} can't start until repaired; /subagents doctor lists the invalid fields.`,
     });
   const [only] = details.profiles;
   const single = only !== undefined && details.profiles.length === 1;

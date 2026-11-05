@@ -2,11 +2,11 @@ import type { Theme, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import { countLabel } from "pi-cosmic-core/display";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
-import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance, renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
 import { compactPlainText } from "../preview/compact-row";
 import { expandedArguments, expandedSection } from "../preview/expanded-section";
+import { previewHeadingText } from "../preview/heading-wrap";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { hostContainer, hostValue, type HostValue } from "../shared/untrusted-value";
 import { withCodePreviewRenderers } from "./cooperative-tools";
@@ -53,12 +53,10 @@ export function createNativeToolSearchRenderers(
     const body = new Container();
     body.addChild(
       safeContent(
-        () => ({
-          render: (width) => [
-            clipToWidth(renderToolHeader({ title: DISPLAY_NAME, subtitle: subject }, theme), width),
-          ],
-          invalidate() {},
-        }),
+        () =>
+          previewHeadingText(() =>
+            renderToolHeader({ title: DISPLAY_NAME, subtitle: subject }, theme),
+          ),
         plainRows(`${DISPLAY_NAME} ${subject}`, 1),
       ),
     );

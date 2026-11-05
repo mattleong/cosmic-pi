@@ -85,6 +85,19 @@ describe("registered extension command", () => {
     }),
   );
 
+  it.effect("keeps a free-text command's text that starts with help", () =>
+    Effect.gen(function* () {
+      const bare = vi.fn();
+      const h = harness({ bare: { handler: bare, text: true, description: "Ask a question" } });
+      yield* h.run("help me debug the login flow");
+      expect(bare).toHaveBeenCalledWith("help me debug the login flow", h.ctx);
+      expect(h.notify).not.toHaveBeenCalled();
+      yield* h.run("help");
+      expect(bare).toHaveBeenCalledTimes(1);
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("Ask a question"), "info");
+    }),
+  );
+
   it.effect("lets a command replace the built-in help", () =>
     Effect.gen(function* () {
       const help = subcommand("help");

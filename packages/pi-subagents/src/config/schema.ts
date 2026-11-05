@@ -380,7 +380,7 @@ const CustomAgentSchema = Schema.Struct({
     Schema.makeFilter((instructions: string) =>
       utf8.encode(instructions).length <= MAX_CUSTOM_AGENT_INSTRUCTIONS_BYTES
         ? true
-        : "Agent instructions exceed 128 KiB.",
+        : "Agent instructions exceed 128 KB.",
     ),
   ),
   profile: Schema.optionalKey(Schema.Literals(PROFILE_IDS)),

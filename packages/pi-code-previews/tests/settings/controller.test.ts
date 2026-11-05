@@ -23,6 +23,7 @@ import { codePreviewSettingsSubcommand } from "../../src/settings/controller";
 import { step } from "../support/effect-test";
 import { inertScheduler } from "../support/renderer-host";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 
 const inertCapability = (): CodePreviewSessionCapability => ({
   ...inertScheduler,
@@ -322,4 +323,31 @@ it.effect("settings edits wait until a session has loaded the settings they chan
     assert.equal(yield* fs.readFileString(file), overrides);
     assert.equal(notifications.length, 2);
   }).pipe(Effect.provide(nodeFilePlatformLayer)),
+);
+
+it.effect("a rejected free-form value states what the setting accepts", () =>
+  Effect.gen(function* () {
+    yield* isolatedSettings;
+    let saves = 0;
+    const panel = {
+      persistSettingsChange: () => {
+        saves++;
+        return Promise.resolve();
+      },
+      createCodePreviewSettingsModel: () => {
+        throw new Error("an assignment must not open the panel");
+      },
+    } satisfies typeof import("../../src/settings/panel");
+    const command = codePreviewSettingsSubcommand(() => Promise.resolve(panel));
+    const host = fakeCustomSurfaceHost();
+    const notifications: string[] = [];
+    const ctx = tuiContext(host, notifications);
+    yield* step(() => Promise.resolve(command.handler("shikiTheme not-a-theme", ctx)));
+    assert.equal(saves, 0);
+    assert.equal(codePreviewSettings.shikiTheme, defaultCodePreviewSettings.shikiTheme);
+    const [notice = ""] = notifications;
+    // The free-form theme names its rule rather than only repeating the rejected value.
+    assert.ok(Str.includes("shikiTheme")(notice), notice);
+    assert.ok(!Str.includes("not-a-theme")(notice), notice);
+  }),
 );

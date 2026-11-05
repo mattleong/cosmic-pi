@@ -166,6 +166,41 @@ const listedRow = (session: ListedSession, label: string, theme: Theme, expanded
   )}`;
 };
 
+/** Two columns past a fact row's hang, so a wrapped name never reads as its directory's row. */
+const NAME_HANGING = "    ";
+const FACT_HANGING = "  ";
+
+/**
+ * An expanded listed session: a name too long for its first row wraps hanging two columns past the
+ * facts' column, and its facts follow on the name's last row when they fit there.
+ */
+const expandedListedRows = (
+  session: ListedSession,
+  label: string,
+  theme: Theme,
+  width: number,
+): string[] => {
+  const glyph = theme.fg(STATE_GLYPH_COLORS[session.state], SESSION_STATE_GLYPHS[session.state]);
+  const name = `${glyph} ${theme.fg("toolOutput", label)}`;
+  if (visibleWidth(name) <= width)
+    return wrapFacts(listedRow(session, label, theme, true), width, FACT_HANGING);
+  const nameRows = wrapFacts(name, width, NAME_HANGING);
+  const factRows = Arr.map(
+    wrapFacts(
+      Arr.join(listedFacts(session, theme, true), theme.fg("dim", FACT_SEPARATOR)),
+      width - FACT_HANGING.length,
+      "",
+    ),
+    (row) => `${FACT_HANGING}${row}`,
+  );
+  const [lastName = ""] = nameRows.slice(-1);
+  const [firstFacts = ""] = factRows;
+  const joined = `${lastName}${theme.fg("dim", FACT_SEPARATOR)}${Str.trimStart(firstFacts)}`;
+  return visibleWidth(joined) <= width
+    ? [...nameRows.slice(0, -1), joined, ...factRows.slice(1)]
+    : [...nameRows, ...factRows];
+};
+
 /** A collapsed listed session on one row: a label too long for it ends at a word boundary first. */
 const collapsedListedRow = (
   session: ListedSession,
@@ -199,9 +234,8 @@ const listExpanded = (details: ListDetails, theme: Theme, compact: boolean): Com
   const rows = composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
     return [
-      // Rows wrap between whole facts, hanging beneath the label.
       ...Arr.flatMap(details.sessions, (session, index) =>
-        wrapFacts(listedRow(session, label(index), theme, true), width),
+        expandedListedRows(session, label(index), theme, width),
       ),
       ...(details.omitted > 0 ? [theme.fg("muted", `and ${details.omitted} more`)] : []),
     ];

@@ -80,15 +80,24 @@ const userWarning = (run: SubagentCompletionNotification): string | undefined =>
   run.userWarning ?? run.warning;
 
 /**
+ * A completed report too long for its file, which keeps only part of it. Tool rows warn about this,
+ * so a notice counts it as a warning too.
+ */
+export const reportPartlySaved = (run: SubagentCompletionNotification): boolean =>
+  run.outcome === "completed" && run.reportArchive?.complete === false;
+
+/**
  * Where the rest of a report shown only in part is: its saved file, or part of it there. Without a
- * file, either only the notice's copy was cut or only the start of the report was kept.
+ * file, either only the notice's copy was cut, so the agent can still read the retained report, or
+ * only the start of the report was kept.
  */
 const reportCutNote = (run: SubagentCompletionNotification): string => {
   const archive = run.reportArchive;
   if (archive?.complete === true) return "The rest of this report is in its saved file";
-  if (archive !== undefined) return "Its saved file holds more, but not all, of this report";
+  if (archive !== undefined)
+    return "Warning: Report too long to save in full; its saved file holds part of it";
   return run.finalTextTruncation === undefined
-    ? "Shown up to its display limit"
+    ? "Shown up to its display limit; your agent can read the rest with agent_read"
     : "Only the start of this report was kept";
 };
 

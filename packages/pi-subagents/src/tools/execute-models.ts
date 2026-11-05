@@ -73,7 +73,7 @@ const formatAgentDiscovery = (
         ...Arr.map(
           invalidAgents,
           (entry) =>
-            `${entry.name ?? "all agents"} · invalid ${entry.scope} configuration · fails closed`,
+            `${entry.name ?? "all agents"} · invalid ${entry.scope} configuration · can't start until repaired`,
         ),
       ];
 

@@ -24,6 +24,7 @@ import {
   TUI_KEYBINDINGS,
 } from "@earendil-works/pi-tui";
 import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
+import { BackgroundTaskConfigError } from "../src/config/store.ts";
 import { taskSettingsSubcommand } from "../src/settings/task-settings.ts";
 import { beforeAll, describe, it } from "@effect/vitest";
 import { initTheme } from "@earendil-works/pi-coding-agent";
@@ -935,6 +936,98 @@ const settingsNoticeLines = (): Effect.Effect<string[]> =>
     return lines;
   });
 
+// Pi leads a warning or error notice with its level, one column in, and wraps at the terminal edge.
+const noticeFrame = (level: "Warning" | "Error", message: string, width: number): string[] =>
+  Arr.flatMap(Str.split(` ${level}: ${message}`, "\n"), (line, index) => {
+    const indented = index === 0 ? line : ` ${line}`;
+    const rows: string[] = [];
+    for (let rest = indented; ; rest = Fn.pipe(rest, Str.slice(width))) {
+      rows.push(Fn.pipe(rest, Str.slice(0, width)));
+      if (rest.length <= width) return rows;
+    }
+  });
+
+/** A command-line change whose save failed, as each common cause reads in Pi's error notice. */
+const settingsSaveFailureLines = (): Effect.Effect<string[]> =>
+  Effect.gen(function* () {
+    const globalFile = `${homedir()}/.pi/agent/extensions/pi-background-task.json`;
+    const nodeError = (code: string, text: string) =>
+      Object.assign(new Error(`${code}: ${text}, open '${globalFile}'`), {
+        code,
+        path: globalFile,
+      });
+    const failures: ReadonlyArray<readonly [string, Error]> = [
+      [
+        "file can't be written",
+        BackgroundTaskConfigError.make({
+          operation: "write",
+          path: globalFile,
+          message: "Unable to write background tasks configuration.",
+        }),
+      ],
+      ["permission denied", nodeError("EACCES", "permission denied")],
+      ["read-only file system", nodeError("EROFS", "read-only file system")],
+      ["disk full", nodeError("ENOSPC", "no space left on device")],
+      ["folder missing", nodeError("ENOENT", "no such file or directory")],
+    ];
+    const lines: string[] = [];
+    for (const [title, failure] of failures) {
+      const notices: string[] = [];
+      const command = taskSettingsSubcommand({
+        config: () => DEFAULT_BACKGROUND_TASK_CONFIG,
+        captureAuthority: () => () => true,
+        read: () => Promise.resolve({}),
+        write: () => Promise.reject(failure),
+      });
+      const ctx = extensionContextFixture({
+        cwd: "/project",
+        mode: "rpc",
+        hasUI: true,
+        isProjectTrusted: () => true,
+        ui: { notify: (message: string) => void notices.push(message) },
+      });
+      yield* Effect.promise(() => Promise.resolve(command.handler("maxRunning 16", ctx)));
+      for (const width of [57, 100])
+        lines.push(
+          `── /tasks settings maxRunning 16 · save failed, ${title} · ${width} cols`,
+          ...Arr.flatMap(notices, (posted) => noticeFrame("Error", posted, width)),
+          "",
+        );
+    }
+    return lines;
+  });
+
+/** A path setting named without a value: the hint's placeholder matches the row's `<path>`. */
+const settingsMissingPathLines = (): Effect.Effect<string[]> =>
+  Effect.gen(function* () {
+    const notices: string[] = [];
+    const command = taskSettingsSubcommand({
+      config: () => DEFAULT_BACKGROUND_TASK_CONFIG,
+      captureAuthority: () => () => true,
+      read: () => Promise.resolve({}),
+      write: () => Promise.resolve(),
+    });
+    const ctx = extensionContextFixture({
+      cwd: "/project",
+      mode: "rpc",
+      hasUI: true,
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => void notices.push(message) },
+    });
+    const lines: string[] = [];
+    for (const args of ["shellPath", "project shellPath"]) {
+      notices.length = 0;
+      yield* Effect.promise(() => Promise.resolve(command.handler(args, ctx)));
+      for (const width of [57, 100])
+        lines.push(
+          `── /tasks settings ${args} · missing value · ${width} cols`,
+          ...Arr.flatMap(notices, (posted) => noticeFrame("Warning", posted, width)),
+          "",
+        );
+    }
+    return lines;
+  });
+
 const directory = galleryDirectory(process.env) ?? "";
 
 const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
@@ -1029,6 +1122,8 @@ describe.skipIf(!directory)("presentation gallery", () => {
           pending: true,
         })),
         ...(yield* settingsNoticeLines()),
+        ...(yield* settingsSaveFailureLines()),
+        ...(yield* settingsMissingPathLines()),
         ...(yield* settingsLines(
           (location) => Promise.resolve(location.scope === "global" ? { enabled: false } : {}),
           { prefix: "tasks off globally · " },

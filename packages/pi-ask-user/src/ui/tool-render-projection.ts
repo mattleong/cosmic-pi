@@ -321,7 +321,14 @@ export const stateWords = (state: QuestionnaireState): readonly string[] => [STA
  * Alternatives, widest first: every state's count, then the most pressing state among them all
  * (`1 of 3 needs your input`), so a narrow row keeps that state's words before only a total.
  */
-export function stateCounts(states: readonly QuestionnaireState[]): readonly string[] {
+/**
+ * Each state's count, longest first. A `partial` list covers only some of a call's questionnaires,
+ * so its shorter forms never total it: `1 needs your input`, not `1 of 4 needs your input`.
+ */
+export function stateCounts(
+  states: readonly QuestionnaireState[],
+  partial = false,
+): readonly string[] {
   if (states.length === 0) return ["no questionnaires", "none"];
   const counted = Arr.filterMap(STATE_ORDER, (state) => {
     const count = Arr.filter(states, (entry) => entry === state).length;
@@ -331,6 +338,7 @@ export function stateCounts(states: readonly QuestionnaireState[]): readonly str
   });
   const wording = joinInline(Arr.map(counted, ([count, word]) => `${count} ${word}`));
   const [first, ...others] = counted;
+  if (partial) return [...new Set([wording, ...(first ? [`${first[0]} ${first[1]}`] : [])])];
   const pressing =
     first && others.length > 0 ? [`${first[0]} of ${states.length} ${first[1]}`] : [];
   return [...new Set([wording, ...pressing, countLabel(states.length, "questionnaire")])];
