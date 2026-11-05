@@ -11,7 +11,7 @@ import * as Sse from "effect/encoding/Sse";
 import { sanitizeDiagnosticError } from "pi-cosmic-core/security";
 import { type StreamingHttpError } from "pi-cosmic-core/platform/errors";
 import { decodeImageStreamEvent } from "./protocol.ts";
-import { fail, type ExtractedImageResult, type OpenAIImageError } from "./types.ts";
+import { generationFailure, type ExtractedImageResult, type OpenAIImageError } from "./types.ts";
 
 const MAX_IMAGE_RESPONSE_BYTES = 100 * 1024 * 1024;
 const MAX_SSE_EVENT_CHARS = 80 * 1024 * 1024;
@@ -70,11 +70,11 @@ export const httpFailure = Effect.fn("OpenAIImage.httpFailure")(function* (
     Effect.orElseSucceed(() => ""),
   );
   const reason = errorBodyReason(text);
-  return yield* fail(
+  return yield* generationFailure(
     "request",
     reason
-      ? `Codex image request failed (${status}): ${sanitizeDiagnosticError(reason)}`
-      : `Codex image request failed (${status}).`,
+      ? `${Str.replace(/\.$/u, "")(sanitizeDiagnosticError(reason))} (HTTP ${status}).`
+      : `OpenAI returned HTTP ${status}.`,
   );
 });
 
@@ -104,10 +104,10 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
       return false;
     }
     const rawEvent = yield* decodeSseJson(data).pipe(
-      Effect.mapError(() => fail("stream", "Codex image response contained malformed JSON.")),
+      Effect.mapError(() => generationFailure("stream", "OpenAI sent malformed JSON.")),
     );
     const event = yield* decodeImageStreamEvent(rawEvent, fallbackId).pipe(
-      Effect.mapError(() => fail("stream", "Codex image response contained a malformed event.")),
+      Effect.mapError(() => generationFailure("stream", "OpenAI sent a malformed event.")),
     );
     return Match.valueTags(event, {
       Image: ({ image }) => {
@@ -122,14 +122,11 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
         return true;
       },
       ResponseFailed: ({ message }) => {
-        providerFailure = fail("response", sanitizeDiagnosticError(message));
+        providerFailure = generationFailure("response", sanitizeDiagnosticError(message));
         return false;
       },
       ProviderError: ({ message }) => {
-        providerFailure = fail(
-          "response",
-          `Codex image error: ${sanitizeDiagnosticError(message)}`,
-        );
+        providerFailure = generationFailure("response", sanitizeDiagnosticError(message));
         return false;
       },
       Ignored: () => true,
@@ -146,7 +143,8 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
 
   const feed = Effect.fn("OpenAIImage.feedSseParser")(function* (chunk: string) {
     const parserError = parser.feed(chunk);
-    if (parserError) return yield* fail("stream", "Codex image response event was too large.");
+    if (parserError)
+      return yield* generationFailure("stream", "OpenAI sent an event that was too large.");
     return yield* drainEvents();
   });
 
@@ -154,7 +152,7 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
     Stream.mapEffect((bytes) => {
       totalBytes += bytes.byteLength;
       return totalBytes > MAX_IMAGE_RESPONSE_BYTES
-        ? Effect.fail(fail("stream", "Codex image response was too large."))
+        ? Effect.fail(generationFailure("stream", "OpenAI's response was too large."))
         : Effect.succeed(bytes);
     }),
     Stream.decodeText,
@@ -162,12 +160,12 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   yield* bounded.pipe(
     Stream.runForEachWhile(feed),
     Effect.catchTag("StreamingHttpError", () =>
-      Effect.fail(fail("stream", "Codex image response stream failed.")),
+      Effect.fail(generationFailure("stream", "OpenAI's response broke off.")),
     ),
   );
   if (!completed && !providerFailure && !terminated) yield* feed("\n\n");
   if (completed) return completed;
   if (providerFailure) return yield* providerFailure;
-  if (imageFailed) return yield* fail("response", "Codex image generation failed.");
-  return yield* fail("stream", "No completed image_generation_call result returned by Codex.");
+  if (imageFailed) return yield* generationFailure("response", "OpenAI gave no reason.");
+  return yield* generationFailure("stream", "OpenAI returned no completed image.");
 });

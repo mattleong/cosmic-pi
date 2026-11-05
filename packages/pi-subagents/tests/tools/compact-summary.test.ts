@@ -268,7 +268,7 @@ describe("await outcomes", () => {
     expect(noted).not.toBe(endedNote);
 
     // A pause that arrived with the message ended the wait, so the message is only noted. The
-    // pause is a held state, so the wait returned rather than warned.
+    // pause is a held state, so the wait settled as paused rather than warned.
     const paused = view({ id: "agent-1", state: "paused" });
     const attention = summarize(
       "await",
@@ -280,7 +280,7 @@ describe("await outcomes", () => {
       "settled",
       { runIds: [paused.id] },
     );
-    expect(attention?.outcome).toBe("returned");
+    expect(attention?.outcome).toBe("paused");
     expect(agentMessageNote(attention?.issues)).toBe(noted);
 
     // The only projected target finished, but a requested one without a card hadn't.
@@ -340,7 +340,7 @@ describe("waiting and held runs", () => {
 
   it("shows a paused run as a held state without a problem", () => {
     const awaited = awaitOf(paused);
-    expect(awaited?.outcome).toBe("returned");
+    expect(awaited?.outcome).toBe("paused");
     expect(severities(awaited?.issues)).not.toContain("warning");
     expect(severities(awaited?.issues)).not.toContain("attention");
     const interrupted = summarize(

@@ -129,7 +129,7 @@ export function openOpenAISettingsMenu(
             {
               id: "section.fast",
               label: "Fast mode",
-              description: "Configure OpenAI fast mode and persistence.",
+              description: "Request priority processing on OpenAI models, and remember the choice.",
               submenuTitle: "Fast mode settings",
               items: () =>
                 settingsItemsFromDescriptors(
@@ -150,7 +150,7 @@ export function openOpenAISettingsMenu(
               id: "section.usage",
               label: "Usage",
               description:
-                "Configure usage refresh details. Footer visibility is in /cosmic-ui settings.",
+                "How subscription usage refreshes. Footer visibility is in /cosmic-ui settings.",
               submenuTitle: "Usage settings",
               items: () => settingsItemsFromDescriptors(USAGE_SETTING_DESCRIPTORS, cfg),
               summary: () => `refresh every ${formatDuration(cfg.usage.refreshIntervalMs)}`,
@@ -158,7 +158,7 @@ export function openOpenAISettingsMenu(
             {
               id: "section.image",
               label: "Image tool",
-              description: "Configure OpenAI image generation defaults.",
+              description: "Defaults for the openai_image tool and /openai image.",
               submenuTitle: "Image tool settings",
               items: () => settingsItemsFromDescriptors(imageDescriptors, cfg),
               summary: () =>
@@ -187,6 +187,7 @@ export function openOpenAISettingsMenu(
                 submenu: (_value, complete) =>
                   createSettingsGroupSubmenu({
                     title: group.submenuTitle,
+                    description: group.description,
                     items: group.items,
                     onChange: writeSetting,
                     done: complete,

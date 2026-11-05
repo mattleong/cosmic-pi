@@ -19,6 +19,7 @@ import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { isOwnedAgentTool } from "../tools/activity-preview.ts";
 import { type RunNameLookup, waitingOn } from "./run-live-activity.ts";
 import { isTextFragment } from "../tools/text-fragments.ts";
+import { WRITER_WORKSPACE_LABELS } from "./run-facts.ts";
 
 const RECENT_EVENTS = 12;
 
@@ -169,7 +170,7 @@ const technical = (run: SubagentRunView): ActivityDetailField[] =>
       { label: "Writes", value: run.writeIntent },
       {
         label: "Workspace",
-        value: `${run.writerWorkspaceMode ?? "shared-checkout"}${run.workspaceId ? ` · ${run.workspaceId}` : ""}`,
+        value: `${WRITER_WORKSPACE_LABELS[run.writerWorkspaceMode ?? "shared-checkout"]}${run.workspaceId ? ` · ${run.workspaceId}` : ""}`,
       },
       { label: "Session", value: run.sessionFile ?? "" },
       {

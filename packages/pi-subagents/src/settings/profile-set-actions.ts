@@ -81,16 +81,18 @@ const startActionRun = (host: ProfileSetActionHost): ActionRun => {
 
 const saveSession = ({ host, inspection, guard, finish }: ActionRun): Promise<void> => {
   if (invalidSession(inspection))
-    throw new Error("Fix or disable invalid Current Session profiles before saving a set.");
+    throw new Error("Fix or disable invalid profiles in the current session before saving a set.");
   return host.save().then((destination) => {
     guard();
     if (!destination) return undefined;
     return host.refresh().then((latest) => {
       guard(destination.scope);
       if (latest.session.revision !== inspection.session.revision)
-        throw new Error("Current Session changed. Review the profiles and save again.");
+        throw new Error("Current session changed. Review the profiles and save again.");
       if (invalidSession(latest))
-        throw new Error("Fix or disable invalid Current Session profiles before saving a set.");
+        throw new Error(
+          "Fix or disable invalid profiles in the current session before saving a set.",
+        );
       return host.actions
         .createProfileSetFromSnapshot({
           ...profileSetPatchBase(latest, destination.scope, host.trusted()),
@@ -99,7 +101,7 @@ const saveSession = ({ host, inspection, guard, finish }: ActionRun): Promise<vo
         })
         .then(() =>
           finish(
-            `Saved Current Session as ${destination.scope}/${destination.name}. Default unchanged.`,
+            `Saved the current session as ${destination.scope}/${destination.name}. Default unchanged.`,
           ),
         );
     });
@@ -134,7 +136,7 @@ const useSet = (
     );
     return host
       .confirm(
-        `Use ${scope}/${action.target.name} in Current Session?`,
+        `Use ${scope}/${action.target.name} in the current session?`,
         `Replace all seven profiles. Active runs stay unchanged. Later edits remain separate.\n\n${preview}`,
       )
       .then((confirmed) => {
@@ -149,7 +151,7 @@ const useSet = (
           })
           .then((snapshot) =>
             finish(
-              `Copied ${scope}/${action.target.name} into Current Session. Active runs unchanged.`,
+              `Copied ${scope}/${action.target.name} into the current session. Active runs unchanged.`,
               (latest) => host.used({ ...latest, session: snapshot }, latest),
             ),
           );
@@ -162,7 +164,7 @@ const useSet = (
       throw new Error("Fix this invalid saved set before making it default.");
     return host.actions
       .patchDefaultProfileSet({ ...base(), defaultProfileSet: action.target.name })
-      .then(() => finish(`Default updated for ${scope}. Current Session unchanged.`));
+      .then(() => finish(`Default updated for ${scope}. Current session unchanged.`));
   });
 };
 
@@ -182,11 +184,11 @@ const nameSet = (
       if (action.action === "copy")
         return host.actions
           .copyProfileSet({ ...base(), sourceProfileSet: source.name, profileSet: name })
-          .then(() => finish(`Created ${scope}/${name}. Current Session unchanged.`));
+          .then(() => finish(`Created ${scope}/${name}. Current session unchanged.`));
       return host.actions
         .renameProfileSet({ ...base(), profileSet: source.name, nextProfileSet: name })
         .then(() =>
-          finish(`Renamed ${scope}/${name}. Current Session unchanged.`, (latest) =>
+          finish(`Renamed ${scope}/${name}. Current session unchanged.`, (latest) =>
             host.renamed(
               { kind: "profile-set", set: source },
               { kind: "profile-set", set: { ...source, name } },
@@ -204,7 +206,7 @@ const deleteSet = (
   host
     .confirm(
       `Delete ${scope}/${action.target.name}?`,
-      "This deletes the saved set. Current Session will not change.",
+      "This deletes the saved set. Current session will not change.",
     )
     .then((confirmed) => {
       guard(scope);
@@ -217,7 +219,7 @@ const deleteSet = (
         .then(() => {
           guard();
           host.deleted({ kind: "profile-set", set: action.target });
-          return finish(`Deleted ${scope}/${action.target.name}. Current Session unchanged.`);
+          return finish(`Deleted ${scope}/${action.target.name}. Current session unchanged.`);
         });
     });
 
@@ -251,7 +253,7 @@ const runPersistentAction = (run: ActionRun, action: PersistentAction): Promise<
     case "clear-scope-default":
       return run.host.actions
         .patchDefaultProfileSet(scoped.base())
-        .then(() => run.finish(`${scope} default cleared. Current Session unchanged.`));
+        .then(() => run.finish(`${scope} default cleared. Current session unchanged.`));
     case "copy":
     case "rename":
       return nameSet(scoped, action);

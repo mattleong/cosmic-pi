@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core";
+import { countLabel } from "pi-cosmic-core/display";
 import {
   extensionContextFixture,
   galleryDirectory,
@@ -24,16 +25,29 @@ import { activitySectionId } from "../src/activity/grouped-tree.ts";
 import { sharedSurfaceGalleryLines } from "./support/gallery-shared-surfaces.ts";
 
 const directory = galleryDirectory(process.env) ?? "";
-const stop = {
+// The words and models real producers publish: subagents name the item they stop and count the
+// active subagents beneath it.
+const stopAgent = (title: string, activeSubagents: number) => ({
   id: "stop",
-  label: "Stop agent",
-  confirmation: "Stop this agent and its subagents?",
-};
+  label: "Stop",
+  confirmation:
+    activeSubagents > 0
+      ? `Stop "${title}" and its ${countLabel(activeSubagents, "subagent")}?`
+      : `Stop "${title}"?`,
+});
 const stopQueued = [{ id: "stop", label: "Stop" }];
+const routes = {
+  planner: { model: "claude-bridge/claude-opus-5-5", modelDetail: "high" },
+  reviewer: { model: "openai-codex/gpt-6-sol", modelDetail: "high" },
+  scout: { model: "openai-codex/gpt-6-luna", modelDetail: "low" },
+  worker: { model: "opencode/gpt-6.1-sol", modelDetail: "xhigh" },
+  researcher: { model: "claude-bridge/claude-sonnet-5-5", modelDetail: "medium" },
+} as const;
+const agent = (profile: keyof typeof routes) => ({ profile, ...routes[profile] });
 const standalone = [
   activityRow("docs", "running", undefined, {
     title: "Update documentation",
-    profile: "worker",
+    ...agent("worker"),
     startedAt: 0,
   }),
   activityRow("server", "running", undefined, {
@@ -44,22 +58,21 @@ const standalone = [
 ];
 const review = activityRow("review", "running", undefined, {
   title: "Review authentication",
-  profile: "planner",
+  ...agent("planner"),
   summary: "Found 5 call sites; reviewing each one for token reuse",
-  detail: 'Args: { "scope": "src/auth" }\nfound 4 risky call sites',
   startedAt: 0,
-  actions: [stop],
+  actions: [stopAgent("Review authentication", 5)],
 });
 const found = memberRow("finder", review, "done", {
   title: "Find call sites",
-  profile: "scout",
+  ...agent("scout"),
   startedAt: 0,
   endedAt: 30_000,
 });
 const reviewers = Arr.map(["Session handling", "Token refresh"], (title, index) =>
   memberRow(`reviewer-${index}`, review, "running", {
     title,
-    profile: "reviewer",
+    ...agent("reviewer"),
     startedAt: 35_000,
     actions: [{ id: "stop", label: "Stop" }],
   }),
@@ -67,14 +80,14 @@ const reviewers = Arr.map(["Session handling", "Token refresh"], (title, index) 
 const queued = Arr.map(["Password reset", "OAuth callback", "Rate limits"], (title, index) =>
   memberRow(`queued-${index}`, review, "pending", {
     title,
-    profile: "reviewer",
+    ...agent("reviewer"),
     actions: stopQueued,
   }),
 );
 const running: readonly ActivityRow[] = [review, found, ...reviewers, ...queued];
 const stopped = activityRow("stopped", "cancelled", undefined, {
   title: "Migrate settings store",
-  profile: "planner",
+  ...agent("planner"),
   startedAt: 0,
   endedAt: 70_000,
 });
@@ -82,83 +95,83 @@ const stoppedRows: readonly ActivityRow[] = [
   stopped,
   memberRow("planner", stopped, "done", {
     title: "Draft migration plan",
-    profile: "planner",
+    ...agent("planner"),
     startedAt: 0,
     endedAt: 20_000,
   }),
   memberRow("implementer", stopped, "cancelled", {
     title: "Rewrite store",
-    profile: "worker",
+    ...agent("worker"),
     startedAt: 25_000,
     endedAt: 70_000,
   }),
   memberRow("queued-verify", stopped, "cancelled", {
     title: "Port callers",
-    profile: "worker",
+    ...agent("worker"),
   }),
 ];
 const failing = activityRow("failing", "running", undefined, {
   title: "Release candidate",
-  profile: "planner",
+  ...agent("planner"),
   startedAt: 0,
-  actions: [stop],
+  actions: [stopAgent("Release candidate", 1)],
 });
 const failingRows: readonly ActivityRow[] = [
   failing,
   memberRow("build", failing, "done", {
     title: "Build packages",
-    profile: "worker",
+    ...agent("worker"),
     startedAt: 0,
     endedAt: 50_000,
   }),
   memberRow("unit", failing, "failed", {
     title: "Unit tests",
-    profile: "worker",
+    ...agent("worker"),
     summary: "3 assertions failed in session.test.ts",
     startedAt: 52_000,
     endedAt: 80_000,
   }),
   memberRow("e2e", failing, "running", {
     title: "End-to-end tests",
-    profile: "worker",
+    ...agent("worker"),
     startedAt: 52_000,
   }),
 ];
 const lengthy = activityRow("lengthy", "running", undefined, {
   title: "Migrate every billing service to the consolidated settings schema",
-  profile: "planner",
+  ...agent("planner"),
   startedAt: 0,
-  actions: [stop],
+  actions: [stopAgent("Migrate every billing service to the consolidated settings schema", 2)],
 });
 const lengthyRows: readonly ActivityRow[] = [
   lengthy,
   memberRow("lengthy-inventory", lengthy, "done", {
     title: "Inventory billing services",
-    profile: "scout",
+    ...agent("scout"),
     startedAt: 0,
     endedAt: 30_000,
   }),
   memberRow("lengthy-invoices", lengthy, "blocked", {
     title: "Migrate invoices",
-    profile: "worker",
+    ...agent("worker"),
     blockedReason: "write-containment",
     startedAt: 32_000,
   }),
   memberRow("lengthy-refunds", lengthy, "running", {
     title: "Migrate refunds",
-    profile: "worker",
+    ...agent("worker"),
     startedAt: 32_000,
   }),
 ];
 const fanout = activityRow("fanout", "running", undefined, {
   title: "Ad-hoc fan-out",
-  profile: "planner",
+  ...agent("planner"),
   startedAt: 0,
-  actions: [stop],
+  actions: [stopAgent("Ad-hoc fan-out", 2)],
 });
 const asking = memberRow("asking", fanout, "needs-input", {
   title: "Choose a library",
-  profile: "researcher",
+  ...agent("researcher"),
   startedAt: 10_000,
   inputTarget: "parent",
 });
@@ -167,7 +180,7 @@ const fanoutRows: readonly ActivityRow[] = [
   asking,
   memberRow("fanout-worker", fanout, "running", {
     title: "Benchmark options",
-    profile: "worker",
+    ...agent("worker"),
     startedAt: 10_000,
   }),
   activityRow("human", "needs-input", asking.id, {
@@ -256,7 +269,7 @@ const managerFrames = (rows: readonly ActivityRow[], tiers: boolean) => {
 
 const steered = activityRow("steered", "running", undefined, {
   title: "Refactor billing client",
-  profile: "worker",
+  ...agent("worker"),
   startedAt: 0,
   actions: [
     { id: "stop", label: "Stop" },
@@ -352,7 +365,7 @@ const flaky = activityRow("flaky", "failed", undefined, {
 });
 const checker = activityRow("checker", "done", undefined, {
   title: "Check tests",
-  profile: "scout",
+  ...agent("scout"),
   model: "openai-codex/gpt-6-sol",
   modelDetail: "low (override)",
   startedAt: 0,
@@ -368,7 +381,7 @@ const taskDetails = {
     technical: [
       { label: "ID", value: "task-2d9mk1xp82" },
       { label: "PID", value: "30502" },
-      { label: "Started", value: "Nov 3, 10:59:31 PM" },
+      { label: "Started", value: "Nov 3, 10:59 PM" },
       { label: "Directory", value: "/private/tmp/ui-review/sandbox" },
       { label: "Log cursor", value: "30" },
     ],
@@ -385,8 +398,8 @@ const taskDetails = {
     technical: [
       { label: "ID", value: "task-7q1c0aa1zz" },
       { label: "Exit", value: "code 2 (misuse of shell builtins) · signal none" },
-      { label: "Started", value: "Nov 3, 10:59:20 PM" },
-      { label: "Ended", value: "Nov 3, 10:59:26 PM" },
+      { label: "Started", value: "Nov 3, 10:59 PM" },
+      { label: "Ended", value: "Nov 3, 10:59 PM" },
     ],
   },
   checker: {
@@ -398,7 +411,7 @@ const taskDetails = {
       },
       { title: "Task", body: "Read src/cart.test.ts and list the tested functions." },
       { title: "Recent activity", body: "bash · sleep 25 · done\nread · src/cart.test.ts · done" },
-      { body: "gpt-6-sol (low) · 22k tokens (125 output) · ~$0.02 · 2 tool uses" },
+      { body: "22k tokens (125 output) · ~$0.02 · 2 tool uses" },
     ],
     technical: [
       { label: "ID", value: "agent-25fzx71b0s" },
@@ -499,7 +512,7 @@ const liveServer = activityRow("live-server", "running", undefined, {
 const liveAgents = [
   activityRow("live-checker", "running", undefined, {
     title: "Check tests",
-    profile: "scout",
+    ...agent("scout"),
     model: "openai-codex/gpt-6-luna",
     modelDetail: "high ⚡",
     startedAt: 80_000,
@@ -507,7 +520,7 @@ const liveAgents = [
   }),
   activityRow("live-mapper", "running", undefined, {
     title: "Map cart module",
-    profile: "reviewer",
+    ...agent("reviewer"),
     model: "claude-bridge/claude-opus-5-5",
     modelDetail: "high",
     startedAt: 80_000,
@@ -515,7 +528,7 @@ const liveAgents = [
   }),
   activityRow("live-fallback", "running", undefined, {
     title: "Read tests",
-    profile: "scout",
+    ...agent("scout"),
     model: "openai-codex/gpt-6-sol",
     modelDetail: "high (fallback)",
     startedAt: 84_000,
@@ -523,7 +536,7 @@ const liveAgents = [
   }),
   activityRow("live-override", "running", undefined, {
     title: "Fix login",
-    profile: "worker",
+    ...agent("worker"),
     model: "opencode/gpt-6.1-sol",
     modelDetail: "xhigh (override)",
     startedAt: 86_000,
@@ -622,6 +635,83 @@ const attentionFrames = () => {
   ];
 };
 
+// Long models under nested branches: a row that can't keep its whole `provider/model` beside a
+// readable title moves the identity to a second line instead of cutting the model.
+const audit = activityRow("audit", "running", undefined, {
+  title: "Audit the payment retry pipeline",
+  ...agent("researcher"),
+  startedAt: 0,
+  actions: [stopAgent("Audit the payment retry pipeline", 2)],
+});
+const auditLead = memberRow("audit-lead", audit, "running", {
+  title: "Compare idempotency keys",
+  ...agent("researcher"),
+  startedAt: 20_000,
+});
+const nestedModelRows: readonly ActivityRow[] = [
+  audit,
+  auditLead,
+  activityRow("audit-leaf", "running", auditLead.id, {
+    title: "Trace webhook replays",
+    ...agent("planner"),
+    startedAt: 40_000,
+  }),
+  memberRow("audit-docs", audit, "done", {
+    title: "api-audit",
+    ...agent("researcher"),
+    startedAt: 0,
+    endedAt: 50_000,
+  }),
+];
+
+const edgeFrames = () => {
+  const lines: string[] = [];
+  const capture = (label: string, frame: readonly string[]) =>
+    lines.push(`── ${label}`, ...frame, "");
+  for (const width of [57, 100, 140])
+    capture(
+      `Nested long models · manager · ${width} cols`,
+      manager(nestedModelRows, 12).render(width),
+    );
+  for (const width of [57, 100])
+    capture(
+      `Nested long models · widget · ${width} cols`,
+      renderActivityWidget(nestedModelRows, width, 8, { now: 90_000, theme: plainTheme }),
+    );
+  const deep = manager(nestedModelRows, 12);
+  deep.render(57);
+  select(deep, activityKeyOf(nestedModelRows, "audit-leaf"), 6);
+  capture("Nested long models · wrapped row focused · 57 cols", deep.render(57));
+  for (const width of [57, 140]) {
+    const empty = manager([], 10);
+    capture(`Empty Activity · ${width} cols`, empty.render(width));
+    empty.handleInput("?");
+    capture(`Empty Activity · expanded help · ${width} cols`, empty.render(width));
+  }
+  for (const width of [57, 140]) {
+    const confirming = manager(running, 10);
+    confirming.render(width);
+    confirming.handleInput("x");
+    capture(`Stop confirmation · ${width} cols`, confirming.render(width));
+  }
+  for (const width of [57, 140]) {
+    const helped = manager(running, 16);
+    helped.render(width);
+    helped.handleInput("?");
+    capture(`Expanded help in the list · ${width} cols`, helped.render(width));
+  }
+  return lines;
+};
+
+const activityKeyOf = (rows: readonly ActivityRow[], id: string): string =>
+  Option.getOrElse(
+    Option.map(
+      Arr.findFirst(rows, (row) => row.id === id),
+      (row) => row.key,
+    ),
+    () => id,
+  );
+
 const ignoreTick = () => {};
 
 const workingFrames = () => {
@@ -698,7 +788,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       }
       for (const [title, rows, key] of footerScenarios)
         lines.push(`── Footer · ${title}`, ...footerFrames(rows, key), "");
-      lines.push(...detailFrames(), ...liveFrames(), ...attentionFrames());
+      lines.push(...detailFrames(), ...liveFrames(), ...attentionFrames(), ...edgeFrames());
       lines.push(...workingFrames());
       lines.push(...sharedSurfaceGalleryLines());
       yield* writeGallerySection(

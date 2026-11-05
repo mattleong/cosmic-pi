@@ -87,9 +87,9 @@ export const profileWorkspaceConfirmation = (input: {
   detail:
     input.candidateCount === 1
       ? input.scope === "session"
-        ? "This disables the profile for new runs in Current Session. Active runs do not change."
-        : "This disables the profile in this saved set. Current Session does not change."
+        ? "This disables the profile for new runs in the current session. Active runs do not change."
+        : "This disables the profile in this saved set. Current session does not change."
       : input.scope === "session"
-        ? "This removes the selected choice for new runs in Current Session. The remaining choices keep their order. Active runs do not change."
-        : "This removes the selected choice from this saved set. The remaining choices keep their order. Current Session does not change.",
+        ? "This removes the selected choice for new runs in the current session. The remaining choices keep their order. Active runs do not change."
+        : "This removes the selected choice from this saved set. The remaining choices keep their order. Current session does not change.",
 });

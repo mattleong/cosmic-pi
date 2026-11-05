@@ -6,7 +6,7 @@ Shared, responsive UI for Pi: a composable footer, a unified Activity view for s
 
 - **Custom footer** combining location, Git branch and pull request, session, tokens, context, model, and thinking level with contributions from other extensions such as OpenAI usage.
 - **Responsive layout** with density, ordering, and per-item visibility settings.
-- **Working indicator** with elapsed time, a current-call estimate (`~18.4 tok/s`), or a reported completed-call average (`24.1 tok/s`).
+- **Working indicator** with elapsed time, a current-call estimate (`~18 tokens/s`), or a reported completed-call average (`24 tokens/s`). Rates below 10 keep one decimal (`~7.4 tokens/s`).
 - **Activity view** that shows subagents, background tasks, and questions in one place, as a compact live panel above the editor and a full-screen manager.
 - **Shared manager chrome** for other extensions: Vim-style navigation, list/detail layouts, status glyphs, settings commands, and full-screen surfaces.
 
@@ -31,7 +31,7 @@ Other Cosmic Pi extensions detect it automatically. Without it, they fall back t
 
 Pull-request numbers open the URL reported by `gh` in terminals that support OSC 8 hyperlinks. Other terminals display the same plain text.
 
-### What tok/s measures
+### What tokens/s measures
 
 The row uses `~` for estimates, with no extra live/completed labels.
 

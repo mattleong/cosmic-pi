@@ -60,6 +60,7 @@ export type ImageStreamEvent = Data.TaggedEnum<{
 export const ImageStreamEvent = Data.taggedEnum<ImageStreamEvent>();
 
 const ignoredEvent = ImageStreamEvent.Ignored();
+const NO_REASON = "OpenAI gave no reason.";
 
 const imageData = (value: string) =>
   Str.trim(/^data:[^;,]+;base64,(.*)$/s.exec(value)?.[1] ?? value);
@@ -99,13 +100,13 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
   if (discriminant.type === "response.failed") {
     const event = yield* Schema.decodeUnknownEffect(FailedEventSchema)(value);
     return ImageStreamEvent.ResponseFailed({
-      message: event.response.error?.message ?? "Codex image request failed.",
+      message: event.response.error?.message ?? NO_REASON,
     });
   }
   if (discriminant.type === "error") {
     const event = yield* Schema.decodeUnknownEffect(ProviderErrorEventSchema)(value);
     return ImageStreamEvent.ProviderError({
-      message: event.message ?? "Codex image request failed.",
+      message: event.message ?? NO_REASON,
     });
   }
   if (

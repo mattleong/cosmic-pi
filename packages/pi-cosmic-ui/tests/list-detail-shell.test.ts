@@ -1,4 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Arr from "effect/Array";
+import { listWindowByHeight } from "../src/manager/list-detail.ts";
 import { ListDetailShell } from "../src/manager/list-detail-shell.ts";
 
 describe("ListDetailShell selection", () => {
@@ -32,5 +34,24 @@ describe("ListDetailShell selection", () => {
     expect(shell.detailWindow(lines, 40, "top").visible[0]).toBe("line 0");
     expect(shell.detailWindow(lines, 40, false).visible[0]).toBe("line 0");
     expect(shell.detailWindow(lines, 12, false).visible[0]).toBe("line 0");
+  });
+});
+
+describe("list windows over rows of different heights", () => {
+  it("keeps the selected row whole and within the line budget wherever it sits", () => {
+    const heights = [1, 2, 1, 2, 2, 1, 1, 2, 1, 2];
+    for (let selected = 0; selected < heights.length; selected++)
+      for (const limit of [2, 3, 5, 8, 30]) {
+        const { start, end } = listWindowByHeight(heights, selected, limit);
+        expect(start).toBeLessThanOrEqual(selected);
+        expect(end).toBeGreaterThan(selected);
+        const used = Arr.reduce(heights.slice(start, end), 0, (total, height) => total + height);
+        expect(used).toBeLessThanOrEqual(Math.max(limit, heights[selected] ?? 1));
+      }
+  });
+
+  it("shows every row when they all fit", () => {
+    expect(listWindowByHeight([2, 1, 2], 2, 10)).toEqual({ start: 0, end: 3 });
+    expect(listWindowByHeight([], 0, 4)).toEqual({ start: 0, end: 0 });
   });
 });

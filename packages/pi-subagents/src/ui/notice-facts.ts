@@ -9,6 +9,7 @@ import type {
 } from "../run/model.ts";
 import { workspaceOutcomeLabel } from "../tools/format.ts";
 import { isTextFragment } from "../tools/text-fragments.ts";
+import { writerFact } from "./run-facts.ts";
 import {
   MAX_NOTICE_FACT_CHARS,
   MAX_NOTICE_FACTS,
@@ -41,15 +42,26 @@ export const nextCandidateFact = (next: SubagentNextCandidate): string =>
     ? "Route has no further model candidates"
     : `Next route candidate: ${sanitizeTerminalLine(next.model)}${next.effort === "default" ? "" : `:${sanitizeTerminalLine(next.effort)}`}`;
 
+/** A finished run's one line of short facts, then its saved files and next candidate. */
 const completionFacts = (run: SubagentCompletionNotification): ReadonlyArray<string> =>
   Arr.filter(
     [
-      `ID ${sanitizeTerminalLine(run.id)}`,
-      run.profile ? `Profile ${sanitizeTerminalLine(run.profile)}` : undefined,
-      run.generation > 1 ? `Assignment ${run.generation}` : undefined,
+      Arr.join(
+        Arr.filter(
+          [
+            sanitizeTerminalLine(run.id),
+            run.profile ? sanitizeTerminalLine(run.profile) : undefined,
+            run.workspaceId
+              ? writerFact({ workspaceId: run.workspaceId, workspaceOutcome: run.workspaceOutcome })
+              : undefined,
+            run.generation > 1 ? `assignment ${run.generation}` : undefined,
+          ],
+          isTextFragment,
+        ),
+        " · ",
+      ),
       run.reportArchive ? savedFileFact("Report file", run.reportArchive) : undefined,
       run.errorArchive ? savedFileFact("Failure file", run.errorArchive) : undefined,
-      run.workspaceId ? workspaceFact(run.workspaceId, run.workspaceOutcome) : undefined,
       run.nextCandidate ? nextCandidateFact(run.nextCandidate) : undefined,
     ],
     isTextFragment,

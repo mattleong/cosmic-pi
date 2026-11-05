@@ -124,12 +124,24 @@ export function actionFailureIssues(
   }
 }
 
+/**
+ * A failure's text after its first line when that line is the issue's own message, as a failure
+ * written for people leads with its summary; otherwise its whole text.
+ */
+const detailBeyond = (text: string, message: string): string | undefined => {
+  const [lead, ...rest] = Str.split(Str.trim(text), "\n");
+  if (Str.trim(lead) !== message && Str.trim(lead) !== `${message}.`)
+    return quoteText(text, { failure: true }).detail;
+  const remaining = Str.trim(Arr.join(rest, "\n"));
+  return remaining === "" ? undefined : remaining;
+};
+
 export function rejectedCallIssue(action: string, text: string, target: string): CompactIssue {
   // Pi's own rejection names the tool, which `readableFailure` would refuse as agent text.
   const invalid = argumentFailureIssue(text);
   if (invalid) return invalid;
   const readable = readableFailure(text, []);
-  const detail = readable ? quoteText(text, { failure: true }).detail : Str.trim(text) && text;
+  const detail = readable ? detailBeyond(text, readable) : Str.trim(text) && text;
   return {
     severity: "error",
     code: "call-rejected",

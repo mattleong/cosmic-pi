@@ -13,7 +13,7 @@ import {
 import { managerTable } from "pi-cosmic-ui/manager/table";
 import {
   configuredKeyLabels,
-  exitKeyHint,
+  framedKeyHintBar,
   framedKeyHints,
   keyHint,
   keyHintRows,
@@ -22,8 +22,10 @@ import {
 } from "pi-cosmic-ui/manager/key-labels";
 import { listWindowStart, wideListDetailGeometry } from "pi-cosmic-ui/manager/list-detail";
 import {
+  FRAME_GUTTER,
   framedBodyWithHints,
   framedFill,
+  framedGutter,
   framedScreen,
   framedStackedRows,
   framedWideRows,
@@ -37,20 +39,33 @@ import {
   type ProfileSetPickerEntry,
 } from "./profile-set-picker-model.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
+import type { SubagentEffort } from "../../domain/routing.ts";
+import { candidateEffortLabel, candidateModelLabel } from "./profile-workspace-model.ts";
 
 interface ProfileSetPickerRenderState {
   readonly entries: ReadonlyArray<ProfileSetPickerEntry>;
   readonly selectedIndex: number;
   readonly query: string;
   readonly searching: boolean;
+  /** `?` expanded the hint bar to every key the picker takes. */
+  readonly hintsExpanded?: boolean | undefined;
+  readonly parentModel?: string | undefined;
+  readonly parentEffort?: SubagentEffort | undefined;
   readonly message?: { readonly kind: "info" | "warning" | "error"; readonly text: string };
 }
+
+/** Where a saved set's missing profile comes from, such as `built-in` or `global`. */
+const inheritedSource = (source: string): string => {
+  const scope = Fn.pipe(source, Str.replace("-invalid", ""));
+  return scope === "builtin" ? "built-in" : scope;
+};
 
 export const PROFILE_SET_SHORTCUTS: ReadonlySet<string> = new Set(["/", "a", "u"]);
 
 /**
  * Pairs that don't fit the bottom border wrap into rows above it, so Move, Edit, and the exit
- * stay visible at every width.
+ * stay visible at every width. `q` and `h` close the picker like Esc, so expanded help names
+ * them in the exit pair.
  */
 const footer = (
   state: ProfileSetPickerRenderState,
@@ -65,30 +80,38 @@ const footer = (
     Str.length(up) === 1 && Str.length(down) === 1 ? `${up}${down}` : `${up}/${down}`,
   );
   // Aliases such as C-c belong in expanded help, not the default hint.
-  const cancelKeys = key("tui.select.cancel", "Esc");
-  const cancel = Str.split(cancelKeys, "/")[0] ?? cancelKeys;
+  const [cancel, ...cancelAliases] = Str.split(key("tui.select.cancel", "Esc"), "/");
   if (state.searching)
     return framedKeyHints(
       ["Type to filter", move, keyHint(confirm, "Edit")],
       [keyHint(cancel, "Clear")],
       inner,
     );
-  return framedKeyHints(
-    [
-      move,
-      keyHint(confirm, "Edit"),
-      keyHint("u", "Use"),
-      keyHint("a", "Actions"),
-      keyHint("/", "Filter"),
-      keyHint("Tab", "Current Session"),
-    ],
-    [exitKeyHint("top", [], cancel)],
+  return framedKeyHintBar(
+    {
+      hints: [
+        move,
+        keyHint(confirm, "Edit"),
+        keyHint("u", "Use"),
+        keyHint("a", "Actions"),
+        keyHint("/", "Filter"),
+        keyHint("Tab", "Current session"),
+      ],
+      more: [keyHint("j/k", "Move")],
+      exit: "top",
+      exitKey: cancel,
+      exitAliases: [...cancelAliases, "q", "h"],
+    },
+    state.hintsExpanded === true,
     inner,
   );
 };
 
 const messageRows = (state: ProfileSetPickerRenderState, theme: Theme): string[] =>
   state.message ? [theme.fg(managerNoticeColor(state.message.kind), state.message.text)] : [];
+
+/** Text width inside a pane, between its gutters. */
+const textWidth = (paneWidth: number): number => Math.max(1, paneWidth - 2 * FRAME_GUTTER);
 
 // Rows align with the pane heading's two-column indent, and wrapped text hangs beneath it.
 const PANE_INDENT = "  ";
@@ -113,7 +136,7 @@ const libraryRows = (
     ...(state.searching ? [PANE_INDENT + theme.fg("muted", `Search /${state.query}`)] : []),
     ...Arr.map(messageRows(state, theme), (row) => PANE_INDENT + row),
     ...indentedWrap(
-      theme.fg("muted", 'Saved sets stay separate until you choose "Use in Current Session".'),
+      theme.fg("muted", "Saved sets stay separate until you press u to use one."),
       width,
     ),
     "",
@@ -191,15 +214,19 @@ const previewRows = (
   ];
   const budget = Math.max(1, Math.floor((height - 1) / entry.preview.length));
   const profiles = Arr.map(entry.preview, (profile) => ({
-    label: `${theme.fg(managerTone.identity, profile.id)}${profile.inherited ? theme.fg("muted", ` · inherited ${Fn.pipe(profile.source, Str.replace("-invalid", ""))}`) : ""}`,
+    label: `${theme.fg(managerTone.identity, profile.id)}${profile.inherited ? theme.fg("muted", ` · from ${inheritedSource(profile.source)}`) : ""}`,
     cells:
       profile.status === "configured"
         ? Arr.map(profile.candidates, (candidate, index) => [
             theme.fg("muted", profileRouteOptionLabel(index)),
-            `${theme.fg(managerTone.value, candidate.model)}${candidate.openaiFastMode ? theme.fg("warning", " ⚡") : ""}`,
+            `${theme.fg(managerTone.value, candidateModelLabel(candidate, state.parentModel, true))}${candidate.openaiFastMode ? theme.fg("warning", " ⚡") : ""}`,
             theme.fg(
               "muted",
-              candidate.effort === "default" ? "profile default" : candidate.effort,
+              state.parentEffort === undefined
+                ? candidate.effort === "default"
+                  ? "profile default"
+                  : candidate.effort
+                : candidateEffortLabel(profile.id, candidate, state.parentEffort),
             ),
           ])
         : [[theme.fg(profile.status === "invalid" ? "error" : "muted", profile.status), "", ""]],
@@ -239,7 +266,7 @@ const previewRows = (
   }
   if (rows.length < height)
     rows.push(
-      PANE_INDENT + theme.fg("dim", "Enter edits the full routes. Current Session is unchanged."),
+      PANE_INDENT + theme.fg("dim", "Enter edits the full routes. Current session is unchanged."),
     );
   return rows;
 };
@@ -305,14 +332,18 @@ const pickerBody = (
           ),
         )
       : "No saved sets";
-    const compact = [selected, ...messageRows(state, theme), ...hints];
+    // Hint rows carry their own gutter.
+    const compact = [...framedGutter([selected, ...messageRows(state, theme)], inner), ...hints];
     return framedFill(frame, compact.slice(0, bodyHeight), bodyHeight, inner, "list");
   }
   if (managerLayoutTier(width) === "wide") {
     const { listWidth, detailWidth } = wideListDetailGeometry(width, 30, 0.35);
     return framedWideRows(frame, {
-      left: libraryRows(state, theme, listWidth, bodyHeight),
-      right: previewRows(state, theme, detailWidth, bodyHeight),
+      left: framedGutter(libraryRows(state, theme, textWidth(listWidth), bodyHeight), listWidth),
+      right: framedGutter(
+        previewRows(state, theme, textWidth(detailWidth), bodyHeight),
+        detailWidth,
+      ),
       height: bodyHeight,
       listWidth,
       detailWidth,
@@ -321,12 +352,15 @@ const pickerBody = (
   if (managerLayoutTier(width) === "stacked" && bodyHeight >= 6) {
     const listHeight = Math.max(4, Math.min(8, Math.floor(bodyHeight / 3)));
     return framedStackedRows(frame, {
-      list: libraryRows(state, theme, inner, listHeight),
-      detail: previewRows(state, theme, inner, bodyHeight - listHeight - 1),
+      list: framedGutter(libraryRows(state, theme, textWidth(inner), listHeight), inner),
+      detail: framedGutter(
+        previewRows(state, theme, textWidth(inner), bodyHeight - listHeight - 1),
+        inner,
+      ),
       height: bodyHeight,
       inner,
     });
   }
-  const rows = libraryRows(state, theme, inner, bodyHeight);
+  const rows = framedGutter(libraryRows(state, theme, textWidth(inner), bodyHeight), inner);
   return framedFill(frame, rows.slice(0, bodyHeight), bodyHeight, inner, "list");
 };

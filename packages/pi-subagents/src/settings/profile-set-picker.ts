@@ -12,6 +12,7 @@ import {
   type PageSteps,
 } from "pi-cosmic-ui/manager/keymap";
 import type { SubagentConfigScope } from "../config/store.ts";
+import type { SubagentEffort } from "../domain/routing.ts";
 import {
   isListMotion,
   isMovementMotion,
@@ -55,6 +56,9 @@ interface ProfileSetPickerOptions extends Pick<
   readonly theme: Theme;
   readonly inspection: ProfileSettingsInspection;
   readonly projectTrusted: boolean;
+  /** The parent's model and reasoning, which inherited candidates run with. */
+  readonly parentModel?: string | undefined;
+  readonly parentEffort?: SubagentEffort | undefined;
   readonly close: (action: ProfileSetPickerAction | undefined) => void;
 }
 
@@ -108,7 +112,7 @@ const savedSetMenuChoices = (
       "Delete",
       entry.scopeDefault
         ? "Stop using this set as the default before deleting it"
-        : "Delete this saved set. Current Session will not change",
+        : "Delete this saved set. Current session will not change",
       entry.scopeDefault ? "clear default first" : undefined,
     ),
   ];
@@ -143,6 +147,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
   private selectedIndex: number;
   private query = "";
   private searching = false;
+  private hintsExpanded = false;
   private menu: SearchableSelectPage<ProfileSetPickerAction> | undefined;
   private message:
     | { readonly kind: "info" | "warning" | "error"; readonly text: string }
@@ -330,8 +335,10 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     if (action === "cancel" || action === "quit" || action === "back")
       this.options.close(undefined);
     else if (action === "confirm" || action === "forward") this.activate("edit");
-    else if (action === "help") this.openActions();
-    else this.renderSoon();
+    else {
+      if (action === "help") this.hintsExpanded = !this.hintsExpanded;
+      this.renderSoon();
+    }
   }
 
   handleInput(data: string): void {
@@ -355,6 +362,9 @@ export class ProfileSetPickerComponent implements Component, Focusable {
         selectedIndex: this.selectedIndex,
         query: this.query,
         searching: this.searching,
+        hintsExpanded: this.hintsExpanded,
+        parentModel: this.options.parentModel,
+        parentEffort: this.options.parentEffort,
         ...(this.message && { message: this.message }),
       },
       {

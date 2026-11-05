@@ -4,14 +4,20 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import type { CompactChild } from "./compact-summary";
-import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
+import {
+  builtinSubjectIsPath,
+  describeBuiltinCompactSubject,
+  type BuiltinCompactTool,
+} from "./builtin-subject";
 import { getReadLineRange, numericArg } from "./data/args";
 import type { NativeArgumentPreview } from "./native-codemode-args";
 import { nativeMcpResourceAction, nativeMcpResourceSubject } from "./native-mcp-identity";
 import { isCorePreviewName } from "./preview-admission";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 
-type CallSubject = Pick<CompactChild, "subject" | "action"> & { readonly label?: string };
+type CallSubject = Pick<CompactChild, "subject" | "action" | "pathSubject"> & {
+  readonly label?: string;
+};
 type FieldText = (key: string) => string;
 
 const mcpToolName = /^mcp__([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*)__([A-Za-z0-9-]+(?:_[A-Za-z0-9-]+)*)$/;
@@ -95,8 +101,13 @@ export function nativeCodemodeCallSubject(
       label: "mcp",
       action: resourceAction,
       subject: nativeMcpResourceSubject(name, text("server"), text("uri")),
+      ...(name === "read_mcp_resource" && text("uri") !== "" && { pathSubject: true }),
     };
-  if (isCorePreviewName(name)) return { subject: coreSubject(name, preview, text, cwd) };
+  if (isCorePreviewName(name))
+    return {
+      subject: coreSubject(name, preview, text, cwd),
+      ...(builtinSubjectIsPath(name) && { pathSubject: true }),
+    };
   if (name === "background_task") return backgroundTaskCall(preview, text);
   return { subject: "" };
 }

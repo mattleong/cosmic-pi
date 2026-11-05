@@ -2,9 +2,10 @@ import { Text } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { CodePreviewMessagePresenter } from "pi-code-previews";
-import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
-import { agentTextLines, bodyIndent, detailsSectionLines, indentedBody } from "./agent-text.ts";
+import { agentTextLines, bodyIndent, expandedRowsBody, indentedBody } from "./agent-text.ts";
+import { agentFactLines } from "./run-facts.ts";
 import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
 import { displayName, MAX_NOTICE_TEXT_CHARS } from "./notice-details.ts";
 
@@ -52,19 +53,12 @@ export const presentAgentMessage: CodePreviewMessagePresenter = (input, options,
           new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
         ),
     };
-  const facts = (width: number) =>
-    details
-      ? detailsSectionLines(
-          [
-            `From ${sanitizeTerminalLine(details.from)} · message ${sanitizeTerminalLine(details.messageId)}`,
-            ...(details.textCut
-              ? ["Shown up to its display limit; the agent received all of it"]
-              : []),
-          ],
-          width,
-          theme,
-        )
-      : [];
+  const facts = details
+    ? [
+        ...agentFactLines(sender, [details.from, `message ${details.messageId}`]),
+        ...(details.textCut ? ["Shown up to its display limit; the agent received all of it"] : []),
+      ]
+    : [];
   return {
     ...presentation,
     collapsed: () =>
@@ -72,12 +66,10 @@ export const presentAgentMessage: CodePreviewMessagePresenter = (input, options,
         agentTextLines(words, width, theme, { expanded: false, indent: bodyIndent(options) }),
       ),
     expanded: () =>
-      indentedBody(
+      expandedRowsBody(
         theme,
-        composeToolComponent((width) => [
-          ...agentTextLines(words, width, theme, { expanded: true, indent: 0 }),
-          ...facts(width),
-        ]),
+        (width) => agentTextLines(words, width, theme, { expanded: true, indent: 0 }),
+        facts,
       ),
   };
 };

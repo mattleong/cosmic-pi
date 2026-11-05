@@ -3,6 +3,7 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { ACTIVITY_LIMITS, type ActivityDetail, type ActivityItem } from "pi-cosmic-ui/activity";
+import { countLabel } from "pi-cosmic-core/display";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { sha256Text } from "pi-cosmic-core/security/sha256";
 import { runCleanupAttention } from "../run/attention.ts";
@@ -67,7 +68,13 @@ const MESSAGE_ACTIONS = {
   guidance: handoff("message", "Message"),
 } satisfies Readonly<Record<RunMessageMode, ReturnType<typeof handoff>>>;
 
-export function runActions(run: SubagentRunView, title: string) {
+/** Stopping a run stops its subtree, so the confirmation counts the active runs beneath it. */
+const stopConfirmation = (title: string, activeDescendants: number): string =>
+  activeDescendants > 0
+    ? `Stop "${title}" and its ${countLabel(activeDescendants, "subagent")}?`
+    : `Stop "${title}"?`;
+
+export function runActions(run: SubagentRunView, title: string, activeDescendants = 0) {
   const mode = runMessageMode(run);
   return [
     ...(isActiveRunState(run.state) || canStopRun(run)
@@ -76,7 +83,7 @@ export function runActions(run: SubagentRunView, title: string) {
             id: "stop",
             label: isActiveRunState(run.state) ? "Stop" : "Verify cleanup",
             confirmation: isActiveRunState(run.state)
-              ? `Stop "${title}" and all its subagents?`
+              ? stopConfirmation(title, activeDescendants)
               : `Verify cleanup for "${title}" and stop any active subagents?`,
             handoff: false as const,
           },
@@ -113,9 +120,9 @@ const runSummary = (run: SubagentRunView, nameOf: RunNameLookup): Pick<ActivityI
   const cleanup = runCleanupAttention(run);
   const summary =
     cleanup === "quarantined"
-      ? "Cleanup remains unconfirmed; the task outcome is unchanged"
+      ? "Couldn't confirm its processes ended; the task outcome is unchanged"
       : cleanup === "pool-quarantined"
-        ? "Writer admission is blocked by another run's cleanup"
+        ? "New writers wait until an earlier writer's cleanup is confirmed"
         : reason
           ? Str.split(reason, "\n")[0]
           : (runLiveActivity(run, nameOf) ?? run.progress);
@@ -136,6 +143,7 @@ const runActivityItem = (
   run: SubagentRunView,
   awaited: boolean,
   nameOf: RunNameLookup,
+  activeDescendants: number,
 ): ActivityItem => {
   const title = sanitizeDiagnosticContent(run.name, { maximumLength: ACTIVITY_LIMITS.title });
   return withActivityRevision(
@@ -148,7 +156,9 @@ const runActivityItem = (
       startedAt: run.startedAt,
       updatedAt: run.lastActivityAt,
       ...runSummary(run, nameOf),
-      actions: Object.freeze(Arr.map(runActions(run, title), (action) => Object.freeze(action))),
+      actions: Object.freeze(
+        Arr.map(runActions(run, title, activeDescendants), (action) => Object.freeze(action)),
+      ),
       ...runModelFields(run),
       ...(run.profile !== undefined && { profile: run.profile }),
       ...(run.endedAt !== undefined && { endedAt: run.endedAt }),
@@ -164,9 +174,14 @@ const runActivityItem = (
   );
 };
 
+interface CachedActivityItem {
+  readonly item: ActivityItem;
+  readonly activeDescendants: number;
+}
+
 interface CachedActivityItems {
-  readonly awaited?: ActivityItem;
-  readonly idle?: ActivityItem;
+  readonly awaited?: CachedActivityItem;
+  readonly idle?: CachedActivityItem;
 }
 
 // Projections keep an unchanged run's frozen view, so its item is built once per change.
@@ -176,15 +191,38 @@ const cachedRunActivityItem = (
   run: SubagentRunView,
   awaited: boolean,
   nameOf: RunNameLookup,
+  activeDescendants: number,
 ): ActivityItem => {
   // A run waiting on others names them, so its item follows their names, not only its own view.
-  if (!Object.isFrozen(run) || isWaitingOnRuns(run)) return runActivityItem(run, awaited, nameOf);
+  if (!Object.isFrozen(run) || isWaitingOnRuns(run))
+    return runActivityItem(run, awaited, nameOf, activeDescendants);
   const cached = activityItemCache.get(run);
   const hit = awaited ? cached?.awaited : cached?.idle;
-  if (hit) return hit;
-  const item = runActivityItem(run, awaited, nameOf);
-  activityItemCache.set(run, awaited ? { ...cached, awaited: item } : { ...cached, idle: item });
+  // The stop confirmation counts the subtree, which changes without this run's view changing.
+  if (hit?.activeDescendants === activeDescendants) return hit.item;
+  const item = runActivityItem(run, awaited, nameOf, activeDescendants);
+  const entry = { item, activeDescendants };
+  activityItemCache.set(run, awaited ? { ...cached, awaited: entry } : { ...cached, idle: entry });
   return item;
+};
+
+/** The number of active runs beneath each run, counted once per ancestor. */
+const activeDescendantCounts = (
+  runs: ReadonlyArray<SubagentRunView>,
+): ReadonlyMap<string, number> => {
+  const parents = new Map(Arr.map(runs, (run) => [run.id, run.parentRunId] as const));
+  const counts = new Map<string, number>();
+  for (const run of runs) {
+    if (!isActiveRunState(run.state)) continue;
+    const seen = new Set([run.id]);
+    let parent = parents.get(run.id);
+    while (parent !== undefined && parent !== "root" && !seen.has(parent)) {
+      seen.add(parent);
+      counts.set(parent, (counts.get(parent) ?? 0) + 1);
+      parent = parents.get(parent);
+    }
+  }
+  return counts;
 };
 
 export function subagentActivityItems(
@@ -195,7 +233,10 @@ export function subagentActivityItems(
   const rows = projectFleetTree(projection.runs, "root").rows;
   const names = new Map(Arr.map(projection.runs, (run) => [run.id, run.name] as const));
   const nameOf: RunNameLookup = (id) => names.get(id);
-  const runs = Arr.map(rows, ({ run }) => cachedRunActivityItem(run, awaited.has(run.id), nameOf));
+  const descendants = activeDescendantCounts(projection.runs);
+  const runs = Arr.map(rows, ({ run }) =>
+    cachedRunActivityItem(run, awaited.has(run.id), nameOf, descendants.get(run.id) ?? 0),
+  );
   return Object.freeze(runs.slice(0, ACTIVITY_LIMITS.items));
 }
 

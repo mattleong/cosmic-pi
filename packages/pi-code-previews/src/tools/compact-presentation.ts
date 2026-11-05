@@ -7,7 +7,7 @@ import {
 
 type CompactHeading = Pick<
   CompactSummary,
-  "subject" | "compactSubject" | "action" | "showTiming" | "showShortTiming"
+  "subject" | "compactSubject" | "pathSubject" | "action" | "showTiming" | "showShortTiming"
 >;
 
 export function planCompactPresentation(input: {
@@ -37,6 +37,7 @@ function fallbackHeading(heading: CompactHeading | undefined): CompactSummary {
   return {
     subject: heading?.subject ?? "",
     ...(heading?.compactSubject !== undefined && { compactSubject: heading.compactSubject }),
+    ...(heading?.pathSubject && { pathSubject: true }),
     ...(heading?.action !== undefined && { action: heading.action }),
     ...(heading?.showTiming && { showTiming: true }),
     ...(heading?.showShortTiming && { showShortTiming: true }),

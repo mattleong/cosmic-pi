@@ -5,7 +5,7 @@ import {
   type ActivityEvents,
   type ActivityItem,
 } from "pi-cosmic-ui/activity";
-import { formatBytes } from "pi-cosmic-core/display";
+import { formatBytes, formatClockTime } from "pi-cosmic-core/display";
 import { exitStatusMeaning } from "pi-code-previews";
 import { safeTextSuffix } from "pi-cosmic-core/text";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -131,16 +131,10 @@ const exitField = (task: BackgroundTaskView): string => {
 };
 
 // Local wall-clock times; the item's own ages and elapsed time cover the relative view.
-const clockTime = (epochMilliseconds: number): string =>
+const clockTime = (epochMilliseconds: number, now: number): string =>
   Option.match(DateTime.make(epochMilliseconds), {
     onNone: () => "unknown",
-    onSome: DateTime.formatLocal({
-      month: "short",
-      day: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      second: "2-digit",
-    }),
+    onSome: (at) => formatClockTime(at, now),
   });
 
 const logTail = (task: BackgroundTaskView): string => {
@@ -167,6 +161,7 @@ const failureSummary = (task: BackgroundTaskView): string | undefined => {
 export function backgroundTaskActivityDetail(
   projection: BackgroundTaskProjection,
   id: string,
+  now: number = DateTime.toEpochMillis(DateTime.nowUnsafe()),
 ): ActivityDetail | undefined {
   const task = Option.getOrUndefined(
     Arr.findFirst(projection.tasks, (candidate) => candidate.id === id),
@@ -188,8 +183,10 @@ export function backgroundTaskActivityDetail(
       { label: "ID", value: task.id },
       { label: "PID", value: task.pid === undefined ? "none" : String(task.pid) },
       { label: "Exit", value: exitField(task) },
-      { label: "Started", value: clockTime(task.startedAt) },
-      ...(task.endedAt === undefined ? [] : [{ label: "Ended", value: clockTime(task.endedAt) }]),
+      { label: "Started", value: clockTime(task.startedAt, now) },
+      ...(task.endedAt === undefined
+        ? []
+        : [{ label: "Ended", value: clockTime(task.endedAt, now) }]),
       { label: "Directory", value: bounded(task.cwd, 1_000) },
       { label: "Log cursor", value: String(task.logCursor) },
       ...(task.droppedLogBytes > 0

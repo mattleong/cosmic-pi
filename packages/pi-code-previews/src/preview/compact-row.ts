@@ -7,6 +7,7 @@ import {
   managerActivityGlyph,
   managerNoticeColor,
   managerNoticeGlyph,
+  SUITE_STATUS_GLYPHS,
   type ManagerActivityKind,
 } from "pi-cosmic-ui/manager";
 import { escapeControlChars } from "../shared/terminal-text";
@@ -50,18 +51,24 @@ const ACTIVITY_KINDS = {
   cancelled: "stopped",
 } as const satisfies Record<string, ManagerActivityKind>;
 
-function compactStatusIcon(
+export function compactStatusIcon(
   status: CompactStatus,
   theme: Theme,
   animationFrame = 0,
   returnedCheckmark = false,
   messageIcon?: CompactSummary["messageIcon"],
+  waiting = false,
 ): string {
+  if (waiting && (status === "pending" || status === "running"))
+    return theme.fg(managerActivityColor("waiting"), managerActivityGlyph("waiting"));
   if (messageIcon && (status === "success" || status === "returned"))
     return theme.fg(status === "success" ? "success" : "muted", MESSAGE_GLYPHS[messageIcon]);
   if (status === "returned")
     return theme.fg("muted", returnedCheckmark ? managerActivityGlyph("done") : "•");
   if (status === "uncertain") return theme.fg("warning", UNCERTAIN_GLYPH);
+  if (status === "queued") return theme.fg("muted", SUITE_STATUS_GLYPHS.queued);
+  if (status === "paused")
+    return theme.fg(managerActivityColor("paused"), managerActivityGlyph("paused"));
   if (status === "warning" || status === "attention")
     return theme.fg(managerNoticeColor(status), managerNoticeGlyph(status));
   const kind = ACTIVITY_KINDS[status];
@@ -92,6 +99,7 @@ function compactRowPrefix(input: CompactRowInput, theme: Theme): string {
     input.animationFrame,
     input.returnedCheckmark,
     input.summary.messageIcon,
+    input.summary.waiting === true,
   );
   const action = compactSingleLine(input.summary.action ?? "");
   return `${icon} ${theme.fg("accent", compactSingleLine(input.name))}${action ? ` ${action}` : ""}`;
@@ -122,6 +130,7 @@ export function layoutCompactRow(input: CompactRowInput, theme: Theme, width: nu
     width,
     theme.fg("dim", " · "),
     summary.showTiming ? timing : undefined,
+    summary.pathSubject ? "path" : "prose",
   );
   return {
     row,

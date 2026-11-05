@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
+import * as Option from "effect/Option";
+import { stripAnsi } from "pi-cosmic-core";
 import { createHighlighter, createJavaScriptRegexEngine } from "shiki";
 import { afterAll, beforeAll, beforeEach, test } from "vitest";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
@@ -76,14 +78,19 @@ const program = Arr.join(
 test("a collapsed codemode program shows exactly the first rows of the expanded program", () => {
   const harness = createToolPresentationHarness(codemodeRenderers());
   for (const width of [40, 60, 120]) {
+    // Expanded, the program sits four columns in under its `Program` label, so it wraps at the
+    // collapsed width when the row is four columns wider.
     harness.call({ code: program }, { expanded: true });
-    const expanded = harness.render(width);
+    const expanded = harness.render(width + 4);
+    const label = Arr.findFirstIndex(expanded, (row) => Str.trim(stripAnsi(row)) === "Program");
+    assert.ok(Option.isSome(label));
+    const source = Arr.map(expanded.slice(label.value + 1), (row) => Fn.pipe(row, Str.slice(4)));
     harness.call({ code: program }, { expanded: false });
     const collapsed = harness.render(width);
     assert.ok(highlighted(collapsed));
     assert.equal(collapsed.length, 1 + 8 + 1);
-    assert.deepEqual(collapsed.slice(0, 9), expanded.slice(0, 9));
-    assert.ok(expanded.length > 9);
+    assert.deepEqual(collapsed.slice(1, 9), source.slice(0, 8));
+    assert.ok(source.length > 8);
   }
 });
 

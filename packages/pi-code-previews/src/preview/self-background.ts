@@ -10,7 +10,12 @@ export function statusBackground(
   isPartial: boolean,
 ): "toolErrorBg" | "toolPendingBg" | "toolSuccessBg" {
   if (status === "error") return "toolErrorBg";
-  return isPartial || status === "cancelled" || status === "uncertain" || status === "attention"
+  return isPartial ||
+    status === "cancelled" ||
+    status === "uncertain" ||
+    status === "attention" ||
+    status === "queued" ||
+    status === "paused"
     ? "toolPendingBg"
     : "toolSuccessBg";
 }

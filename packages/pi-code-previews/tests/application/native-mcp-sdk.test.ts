@@ -117,7 +117,7 @@ it.live(
       assert.ok(historical);
       const h = createToolPresentationHarness(historical);
       h.call({ query: "historical input" });
-      assert.ok(Fn.pipe(Arr.join(h.render(200), "\n"), Str.includes("mcp__docs__lookup")));
+      assert.ok(Fn.pipe(Arr.join(h.render(200), "\n"), Str.includes("docs / lookup")));
       yield* step(() => session.reload());
       assert.deepEqual(report.tools, []);
       assert.deepEqual(errors, []);

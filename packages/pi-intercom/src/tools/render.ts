@@ -41,10 +41,11 @@ import {
   type SessionView,
 } from "./contract.ts";
 import {
-  addresseeSubject,
   distinctSessionLabels,
+  knownAddresseeSubject,
   SESSION_STATE_LABELS,
   sessionSubject,
+  type SessionNames,
 } from "../identity.ts";
 import { sessionToolDetails } from "./summary.ts";
 
@@ -64,10 +65,11 @@ interface RenderContext {
 
 const MAX_COLLAPSED_SESSIONS = 6;
 
+/** `Message → web work` and `Reply ← web work`, as the suite names messages between agents. */
 const heading = (tool: SessionToolName, target: string): ToolHeader => {
   if (tool === SESSION_TOOL.list) return { title: "Sessions" };
-  if (tool === SESSION_TOOL.send) return { title: target ? `→ ${target}` : "Message" };
-  return { title: target ? `← ${target}` : "Read", subtitle: "latest reply" };
+  if (tool === SESSION_TOOL.send) return { title: target ? `Message → ${target}` : "Message" };
+  return { title: target ? `Reply ← ${target}` : "Reply" };
 };
 
 const stacked = (parts: ReadonlyArray<Component>): Component => {
@@ -90,20 +92,27 @@ const callBody = (args: SessionToolArgs, theme: Theme, expanded: boolean): Compo
  * The heading reads the render state when it draws, after the result renderer has stored it.
  */
 export const renderSessionCall =
-  (tool: SessionToolName) =>
+  (tool: SessionToolName, names?: SessionNames) =>
   (args: SessionToolArgs, theme: Theme, context: RenderContext): Component => {
     const { state } = context;
     const running = context.executionStarted && context.isPartial;
     const header = composeToolComponent((width) => {
       if (!Number.isFinite(width) || width < 1) return [];
-      const target = state.sessionTarget ?? addresseeSubject(args.to);
-      const lines = new Text(renderToolHeader(heading(tool, target), theme), 0, 0).render(width);
-      return running ? [...lines, toolRunningLine(theme)] : lines;
+      const target = state.sessionTarget ?? knownAddresseeSubject(args.to, names);
+      return new Text(renderToolHeader(heading(tool, target), theme), 0, 0).render(width);
     });
+    const runningLine = composeToolComponent((width) =>
+      running && width >= 1 ? [toolRunningLine(theme)] : [],
+    );
     const message =
       tool === SESSION_TOOL.send ? callBody(args, theme, context.expanded) : undefined;
-    if (!context.expanded) return message ? stacked([header, message]) : header;
-    return stacked([header, previewIssuesSlot(context), ...(message ? [message] : [])]);
+    // Issues follow the heading, so an expanded preview row reuses only the heading above them.
+    return stacked([
+      header,
+      previewIssuesSlot(context),
+      runningLine,
+      ...(message ? [message] : []),
+    ]);
   };
 
 const STATE_COLORS = {
@@ -191,30 +200,34 @@ const listBody = (details: ListDetails, theme: Theme): Component => {
 const detailsOf = (session: SessionView | undefined, to: string | undefined, theme: Theme) =>
   sessionDetails(theme, session?.sessionId ?? to ?? "", session?.cwd);
 
+/** How a recipient reads a message, worth saying only when it waits; a woken one reads it now. */
 const DELIVERY_STATUS = {
-  woken: "Delivered; it started a turn to read it",
+  woken: undefined,
   queued: "Queued until its current turn ends",
-  held: "Holding until its user's next prompt",
+  held: "Held until its user's next prompt",
 } as const;
 
 type SendOutcome = SessionSendDetails | SessionRefusal;
 type ReadOutcome = SessionReadContract | SessionRefusal;
 
 /** Collapsed, a delivery shows how it will be read only when that departs from the usual. */
-const sendCollapsed = (details: SendOutcome, theme: Theme): ReadonlyArray<Component> =>
-  details.outcome === "delivered" && details.disposition !== "woken"
-    ? [statusLine(DELIVERY_STATUS[details.disposition], theme)]
-    : [];
+const deliveryStatus = (details: SendOutcome): string | undefined =>
+  details.outcome === "delivered" ? DELIVERY_STATUS[details.disposition] : undefined;
 
-const sendExpanded = (details: SendOutcome, to: string | undefined, theme: Theme): Component =>
-  expandedBody(
-    details.outcome === "delivered"
-      ? expandedFields(theme, [
-          { label: "Delivery", lines: [DELIVERY_STATUS[details.disposition]] },
-        ])
-      : undefined,
+const sendCollapsed = (details: SendOutcome, theme: Theme): ReadonlyArray<Component> => {
+  const status = deliveryStatus(details);
+  return status === undefined ? [] : [statusLine(status, theme)];
+};
+
+const sendExpanded = (details: SendOutcome, to: string | undefined, theme: Theme): Component => {
+  const status = deliveryStatus(details);
+  return expandedBody(
+    status === undefined
+      ? undefined
+      : expandedFields(theme, [{ label: "Delivery", lines: [status] }]),
     detailsOf("session" in details ? details.session : undefined, to, theme),
   );
+};
 
 /** The reply's text, unless the latest message has none to show. */
 const replyText = (details: SessionReadContract): string | undefined =>

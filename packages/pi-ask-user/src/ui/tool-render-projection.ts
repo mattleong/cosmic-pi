@@ -4,6 +4,7 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { countLabel } from "pi-cosmic-core/display";
+import { joinInline } from "pi-cosmic-ui/manager";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
@@ -40,6 +41,12 @@ export const answerOutcome = Schema.Union([
   }),
 ]);
 export type ReplayedOutcome = typeof answerOutcome.Type;
+
+/** The progress a blocking questionnaire reports once its questions are on screen. */
+export const QUESTIONS_SHOWN = { questionnaire: "open" } as const;
+const QuestionsShownSchema = Schema.Struct({ questionnaire: Schema.Literal("open") });
+export type QuestionsShown = typeof QuestionsShownSchema.Type;
+export const questionsShown = Schema.is(QuestionsShownSchema);
 export type ReplayedAnswer = Extract<ReplayedOutcome, { outcome: "submitted" }>["answers"][number];
 export const decodeOutcome = decodeUnknownOrUndefined(answerOutcome);
 
@@ -267,13 +274,17 @@ export function questionnaireState(row: StateRow): QuestionnaireState | undefine
   return undefined;
 }
 
+// Long and short words for each state, for one questionnaire or several.
 const STATE_WORDS = {
-  waiting: ["waiting for answers", "waiting"],
-  queued: ["queued", "queued"],
-  answered: ["answered", "answered"],
-  cancelled: ["cancelled", "cancelled"],
-  failed: ["failed", "failed"],
-} as const satisfies Readonly<Record<QuestionnaireState, readonly [string, string]>>;
+  waiting: (count) =>
+    count === 1 ? ["needs your input", "needs input"] : ["need your input", "need input"],
+  queued: () => ["queued", "queued"],
+  answered: () => ["answered", "answered"],
+  cancelled: () => ["cancelled", "cancelled"],
+  failed: () => ["failed", "failed"],
+} as const satisfies Readonly<
+  Record<QuestionnaireState, (count: number) => readonly [string, string]>
+>;
 const STATE_ORDER: readonly QuestionnaireState[] = [
   "failed",
   "waiting",
@@ -283,20 +294,19 @@ const STATE_ORDER: readonly QuestionnaireState[] = [
 ];
 
 export const stateWords = (state: QuestionnaireState): readonly string[] => [
-  ...new Set(STATE_WORDS[state]),
+  ...new Set(STATE_WORDS[state](1)),
 ];
 
 export function stateCounts(states: readonly QuestionnaireState[]): readonly string[] {
-  if (states.length === 0) return ["none retained", "none"];
+  if (states.length === 0) return ["no questionnaires", "none"];
   const counted = Arr.filterMap(STATE_ORDER, (state) => {
     const count = Arr.filter(states, (entry) => entry === state).length;
-    return count === 0 ? Result.failVoid : Result.succeed([count, STATE_WORDS[state]] as const);
+    return count === 0
+      ? Result.failVoid
+      : Result.succeed([count, STATE_WORDS[state](count)] as const);
   });
   const wording = (short: 0 | 1) =>
-    Arr.join(
-      Arr.map(counted, ([count, words]) => `${count} ${words[short]}`),
-      ", ",
-    );
+    joinInline(Arr.map(counted, ([count, words]) => `${count} ${words[short]}`));
   return [...new Set([wording(0), wording(1), countLabel(states.length, "questionnaire")])];
 }
 
@@ -320,7 +330,7 @@ export function requestFacts(rows: readonly ReplayedSnapshot[], list: boolean): 
   return Arr.map(rows, (row) => {
     const state = questionnaireState(row);
     return factLine([
-      list && state !== undefined ? `${row.requestId}: ${STATE_WORDS[state][0]}` : row.requestId,
+      list && state !== undefined ? `${row.requestId}: ${STATE_WORDS[state](1)[0]}` : row.requestId,
       `delivery ID ${row.deliveryId}`,
       DELIVERY_WORDS[row.delivery],
     ]);

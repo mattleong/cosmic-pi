@@ -4,7 +4,6 @@ import {
   activityAttentionLabels,
   activityQueued,
   addAttention,
-  compactNotices,
   type ActivityAttentionCounts,
 } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
@@ -79,13 +78,21 @@ export const endedWorkLabels = (summary: Pick<GroupSummary, "stopped">): string[
 const finishedWork = (summary: GroupSummary): number =>
   Math.max(0, summary.terminal - summary.stopped - summary.attention.failed);
 
-// Section rows use the same attention words as the title and the Needs-your-input banner;
-// compact rows shorten only parent waits.
-export const groupSummaryLabels = (summary: GroupSummary, compact = false): string[] => [
-  ...(compact ? compactNotices(summary.attention) : activityAttentionLabels(summary.attention)),
-  ...activeWorkLabels(summary),
-  ...endedWorkLabels(summary),
-  ...(summary.awaited ? [`${summary.awaited} awaited`] : []),
+/**
+ * Section rows use the same attention words as the title and the Needs-your-input banner. As
+ * room runs out, ended work and awaits go first, then live work, then parent waits.
+ */
+export const groupSummaryLabels = (
+  summary: GroupSummary,
+  detail: "full" | "live" | "attention" | "urgent" = "full",
+): string[] => [
+  // Last of all, parent waits give way: the agent's own row still says it is waiting for reply.
+  ...activityAttentionLabels(
+    detail === "urgent" ? { ...summary.attention, parent: 0 } : summary.attention,
+  ),
+  ...(detail === "attention" || detail === "urgent" ? [] : activeWorkLabels(summary)),
+  ...(detail === "full" ? endedWorkLabels(summary) : []),
+  ...(detail === "full" && summary.awaited ? [`${summary.awaited} awaited`] : []),
 ];
 
 export const workStateLabels = (summary: GroupSummary): string[] => {

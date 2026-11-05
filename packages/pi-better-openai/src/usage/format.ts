@@ -8,7 +8,7 @@ import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { clampPercent, formatDuration } from "pi-cosmic-core/display";
+import { clampPercent, formatClockTime, formatDuration } from "pi-cosmic-core/display";
 import { JsonHttpClient } from "pi-cosmic-core/platform/json-http";
 import type { CodexCredentials } from "../auth/codex-auth.ts";
 
@@ -89,25 +89,6 @@ function formatResetCountdown(seconds: number): string {
   return total < 60 ? `${total}s` : formatDuration(total * 1000);
 }
 
-const normalizeSpaces = (text: string): string => Fn.pipe(text, Str.replace(/\s+/gu, " "));
-
-const localDay = (at: DateTime.DateTime): string =>
-  DateTime.formatLocal(at, { locale: "en-US", year: "numeric", month: "numeric", day: "numeric" });
-
-/** A local short time: `10:59 PM` today, `Nov 9, 10:59 PM` on another day. */
-function formatLocalShort(at: DateTime.DateTime, now: number): string {
-  const today = DateTime.make(now);
-  const sameDay = Option.isSome(today) && localDay(today.value) === localDay(at);
-  return normalizeSpaces(
-    DateTime.formatLocal(at, {
-      locale: "en-US",
-      ...(sameDay ? {} : { month: "short", day: "numeric" }),
-      hour: "numeric",
-      minute: "2-digit",
-    }),
-  );
-}
-
 interface ResetMoment {
   readonly countdown: string;
   readonly at: string;
@@ -118,7 +99,7 @@ function resetMoment(seconds: number | null, now: number): ResetMoment | undefin
     return undefined;
   const reset = DateTime.make(now + seconds * 1000);
   return Option.isSome(reset)
-    ? { countdown: formatResetCountdown(seconds), at: formatLocalShort(reset.value, now) }
+    ? { countdown: formatResetCountdown(seconds), at: formatClockTime(reset.value, now) }
     : undefined;
 }
 
@@ -138,18 +119,10 @@ function usedToLeftPercent(value: number | null | undefined): number | null {
 /** A diagnostic timestamp in the local short form, always with its date: `Nov 3, 10:59 PM`. */
 export function formatTimestampOrNever(value: number | undefined): string {
   if (value === undefined) return "never";
-  const at = DateTime.make(value);
-  return Option.isSome(at)
-    ? normalizeSpaces(
-        DateTime.formatLocal(at.value, {
-          locale: "en-US",
-          month: "short",
-          day: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        }),
-      )
-    : "unknown";
+  return Option.match(DateTime.make(value), {
+    onNone: () => "unknown",
+    onSome: (at) => formatClockTime(at),
+  });
 }
 
 function formatPercent(value: number | null): string {
@@ -275,7 +248,7 @@ export function formatUsageDetails(snapshot: UsageSnapshot, now: number): string
   const width = Math.max(...Arr.map(windows, (window) => window.name.length));
   return Arr.join(
     [
-      `OpenAI subscription usage · updated ${formatLocalShort(DateTime.makeUnsafe(now), now)}`,
+      `OpenAI subscription usage · updated ${formatClockTime(DateTime.makeUnsafe(now), now)}`,
       ...Arr.map(
         windows,
         (window) =>

@@ -148,7 +148,7 @@ export function registerBackgroundTaskTool(
     BackgroundTaskRenderState
   >({
     name: "background_task",
-    label: "Background Task",
+    label: "Background task",
     description:
       "Start and manage session-scoped local background commands, run in Pi's shell (bash by default) with stdin open but never written, so a command that may prompt or read stdin waits until stopped or timed out: give it </dev/null or non-interactive flags. Actions: start, list, status, logs, wait, stop, stop_all, clear. Task IDs are opaque and come only from a start result, so a call that names a new task must wait for it. Start with notify to get a message when the task finishes. Each action accepts only its own parameters; empty, false, or zero placeholders in other fields are ignored, and other values there are rejected. Output is bounded; each task's process group is terminated when the Pi session closes, but processes that start their own session or process group, such as daemons, are not tracked.",
     promptSnippet: "Start and manage long-running local commands without blocking the current turn",
@@ -179,17 +179,19 @@ export function registerBackgroundTaskTool(
       const heading = composeToolComponent((width) => {
         if (!Number.isFinite(width) || width < 1) return [];
         const subtitle = headingSubtitle(args, state.backgroundTaskSubject);
-        const lines = new Text(renderToolHeader({ title: TITLE, subtitle }, theme), 0, 0).render(
-          width,
-        );
-        const running = executionStarted && isPartial && state.backgroundTaskSubject === undefined;
-        return running ? [...lines, toolRunningLine(theme)] : lines;
+        return new Text(renderToolHeader({ title: TITLE, subtitle }, theme), 0, 0).render(width);
       });
-      if (!context.expanded) return heading;
+      const running = composeToolComponent((width) =>
+        width >= 1 && executionStarted && isPartial && state.backgroundTaskSubject === undefined
+          ? [toolRunningLine(theme)]
+          : [],
+      );
+      // Issues follow the heading, so an expanded preview row reuses only the heading above them.
       const body = new Container();
       body.addChild(heading);
       body.addChild(previewIssuesSlot(context));
-      body.addChild(renderBackgroundTaskRequest(args, theme));
+      body.addChild(running);
+      if (context.expanded) body.addChild(renderBackgroundTaskRequest(args, theme, !isPartial));
       return body;
     },
     renderResult(result, { isPartial, expanded }, theme, context) {
@@ -206,7 +208,8 @@ export function registerBackgroundTaskTool(
     shell(tool, {
       compactSummary: backgroundTaskCompactSummary,
       expandedContent: {
-        renderCall: (args, theme) => renderBackgroundTaskRequest(args, theme),
+        renderCall: (args, theme, context) =>
+          renderBackgroundTaskRequest(args, theme, !context.isPartial),
         renderResult(result, _options, theme, context) {
           const input = previewInput(result, context.args, true, context.isError);
           if (Option.isSome(input.details) || Option.isSome(input.failure))

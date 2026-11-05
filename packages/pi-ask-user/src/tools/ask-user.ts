@@ -8,7 +8,7 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Fn from "effect/Function";
 import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
-import { toolRunningLine } from "pi-cosmic-ui/tool";
+import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { AskUserParameters, type AskUserRequest } from "../questionnaire/schema.ts";
@@ -25,6 +25,9 @@ import {
 } from "../ui/tool-body.ts";
 import {
   callTitles,
+  QUESTIONS_SHOWN,
+  questionsShown,
+  type QuestionsShown,
   decodeOutcome,
   fallbackText,
   requestArguments,
@@ -35,18 +38,24 @@ import { questionnaireArgumentPreparer } from "./arguments.ts";
 import { AskUserContractSchema } from "./contract-schema.ts";
 import { askUserContract, questionnaireToolResult } from "./contract.ts";
 
+type AskUserToolDetails = AskUserOutcome | QuestionsShown;
+
 // Converted on first registration, so processes that never register the tool skip the cost.
 const outputSchema = Fn.memoize(toPiToolOutputSchema);
 
 export function registerAskUserTool(
   pi: ExtensionAPI,
-  ask: (request: AskUserRequest, signal: AbortSignal | undefined) => Promise<AskUserOutcome>,
+  ask: (
+    request: AskUserRequest,
+    signal: AbortSignal | undefined,
+    shown: () => void,
+  ) => Promise<AskUserOutcome>,
   scheduleAnimation?: CompactAnimationScheduler,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
   const tool = defineTool({
     name: "ask_user",
-    label: "Ask User",
+    label: "Ask user",
     description:
       "Present one structured questionnaire containing one to six questions. Use single/multiple mode with two to six concrete choices and an automatic custom-answer action, or text mode without choices for a required free-text answer. Text answers are trimmed and limited to 4000 code units. All questions support optional notes up to 2000 code units; choices may include markdown previews. Use this only when a decision is needed to proceed safely. Questionnaires open automatically in FIFO order, sharing a session queue of at most 16 pending requests; the tool waits for answers, not merely admission. Local Pi child requests route to the root UI with authenticated run ownership.",
     promptSnippet:
@@ -65,16 +74,29 @@ export function registerAskUserTool(
     prepareArguments: questionnaireArgumentPreparer("ask_user", AskUserParameters),
     outputSchema: outputSchema(AskUserContractSchema),
     executionMode: "sequential",
-    execute(_toolCallId, input, signal) {
-      return ask(input, signal).then((outcome) =>
-        questionnaireToolResult(formatAskUserOutcome(outcome), outcome, askUserContract(outcome)),
+    execute(_toolCallId, input, signal, onUpdate) {
+      // Progress tells the row the questions are on screen, so it waits on the user, not a spinner.
+      const shown = () => onUpdate?.({ content: [], details: QUESTIONS_SHOWN });
+      return ask(input, signal, shown).then((outcome) =>
+        questionnaireToolResult<AskUserToolDetails>(
+          formatAskUserOutcome(outcome),
+          outcome,
+          askUserContract(outcome),
+        ),
       );
     },
     renderCall(args, theme, context) {
       return callBody({ title: "Ask user", subtitle: callTitles(args) }, args, theme, context);
     },
     renderResult(result, options, theme, context) {
-      if (options.isPartial) return new Text(toolRunningLine(theme), 0, 0);
+      if (options.isPartial)
+        return new Text(
+          questionsShown(result.details)
+            ? toolStatusLine(theme, "waiting", "Needs your input")
+            : toolRunningLine(theme),
+          0,
+          0,
+        );
       const details = decodeOutcome(result.details);
       const cancelled = details?.outcome === "cancelled" && !context.isError;
       if (options.expanded)

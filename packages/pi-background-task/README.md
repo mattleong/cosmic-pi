@@ -47,7 +47,7 @@ Optional JSON in `~/.pi/agent/extensions/pi-background-task.json`, or `.pi/exten
 }
 ```
 
-Tasks run in Pi's shell, normally bash, with Pi's `shellPath` and `shellCommandPrefix` settings, as its `bash` tool does. Set this package's `shellPath` to run tasks in another shell instead, without Pi's prefix. `maxWaitSeconds` goes up to 3600. In `/tasks settings`, the two byte settings also accept sizes such as `512KiB` or `4m`.
+Tasks run in Pi's shell, normally bash, with Pi's `shellPath` and `shellCommandPrefix` settings, as its `bash` tool does. Set this package's `shellPath` to run tasks in another shell instead, without Pi's prefix. `maxWaitSeconds` goes up to 3600. `/tasks settings` groups the settings by scope and shows sizes and durations in their units, such as `256 KB` and `2s`. Its byte settings also accept sizes such as `512KiB` or `4m`, and its durations accept `500ms`, `2s`, or `1m 30s`; a bare number counts in the setting's own unit.
 
 ## How it works
 

@@ -1,20 +1,14 @@
 import * as Arr from "effect/Array";
+import * as Match from "effect/Match";
 import * as Order from "effect/Order";
 import * as Rec from "effect/Record";
 import { getSettingsListTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   createSettingsChoiceSubmenu,
+  createSettingsGroupSubmenu,
   managerSettingsTheme,
-  settingsListHint,
 } from "pi-cosmic-ui/manager/settings-surface";
-import {
-  Container,
-  SettingsList,
-  Spacer,
-  Text,
-  type Component,
-  type SettingItem,
-} from "@earendil-works/pi-tui";
+import { type Component, type SettingItem } from "@earendil-works/pi-tui";
 import { bundledThemes } from "shiki/themes";
 import { ON_OFF_VALUES, formatOnOff } from "../../config/values";
 import {
@@ -23,93 +17,79 @@ import {
   toolToggleId,
   type CodePreviewToolName,
 } from "../../tools/names";
-import { formatToolsSettingValue } from "../../tools/policy";
+import { formatToolsSettingValue, type ToolPreviewSetting } from "../../tools/policy";
+import { SETTING_ITEM_DEFINITIONS } from "./registry";
 import {
   formatToolOwner,
   getCodePreviewToolStatuses,
   type CodePreviewToolStatus,
 } from "../../tools/status";
 
-export class ToolPreviewSettingsSubmenu extends Container {
-  private readonly selectedTools: Set<CodePreviewToolName>;
-  private readonly settingsList: SettingsList;
-
-  constructor(
-    tools: readonly CodePreviewToolName[],
-    done: (selectedValue?: string) => void,
-    theme: Theme | undefined,
-    required: ReadonlySet<CodePreviewToolName>,
-  ) {
-    super();
-    this.selectedTools = new Set(tools);
-    this.settingsList = new SettingsList(
-      createToolToggleItems(this.selectedTools, getCodePreviewToolStatuses(), required),
-      ALL_CODE_PREVIEW_TOOLS.length + 2,
-      theme ? managerSettingsTheme(theme) : getSettingsListTheme(),
-      (id, value) => {
-        const tool = parseToolToggleId(id);
-        if (!tool) return;
-        if (value === "on") this.selectedTools.add(tool);
-        else this.selectedTools.delete(tool);
-      },
-      () =>
-        done(
-          formatToolsSettingValue(
-            Arr.filter(ALL_CODE_PREVIEW_TOOLS, (tool) => this.selectedTools.has(tool)),
-          ),
-        ),
-    );
-
-    this.addChild(new Text("Preview tools", 0, 0));
-    this.addChild(
-      new Text(
-        "Toggle previews individually. Changes take effect after /reload; tools owned by another extension stay disabled.",
-        0,
-        0,
-      ),
-    );
-    this.addChild(new Spacer(1));
-    this.addChild(this.settingsList);
-  }
-
-  settingsHint(expanded: boolean): string {
-    return settingsListHint(this.settingsList, { level: "nested", expanded });
-  }
-
-  handleInput(data: string): void {
-    this.settingsList.handleInput(data);
-  }
+/** The `Enabled tools` list: a toggle per tool, read-only where a setting or owner decides. */
+export function createToolPreviewSettingsSubmenu(
+  tools: readonly CodePreviewToolName[],
+  done: (selectedValue?: string) => void,
+  theme: Theme | undefined,
+  required: ReadonlyMap<CodePreviewToolName, ToolPreviewSetting>,
+): Component {
+  const selected = new Set(tools);
+  const statuses = getCodePreviewToolStatuses();
+  const summary = () =>
+    formatToolsSettingValue(Arr.filter(ALL_CODE_PREVIEW_TOOLS, (tool) => selected.has(tool)));
+  return createSettingsGroupSubmenu({
+    title: ENABLED_TOOLS_LABEL,
+    description: "Changes take effect after /reload.",
+    items: () => createToolToggleItems(selected, statuses, required),
+    onChange: (id, value) => {
+      const tool = parseToolToggleId(id);
+      if (!tool || required.has(tool)) return;
+      if (value === "on") selected.add(tool);
+      else selected.delete(tool);
+    },
+    done,
+    summary,
+    listTheme: theme ? managerSettingsTheme(theme) : getSettingsListTheme(),
+  });
 }
 
+export const ENABLED_TOOLS_LABEL = "Enabled tools";
+
 function createToolToggleItems(
-  enabledTools: Set<CodePreviewToolName>,
+  enabledTools: ReadonlySet<CodePreviewToolName>,
   statuses: Map<CodePreviewToolName, CodePreviewToolStatus>,
-  required: ReadonlySet<CodePreviewToolName>,
+  required: ReadonlyMap<CodePreviewToolName, ToolPreviewSetting>,
 ): SettingItem[] {
   return Arr.map(ALL_CODE_PREVIEW_TOOLS, (tool) => {
+    const id = toolToggleId(tool);
     const status = statuses.get(tool);
     if (status?.state === "skipped-conflict") {
       const owner = formatToolOwner(status.owner);
       return {
-        id: toolToggleId(tool),
-        label: `${tool} preview`,
-        description: `${owner} owns this tool.`,
-        currentValue: `disabled (${owner})`,
+        id,
+        label: tool,
+        description: `${owner} owns this tool, so its preview stays off.`,
+        currentValue: `off (${owner})`,
       };
     }
-
-    const description = required.has(tool)
-      ? "Stays on while this tool's preview setting is off."
-      : status?.state === "installed"
-        ? "Preview renderer available."
-        : status?.state === "registration-error"
-          ? "Write hook registration failed; retry with /reload."
-          : status?.state === "unavailable"
-            ? "Tool is not available; previews never enable it."
-            : "Takes effect after /reload.";
+    const setting = required.get(tool);
+    if (setting !== undefined) {
+      const reason = SETTING_ITEM_DEFINITIONS[setting].label;
+      return {
+        id,
+        label: tool,
+        description: `Stays on so collapsed ${tool} output can be hidden. Turn ${reason} on to change this.`,
+        currentValue: `on (needed: ${reason} off)`,
+      };
+    }
+    const description = Match.value(status?.state).pipe(
+      Match.when("installed", () => "Preview renderer available."),
+      Match.when("registration-error", () => "Write hook registration failed; retry with /reload."),
+      Match.when("unavailable", () => "Tool is not available; previews never enable it."),
+      Match.orElse(() => "Takes effect after /reload."),
+    );
     return {
-      id: toolToggleId(tool),
-      label: `${tool} preview`,
+      id,
+      label: tool,
       description,
       currentValue: formatOnOff(enabledTools.has(tool)),
       values: [...ON_OFF_VALUES],

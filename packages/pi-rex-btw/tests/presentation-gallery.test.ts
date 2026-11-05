@@ -1,5 +1,7 @@
 import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { beforeAll, describe, it } from "@effect/vitest";
+import { vi } from "vitest";
+import * as Str from "effect/String";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
@@ -10,7 +12,13 @@ import {
   galleryFrames,
   writeGallerySection,
 } from "pi-code-previews/testing";
-import { plainTheme } from "pi-cosmic-core/testing";
+import { Text } from "@earendil-works/pi-tui";
+import {
+  extensionContextFixture,
+  plainTheme,
+  recordingExtensionHost,
+} from "pi-cosmic-core/testing";
+import rexBtw from "../src/extension.ts";
 import { ORIENTATION, orientationLine } from "../src/parent/application.ts";
 import {
   conversationText,
@@ -126,6 +134,55 @@ const scenarios = [
   { title: "the parent's file can't be read", args: {}, result: failed("unreadable") },
 ] as const;
 
+/**
+ * `/btw` in a session whose conversation a pane couldn't read: no pane opens, and the notice says
+ * why, drawn one column in as Pi draws notices.
+ */
+const refusalLines = (): Effect.Effect<string[]> =>
+  Effect.gen(function* () {
+    vi.stubEnv("REX_SESSION", "session:s");
+    vi.stubEnv("REX_BLOCK", "block:b");
+    vi.stubEnv("REX_BIN_DIR", "/nonexistent-rex-bin");
+    const lines: string[] = [];
+    try {
+      const cases = [
+        ["a session that was never saved", undefined],
+        ["a session with no messages yet", "/nonexistent/session.jsonl"],
+      ] as const;
+      for (const [label, sessionFile] of cases) {
+        const notices: string[] = [];
+        const host = recordingExtensionHost({}, { registerFlag() {}, getFlag: () => undefined });
+        const ctx = extensionContextFixture({
+          cwd: "/project",
+          mode: "tui",
+          hasUI: true,
+          ui: { notify: (message: string) => void notices.push(message) },
+          sessionManager: {
+            getSessionId: () => parent.id,
+            getSessionFile: () => sessionFile,
+          },
+        });
+        rexBtw(host.pi);
+        yield* Effect.promise(() => Promise.resolve(host.emit("session_start", ctx)));
+        yield* Effect.promise(() =>
+          Promise.resolve(host.commands.get("btw")?.handler("what changed?", ctx)),
+        );
+        yield* Effect.promise(() => Promise.resolve(host.emit("session_shutdown", ctx)));
+        for (const width of [100, 57])
+          lines.push(
+            `── /btw notice · ${label} · ${width} cols`,
+            ...Arr.flatMap(notices, (notice) =>
+              Arr.map(new Text(plainTheme.fg("warning", notice), 1, 0).render(width), Str.trimEnd),
+            ),
+            "",
+          );
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    return lines;
+  });
+
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
@@ -173,6 +230,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
             ...orientationLine(message, plainTheme).render(width),
             "",
           );
+      lines.push(...(yield* refusalLines()));
       yield* writeGallerySection(directory, "pi-rex-btw", lines);
     }),
   );

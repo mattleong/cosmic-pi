@@ -37,7 +37,6 @@ import {
   DEFAULT_MAX_ACTIVE_RUNS,
   DEFAULT_SUBAGENT_NESTING_POLICY,
   WRITER_WORKSPACE_MODES,
-  isWriterWorkspaceMode,
   type DelegationMode,
   type SubagentNestingOverrides,
 } from "../config/schema.ts";
@@ -49,6 +48,7 @@ import {
   type ProfileSettingsScope,
 } from "./profile-route-editor.ts";
 import { profileSetPatchBase } from "./profile-write-context.ts";
+import { WRITER_WORKSPACE_LABELS, writerWorkspaceModeOf } from "../ui/run-facts.ts";
 
 type SettingsResult = Result.Result<
   undefined,
@@ -206,23 +206,43 @@ const SCOPE_GROUP_DESCRIPTIONS = {
 
 // A group row has one line, so its summary names each value as briefly as it stays clear.
 const SCOPED_SETTING_SUMMARIES = {
-  [DELEGATION]: (value) => `${value} delegation`,
+  [DELEGATION]: (value) => value,
   maxDirectChildren: (value) => `${value} children`,
   maxDepth: (value) => `depth ${value}`,
   maxActiveRuns: (value) => `${value} active`,
 } as const satisfies Record<typeof DELEGATION | NestingField, (value: string) => string>;
 
+/** The value an `inherit (12)` row applies, or the row's own value. */
+const appliedValue = (value: string): string =>
+  Str.startsWith(`${INHERIT} (`)(value) && Str.endsWith(")")(value)
+    ? Fn.pipe(value, Str.slice(INHERIT.length + 2, -1))
+    : value;
+
+const isDefaultLimit = (id: typeof DELEGATION | NestingField, value: string): boolean =>
+  id !== DELEGATION &&
+  value === String(DEFAULT_SUBAGENT_NESTING_POLICY[id] ?? DEFAULT_MAX_ACTIVE_RUNS);
+
 /**
- * A scope's group value: the settings it sets itself, such as `32 children · depth 3 · 16 active`,
- * or `inherit` when it sets none.
+ * A scope's group value: the values its settings apply, set there or inherited, such as
+ * `encouraged · depth 2`. The delegation mode always shows; limits at their defaults are left to
+ * the group's rows, so the line fits a narrow row.
  */
 const scopeGroupSummary = (
   values: ReadonlyArray<readonly [typeof DELEGATION | NestingField, string]>,
-): string => {
-  const own = Arr.filter(values, ([, value]) => inheritChoice(value) !== INHERIT);
-  return own.length === 0
-    ? INHERIT
-    : joinInline(Arr.map(own, ([id, value]) => SCOPED_SETTING_SUMMARIES[id](value)));
+): string =>
+  joinInline(
+    Arr.filterMap(values, ([id, value]) => {
+      const applied = appliedValue(value);
+      return isDefaultLimit(id, applied)
+        ? Result.failVoid
+        : Result.succeed(SCOPED_SETTING_SUMMARIES[id](applied));
+    }),
+  );
+
+/** A saved value as its row shows it: the writer workspace by its label. */
+const shownValue = (id: string, value: string): string => {
+  const mode = id === WORKSPACE ? writerWorkspaceModeOf(value) : undefined;
+  return mode === undefined ? value : WRITER_WORKSPACE_LABELS[mode];
 };
 
 export function subagentSettingsSubcommand(actions: SubagentCommandActions): ExtensionSubcommand {
@@ -283,11 +303,12 @@ function subagentSettingsCommand(
       actions
         .inspectWriterWorkspace()
         .then((snapshot): SettingsResult | Promise<SettingsResult> => {
-          if (!isWriterWorkspaceMode(value))
+          const mode = writerWorkspaceModeOf(value);
+          if (mode === undefined)
             return failed(`${WORKSPACE} must be ${Arr.join(WRITER_WORKSPACE_MODES, " or ")}`);
-          if (snapshot.mode === value || !stillCurrent()) return succeeded;
+          if (snapshot.mode === mode || !stillCurrent()) return succeeded;
           return actions
-            .setWriterWorkspaceMode(value)
+            .setWriterWorkspaceMode(mode)
             .then(() => succeeded, saveFailure("change the writer workspace"));
         }),
     );
@@ -394,8 +415,8 @@ function subagentSettingsCommand(
             id: WORKSPACE,
             label: "Writer workspace",
             description: `${WORKSPACE_DESCRIPTION}${unresolved ? ` ${unresolved}.` : ""}`,
-            currentValue: workspace.mode,
-            values: [...WRITER_WORKSPACE_MODES],
+            currentValue: WRITER_WORKSPACE_LABELS[workspace.mode],
+            values: Arr.map(WRITER_WORKSPACE_MODES, (mode) => WRITER_WORKSPACE_LABELS[mode]),
           },
         ];
         for (const item of items) committed.set(item.id, item.currentValue);
@@ -467,7 +488,7 @@ function subagentSettingsCommand(
     status: statusText,
     apply: (ctx, id, value, _signal, scope) =>
       apply(ctx, id, value, settingScope(scope)).then((result) => {
-        if (Result.isSuccess(result)) committed.set(rowId(id, scope), value);
+        if (Result.isSuccess(result)) committed.set(rowId(id, scope), shownValue(id, value));
         return result;
       }),
     displayValue: (_ctx, id, scope) => committed.get(rowId(id, scope)),

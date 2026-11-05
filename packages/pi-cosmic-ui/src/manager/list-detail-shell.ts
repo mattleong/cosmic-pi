@@ -11,6 +11,7 @@ import {
   clampListIndex,
   computeDetailWindow,
   listDetailMotion,
+  listWindowByHeight,
   listWindowStart,
   padListDetailRow,
   type DetailWindowPosition,
@@ -138,10 +139,19 @@ export class ListDetailShell {
     this.detailLineCount = 0;
   }
 
-  visibleWindow(count: number, limit: number) {
-    this.listPageSize = Math.max(1, limit);
-    const start = listWindowStart(count, this.current.selected, limit);
-    return { start, end: start + this.listPageSize };
+  /**
+   * The rows to show around the selection. Pass `heights` when rows can take more than one line;
+   * `limit` then counts lines, and the window keeps the selected row whole.
+   */
+  visibleWindow(count: number, limit: number, heights?: ReadonlyArray<number>) {
+    if (heights === undefined) {
+      this.listPageSize = Math.max(1, limit);
+      const start = listWindowStart(count, this.current.selected, limit);
+      return { start, end: start + this.listPageSize };
+    }
+    const window = listWindowByHeight(heights, this.current.selected, limit);
+    this.listPageSize = Math.max(1, window.end - window.start);
+    return window;
   }
 }
 
@@ -166,7 +176,7 @@ export const listDetailHeading = (
   text: string,
   focused: boolean,
   tone: Parameters<Theme["fg"]>[0] = "muted",
-): string => theme.fg(focused ? "accent" : tone, `  ${theme.bold(text)}`);
+): string => theme.fg(focused ? "accent" : tone, theme.bold(text));
 
 export interface ListDetailField {
   readonly label: string;
@@ -243,6 +253,28 @@ export const framedStackedRows = (
 
 const horizontalRule = (width: number) => Fn.pipe("─", Str.repeat(Math.max(0, width)));
 
+/** A rule across a frame's body; a two-pane layout passes its pane widths to close the column rule. */
+export const framedDivider = (
+  frame: ListDetailFrame,
+  inner: number,
+  columns?: { readonly listWidth: number; readonly detailWidth: number },
+): string =>
+  columns
+    ? `${frame.outer("├")}${frame.outer(horizontalRule(columns.listWidth))}${frame.inner("┴")}${frame.outer(horizontalRule(columns.detailWidth))}${frame.outer("┤")}`
+    : `${frame.outer("├")}${frame.outer(horizontalRule(inner))}${frame.outer("┤")}`;
+
+/** Columns a frame keeps between its left border and its text. */
+export const FRAME_GUTTER = 1;
+
+/**
+ * Sets text one column in from a frame's left border, as panels, hint rows, and detail panes do.
+ * `width` is the pane's full inner width; each row is clipped to the room left after the gutter.
+ */
+export const framedGutter = (rows: ReadonlyArray<string>, width: number): string[] =>
+  Arr.map(rows, (row) =>
+    row ? ` ${clipToWidth(row, Math.max(0, width - FRAME_GUTTER), "")}` : row,
+  );
+
 /**
  * Places wrapped hint rows (`keyHintRows`) between a framed body and its bottom border, set off
  * by a divider. A two-pane layout passes its pane widths so the divider closes the column rule.
@@ -260,12 +292,9 @@ export const framedBodyWithHints = (
 ): ReadonlyArray<string> => {
   const { height, inner, hints, columns } = options;
   if (!hints.length || height <= hints.length + 4) return body(height);
-  const divider = columns
-    ? `${frame.outer("├")}${frame.outer(horizontalRule(columns.listWidth))}${frame.inner("┴")}${frame.outer(horizontalRule(columns.detailWidth))}${frame.outer("┤")}`
-    : `${frame.outer("├")}${frame.outer(horizontalRule(inner))}${frame.outer("┤")}`;
   return [
     ...body(height - hints.length - 1),
-    divider,
+    framedDivider(frame, inner, columns),
     ...framedFill(frame, hints, hints.length, inner),
   ];
 };

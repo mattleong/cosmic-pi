@@ -37,7 +37,7 @@ export class PreviewPane {
     const boxWidth = Math.max(8, width);
     const innerWidth = Math.max(1, boxWidth - 4);
     const border = (value: string) => this.theme.fg("borderMuted", value);
-    const lines = [border(`┌${Fn.pipe("─", Str.repeat(Math.max(0, boxWidth - 2)))}┐`)];
+    const lines = [border(`╭${Fn.pipe("─", Str.repeat(Math.max(0, boxWidth - 2)))}╮`)];
     const title = this.choice
       ? `${this.theme.fg("accent", this.theme.bold("Preview"))} ${this.theme.fg("muted", stripTerminalControls(this.choice.label))}`
       : this.theme.fg("muted", "No preview for this choice");
@@ -50,7 +50,7 @@ export class PreviewPane {
     for (const line of rendered) {
       lines.push(`${border("│")} ${padListDetailRow(line, innerWidth)} ${border("│")}`);
     }
-    lines.push(border(`└${Fn.pipe("─", Str.repeat(Math.max(0, boxWidth - 2)))}┘`));
+    lines.push(border(`╰${Fn.pipe("─", Str.repeat(Math.max(0, boxWidth - 2)))}╯`));
     return lines;
   }
 

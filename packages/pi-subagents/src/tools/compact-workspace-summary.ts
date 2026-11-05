@@ -47,7 +47,7 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
           ...(unreadable > 0 ? [`${unreadable} unreadable`] : []),
           ...(adoptable > 0 ? [`${adoptable} adoptable`] : []),
         ],
-        ", ",
+        " · ",
       );
     }
     case "review":

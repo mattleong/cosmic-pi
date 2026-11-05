@@ -1,14 +1,15 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TUnknown } from "typebox";
-import { Text } from "@earendil-works/pi-tui";
-import * as Arr from "effect/Array";
-import * as Predicate from "effect/Predicate";
+import { Container, Text } from "@earendil-works/pi-tui";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import {
   escapeControlChars,
+  expandedAuthoredText,
+  expandedText,
   getTextContent,
+  previewIssuesSlot,
   type CodePreviewShellOptions,
   type CompactIssue,
   type CompactSummary,
@@ -16,14 +17,22 @@ import {
 } from "pi-code-previews";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { quoteText } from "pi-cosmic-core/message-text";
-import { safeTextPrefix } from "pi-cosmic-core/text";
-import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
+import { stripTerminalControls } from "pi-cosmic-core/security";
+import {
+  composeToolComponent,
+  renderToolHeader,
+  toolRunningLine,
+  toolStatusLine,
+} from "pi-cosmic-ui/tool";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
 import { QUOTED_TEXT_LIMIT } from "./compact-run-issues.ts";
-import { errorSection, previewCall, rejectionAwareCall, textResultBody } from "./render-preview.ts";
-import { indentedBody } from "../ui/agent-text.ts";
-import { isTextFragment } from "./text-fragments.ts";
+import { errorSection, rejectionAwareCall, textResultBody } from "./render-preview.ts";
+import { agentTextLines } from "../ui/agent-text.ts";
+
+/** A sent question's live status: it waits on the parent's reply. */
+const waitingLine = (theme: Parameters<typeof toolRunningLine>[0]): string =>
+  toolStatusLine(theme, "waiting", "Waiting for reply");
 
 export const CONTACT_PARENT_LABEL = "Contact Parent";
 
@@ -67,6 +76,22 @@ const warningIssue = (message: string): CompactIssue => {
   };
 };
 
+/** The error a child's own cancelled question settles with; a routine stop, not a failure. */
+const CANCELLED_QUESTION = "Parent question was cancelled.";
+
+const isCancelledQuestion = (result: {
+  readonly content: ReadonlyArray<{ readonly type: string }>;
+}) => Str.trim(getTextContent(result.content)) === CANCELLED_QUESTION;
+
+/**
+ * A short heading naming the kind of contact, with the agent's words quoted beneath it as a sent
+ * message's are. A warning's words are its issue instead.
+ */
+const warningFitsIssue = (message: string): boolean => {
+  const { line } = quoteText(message, { limit: QUOTED_TEXT_LIMIT });
+  return line !== undefined && line === Str.trim(stripTerminalControls(message));
+};
+
 export const contactParentCompactSummary: CompactSummaryProvider = ({
   args,
   result,
@@ -76,45 +101,60 @@ export const contactParentCompactSummary: CompactSummaryProvider = ({
   const request = contactRequest(args);
   if (!request) return undefined;
   const warning = request.kind === "warning";
+  // Expanded, the quoted words only gain a label, so the row offers expansion only for a reply.
   const summary: CompactSummary = {
     action: request.kind,
-    subject: warning ? "" : safeTextPrefix(sanitizeTerminalLine(request.message), 120),
-    ...(warning && { issues: [warningIssue(request.message)], outcome: "warning" as const }),
-  };
-  if (!result) return phase === "settled" || context.isError ? undefined : summary;
-  if (context.isError)
-    return phase === "settled"
+    subject: "",
+    ...(warning
       ? {
-          ...summary,
-          outcome: "error",
-          issues: [rejectedCallIssue(request.kind, getTextContent(result.content), "the parent")],
+          issues: [warningIssue(request.message)],
+          outcome: "warning" as const,
+          // A warning short enough for its issue has nothing more to show expanded.
+          ...(warningFitsIssue(request.message) && { expandLabel: false as const }),
         }
-      : undefined;
+      : { quote: stripTerminalControls(request.message), expandLabel: false as const }),
+  };
+  if (!result)
+    return phase === "settled" || context.isError
+      ? undefined
+      : {
+          ...summary,
+          // Once sent, an open question waits on the parent's reply.
+          ...(request.kind === "question" && phase === "running" && { waiting: true as const }),
+        };
+  if (context.isError) {
+    if (phase !== "settled") return undefined;
+    if (request.kind === "question" && isCancelledQuestion(result))
+      return { ...summary, counters: ["cancelled"], outcome: "cancelled" };
+    return {
+      ...summary,
+      outcome: "error",
+      issues: [rejectedCallIssue(request.kind, getTextContent(result.content), "the parent")],
+    };
+  }
   if (request.kind === "question")
     return parentReplyText(result) === undefined
       ? undefined
-      : { ...summary, counters: ["answered"], outcome: "success" };
+      : { ...summary, counters: ["answered"], outcome: "success", expandLabel: "reply" };
   const receipt = decodeReceipt(result);
   if (receipt?.content[0]?.text !== `Parent received ${request.kind}.`) return undefined;
-  return { ...summary, counters: ["acknowledged"], outcome: warning ? "warning" : "success" };
+  return { ...summary, counters: ["received"], outcome: warning ? "warning" : "success" };
 };
+
+const MESSAGE_LABELS = { progress: "Progress", warning: "Warning", question: "Question" } as const;
+
+/** The parent's reply without the prefix the child reads, or undefined for another result. */
+const replyWords = Fn.flow(parentReplyText, (text) =>
+  text === undefined ? undefined : Str.replace(/^Parent repl(?:y|ied): /u, "")(text),
+);
 
 export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["expandedContent"]> =
   {
     renderCall: (args, theme, context) => {
-      if (!Predicate.isObject(args)) return new Text("", 0, 0);
-      const warning = "kind" in args && args.kind === "warning";
-      const message = "message" in args ? args.message : undefined;
-      return indentedBody(
-        theme,
-        new Text(
-          (!warning || context.isError) && Predicate.isString(message)
-            ? theme.fg("toolOutput", escapeControlChars(message))
-            : "",
-          0,
-          0,
-        ),
-      );
+      const request = contactRequest(args);
+      // A warning's words are its issue, unless the call failed before the warning was sent.
+      if (!request || (request.kind === "warning" && !context.isError)) return new Container();
+      return expandedAuthoredText(theme, MESSAGE_LABELS[request.kind], request.message);
     },
     renderResult: (result, options, theme, context) => {
       const summary = contactParentCompactSummary({
@@ -124,14 +164,13 @@ export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["
         context,
       });
       const text = escapeControlChars(getTextContent(result.content));
+      if (summary?.outcome === "cancelled") return new Container();
       if (summary && context.isError) return errorSection(theme, text);
-      const shown = !summary || parentReplyText(result) !== undefined ? text : "";
-      return indentedBody(theme, new Text(theme.fg("toolOutput", shown), 0, 0));
+      const reply = replyWords(result);
+      if (reply !== undefined) return expandedAuthoredText(theme, "Reply", reply);
+      return summary ? new Container() : expandedText(theme, undefined, Str.split(text, "\n"));
     },
   };
-
-const fitsHeading = (message: string): boolean =>
-  message.length <= 120 && sanitizeTerminalLine(message) === message;
 
 const COLLAPSED_REPLY_LINES = 4;
 
@@ -139,14 +178,44 @@ export const contactParentRenderers = {
   renderCall: rejectionAwareCall(CONTACT_PARENT_LABEL, (args, theme, context) => {
     const request = contactRequest(args);
     const message = request && request.kind !== "warning" ? request.message : undefined;
-    const subject = Fn.pipe([request?.kind, message], Arr.filter(isTextFragment), Arr.join(": "));
-    const whole =
-      context.expanded && message && !fitsHeading(message)
-        ? new Text(theme.fg("toolOutput", escapeControlChars(message)), 0, 0)
-        : undefined;
-    return previewCall(theme, context, { title: CONTACT_PARENT_LABEL, subtitle: subject }, whole);
+    const container = new Container();
+    container.addChild(
+      new Text(
+        renderToolHeader({ title: CONTACT_PARENT_LABEL, subtitle: request?.kind }, theme),
+        0,
+        0,
+      ),
+    );
+    // Issues follow the heading, so the shell knows where the heading ends and the body begins.
+    container.addChild(previewIssuesSlot(context));
+    if (request && message !== undefined)
+      container.addChild(
+        context.expanded
+          ? expandedAuthoredText(theme, MESSAGE_LABELS[request.kind], message)
+          : composeToolComponent((width) =>
+              agentTextLines(message, width, theme, { expanded: false }),
+            ),
+      );
+    if (context.executionStarted && context.isPartial)
+      container.addChild(
+        new Text(request?.kind === "question" ? waitingLine(theme) : toolRunningLine(theme), 0, 0),
+      );
+    return container;
   }),
   renderResult(result, options, theme, context) {
+    // A cancelled question's status line already says so.
+    if (context.isError && isCancelledQuestion(result)) return new Container();
+    const reply = context.isError ? undefined : replyWords(result);
+    if (reply !== undefined)
+      return options.expanded
+        ? expandedAuthoredText(theme, "Reply", reply)
+        : composeToolComponent((width) =>
+            agentTextLines(`Parent replied: ${reply}`, width, theme, {
+              expanded: false,
+              indent: 0,
+              rows: COLLAPSED_REPLY_LINES,
+            }),
+          );
     const text = stripTerminalControls(getTextContent(result.content));
     return textResultBody(
       theme,

@@ -39,6 +39,13 @@ function summarize(
   });
 }
 
+/** A call still running, with any progress it reported. */
+const live = (
+  provider: CompactSummaryProvider,
+  args: SummaryInput["args"],
+  result?: SummaryInput["result"],
+) => provider({ phase: "running", args, result, context: renderContextFixture({}) });
+
 const pairedAnswers = (label: string) => ({
   outcome: "submitted",
   answers: [
@@ -115,6 +122,34 @@ describe("questionnaire compact outcome projection", () => {
     ).toBe("error");
     expect(summarize(asyncAskUserCompactSummary, row())?.outcome).toBe("success");
   });
+  it("marks a questionnaire queued behind others as queued, not as needing the user", () => {
+    const queued = row({
+      status: "pending",
+      outcome: undefined,
+      delivery: "pending",
+      presentation: "queued",
+    });
+    const open = row({ status: "pending", outcome: undefined, delivery: "pending" });
+    const status = { action: "status" };
+    expect(summarize(asyncAskUserCompactSummary, queued)?.outcome).toBe("queued");
+    expect(
+      summarize(asyncAskUserCompactSummary, { requests: [queued, row()] }, { args: status })
+        ?.outcome,
+    ).toBe("queued");
+    expect(
+      summarize(asyncAskUserCompactSummary, { requests: [queued, open] }, { args: status })
+        ?.outcome,
+    ).toBe("attention");
+  });
+  it("waits on the user once a call's questions are shown, or while it awaits answers", () => {
+    const args = { questions: [{ key: "library", title: "Library", prompt: "Which?" }] };
+    const shown = { content: [], details: { questionnaire: "open" } };
+    expect(live(askUserCompactSummary, args)?.waiting).toBeUndefined();
+    expect(live(askUserCompactSummary, args, shown)?.waiting).toBe(true);
+    const awaiting = { action: "await", requestId: "request-1" };
+    expect(live(asyncAskUserCompactSummary, awaiting)?.waiting).toBe(true);
+    expect(live(asyncAskUserCompactSummary, args)?.waiting).toBeUndefined();
+  });
   it("names a control call's questions by their stored titles, falling back without them", () => {
     const args = { action: "await", requestId: "request-1" };
     const titled = row({ titles: [{ key: "library", title: "Library" }] });
@@ -152,8 +187,10 @@ describe("questionnaire compact outcome projection", () => {
     const failed = row({ delivery: "failed" });
     const broken = row({ status: "failed", outcome: undefined, delivery: "none" });
     const list = { args: { action: "status" } };
+    // A lone open questionnaire's heading says it needs input, so it carries no issue.
+    expect(summarize(asyncAskUserCompactSummary, pending)?.issues).toBeUndefined();
     const summaries = [
-      summarize(asyncAskUserCompactSummary, pending),
+      summarize(asyncAskUserCompactSummary, { requests: [pending, queued] }, list),
       summarize(asyncAskUserCompactSummary, queued),
       summarize(asyncAskUserCompactSummary, { requests: [pending] }, list),
       summarize(asyncAskUserCompactSummary, { requests: [queued, { ...queued }] }, list),

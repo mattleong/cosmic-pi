@@ -73,7 +73,7 @@ export function tone(
       Arr.map(Arr.filter(Str.split(text, " "), Str.isNonEmpty), (value) => {
         const color = Fn.pipe(value, Str.startsWith("+"))
           ? "success"
-          : Fn.pipe(value, Str.startsWith("-"))
+          : Fn.pipe(value, Str.startsWith("−"))
             ? "error"
             : Fn.pipe(value, Str.startsWith("~"))
               ? "syntaxNumber"

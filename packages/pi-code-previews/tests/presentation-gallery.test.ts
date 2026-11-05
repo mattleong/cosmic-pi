@@ -1,19 +1,22 @@
-import type * as Schema from "effect/Schema";
+import * as Schema from "effect/Schema";
 import {
   generateDiffString,
   type AgentToolResult,
   type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
-import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionApiFixture, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
+import { stripAnsi } from "pi-cosmic-core";
 import { registerCodePreviewsCommand } from "../src/commands/register";
 import { describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { expandedText, withCodePreviewMessageShell } from "../index";
 import {
   captureRegistrations,
   galleryDirectory,
   galleryFrames,
+  galleryMessageFrames,
   writeGallerySection,
   withPresentationSettings,
   type GalleryScenario,
@@ -22,6 +25,8 @@ import { defaultCodePreviewSettings } from "../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { ALL_CODE_PREVIEW_TOOLS } from "../src/tools/names";
 import { withCodePreviewRenderers } from "../src/tools/cooperative-tools";
+import { setCodePreviewToolStatus } from "../src/tools/status";
+import { createSettingsCategoryItems } from "../src/settings/ui/index";
 import { WEB_ACCESS_TOOLS, isWebAccessTool } from "../src/third-party/web-access/identity";
 import {
   CodePreviewPresentationOwner,
@@ -179,6 +184,81 @@ const nativeCall = (status: string, error?: string) =>
   callRecord({ args: '{"path":"/project/source.ts"}', status, ...(error && { error }) });
 const nativeArgumentCall = (name: string, args: Schema.JsonObject) =>
   callRecord({ id: `private/${name}`, name, args: nativeReceipt(args) });
+
+/** A cooperating tool whose summary comes from its arguments, to show shared row states. */
+const StatusDemoArgs = Schema.Struct({
+  subject: Schema.optionalKey(Schema.String),
+  path: Schema.optionalKey(Schema.Literal(true)),
+  waiting: Schema.optionalKey(Schema.Literal(true)),
+  outcome: Schema.optionalKey(Schema.Literals(["queued", "paused", "returned"])),
+  metadata: Schema.optionalKey(Schema.String),
+  /** A state the collapsed result states above its output, as a task's `running` does. */
+  state: Schema.optionalKey(Schema.String),
+  expandLabel: Schema.optionalKey(Schema.Literal(false)),
+});
+const statusDemoArgs = Fn.flow(
+  Schema.decodeUnknownOption(StatusDemoArgs),
+  Option.getOrElse((): typeof StatusDemoArgs.Type => ({})),
+);
+const statusDemo = () =>
+  withCodePreviewRenderers<unknown, unknown, object>(
+    { name: "status_demo", label: "Status demo" },
+    {
+      renderCall: (args) => new Text(`Status demo ${statusDemoArgs(args).subject ?? ""}`, 0, 0),
+      renderResult: (result, _options, _theme, context) => {
+        const output = result.content[0]?.type === "text" ? result.content[0].text : "";
+        const { state } = statusDemoArgs(context.args);
+        return new Text(state === undefined ? output : `${state}\n${output}`, 0, 0);
+      },
+    },
+    {
+      compactSummary: ({ args: raw, phase }) => {
+        const args = statusDemoArgs(raw);
+        const metadata = args.metadata ?? args.state;
+        return {
+          subject: args.subject ?? "",
+          ...(args.path && { pathSubject: true }),
+          ...(args.waiting && { waiting: true }),
+          ...(metadata !== undefined && { metadata: [metadata] }),
+          ...(args.expandLabel === false && { expandLabel: false }),
+          ...(phase === "settled" && { outcome: args.outcome ?? "returned" }),
+        };
+      },
+      expandedContent: {
+        renderCall: () => new Container(),
+        renderResult: (result, _options, theme) =>
+          expandedText(
+            theme,
+            "Output",
+            Arr.map(result.content, (part) => (part.type === "text" ? part.text : "[image]")),
+          ),
+      },
+    },
+  );
+
+const messageText = (content: string | ReadonlyArray<{ readonly type: string }>) =>
+  Predicate.isString(content)
+    ? content
+    : Arr.join(
+        Arr.map(content, (part) =>
+          "text" in part && Predicate.isString(part.text) ? part.text : "",
+        ),
+        "\n",
+      );
+
+const statusDemoMessage = withCodePreviewMessageShell((message, _options, theme) => ({
+  name: "status_message",
+  label: "Status message",
+  summary: {
+    subject: "release notes",
+    outcome: "returned",
+    messageIcon: "received",
+  },
+  collapsed: () => new Text(messageText(message.content), 0, 0),
+  expanded: () =>
+    expandedText(theme, "Message", [messageText(message.content), "The full note continues here."]),
+  expandLabel: "message",
+}));
 
 const scenarios: ReadonlyArray<
   Omit<GalleryScenario, "args"> & {
@@ -1175,6 +1255,72 @@ const scenarios: ReadonlyArray<
     args: editArgs,
     result: text("Successfully replaced text in /project/src/a.ts."),
   },
+  {
+    tool: "status_demo",
+    title: "open question waits on a person",
+    args: {
+      subject: "Which database should the migration target before the release?",
+      waiting: true,
+    },
+    phase: "running",
+    narrow: true,
+  },
+  {
+    tool: "status_demo",
+    title: "queued request",
+    args: { subject: "Release checklist", outcome: "queued", metadata: "queued" },
+    result: text("Queued behind 2 earlier questionnaires"),
+  },
+  {
+    tool: "status_demo",
+    title: "routine running state kept on expansion",
+    args: { subject: "dev server", state: "running" },
+    result: text("VITE v6.3.5  ready in 412 ms"),
+  },
+  {
+    tool: "status_demo",
+    title: "paused run",
+    args: { subject: "auth review", outcome: "paused", metadata: "paused" },
+    result: text("Paused by the user"),
+  },
+  {
+    tool: "status_demo",
+    title: "prose subject cut at a word",
+    args: {
+      subject:
+        "Summarize the open review comments on the authentication refactor and list the blockers",
+    },
+    result: text("3 blockers"),
+    narrow: true,
+  },
+  {
+    tool: "status_demo",
+    title: "path subject keeps its file name",
+    args: {
+      subject: "packages/pi-code-previews/src/preview/compact-header-layout-elision.ts",
+      path: true,
+    },
+    result: text("Checked"),
+    narrow: true,
+  },
+  {
+    tool: "status_demo",
+    title: "expansion adds nothing, so no affordance",
+    args: { subject: "status all", metadata: "no questionnaires", expandLabel: false },
+    result: text("No questionnaires"),
+  },
+  {
+    tool: "read",
+    title: "read a deeply nested file",
+    args: {
+      path: "/project/packages/pi-code-previews/src/tools/renderers/shared/builtin-expanded-content.ts",
+      offset: 1,
+      limit: 2,
+    },
+    result: text(
+      "import * as Predicate from 'effect/Predicate';\nimport * as Arr from 'effect/Array';",
+    ),
+  },
 ];
 
 /**
@@ -1210,6 +1356,38 @@ const commandOverviewFrames = Effect.fn("Gallery.commandOverviewFrames")(functio
   ]);
 });
 
+/** `/code-previews settings` › Enabled tools, with two previews off and one tool owned elsewhere. */
+function enabledToolsFrames(): string[] {
+  const settings = {
+    ...defaultCodePreviewSettings,
+    tools: Arr.filter([...ALL_CODE_PREVIEW_TOOLS], (tool) => tool !== "tool_search"),
+    readContentPreview: false,
+    bashResultPreview: false,
+  };
+  setCodePreviewToolStatus("grep", {
+    state: "skipped-conflict",
+    owner: { source: "npm:pi-ripgrep", origin: "package", scope: "user", path: "" },
+  });
+  try {
+    const items = createSettingsCategoryItems(
+      () => settings,
+      () => undefined,
+      plainTheme,
+    );
+    const tools = Option.getOrThrow(Arr.findFirst(items, (item) => item.id === "tools"));
+    const submenu = tools.submenu?.(tools.currentValue, () => undefined);
+    return Arr.flatMap([100, 57], (width) => [
+      `── /code-previews settings › Enabled tools (row value ${tools.currentValue}) · ${width} cols`,
+      ...Arr.map(submenu?.render(width) ?? [], (line) =>
+        Fn.pipe(stripAnsi(line), Str.replace(/\s+$/u, "")),
+      ),
+      "",
+    ]);
+  } finally {
+    setCodePreviewToolStatus("grep", { state: "installed" });
+  }
+}
+
 const directory = galleryDirectory(process.env) ?? "";
 
 describe.skipIf(!directory)("presentation gallery", () => {
@@ -1225,6 +1403,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ] as const) {
           const tools = registered(style, background);
           tools.set("fallback", withCodePreviewRenderers({ name: "fallback" }, {}));
+          tools.set("status_demo", statusDemo());
           const label = background ? `${style} ${background}` : style;
           for (const scenario of background
             ? Arr.filter(scenarios, (candidate) => candidate.border === true)
@@ -1249,9 +1428,25 @@ describe.skipIf(!directory)("presentation gallery", () => {
               ),
             );
         }
+        for (const style of ["compact", "preview"] as const)
+          withPresentationSettings({ toolCallCollapsedStyle: style }, () =>
+            lines.push(
+              ...galleryMessageFrames(statusDemoMessage, {
+                title: `${style} · message whose expansion reveals more`,
+                message: {
+                  role: "custom",
+                  customType: "status_message",
+                  content: "Release notes are ready for review.",
+                  display: true,
+                  timestamp: 0,
+                },
+              }),
+            ),
+          );
       } finally {
         setCodePreviewSettings(saved);
       }
+      lines.push(...enabledToolsFrames());
       lines.push(...(yield* commandOverviewFrames()));
       yield* writeGallerySection(directory, "pi-code-previews", lines);
     }),

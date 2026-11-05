@@ -66,10 +66,10 @@ const DurationMillisecondsSchema = Schema.String.check(Schema.isPattern(DURATION
 export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "persistState",
-    label: "Remember fast mode",
+    label: "Remember across sessions",
     currentValue: (cfg) => formatOnOff(cfg.persistState),
     values: ON_OFF_VALUES,
-    description: "Remember fast-mode state across sessions.",
+    description: "Keep fast mode on or off in new sessions.",
     decoder: OnOffSchema,
   },
 ];
@@ -87,7 +87,7 @@ export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<R
 export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "usage.refreshIntervalMs",
-    label: "Usage refresh",
+    label: "Refresh interval",
     currentValue: (cfg) => formatDuration(cfg.usage.refreshIntervalMs),
     values: ["15s", "30s", "1m", "2m", "5m", "10m"],
     description: "How often usage refreshes.",
@@ -95,15 +95,15 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
   },
   {
     id: "usage.showOnlyOnSubscriptionModels",
-    label: "Usage only on OAuth",
+    label: "Subscription models only",
     currentValue: (cfg) => formatOnOff(cfg.usage.showOnlyOnSubscriptionModels),
     values: ON_OFF_VALUES,
-    description: "Only show usage when the current OpenAI model uses subscription/OAuth auth.",
+    description: "Show usage only when the current OpenAI model signs in with a subscription.",
     decoder: OnOffSchema,
   },
   {
     id: "usage.showResetTimes",
-    label: "Usage reset times",
+    label: "Reset times",
     currentValue: (cfg) => formatOnOff(cfg.usage.showResetTimes),
     values: ON_OFF_VALUES,
     description: "Show when each usage window resets.",
@@ -113,22 +113,22 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
 const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
   {
     id: "image.enabled",
-    label: "Image tool",
+    label: "Enabled",
     currentValue: (cfg) => formatOnOff(cfg.image.enabled),
     values: ON_OFF_VALUES,
-    description: "Allow the openai_image tool to make image requests.",
+    description: "Allow image requests from the openai_image tool and /openai image.",
     decoder: OnOffSchema,
   },
   {
     id: "image.defaultModel",
-    label: "Image model",
+    label: "Fallback model",
     currentValue: (cfg) => cfg.image.defaultModel,
-    description: "Model to use for image generation when the current model isn't OpenAI Codex.",
+    description: "Codex model that runs image requests when the current model isn't OpenAI Codex.",
     decoder: NonBlankStringSchema,
   },
   {
     id: "image.defaultSave",
-    label: "Image save",
+    label: "Save to",
     currentValue: (cfg) => cfg.image.defaultSave,
     values: IMAGE_SAVE_MODES,
     description: "Where generated images are saved by default.",
@@ -136,7 +136,7 @@ const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfi
   },
   {
     id: "image.outputFormat",
-    label: "Image format",
+    label: "Format",
     currentValue: (cfg) => cfg.image.outputFormat,
     values: IMAGE_OUTPUT_FORMATS,
     description: "Generated image file format.",
@@ -144,7 +144,7 @@ const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfi
   },
   {
     id: "image.timeoutMs",
-    label: "Image timeout",
+    label: "Timeout",
     currentValue: (cfg) => formatDuration(cfg.image.timeoutMs),
     values: ["30s", "1m", "2m", "3m", "5m"],
     description: "How long an image request may take.",

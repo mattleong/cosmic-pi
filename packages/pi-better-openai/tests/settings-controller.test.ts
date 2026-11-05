@@ -1,119 +1,21 @@
-import { initTheme, type ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Layer from "effect/Layer";
-import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { formatDuration, registerExtensionCommand, type JsonObject } from "pi-cosmic-core";
-import {
-  deferredPromise,
-  extensionContextFixture,
-  recordingExtensionHost,
-} from "pi-cosmic-core/testing";
-import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
+import { formatDuration } from "pi-cosmic-core";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { beforeAll, describe, vi } from "vitest";
-import { initialFastSnapshot } from "../src/fast/controller.ts";
-import { FastModeService } from "../src/fast/service.ts";
-import { registerSettingsController } from "../src/settings/controller.ts";
-import { OpenAIConfigService } from "../src/config/store.ts";
 import { makeResolvedConfig, waitUntil } from "./helpers.ts";
+import { input, settingsHarnessWith, type SettingsHarnessOptions } from "./settings-harness.ts";
+
+const settingsHarness = (options?: SettingsHarnessOptions) =>
+  settingsHarnessWith(makeResolvedConfig({ configPath: "/tmp/openai-settings.json" }), options);
 
 beforeAll(() => initTheme(undefined, false));
-
-interface SettingsHarnessOptions {
-  readonly configDocument?: JsonObject;
-  readonly updateSetting?: () => Promise<void>;
-  readonly hostCustom?: ExtensionUIContext["custom"];
-  readonly captureAuthority?: () => () => boolean;
-  readonly loadMenu?: () => PromiseLike<typeof import("../src/settings/menu.ts")>;
-  readonly signal?: () => AbortSignal | undefined;
-}
-
-function settingsHarness(options: SettingsHarnessOptions = {}) {
-  let currentConfig = makeResolvedConfig({
-    configPath: "/tmp/openai-settings.json",
-  });
-  const notify = vi.fn();
-  const surface = fakeCustomSurfaceHost();
-  const surfaceUi = surface.ctx.ui;
-  const baseContext = extensionContextFixture({
-    ...surface.ctx,
-    cwd: "/tmp",
-    signal: undefined,
-    ui: { custom: options.hostCustom ?? surfaceUi.custom.bind(surfaceUi), notify },
-  });
-  const ctx = {
-    ...baseContext,
-    get signal() {
-      return options.signal?.();
-    },
-  };
-  const host = recordingExtensionHost();
-  const services = Layer.mergeAll(
-    Layer.succeed(OpenAIConfigService, {
-      get: Effect.sync(() => currentConfig),
-      observe: () => Effect.void,
-      updateSetting: () =>
-        options.updateSetting ? Effect.promise(options.updateSetting) : Effect.void,
-      persistFast: (_desiredActive, afterCommit) => afterCommit,
-      readConfigDocument: Effect.sync(() => options.configDocument ?? {}),
-    }),
-    Layer.succeed(FastModeService, {
-      recordInjection: () => undefined,
-      initialize: () => Effect.void,
-      setDesired: () => Effect.void,
-      modelChanged: () => Effect.void,
-    }),
-  );
-
-  registerSettingsController(
-    registerExtensionCommand(host.pi, { name: "openai", description: "" }),
-    {
-      config: () => currentConfig,
-      updateContext: vi.fn(),
-      updateFooter: vi.fn(),
-      formatDebugStatus: () => "diagnostics",
-      fastProjection: MutableRef.make(initialFastSnapshot()),
-      resetFastRoutingTransport: vi.fn(),
-      run: (effect, signal) => Effect.runPromise(effect.pipe(Effect.provide(services)), { signal }),
-      captureAuthority: options.captureAuthority ?? (() => () => true),
-      ...(options.loadMenu && { loadMenu: options.loadMenu }),
-    },
-  );
-
-  const invoke = (args: string) =>
-    Promise.resolve(host.commands.get("openai")!.handler(`settings ${args}`, ctx));
-  const open = Effect.gen(function* () {
-    const closed = invoke("");
-    yield* waitUntil(() => {
-      surface.mount();
-      return surface.editor !== undefined;
-    });
-    return { closed };
-  });
-  const selectedComponent = () => {
-    if (!surface.editor) throw new Error("settings component has not opened");
-    return surface.editor;
-  };
-  const setRefreshInterval = (refreshIntervalMs: number) => {
-    currentConfig = {
-      ...currentConfig,
-      usage: { ...currentConfig.usage, refreshIntervalMs },
-    };
-  };
-
-  return { invoke, open, selectedComponent, setRefreshInterval, notify, surface };
-}
-
-const input = {
-  down: "\u001b[B",
-  enter: "\r",
-  escape: "\u001b",
-};
 
 function renderedRow(component: Component, label: string): string | undefined {
   return Option.getOrUndefined(
@@ -133,7 +35,7 @@ const beginRefreshWrite = Effect.gen(function* () {
   component.handleInput?.(input.enter);
   component.handleInput?.(input.down);
   component.handleInput?.(input.enter);
-  expect(renderedRow(component, "Usage refresh")).toContain("2m");
+  expect(renderedRow(component, "Refresh interval")).toContain("2m");
   return { h, write, closed, component };
 });
 

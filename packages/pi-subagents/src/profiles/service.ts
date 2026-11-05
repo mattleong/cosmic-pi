@@ -66,7 +66,7 @@ export interface SubagentProfileServiceContract {
   ) => Effect.Effect<SessionProfileSnapshot, SessionProfileEditError | ProjectionError>;
   /**
    * Records a saved writer workspace default in the session's base configuration, which /tree
-   * keeps, without changing Current Session's revision.
+   * keeps, without changing current session's revision.
    */
   readonly recordWriterWorkspaceMode: (
     mode: WriterWorkspaceMode,
@@ -146,7 +146,7 @@ const subagentProfileService = Effect.fn("SubagentProfileService.make")(function
               : conflict(
                   current,
                   expectedRevision,
-                  "Current Session changed while the saved-set write was pending; review it and try again.",
+                  "Current session changed while the saved-set write was pending; review it and try again.",
                 ),
         ),
       ),

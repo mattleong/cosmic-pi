@@ -111,3 +111,28 @@ it.effect("shares one bounded queue across blocking, owned and async requests", 
     }).pipe(Effect.provide(AskUserService.layer(host, () => Effect.void)));
   }),
 );
+
+it.effect("reports a blocking questionnaire as shown only once earlier ones close", () =>
+  Effect.gen(function* () {
+    const firstAnswer = yield* Deferred.make<AskUserOutcome>();
+    const shown: string[] = [];
+    const host: AskUserHost = (input) =>
+      input.questions[0]!.key === "first" ? Deferred.await(firstAnswer) : Effect.succeed(outcome);
+    const keyed = (key: string) => ({ questions: [{ ...request.questions[0]!, key }] });
+    const report = (key: string) =>
+      Effect.sync(() => {
+        shown.push(key);
+      });
+    yield* Effect.gen(function* () {
+      const service = yield* AskUserService;
+      const first = yield* forkNow(service.ask(keyed("first"), report("first")));
+      const second = yield* forkNow(service.ask(keyed("second"), report("second")));
+      yield* Effect.yieldNow;
+      expect(shown).toEqual(["first"]);
+      yield* Deferred.succeed(firstAnswer, outcome);
+      yield* Fiber.join(first);
+      yield* Fiber.join(second);
+      expect(shown).toEqual(["first", "second"]);
+    }).pipe(Effect.provide(AskUserService.layer(host)));
+  }),
+);

@@ -60,6 +60,7 @@ const makeService = Effect.fn("AskUserService.make")(function* (
   const askRequest = Effect.fn("AskUserService.ask")(function* (
     request: AskUserRequest,
     owner?: QuestionnaireOwner,
+    shown: Effect.Effect<void> = Effect.void,
   ) {
     const normalized = normalizeAskUserRequest(request);
     const validationError = validateAskUserRequest(normalized);
@@ -76,9 +77,10 @@ const makeService = Effect.fn("AskUserService.make")(function* (
               Effect.andThen(
                 Effect.raceFirst(
                   ticket.run(
-                    activity
-                      .presenting(id)
-                      .pipe(Effect.andThen(() => host(normalized, undefined, true))),
+                    activity.presenting(id).pipe(
+                      Effect.andThen(shown),
+                      Effect.andThen(() => host(normalized, undefined, true)),
+                    ),
                   ),
                   Deferred.await(cancel).pipe(
                     Effect.as<AskUserOutcome>({ outcome: "cancelled", answers: [] }),
@@ -103,7 +105,9 @@ const makeService = Effect.fn("AskUserService.make")(function* (
     );
   });
   return {
-    ask: (request: AskUserRequest) => askRequest(request),
+    /** `shown` runs as the questionnaire opens, after any earlier ones in the queue close. */
+    ask: (request: AskUserRequest, shown?: Effect.Effect<void>) =>
+      askRequest(request, undefined, shown),
     askOwned: (request: AskUserRequest, owner: QuestionnaireOwner) => askRequest(request, owner),
     startAsync: async.start,
     controlAsync: async.control,

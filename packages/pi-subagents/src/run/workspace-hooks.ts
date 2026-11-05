@@ -23,7 +23,7 @@ export const runWorktreeCreateHooks = Effect.fn("SubagentWorkspace.runWorktreeCr
     if ("invalid" in setup)
       return yield* invalid(
         "workspace_hook_failed",
-        `WorktreeCreate hooks are invalid in the subagents configuration (${Arr.join(setup.invalid, ", ")}); fix them and run /reload.`,
+        `Workspace setup is misconfigured; fix it and run /reload.\nWorktreeCreate hooks are invalid in the subagents configuration (${Arr.join(setup.invalid, ", ")}).`,
       );
     const hooks = setup;
     if (hooks.length === 0) return undefined;
@@ -46,7 +46,7 @@ export const runWorktreeCreateHooks = Effect.fn("SubagentWorkspace.runWorktreeCr
         : "";
     return yield* invalid(
       "workspace_hook_failed",
-      `WorktreeCreate hooks changed project files (${listed}${more}); add their outputs to .gitignore.`,
+      `Workspace setup changed project files; add its outputs to .gitignore.\nWorktreeCreate hooks changed ${listed}${more}.`,
     );
   },
 );

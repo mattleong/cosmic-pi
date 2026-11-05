@@ -90,9 +90,17 @@ test("only a recognized owned recoverable MCP envelope is quietly suppressed", (
     const h = createToolPresentationHarness(styleNativeMcp(definition()));
     h.call({}, { executionStarted: true, isPartial: item.isPartial ?? false });
     h.result(item.result, { isError: item.isError ?? false, isPartial: item.isPartial ?? false });
-    assert.ok(
-      Fn.pipe(stripAnsi(Arr.join(h.render(160), "\n")), Str.includes("Warning: truncated output")),
-    );
+    const collapsed = stripAnsi(Arr.join(h.render(160), "\n"));
+    // A failure collapses to its issue. When an owned envelope's issue states the truncation, the
+    // preview keeps only its output. Everything else keeps the original text.
+    const explained = Fn.pipe(collapsed, Str.includes("Output is truncated"));
+    const has = (text: string) => Fn.pipe(collapsed, Str.includes(text));
+    if (item.isError === true)
+      assert.ok(!has("Warning: truncated output") && !has("TAIL_RETAINED"));
+    else if (explained) {
+      assert.ok(has("LOST_OUTPUT") || has("HEAD_RETAINED"));
+      assert.ok(!has("Warning: truncated output"));
+    } else assert.ok(has("Warning: truncated output"));
     h.call({}, { expanded: true });
     h.result(item.result, {
       expanded: true,

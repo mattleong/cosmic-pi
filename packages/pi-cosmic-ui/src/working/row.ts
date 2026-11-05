@@ -1,18 +1,27 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as Fn from "effect/Function";
 import * as MutableRef from "effect/MutableRef";
+import * as Str from "effect/String";
 import { formatElapsed } from "pi-cosmic-core/display";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { synchronousMonotonicNow } from "pi-cosmic-core/platform/native-clock";
 import { startHostUiTicker } from "../boundary/host-status.ts";
 import { createThroughputMeter, type ThroughputRate } from "./throughput.ts";
 
-const WAITING_MESSAGE = "Waiting for you";
+/** Shown while a prompt waits on the user, in the suite's words for that wait. */
+export const WAITING_MESSAGE = "Needs your input";
 
+// Whole tokens read best once the rate is in double digits; slower rates keep one decimal.
+const formatRate = (tokensPerSecond: number): string =>
+  tokensPerSecond >= 10
+    ? String(Math.round(tokensPerSecond))
+    : Fn.pipe(tokensPerSecond.toFixed(1), Str.replace(/\.0$/u, ""));
+
+/** `Working · 1m 25s · ~50 tokens/s`; it fits a 57-column row, so no shorter form is needed. */
 const formatWorkingMessage = (milliseconds: number, rate: ThroughputRate | undefined): string => {
   const message = `Working · ${formatElapsed(milliseconds)}`;
   if (!rate) return message;
-  const value = rate.tokensPerSecond.toFixed(1);
-  return `${message} · ${rate.kind === "live" ? "~" : ""}${value} tok/s`;
+  return `${message} · ${rate.kind === "live" ? "~" : ""}${formatRate(rate.tokensPerSecond)} tokens/s`;
 };
 
 export interface WorkingRowOptions {

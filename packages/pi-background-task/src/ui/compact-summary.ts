@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
+import { joinInline } from "pi-cosmic-ui/manager";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import {
   countTaskStates,
@@ -209,8 +210,14 @@ function failureIssues(value: BackgroundTaskSnapshot): CompactIssue[] {
   return issues;
 }
 
+/** The outcomes one task can have. */
+export type TaskOutcome = Extract<
+  CompactOutcome,
+  "success" | "error" | "cancelled" | "uncertain" | "returned"
+>;
+
 // Only a cleanly exited command is a success; work still starting or running stays neutral.
-function taskOutcome(value: BackgroundTaskSnapshot): CompactOutcome {
+function taskOutcome(value: BackgroundTaskSnapshot): TaskOutcome {
   if (value.state === "failed" || value.state === "timed_out" || value.error) return "error";
   if (value.state === "stopped") return "cancelled";
   if (failingExitCode(value) !== undefined || value.signal) return "error";
@@ -273,12 +280,16 @@ function startSummary(value: BackgroundTaskSnapshot, action: string): CompactSum
     : { ...task, action };
 }
 
+/** A timed-out task's issue already says it timed out, so its row doesn't repeat the state. */
+const stateMetadata = (state: BackgroundTaskSnapshot["state"]): string[] =>
+  state === "timed_out" ? [] : [taskStateLabel(state)];
+
 function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
   const outcome = taskOutcome(value);
   return {
     subject: taskDisplayName(value),
     // A failing exit code is already the issue's message.
-    metadata: [taskStateLabel(value.state)],
+    metadata: stateMetadata(value.state),
     outcome,
     issues: taskIssues(value, outcome),
   };
@@ -288,10 +299,19 @@ function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
 export const listedTaskIssues = (value: BackgroundTaskSnapshot): ReadonlyArray<CompactIssue> =>
   taskSummary(value).issues;
 
-/** A finished task's notice: its outcome and issues as a status row has them, and its duration. */
+/** A listed task's outcome, which its row marks with the suite's status glyph. */
+export const listedTaskOutcome = (value: BackgroundTaskSnapshot): TaskOutcome => taskOutcome(value);
+
+/**
+ * A finished task's notice: its outcome and issues as a status row has them, and its duration,
+ * unless its timeout issue already states it.
+ */
 export function taskNoticeSummary(value: BackgroundTaskSnapshot): TaskSummary {
   const task = taskReportSummary(value);
-  const ran = value.endedAt === undefined ? [] : [formatDuration(value.endedAt - value.startedAt)];
+  const ran =
+    value.endedAt === undefined || value.state === "timed_out"
+      ? []
+      : [formatDuration(value.endedAt - value.startedAt)];
   return { ...task, metadata: [...(task.metadata ?? []), ...ran] };
 }
 
@@ -384,14 +404,13 @@ function aggregateCounters(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string
   });
   const total = countLabel(tasks.length, "task");
   const { active, failed } = countTaskStates(tasks);
-  const brief = Arr.join(
+  const brief = joinInline(
     Arr.filter(
       [total, active ? `${active} active` : "", failed ? `${failed} failed` : ""],
       Boolean,
     ),
-    ", ",
   );
-  return [...new Set([Arr.join(counts, ", ") || total, brief, total])];
+  return [...new Set([joinInline(counts) || total, brief, total])];
 }
 
 const LISTED_PROBLEMS: ReadonlyArray<CompactOutcome> = ["error", "warning", "uncertain"];
@@ -429,16 +448,22 @@ function aggregateSummary(
   };
 }
 
+/** What a wait found, and the task's state unless an issue already states it. */
 function waitMetadata(
   wait: DetailsFor<"wait">["wait"],
-  state: string,
+  state: string | undefined,
   alternatives: number,
-): string {
+): string[] {
+  // A heading shows one metadata fact, so the state shares it.
+  const withState = (found: string) => [state === undefined ? found : `${found} · ${state}`];
   if (wait.outcome === "matched")
-    return alternatives > 1 && wait.matchedText !== undefined
-      ? `found ${quotedWaitText(wait.matchedText)}, ${state}`
-      : `output found, ${state}`;
-  return wait.outcome === "timeout" ? `still ${taskStateLabel(wait.snapshot.state)}` : state;
+    return withState(
+      alternatives > 1 && wait.matchedText !== undefined
+        ? `found ${quotedWaitText(wait.matchedText)}`
+        : "output found",
+    );
+  if (wait.outcome === "timeout") return [`still ${taskStateLabel(wait.snapshot.state)}`];
+  return state === undefined ? [] : [state];
 }
 
 /** An output wait whose task finished first: the awaited text never appeared. */
@@ -489,11 +514,10 @@ function waitSummary(
         "The task ended before the awaited output appeared.",
       ),
     );
-  const state = task.metadata?.[0] ?? taskStateLabel(wait.snapshot.state);
   return {
     ...task,
     action,
-    metadata: [waitMetadata(wait, state, texts.length)],
+    metadata: waitMetadata(wait, task.metadata?.[0], texts.length),
     issues,
     outcome: waitOutcome(wait, task.outcome, unmatched),
   };
@@ -556,7 +580,7 @@ function logsSummary(details: DetailsFor<"logs">, action: string): CompactSummar
   return {
     action,
     subject: taskDisplayName(details.task),
-    metadata: [taskStateLabel(details.logs.state)],
+    metadata: stateMetadata(details.logs.state),
     outcome: logsOutcome(details.logs.state, issues),
     issues,
   };

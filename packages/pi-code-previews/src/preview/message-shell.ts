@@ -6,12 +6,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import {
-  composeToolComponent,
-  renderExpansionAffordance,
-  renderToolHeader,
-  toolExpandHint,
-} from "pi-cosmic-ui/tool";
+import { composeToolComponent, renderExpansionAffordance, toolExpandHint } from "pi-cosmic-ui/tool";
 import type { ToolCallCollapsedStyle } from "../config/schema";
 import { sharedPresentation, type SharedPresentation } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
@@ -19,7 +14,9 @@ import { planCompactPresentation } from "../tools/compact-presentation";
 import { compactStatus, type CompactSummary } from "../tools/compact-summary";
 import { BorderedToolCall, statusBorderColor } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
-import { compactSingleLine, renderCompactRow } from "./compact-row";
+import { renderCompactRow } from "./compact-row";
+import { renderCompactAffordance } from "./compact-quote";
+import { renderPreviewHeading } from "./preview-heading";
 import { statusBackground } from "./self-background";
 
 /** A custom message presented like a settled tool row: its heading, then what someone wrote. */
@@ -167,8 +164,18 @@ class MessageShell implements Component {
               width,
             ),
           ]
-        : new Text(previewHeading(message, summary, expanded, theme), 0, 0).render(width)),
-      ...renderCompactIssues(summary.issues, theme, width, expanded, compact ? ROW_INDENT : ""),
+        : new Text(
+            renderPreviewHeading(message.label ?? message.name, summary, expanded, theme),
+            0,
+            0,
+          ).render(width)),
+      ...renderCompactIssues(
+        summary.issues,
+        theme,
+        width,
+        expanded,
+        compact || expanded ? ROW_INDENT : "",
+      ),
     ]);
     const body = (expanded ? (message.expanded ?? message.collapsed) : message.collapsed)?.();
     const shown = new Container();
@@ -176,6 +183,11 @@ class MessageShell implements Component {
     if (compact && !expanded) {
       shown.addChild(heading);
       if (body) shown.addChild(beneathRow(body));
+      const label = message.expandLabel;
+      if (label !== undefined)
+        shown.addChild(
+          composeToolComponent((width) => renderCompactAffordance(label, theme, width)),
+        );
     } else shown.addChild(this.frame(heading, body, status));
     for (const attachment of message.attachments ?? []) {
       shown.addChild(new Spacer(1));
@@ -236,26 +248,3 @@ function beneathRow(body: Component): Component {
 }
 
 const ROW_INDENT = "  ";
-
-/** A preview heading as tool rows have it: the title, then its action and subject dimmed. */
-function previewHeading(
-  message: CodePreviewMessage,
-  summary: CompactSummary,
-  expanded: boolean,
-  theme: Theme,
-): string {
-  const subject = expanded ? summary.subject : (summary.compactSubject ?? summary.subject);
-  const facts = Arr.filter(
-    Arr.map([...(summary.counters ?? []), ...(summary.metadata ?? [])], compactSingleLine),
-    Str.isNonEmpty,
-  );
-  const lead = Arr.join(
-    Arr.filter(
-      [compactSingleLine(summary.action ?? ""), compactSingleLine(subject)],
-      Str.isNonEmpty,
-    ),
-    " ",
-  );
-  const subtitle = Arr.join(Arr.filter([lead, ...facts], Str.isNonEmpty), " · ");
-  return renderToolHeader({ title: message.label ?? message.name, subtitle }, theme);
-}

@@ -15,7 +15,7 @@ import {
 import type { SubagentEffort } from "../../domain/routing.ts";
 import type { ProjectedPiModel } from "../profile-model-catalog.ts";
 import { profileRouteOptionLabel } from "../profile-route-editor.ts";
-import { selectHost } from "./profile-workspace-selectors.ts";
+import { profileBreadcrumb, selectHost } from "./profile-workspace-selectors.ts";
 
 export interface ProfileModelOption extends ModelPickerModel {
   readonly selector: string;
@@ -93,7 +93,7 @@ export const profileModelPickerPage = (options: ProfileModelPickerPageOptions) =
   const optionLabel = profileRouteOptionLabel(context.candidateIndex);
   return new ModelPickerPage({
     ...selectHost(options),
-    breadcrumb: `${targetLabel} · ${context.profile} · ${optionLabel} · Model`,
+    breadcrumb: profileBreadcrumb(targetLabel, context.profile, optionLabel, "Model"),
     title: `Choose model · ${context.profile} · ${optionLabel}`,
     subtitle: targetLabel,
     scopedModels: scopedChoices ?? [],

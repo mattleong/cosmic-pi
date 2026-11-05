@@ -95,7 +95,8 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
       expect(h.notify).not.toHaveBeenCalled();
 
       yield* selectModel(otherProvider, "set");
-      expect(h.notify).toHaveBeenCalledExactlyOnceWith(expect.any(String), "warning");
+      // Pausing for a model without fast mode is a normal state, so it informs rather than warns.
+      expect(h.notify).toHaveBeenCalledExactlyOnceWith(expect.any(String), "info");
       h.notify.mockClear();
       yield* selectModel(h.ctx, "restore");
       expect(h.notify).not.toHaveBeenCalled();

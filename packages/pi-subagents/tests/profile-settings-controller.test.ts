@@ -168,7 +168,7 @@ const useSelectedSet = function* (fixture: ReturnType<typeof setup>, beforeConfi
   press(fixture, "\r");
   yield* step(settleHostPromises);
 };
-const makeDefault = (fixture: ReturnType<typeof setup>) => press(fixture, "k", "?", "\r");
+const makeDefault = (fixture: ReturnType<typeof setup>) => press(fixture, "k", "a", "\r");
 const replaceableActivation = (fixture: ReturnType<typeof setup>) => {
   const activation = new AbortController();
   const runs = vi.fn();

@@ -11,7 +11,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { countLabel } from "pi-cosmic-core/display";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
-import { toolRunningLine } from "pi-cosmic-ui/tool";
+import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
 import {
   answersBody,
   callBody,
@@ -19,6 +19,7 @@ import {
   emptyBody,
   expandedResult,
   mutedState,
+  queuedState,
   waitingState,
   stacked,
   type QuestionnaireArgs,
@@ -126,7 +127,15 @@ export function renderAsyncResult(
   theme: Theme,
   context: ResultContext = {},
 ): Component {
-  if (options.isPartial) return new Text(toolRunningLine(theme), 0, 0);
+  if (options.isPartial)
+    return new Text(
+      // An await is a wait on the user, as its compact row says.
+      decodeAsyncControl(context.args)?.action === "await"
+        ? toolStatusLine(theme, "waiting", "Needs your input")
+        : toolRunningLine(theme),
+      0,
+      0,
+    );
   const result = envelope(input);
   const decoded = decodeExpandedAsyncRows(result?.details);
   const rows = decoded ?? [];
@@ -152,16 +161,20 @@ function collapsedRows(
   list: boolean,
   theme: Theme,
 ): Component {
-  if (rows.length === 0) return mutedState(["No questionnaires retained", "None retained"], theme);
-  if (list)
-    return Arr.some(states, isPendingState)
-      ? waitingState(stateCounts(states), theme)
-      : mutedState(stateCounts(states), theme);
+  if (rows.length === 0) return mutedState(["No questionnaires", "None"], theme);
+  // An open questionnaire needs the user now; a queued one only waits its turn.
+  const pendingState = (alternatives: readonly string[]) =>
+    states.includes("waiting")
+      ? waitingState(alternatives, theme)
+      : states.includes("queued")
+        ? queuedState(alternatives, theme)
+        : mutedState(alternatives, theme);
+  if (list) return pendingState(stateCounts(states));
   const [state] = states;
   if (state === "cancelled") return cancelledLine(theme);
   const answers = submittedAnswers(rows);
   if (answers) return answersBody(answers, rowTitles(rows), theme, true);
-  return state && isPendingState(state) ? waitingState(stateWords(state), theme) : emptyBody();
+  return state && isPendingState(state) ? pendingState(stateWords(state)) : emptyBody();
 }
 
 /**

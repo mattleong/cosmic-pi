@@ -1,3 +1,4 @@
+import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
@@ -99,6 +100,22 @@ export const candidateEffortLabel = (
     ? `${candidateEffortLevel(profile, candidate, parentEffort)} (profile default)`
     : candidate.effort;
 
+/**
+ * A candidate's model as the editor shows it: the `parent` choice reads as the inherited model it
+ * runs on, such as `inherit (anthropic/claude-opus-5-5)`, or `inherit (claude-opus-5-5)` where a
+ * table column is short.
+ */
+export const candidateModelLabel = (
+  candidate: Pick<ProfileCandidate, "model">,
+  parentModel: string | undefined,
+  short = false,
+): string => {
+  if (candidate.model !== "parent") return candidate.model;
+  if (parentModel === undefined) return "inherit";
+  const model = short ? (Str.split(parentModel, "/").at(-1) ?? parentModel) : parentModel;
+  return `inherit (${model})`;
+};
+
 export const candidateFastModeAvailable = (
   candidate: ProfileCandidate,
   parentModel: string | undefined,
@@ -121,7 +138,7 @@ export const targetProfilePrimarySummary = (
   const draft = loadProfileRouteDraft(inspection, target, profile);
   const kind = draftKindLabel(draft, profileWorkspaceScope(target));
   const primary = draft.candidates[0];
-  if (primary) return `${kind} · ${primary.model}`;
+  if (primary) return `${kind} · ${candidateModelLabel(primary, undefined)}`;
   return draft.kind === "disabled" || draft.kind === "invalid" ? kind : `${kind} · disabled`;
 };
 
@@ -176,7 +193,12 @@ export const candidateFieldRows = (
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const advancedValues = advancedSummaryValues(candidate, parentModel);
   return [
-    { field: "model", label: "Model", value: candidate.model, fixed: false },
+    {
+      field: "model",
+      label: "Model",
+      value: candidateModelLabel(candidate, parentModel),
+      fixed: false,
+    },
     {
       field: "effort",
       label: "Reasoning",

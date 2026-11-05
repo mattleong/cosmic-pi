@@ -38,6 +38,8 @@ import { headingShowedSubject } from "../../../preview/heading-coverage";
 import { normalizeShellCommandWhitespace } from "../../shell-command";
 import { argumentsStreaming, pathPreviewLanguage, renderContentPreview } from "./preview-text";
 import { readResultBody } from "./read-result";
+import { cachedDeferredPreview } from "./cache";
+import { captureCodePreviewSessionCapability } from "../../../application/capability";
 import type { PreviewRenderers, RendererState, ToolRenderContext } from "./types";
 import { writeBeforeSnapshot, writeDiffPlan } from "./write-result";
 import { editDiffShowsOperations, writeDiffShowsContent } from "./edit-diff-coverage";
@@ -123,7 +125,19 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       }
       const { output, notice } = splitAgentNotice(tool, result);
       const body = builtinResultBody(tool, cwd, result, output, theme, context);
-      return withAgentNotes(expandedSection(theme, undefined, body), theme, notice);
+      const raw = unconfirmedResultText(tool, output);
+      // Once the body has a second kind of content, each kind is labeled.
+      const label =
+        (notice !== undefined || raw !== undefined) && (tool !== "read" || output !== "")
+          ? RESULT_LABELS[tool]
+          : undefined;
+      const container = new Container();
+      container.addChild(expandedSection(theme, label, body));
+      if (raw !== undefined)
+        container.addChild(
+          expandedSection(theme, "Raw result", new Text(escapeControlChars(raw), 0, 0)),
+        );
+      return withAgentNotes(container, theme, notice);
     },
   };
 }
@@ -156,21 +170,36 @@ function builtinResultBody(
     const body = readResultBody(result, input);
     if (body.kind === "image") return new Text(escapeControlChars(body.text), 0, 0);
     if (body.kind === "oversized") return new Container();
-    return source(body.content, path, theme, context.invalidate, { firstLine: body.firstLine });
+    const { content, firstLine } = body;
+    // A full file can be large, so it draws after deferred work, as the preview style's does.
+    return deferredBody(
+      context,
+      "readExpandedContent",
+      [content, path, firstLine],
+      theme,
+      (active) =>
+        source(content, path, theme, context.invalidate, { firstLine, highlight: active }),
+    );
   }
   if (tool === "edit") {
     const diff = getEditDiff(hostObject(result.details));
     const content = new Container();
     if (diff) content.addChild(renderDiff(diff, path, theme, context.invalidate));
-    if (output && !EDIT_SUCCESS.test(output)) content.addChild(rawResult(output, theme));
     return content;
   }
-  if (tool === "write") return writeResultBody(result, output, theme, context, input, path);
+  if (tool === "write") return writeResultBody(result, theme, context, input, path);
   if (tool === "grep")
-    return new Text(
-      Arr.join(renderGrepOutputLines(output, theme, input, context.invalidate), "\n"),
-      0,
-      0,
+    return deferredBody(
+      context,
+      "grepExpandedContent",
+      [output, input],
+      theme,
+      () =>
+        new Text(
+          Arr.join(renderGrepOutputLines(output, theme, input, context.invalidate), "\n"),
+          0,
+          0,
+        ),
     );
   if (tool === "find" || tool === "ls") {
     // An empty listing's note is not a path, so it gets no path marker.
@@ -188,9 +217,31 @@ function builtinResultBody(
   return new Text(escapeControlChars(Str.trimEnd(output)), 0, 0);
 }
 
+function deferredBody(
+  context: Pick<ToolRenderContext<RendererState, unknown>, "state" | "invalidate">,
+  slot: string,
+  dependencies: readonly unknown[],
+  theme: Theme,
+  render: (active: boolean) => Component,
+): Component {
+  const characters = Arr.reduce(dependencies, 0, (total, value) =>
+    Predicate.isString(value) ? total + value.length : total,
+  );
+  return cachedDeferredPreview(
+    context.state,
+    slot,
+    [...dependencies, theme],
+    characters,
+    "Rendering…",
+    theme,
+    render,
+    context.invalidate,
+    captureCodePreviewSessionCapability(),
+  );
+}
+
 function writeResultBody(
   result: AgentToolResult<unknown>,
-  output: string,
   theme: Theme,
   context: Pick<ToolRenderContext<RendererState, unknown>, "state" | "toolCallId" | "invalidate">,
   input: HostObject | undefined,
@@ -210,7 +261,6 @@ function writeResultBody(
       renderDiff(createSimpleDiff(plan.previous, plan.content), path, theme, context.invalidate),
     );
   }
-  if (output && !WRITE_SUCCESS.test(output)) body.addChild(rawResult(output, theme));
   return body;
 }
 
@@ -342,6 +392,20 @@ function renderDiff(
   );
 }
 
-function rawResult(output: string, theme: Theme): Text {
-  return new Text(`${theme.fg("muted", "Raw result")}\n${escapeControlChars(output)}`, 0, 0);
+const RESULT_LABELS = {
+  bash: "Output",
+  read: "Content",
+  write: "Diff",
+  edit: "Diff",
+  grep: "Matches",
+  find: "Paths",
+  ls: "Entries",
+} as const satisfies Record<BuiltinCompactTool, string>;
+
+/** Result text from an edit or write other than Pi's confirmation, which the heading restates. */
+function unconfirmedResultText(tool: BuiltinCompactTool, output: string): string | undefined {
+  if (!output) return undefined;
+  if (tool === "edit") return EDIT_SUCCESS.test(output) ? undefined : output;
+  if (tool === "write") return WRITE_SUCCESS.test(output) ? undefined : output;
+  return undefined;
 }

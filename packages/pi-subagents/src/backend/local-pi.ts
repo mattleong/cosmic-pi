@@ -345,7 +345,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
                       processError(
                         "start",
                         "prompt_not_delivered",
-                        "Subagent did not admit the task.\nAn input hook or slash command handled it before it reached the model.",
+                        "A hook or slash command took the task before the model saw it.\nAn input hook or slash command handled the prompt, so the subagent never started on it.",
                       ),
                     )
                   : Effect.void,

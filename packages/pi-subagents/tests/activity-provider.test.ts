@@ -78,6 +78,19 @@ const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () =
   return { transport, bridge, pending, admitted, act, dispose, invoke };
 };
 
+/** A frozen child of `parent`, as the projection publishes it. */
+const childRun = (id: string, state: SubagentRunView["state"]) =>
+  Object.freeze(view({ id, state, parentRunId: "parent" }));
+
+/** The first item's stop confirmation, as Activity shows it. */
+const stopConfirmation = (runs: ReadonlyArray<SubagentRunView>) =>
+  Option.getOrUndefined(
+    Arr.findFirst(
+      subagentActivityItems({ revision: 1, runs })[0]?.actions ?? [],
+      (action) => action.id === "stop",
+    ),
+  )?.confirmation;
+
 describe("subagent activity provider", () => {
   effectTest(
     "offers stop verification for terminal recoverable cleanup without changing completed work",
@@ -236,6 +249,26 @@ describe("subagent activity provider", () => {
     expect(status("asking")).toMatchObject({ status: "needs-input", inputTarget: "parent" });
     expect(status("waiting")).toMatchObject({ status: "needs-input", inputTarget: "parent" });
     expect(status("paused")?.status).toBe("paused");
+  });
+
+  it("keeps a parent's stop confirmation current as its subtree finishes", () => {
+    const parent = Object.freeze(view({ id: "parent", state: "running" }));
+    const twoActive = stopConfirmation([
+      parent,
+      childRun("a", "running"),
+      childRun("b", "running"),
+    ]);
+    const oneActive = stopConfirmation([
+      parent,
+      childRun("a", "running"),
+      childRun("b", "completed"),
+    ]);
+    const none = stopConfirmation([parent, childRun("a", "failed"), childRun("b", "completed")]);
+    expect(new Set([twoActive, oneActive, none]).size).toBe(3);
+    expect(stopConfirmation([parent, childRun("a", "running"), childRun("b", "running")])).toBe(
+      twoActive,
+    );
+    expect(stopConfirmation([parent])).toBe(none);
   });
 
   it("shows a report once, as Markdown, and keeps run identity behind the technical disclosure", () => {

@@ -19,7 +19,7 @@ pi install "$PWD/packages/pi-directory-models"
 
 ## Usage
 
-There are no commands. Pick a model in a directory once and later fresh sessions there start with it. Resumed, forked, and reloaded sessions keep their own model. A directory without a preference records Pi's current model on its first fresh session.
+There are no commands. Pick a model in a directory once and later fresh sessions there start with it, with a short notice such as `Using openai-codex/gpt-5.6-sol · thinking high, saved for this directory` when the restore changed anything. Resumed, forked, and reloaded sessions keep their own model. A directory without a preference records Pi's current model on its first fresh session.
 
 ## Configuration
 
@@ -43,6 +43,6 @@ You can edit these by hand; valid changes apply to the next fresh session. An in
 
 ## How it works
 
-The extension resolves the canonical current directory at session start and, for fresh sessions, applies its saved preference through Pi's `setModel()`. That changes only the current session, never Pi's global default. Failures fail open: an invalid record, an unavailable model, missing authentication, or a write error leaves Pi's current model in place with a short warning. A saved model that's temporarily unavailable is kept rather than overwritten.
+The extension resolves the canonical current directory at session start and, for fresh sessions, applies its saved preference through Pi's `setModel()`. That changes only the current session, never Pi's global default. Failures fail open: an invalid record, an unavailable model, missing authentication, or a write error leaves Pi's current model in place with a short warning that names the saved model and the next step, such as `/login <provider>` or picking another model with `/model`, which replaces the saved one. A saved model that's temporarily unavailable is kept rather than overwritten.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

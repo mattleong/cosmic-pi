@@ -88,12 +88,9 @@ const COMMAND = "openai";
 
 const ignoreFastInjection: FastInjectionIngress = () => undefined;
 
+// Fast mode waiting for an OpenAI model is a normal state, not a problem, so every state is info.
 const notifyFastState = (ctx: ExtensionContext, fast: FastSnapshot) =>
-  notifyAtHostBoundary(
-    ctx,
-    fastStateText(ctx, fast),
-    fast.desiredActive && !isFastActive(ctx, fast) ? "warning" : "info",
-  );
+  notifyAtHostBoundary(ctx, fastStateText(ctx, fast), "info");
 
 const needsContextRepair = (ctx: ExtensionContext) =>
   invokeHostCallback(() => Boolean(latestOwnedCheckpoint(ctx.sessionManager.getBranch())), true);
@@ -336,7 +333,11 @@ export function betterOpenAIWithDependencies(
     handler: (args, ctx) => {
       updateContext(ctx);
       if (Str.trim(args)) {
-        notifyAtHostBoundary(ctx, "Usage: /openai fast", "warning");
+        notifyAtHostBoundary(
+          ctx,
+          "/openai fast takes no arguments; it toggles fast mode",
+          "warning",
+        );
         return Promise.resolve();
       }
       const desired = !MutableRef.get(fastProjection).desiredActive;
@@ -485,7 +486,7 @@ export function betterOpenAIWithDependencies(
       notifyAtHostBoundary(
         ctx,
         active ? fastStateText(ctx, fast) : inactiveForModelMessage(ctx),
-        active ? "info" : "warning",
+        "info",
       );
     slot.fork(
       FastModeService.use((service) => service.modelChanged(ctx)),

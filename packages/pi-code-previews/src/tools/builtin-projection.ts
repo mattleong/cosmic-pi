@@ -3,6 +3,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import {
+  diffCountLabel,
   editResultDetail,
   grepResultDetail,
   pathListResultDetail,
@@ -12,6 +13,7 @@ import { hostObject, ownField, type HostObject } from "../shared/untrusted-value
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import type { CompactSummary, CompactPhase } from "./compact-summary";
 import { argumentFailureIssue } from "./argument-failure";
+import { summarizeDiff } from "../diff/summary";
 import { fileFailure } from "./builtin-failure-file";
 import { shellFailure } from "./builtin-failure-shell";
 import { compactIssueSeverity, mergeCompactIssues, type CompactIssue } from "./compact-issues";
@@ -25,7 +27,11 @@ import {
 } from "./builtin-issues";
 import { editOperationInputs, getPathArg, hasReadLimit, stringArg } from "./data/args";
 import { getBoundedTextContent, getEditDiff } from "./data/results";
-import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
+import {
+  builtinSubjectIsPath,
+  describeBuiltinCompactSubject,
+  type BuiltinCompactTool,
+} from "./builtin-subject";
 
 export interface BuiltinCompactPolicy {
   secretWarnings: boolean;
@@ -66,6 +72,29 @@ const scanSecrets = (policy: BuiltinCompactPolicy, sources: readonly string[]) =
   secretIssues(sources, policy.secretWarnings, policy.secretScanChars);
 
 export function projectBuiltinCompactSummary(
+  tool: BuiltinCompactTool,
+  input: BuiltinCompactProjectionInput,
+): CompactSummary | undefined {
+  const summary = projectSummary(tool, input);
+  if (!summary) return undefined;
+  const expandLabel = summary.outcome === "error" ? undefined : builtinExpandLabel(tool, summary);
+  return {
+    ...summary,
+    ...(builtinSubjectIsPath(tool) && { pathSubject: true }),
+    ...(expandLabel !== undefined && { expandLabel }),
+  };
+}
+
+/** What a builtin row's expansion shows when it isn't the tool's plain output. */
+function builtinExpandLabel(tool: BuiltinCompactTool, summary: CompactSummary): string | undefined {
+  if (tool === "read") return "content";
+  if (tool === "edit") return "diff";
+  if (tool !== "write") return undefined;
+  const [counter] = summary.counters ?? [];
+  return counter !== undefined && Str.startsWith("+")(counter) ? "diff" : "content";
+}
+
+function projectSummary(
   tool: BuiltinCompactTool,
   input: BuiltinCompactProjectionInput,
 ): CompactSummary | undefined {
@@ -199,8 +228,9 @@ function editParts(
   input: BuiltinCompactProjectionInput,
   { args, details }: DecodedProjectionInput,
 ): ProjectionParts {
-  const detail = editResultDetail(args);
   const diff = getEditDiff(details);
+  // Line counts read the same as write's; the edit count stands in when Pi sent no diff.
+  const detail = diff ? diffCountLabel(summarizeDiff(diff)) : editResultDetail(args);
   return {
     counters: detail ? [detail] : [],
     metadata: [],

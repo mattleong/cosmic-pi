@@ -3,6 +3,11 @@ import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { createCompactToolShell, type CompactShellOptions } from "./compact-shell";
 import { withSelfBackground } from "./self-background";
 import { PreviewFrames, renderWithPreviewIssues } from "./preview-issues";
+import {
+  previewExpandedCall,
+  previewExpandedResult,
+  unwrapPreviewExpanded,
+} from "./preview-expanded";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import {
   borderState,
@@ -61,9 +66,15 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
   };
   const shell: CodePreviewToolShell<TArgs, TDetails, TState> = {
     renderShell: mode === "on" ? "default" : "self",
-    renderCall: (context, theme, body) => {
-      const render = (current: typeof context) =>
-        renderWithPreviewIssues(frames, body, summary, current, theme);
+    renderCall: (context, theme, body, content) => {
+      const render = (latest: typeof context) => {
+        const current = withLastComponent(latest, unwrapPreviewExpanded(latest.lastComponent));
+        const original = renderWithPreviewIssues(frames, body, summary, current, theme);
+        if (!current.expanded || !content) return original;
+        const input = { frames, provider: summary, context: current, theme, original, content };
+        const title = compact.previewTitle ?? compact.name;
+        return previewExpandedCall({ ...input, title, heading: body });
+      };
       if (mode !== "border") {
         const component = render(context);
         updateToolCallTiming(context, { ...timing, animate: animateProgress, formatLabel: false });
@@ -79,10 +90,20 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
       state.codePreviewBorderLastCallPartial = context.isPartial;
       return frameBorderShell(context, theme, label);
     },
-    renderResult: (context, theme, render, result) => {
+    renderResult: (context, theme, body, result, content) => {
       frames.record(context, result);
       const label = updateToolCallTiming(context, timing)?.label;
-      if (mode !== "border") return renderTimedResultFooter(context, theme, render, label);
+      const expandedTiming = mode === "border" ? undefined : label;
+      const render = (latest: typeof context) => {
+        const current = withLastComponent(latest, unwrapPreviewExpanded(latest.lastComponent));
+        const original = body(current);
+        if (!current.expanded || !content) return original;
+        const input = { frames, provider: summary, context: current, theme, original, content };
+        return previewExpandedResult({ ...input, timing: expandedTiming, collapsed: body });
+      };
+      // Expanded composition draws its own timing line at the body column.
+      const footer = context.expanded && content ? undefined : label;
+      if (mode !== "border") return renderTimedResultFooter(context, theme, render, footer);
       const state = borderState(context);
       const resultComponent = renderWithBorderSlot(state, "result", () =>
         render(withLastComponent(context, state.codePreviewBorderResultComponent)),

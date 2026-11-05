@@ -45,6 +45,7 @@ import { errnoMessage } from "./system-diagnostics";
 
 const nativeModelCalls: ReadonlySet<string> = new Set(["models.classify", "models.generateImages"]);
 const SCRIPT_ERROR = "Script error:\n";
+const SCRIPT_STOPPED = /^\s*Script aborted(?:: stopped)?\s*$/u;
 
 function issue(code: string, text: string): CompactIssue {
   const detail = sanitizeDiagnosticContent(text);
@@ -202,8 +203,7 @@ function callCounters(
   if (evidence.kind === "unavailable" || (complete && calls.length === 0 && intent?.discoveryOnly))
     return [];
   if (!complete) return [`${countLabel(calls.length, "call")} listed`];
-  const toolCalls = intent && Arr.every(calls, (call) => !nativeModelCalls.has(call.name));
-  return [countLabel(calls.length, toolCalls ? "tool call" : "call")];
+  return [countLabel(calls.length, "call")];
 }
 
 // Pi appends its error trailer after all script output and may join it with the preceding text,
@@ -227,6 +227,16 @@ function scriptFailure(
   diagnosticHidden: boolean,
 ): CompactSummary {
   const text = diagnosticHidden ? "" : scriptErrorText(result.content);
+  // A stop someone asked for is not a failure; the raw trailer stays in the expanded output.
+  if (SCRIPT_STOPPED.test(text))
+    return {
+      ...summary,
+      outcome: "cancelled",
+      issues: [
+        { severity: "info", code: "native-script-stopped", message: "Script was stopped" },
+        ...summary.issues,
+      ],
+    };
   const failure = issue("native-script-error", text || "The script failed");
   const explained = Arr.some(
     selectCompactChildren(summary.children).entries,
@@ -279,6 +289,7 @@ export const nativeCodemodeSummary =
       ...(label && { action: label }),
       showTiming: true as const,
       showShortTiming: true as const,
+      expandLabel: "details",
     };
     if (!result) return phase === "settled" ? undefined : heading;
     const evidence = nativeCodemodeEvidence(hostContainer(result.details));

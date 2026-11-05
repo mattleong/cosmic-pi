@@ -62,11 +62,15 @@ export const selectChoice = <A>(
 });
 
 export const shortTargetLabel = (target: ProfileWorkspaceTarget): string =>
-  target.kind === "session" ? "Session" : qualifiedProfileSetLabel(target.set);
+  target.kind === "session" ? "Current session" : qualifiedProfileSetLabel(target.set);
+
+/** A picker's place in the editor, such as `Current session › reviewer › Primary › Model`. */
+export const profileBreadcrumb = (...parts: ReadonlyArray<string>): string =>
+  Arr.join(parts, " › ");
 
 const targetLabel = (target: ProfileWorkspaceTarget): string =>
   target.kind === "session"
-    ? "Editing Current Session"
+    ? "Editing current session"
     : `${qualifiedProfileSetLabel(target.set)} · session not affected`;
 
 interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
@@ -112,9 +116,15 @@ export const candidateFieldSelector = (
   };
   return new SearchableSelectPage<string>({
     ...selectHost(options),
-    breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · ${label}`,
+    breadcrumb: profileBreadcrumb(
+      shortTargetLabel(options.target),
+      options.profile,
+      profileRouteOptionLabel(options.candidateIndex),
+      label,
+    ),
     title: `Choose ${Str.toLowerCase(label)}`,
-    subtitle: `${targetLabel(options.target)} · current: ${row?.value ?? current}`,
+    // The list marks the current value, so the subtitle doesn't repeat it.
+    subtitle: targetLabel(options.target),
     choices: Arr.map(candidateFieldChoices(options.field, changeOptions), (choice) =>
       selectChoice(choice.value, choice.label, choice.description, choice.value),
     ),
@@ -146,7 +156,12 @@ export const routeActionsSelector = (
   const choices = profileWorkspaceActionChoices(options);
   return new SearchableSelectPage<string>({
     ...selectHost(options),
-    breadcrumb: `${shortTargetLabel(options.target)} · ${options.profile} · ${profileRouteOptionLabel(options.candidateIndex)} · Actions`,
+    breadcrumb: profileBreadcrumb(
+      shortTargetLabel(options.target),
+      options.profile,
+      profileRouteOptionLabel(options.candidateIndex),
+      "Actions",
+    ),
     title: `Manage ${profileRouteOptionLabel(options.candidateIndex)} · ${options.profile}`,
     subtitle: targetLabel(options.target),
     choices: Arr.map(choices, (choice) =>

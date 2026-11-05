@@ -3,7 +3,6 @@ import { Container, visibleWidth, wrapTextWithAnsi, type Component } from "@eare
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import {
   exitStatusMeaning,
@@ -18,10 +17,16 @@ import {
   managerActivityColor,
   managerNoticeColor,
   managerNoticeGlyph,
+  SUITE_STATUS_GLYPHS,
 } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { failingExitCode, type BackgroundTaskSnapshot } from "../task/model.ts";
-import { listedTaskIssues, quotedWaitText } from "../ui/compact-summary.ts";
+import {
+  listedTaskIssues,
+  listedTaskOutcome,
+  quotedWaitText,
+  type TaskOutcome,
+} from "../ui/compact-summary.ts";
 import { styledTaskOutputLine } from "../ui/output-lines.ts";
 import { failureFactLines, resultFactLines } from "../ui/result-facts.ts";
 import { taskDisplayName, taskStatePresentation } from "../ui/task-state.ts";
@@ -31,7 +36,7 @@ import {
   type BackgroundTaskToolDetails,
 } from "./command.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
-import { commandLines, type LabeledRow } from "./request-view.ts";
+import { commandLines, requestTaskId, type LabeledRow } from "./request-view.ts";
 
 type PreviewTheme = Pick<Theme, "fg" | "bold">;
 
@@ -58,25 +63,59 @@ interface TaskLineOptions {
   readonly expanded: boolean;
   /** A start result, which reports the admission rather than a state that later goes stale. */
   readonly started?: boolean;
+  /** A listed row whose issues follow beneath it. */
+  readonly issuesBeneath?: boolean;
 }
 
 const startedState = (task: BackgroundTaskSnapshot): boolean =>
   task.state === "starting" || task.state === "running";
 
+// A listed row's status glyph, as other suite lists mark them; a running task in a saved
+// result is neutral, since a spinner would freeze.
+const LISTED_GLYPHS = {
+  success: { glyph: SUITE_STATUS_GLYPHS.succeeded, color: "success" },
+  error: { glyph: SUITE_STATUS_GLYPHS.failed, color: "error" },
+  cancelled: { glyph: SUITE_STATUS_GLYPHS.stopped, color: "muted" },
+  uncertain: { glyph: SUITE_STATUS_GLYPHS.uncertain, color: "warning" },
+  returned: { glyph: SUITE_STATUS_GLYPHS.neutral, color: "accent" },
+} as const satisfies Record<
+  TaskOutcome,
+  { readonly glyph: string; readonly color: Parameters<PreviewTheme["fg"]>[0] }
+>;
+
+const listedGlyph = (task: BackgroundTaskSnapshot, theme: PreviewTheme): string => {
+  const { glyph, color } =
+    task.state === "stopping"
+      ? ({ glyph: SUITE_STATUS_GLYPHS.stopping, color: "warning" } as const)
+      : LISTED_GLYPHS[listedTaskOutcome(task)];
+  return theme.fg(color, glyph);
+};
+
+/**
+ * A listed row's state in words, unless its glyph already says it (finished or failed) or, for a
+ * timeout, an issue beneath the row does.
+ */
+const listedStateShown = (task: BackgroundTaskSnapshot, issuesBeneath: boolean): boolean =>
+  task.state !== "exited" &&
+  task.state !== "failed" &&
+  !(task.state === "timed_out" && issuesBeneath);
+
 function taskPreviewLine(
   task: BackgroundTaskSnapshot,
   theme: PreviewTheme,
-  { inHeading, expanded, started = false }: TaskLineOptions,
+  { inHeading, expanded, started = false, issuesBeneath = false }: TaskLineOptions,
 ): string {
   const state =
     started && startedState(task)
       ? { color: managerActivityColor("done"), label: "started" }
       : taskStatePresentation(task.state);
   const status = expanded ? exitStatus(task) : undefined;
+  const stateShown = inHeading || listedStateShown(task, issuesBeneath);
+  const name = `${listedGlyph(task, theme)} ${theme.fg("toolOutput", taskDisplayName(task))}`;
   return Arr.join(
     [
-      ...(inHeading ? [] : [theme.fg("toolOutput", taskDisplayName(task))]),
-      theme.fg(state.color, state.label),
+      ...(inHeading ? [] : [name]),
+      ...(stateShown ? [theme.fg(state.color, state.label)] : []),
       ...(status ? [theme.fg(state.color, status)] : []),
       // An unnamed task's display name is its command.
       ...(task.name && Str.trim(task.name)
@@ -144,7 +183,11 @@ function taskRows(
   const issues = expanded && listing;
   const rows: Row[] = Arr.flatMap(shown, (task) => [
     {
-      text: taskPreviewLine(task, theme, { inHeading: false, expanded: expanded && !issues }),
+      text: taskPreviewLine(task, theme, {
+        inHeading: false,
+        expanded: expanded && !issues,
+        issuesBeneath: issues,
+      }),
       hang: 2,
     },
     ...(issues ? taskIssueRows(task, theme) : []),
@@ -287,7 +330,8 @@ function taskFacts(task: BackgroundTaskSnapshot): Section[] {
   const named = task.name !== undefined && Str.trim(task.name) !== "";
   const facts: LabeledRow[] = [
     ...(named ? [{ label: "Command", lines: commandLines(task.command) }] : []),
-    ...(task.endedAt === undefined
+    // A timeout's issue already says how long it ran.
+    ...(task.endedAt === undefined || task.state === "timed_out"
       ? []
       : [{ label: "Ran", lines: [formatDuration(task.endedAt - task.startedAt)] }]),
   ];
@@ -404,21 +448,24 @@ function previewSections(input: BackgroundTaskPreviewInput, theme: PreviewTheme)
   );
 }
 
-/** The technical facts of an expanded result, decoded from its details. */
+/**
+ * The technical facts of an expanded result, decoded from its details. Every action's Details
+ * lead with the task ID: a result that doesn't name it keeps the requested one.
+ */
 function factLines(input: BackgroundTaskPreviewInput): ReadonlyArray<string> {
   if (!input.expanded) return [];
-  return Option.match(input.failure, {
+  const facts = Option.match(input.failure, {
     onSome: ({ failure }) => failureFactLines(failure),
     onNone: () =>
       Option.match(input.details, {
-        onSome: (details) =>
-          Arr.filter(
-            resultFactLines(details, Predicate.isString(input.args.id) ? input.args.id : undefined),
-            (line) => line !== "",
-          ),
+        onSome: (details) => Arr.filter(resultFactLines(details), (line) => line !== ""),
         onNone: () => [],
       }),
   });
+  const id = requestTaskId(input.args);
+  return id === undefined || Arr.some(facts, (line) => Fn.pipe(line, Str.includes(id)))
+    ? facts
+    : [id, ...facts];
 }
 
 /** Wraps within `width`, indenting continuation rows `hang` columns. */

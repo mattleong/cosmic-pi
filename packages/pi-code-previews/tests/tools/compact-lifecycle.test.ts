@@ -140,13 +140,14 @@ test("one stable compact call carries pending, executing, streaming and final me
     },
   });
   const shell = h.call();
-  assert.equal(h.rows().length, 1);
+  // Each collapsed state is its row plus the affordance naming what expansion reveals.
+  assert.equal(h.rows().length, 2);
   h.update({ executionStarted: true, argsComplete: true });
   h.update({}, result("stream-one"));
-  assert.equal(h.rows().length, 1);
+  assert.equal(h.rows().length, 2);
   assert.equal(h.call(), shell);
   h.update({ isPartial: false }, result("final-count"));
-  assert.equal(h.rows().length, 1);
+  assert.equal(h.rows().length, 2);
   assert.match(Arr.join(h.rows(), ""), /final-count/u);
   assert.doesNotMatch(Arr.join(h.rows(), ""), /stream-one/u);
   assert.equal(bodyWork, 0, "compact summaries must avoid hidden diff/output computation");
@@ -194,7 +195,8 @@ test("missing outcomes, malformed summaries, declines and throwing providers kee
       for (const isError of [false, true]) {
         const h = harness(provider, mode);
         const rows = h.update({ isPartial: false, isError }, result(body));
-        assert.equal(rows.length, isError ? 2 : 1);
+        // The row, an error's issue, then the affordance that leads to the original bodies.
+        assert.equal(rows.length, isError ? 3 : 2);
         const collapsed = Arr.join(rows, "\n");
         assert.doesNotMatch(collapsed, /CALL file.ts|MALFORMED|recovery-step-[1-9]/u);
         assert.equal(Fn.pipe(collapsed, Str.includes("recovery-step-0")), isError);

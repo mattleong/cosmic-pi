@@ -84,6 +84,7 @@ export function withCodePreviewRenderers<TArgs, TDetails, TState extends object>
     options.mode,
     {
       name: nonEmptyText(options.displayName) ?? identity.name,
+      previewTitle: nonEmptyText(identity.label) ?? nonEmptyText(options.displayName),
       animateProgress: options.animateProgress,
       showShortTiming: options.showShortTiming,
       scheduleAnimation: options.scheduleAnimation,
@@ -111,7 +112,16 @@ export function withCodePreviewRenderers<TArgs, TDetails, TState extends object>
       const call =
         (render: RenderResult<TArgs, TDetails, TState>) =>
         (current: ToolRenderContext<TState, TArgs>) =>
-          render(result, resultOptions, theme, current);
+          // Renderers read expansion from their options, so a body the shell draws collapsed for
+          // an expanded row must say so there too.
+          render(
+            result,
+            current.expanded === resultOptions.expanded
+              ? resultOptions
+              : { ...resultOptions, expanded: current.expanded },
+            theme,
+            current,
+          );
       return shell.renderResult(
         context,
         theme,

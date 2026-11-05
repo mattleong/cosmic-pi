@@ -115,7 +115,7 @@ import {
   subagentCommandActionsFixture,
 } from "./fixtures/profile-settings-inspection.ts";
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
-import { settle, step } from "./support/effect-test.ts";
+import { eventLoopTurn, settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
 import type { DoctorCheck } from "../src/application/doctor.ts";
@@ -134,6 +134,7 @@ import {
 } from "./tools/fixtures/tool-harness.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 
@@ -454,7 +455,7 @@ const startScenarios = Effect.gen(function* () {
                           "Subagent did not confirm task admission.\nThe task may already have started",
                           "inspect the run with agent_read before retrying.",
                         )
-                      : "Subagent did not admit the task.\nAn input hook or slash command handled it before it reached the model.",
+                      : "A hook or slash command took the task before the model saw it.\nAn input hook or slash command handled the prompt, so the subagent never started on it.",
                   ),
                 }),
               ),
@@ -1112,7 +1113,8 @@ const staleWorkspace: SubagentServiceDoubleInput = {
     Effect.fail(
       InvalidSubagentRequestError.make({
         code: "workspace_revision_stale",
-        message: "The immutable workspace revision no longer matches.",
+        message:
+          "The proposal changed since that revision; review it again.\nThe requested revision is no longer the proposal's current revision.",
       }),
     ),
 };
@@ -1167,7 +1169,7 @@ const workspaceScenarios = Effect.all([
             InvalidSubagentRequestError.make({
               code: "workspace_hook_failed",
               message:
-                "WorktreeCreate hook `pnpm install --offline --frozen-lockfile` exited with code 1: ERR_PNPM_NO_OFFLINE_TARBALL",
+                "Workspace setup failed.\nWorktreeCreate hook `pnpm install --offline --frozen-lockfile` exited with code 1: ERR_PNPM_NO_OFFLINE_TARBALL",
             }),
           ),
       },
@@ -1276,7 +1278,7 @@ const workspaceScenarios = Effect.all([
             InvalidSubagentRequestError.make({
               code: "workspace_hook_failed",
               message:
-                "WorktreeCreate hook `pnpm install --offline --frozen-lockfile` timed out after 600s: Progress: resolved 412, reused 398",
+                "Workspace setup timed out after 10m.\nWorktreeCreate hook `pnpm install --offline --frozen-lockfile` timed out after 10m: Progress: resolved 412, reused 398",
             }),
           ),
       },
@@ -2248,7 +2250,7 @@ const widgetLines = (): ReadonlyArray<string> => [
  * with its field pane focused, whose hints name that pane's own movement and Enter action.
  */
 const profileEditorLines = (): ReadonlyArray<string> => {
-  const { component } = workspaceHarness({}, [
+  const { component } = workspaceHarness({ parentModel: "anthropic/claude-opus-5-5" }, [
     profileCandidate("claude-bridge/claude-opus-5-5"),
     profileCandidate("openai-codex/gpt-6-luna"),
   ]);
@@ -2258,9 +2260,17 @@ const profileEditorLines = (): ReadonlyArray<string> => {
       ...Arr.map(component.render(width), (line) => Str.trimEnd(line)),
       "",
     ]);
-  const profiles = frames("Current Session", [180, 72, 57]);
+  const profiles = frames("Current session", [180, 72, 57]);
   component.handleInput("\r");
-  return [...profiles, ...frames("field pane focused", [180, 57])];
+  const fields = frames("field pane focused", [180, 57]);
+  // `?` expands the hint bar to every key the editor takes, keeping the default pairs.
+  component.handleInput("?");
+  const expanded = frames("field pane, hints expanded", [180, 57]);
+  // A field's choice list names its place in the editor in its breadcrumb.
+  component.handleInput("?");
+  component.handleInput("\x1b[B");
+  component.handleInput("\r");
+  return [...profiles, ...fields, ...expanded, ...frames("reasoning choice list", [180, 57])];
 };
 
 /** The profiles editor and its dashboard when every profile names its own model and no fallback. */
@@ -2291,6 +2301,7 @@ const profileDashboardLines = (): ReadonlyArray<string> => {
         target: { kind: "session" },
         initialProfile: "scout",
         parentEffort: "high",
+        parentModel: "anthropic/claude-opus-5-5",
         getHeight: () => 24,
         requestRender: () => undefined,
         close: () => undefined,
@@ -2313,6 +2324,65 @@ const profileDashboardLines = (): ReadonlyArray<string> => {
     ];
   });
 };
+
+// The input's cursor markers: zero-width terminal control strings that the TUI consumes.
+const CURSOR_CONTROL_STRINGS = [CURSOR_MARKER, "\u001b_pi:fc\u0007", "\u001b_pi:/fc\u0007"];
+const withoutCursorMarkers = (line: string): string =>
+  Arr.reduce(CURSOR_CONTROL_STRINGS, line, (text, marker) =>
+    Fn.pipe(text, Str.replaceAll(marker, "")),
+  );
+
+/** Opens a dashboard dialog the way the settings host does, so the gallery can show it. */
+const openGalleryDialog = <T>(register: (finish: (value: T) => void) => () => void): Promise<T> =>
+  Effect.runPromise(
+    Effect.callback<T>((resume) => {
+      const cleanup = register((value) => resume(Effect.succeed(value)));
+      return Effect.sync(cleanup);
+    }),
+  );
+
+/** The dashboard's own dialog, saving the session's profiles as a set, inside its frame. */
+const profileSaveDialogLines = Effect.fn("SubagentGallery.profileSaveDialogLines")(function* () {
+  const inspection = workspaceInspection({ revision: 1, overrides: {} });
+  const lines: string[] = [];
+  for (const width of [180, 57]) {
+    const dashboard = new ProfileDashboardComponent({
+      ctx: extensionContextFixture({ isProjectTrusted: () => true }),
+      actions: subagentCommandActionsFixture({
+        inspectProfiles: () => Promise.resolve(inspection),
+      }),
+      isCurrent: () => true,
+      onInspection: () => undefined,
+      awaitDialog: openGalleryDialog,
+      workspace: {
+        theme: plainTheme,
+        inspection,
+        target: { kind: "session" },
+        initialProfile: "scout",
+        parentEffort: "high",
+        parentModel: "anthropic/claude-opus-5-5",
+        getHeight: () => 24,
+        requestRender: () => undefined,
+        close: () => undefined,
+        saveDraft: () => Promise.resolve({ inspection }),
+        loadModelPicker: () => Promise.reject(new Error("unused")),
+        supportedPiEfforts: () => undefined,
+      },
+    });
+    // The last row saves the session's profiles as a set.
+    dashboard.handleInput("G");
+    dashboard.handleInput("\r");
+    yield* step(eventLoopTurn);
+    lines.push(
+      `── profiles dashboard · save as a set dialog · ${width} cols`,
+      ...Arr.map(dashboard.render(width), (line) => Str.trimEnd(withoutCursorMarkers(line))),
+      "",
+    );
+    dashboard.handleInput("\u001b");
+    dashboard.dispose();
+  }
+  return lines;
+});
 
 /** `/subagents settings` through the registered command: the scope groups, then one opened. */
 const settingsLines = Effect.fn("SubagentGallery.settingsLines")(function* () {
@@ -2473,6 +2543,7 @@ const profileSetPickerLines = (): ReadonlyArray<string> => {
         target: { kind: "session" },
         initialProfile: "scout",
         parentEffort: "high",
+        parentModel: "anthropic/claude-opus-5-5",
         getHeight: () => 24,
         requestRender: () => undefined,
         close: () => undefined,
@@ -2483,7 +2554,7 @@ const profileSetPickerLines = (): ReadonlyArray<string> => {
     });
     dashboard.handleInput("\t");
     // The default set starts selected; each step moves up to the set above it.
-    return Arr.flatMap(["the default", "an ordinary", "an invalid"], (kind, index) => {
+    const selections = Arr.flatMap(["the default", "an ordinary", "an invalid"], (kind, index) => {
       if (index > 0) dashboard.handleInput("\u001b[A");
       return [
         `── profiles dashboard · saved sets · ${kind} set selected · ${width} cols`,
@@ -2491,6 +2562,14 @@ const profileSetPickerLines = (): ReadonlyArray<string> => {
         "",
       ];
     });
+    // `?` expands the hint bar with the picker's aliases, keeping the default pairs.
+    dashboard.handleInput("?");
+    return [
+      ...selections,
+      `── profiles dashboard · saved sets · hints expanded · ${width} cols`,
+      ...Arr.map(dashboard.render(width), (line) => Str.trimEnd(line)),
+      "",
+    ];
   });
 };
 
@@ -2602,6 +2681,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...profileEditorLines(),
         ...profileDashboardLines(),
         ...profileSetPickerLines(),
+        ...(yield* profileSaveDialogLines()),
         ...(yield* Effect.scoped(settingsLines())),
         ...(yield* Effect.scoped(doctorLines())),
       );

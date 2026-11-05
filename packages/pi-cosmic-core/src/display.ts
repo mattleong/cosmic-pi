@@ -1,4 +1,6 @@
+import * as DateTime from "effect/DateTime";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { safeTextPrefix } from "./text.ts";
 
@@ -48,12 +50,38 @@ export const formatRelativeAge = (milliseconds: number): string => {
 export const countLabel = (count: number, singular: string, plural = `${singular}s`): string =>
   `${count} ${count === 1 ? singular : plural}`;
 
+/** One decimal place, dropping a trailing `.0` the way `formatDuration` does: `18 KB`, `1.5 MB`. */
+const oneDecimal = (value: number): string => `${Number(value.toFixed(1))}`;
+
 export const formatBytes = (bytes: number): string => {
   const value = Math.round(finite(bytes));
   if (value < 1024) return countLabel(value, "byte");
-  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`;
-  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB`;
-  return `${(value / 1024 ** 3).toFixed(1)} GB`;
+  if (value < 1024 ** 2) return `${oneDecimal(value / 1024)} KB`;
+  if (value < 1024 ** 3) return `${oneDecimal(value / 1024 ** 2)} MB`;
+  return `${oneDecimal(value / 1024 ** 3)} GB`;
+};
+
+const localDay = (at: DateTime.DateTime): string =>
+  DateTime.formatLocal(at, { locale: "en-US", year: "numeric", month: "numeric", day: "numeric" });
+
+/**
+ * An absolute time in the suite's local short form, without seconds: `10:59 PM` on the same local
+ * day as `now`, otherwise `Nov 3, 10:59 PM`. Without `now` the date is always shown, for
+ * diagnostics read out of context.
+ */
+export const formatClockTime = (at: DateTime.DateTime, now?: number): string => {
+  const today = now === undefined ? Option.none() : DateTime.make(now);
+  const sameDay = Option.isSome(today) && localDay(today.value) === localDay(at);
+  return Fn.pipe(
+    DateTime.formatLocal(at, {
+      locale: "en-US",
+      ...(sameDay ? {} : { month: "short", day: "numeric" }),
+      hour: "numeric",
+      minute: "2-digit",
+    }),
+    // Intl separates the meridiem with a narrow no-break space on some platforms.
+    Str.replace(/\s+/gu, " "),
+  );
 };
 
 export const formatCost = (cost: number): string => {

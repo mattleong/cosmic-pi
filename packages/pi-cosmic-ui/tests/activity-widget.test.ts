@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { plainTheme } from "pi-cosmic-core/testing";
+import { stripAnsi } from "pi-cosmic-core/security";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetSections, widgetFailuresExpire } from "../src/activity/widget-projection.ts";
-import { activityRow, memberRow } from "./support/activity.ts";
+import { activityRow, memberRow, mountActivity } from "./support/activity.ts";
 
 const standalone = [
   activityRow("standalone-agent"),
@@ -84,5 +86,49 @@ describe("grouped activity widget", () => {
     const lines = renderActivityWidget([live, hidden], 80, 8, { inputDockVisible: true });
     expect(Arr.filter(lines, Str.includes("Deploy"))).toHaveLength(1);
     expect(Arr.join(lines, "\n")).toContain("resume-hint");
+  });
+});
+
+describe("agent identity at narrow widths", () => {
+  const model = "claude-bridge/claude-sonnet-5-5";
+  const parent = activityRow("audit", "running", undefined, {
+    title: "Audit the payment retry pipeline",
+    profile: "researcher",
+    model,
+    modelDetail: "medium",
+    startedAt: 0,
+  });
+  const child = memberRow("lead", parent, "running", {
+    title: "Compare idempotency keys",
+    profile: "researcher",
+    model,
+    startedAt: 0,
+  });
+  const leaf = activityRow("leaf", "running", child.id, {
+    title: "Trace webhook replays",
+    profile: "planner",
+    model,
+    startedAt: 0,
+  });
+  const rows = [parent, child, leaf];
+
+  it("keeps the whole provider/model in the widget at phone width", () => {
+    const lines = Arr.map(
+      renderActivityWidget(rows, 57, 8, { now: 90_000, theme: plainTheme }),
+      stripAnsi,
+    );
+    expect(Arr.filter(lines, Str.includes(model))).toHaveLength(3);
+  });
+
+  it("keeps the whole provider/model and elapsed time in the manager at phone and wide widths", () => {
+    for (const width of [57, 100, 140]) {
+      const { component } = mountActivity(() => rows, { height: 16 });
+      const screen = Arr.map(component.render(width), stripAnsi);
+      expect(Arr.filter(screen, Str.includes(model))).toHaveLength(3);
+      for (const title of ["Audit", "Compare", "Trace"])
+        expect(
+          Arr.some(screen, (line) => Str.includes(title)(line) && /\d+m?s? *│/u.test(line)),
+        ).toBe(true);
+    }
   });
 });

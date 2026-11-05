@@ -154,8 +154,16 @@ export function askUserWithDependencies(
       }
       registerAskUserTool(
         pi,
-        (request, signal) =>
-          runCurrent(askAtQuestionnaireBoundary(pi.events, sessionId, request), signal),
+        (request, signal, shown) =>
+          runCurrent(
+            askAtQuestionnaireBoundary(
+              pi.events,
+              sessionId,
+              request,
+              Effect.sync(() => invokeHostCallback(shown, undefined)),
+            ),
+            signal,
+          ),
         scheduleAnimation,
         replay.shell,
       );

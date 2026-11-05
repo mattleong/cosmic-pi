@@ -152,6 +152,8 @@ const contactParent = () =>
     { compactSummary: contactParentCompactSummary, expandedContent: contactParentExpandedContent },
   );
 
+const heading = (rows: string) => Str.trimEnd(Str.split(rows, "\n")[0] ?? "");
+
 it("names only the tool for a call Pi rejected as malformed JSON, not for one that ran", () => {
   applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
   for (const tool of [...registered(), contactParent()]) {
@@ -168,8 +170,9 @@ it("names only the tool for a call Pi rejected as malformed JSON, not for one th
       // Pi parses malformed tool-call JSON as `{}` and records a duration only for calls that ran,
       // so defaults that `{}` implies describe only an executed call.
       expect(callRows({ expanded, isError: true }), tool.name).toBe(tool.label);
-      expect(callRows({ expanded, isError: true, durationMs: 12 }), tool.name).toBe(
-        callRows({ expanded, isError: false, durationMs: 12 }),
+      // A call still running adds its status beneath the heading, so only the headings compare.
+      expect(heading(callRows({ expanded, isError: true, durationMs: 12 })), tool.name).toBe(
+        heading(callRows({ expanded, isError: false, durationMs: 12 })),
       );
     }
   }

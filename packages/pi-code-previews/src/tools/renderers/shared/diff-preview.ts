@@ -31,7 +31,7 @@ export function formatDiffPreview(
 }
 
 export function diffCounts(theme: Theme, counts: { additions: number; removals: number }): string {
-  return `${theme.fg("success", `+${counts.additions}`)} ${theme.fg("error", `-${counts.removals}`)}`;
+  return `${theme.fg("success", `+${counts.additions}`)} ${theme.fg("error", `−${counts.removals}`)}`;
 }
 
 export function diffSkippedNote(theme: Theme, guard: "size" | "complexity"): string {

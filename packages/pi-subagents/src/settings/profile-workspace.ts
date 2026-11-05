@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
-import { pageSteps, type FullScreenResolution } from "pi-cosmic-ui/manager/keymap";
+import { pageSteps } from "pi-cosmic-ui/manager/keymap";
 import { isMovementMotion, movementOffset } from "pi-cosmic-ui/manager/list-navigation";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../profiles/model.ts";
@@ -15,10 +15,7 @@ import {
 import type { CandidateModelPickerData } from "./profile-model-catalog.ts";
 import type { ProfileWorkspacePane, ProfileWorkspaceField } from "./ui/profile-workspace-model.ts";
 import { profileWorkspaceConfirmation } from "./ui/profile-workspace-actions.ts";
-import {
-  renderProfileWorkspace,
-  profileWorkspaceHelpLines,
-} from "./ui/profile-workspace-render.ts";
+import { renderProfileWorkspace } from "./ui/profile-workspace-render.ts";
 import {
   PROFILE_WORKSPACE_SHORTCUTS,
   isWorkspaceNavigationKey,
@@ -241,10 +238,6 @@ export class ProfileWorkspaceComponent
       reservedKeys: PROFILE_WORKSPACE_SHORTCUTS,
     });
     if (!resolution) return;
-    if (this.helpOpen) {
-      this.handleHelpInput(resolution);
-      return;
-    }
     if (Predicate.isTagged(resolution, "Shortcut")) {
       if (!this.handleShortcutKey(resolution.key)) this.renderSoon();
       return;
@@ -262,27 +255,6 @@ export class ProfileWorkspaceComponent
       return;
     }
     if (this.handleNavigationAction(resolution.action)) this.renderSoon();
-  }
-
-  protected handleHelpInput(resolution: FullScreenResolution): void {
-    if (!Predicate.isTagged(resolution, "Action")) return;
-    if (isMovementMotion(resolution.action)) {
-      this.helpScroll = Math.max(
-        0,
-        Math.min(
-          this.helpMaximum,
-          this.helpScroll +
-            movementOffset(resolution.action, pageSteps(this.options.getHeight() - 3)),
-        ),
-      );
-      this.renderSoon();
-    } else if (resolution.action === "first" || resolution.action === "last") {
-      this.helpScroll = resolution.action === "first" ? 0 : this.helpMaximum;
-      this.renderSoon();
-    } else if (["help", "cancel", "back", "quit", "confirm"].includes(resolution.action)) {
-      this.helpOpen = false;
-      this.renderSoon();
-    }
   }
 
   protected handleNavigationAction(action: string): boolean {
@@ -305,7 +277,7 @@ export class ProfileWorkspaceComponent
         this.moveToEndpoint(action);
         return true;
       case "help":
-        this.helpOpen = true;
+        this.hintsExpanded = !this.hintsExpanded;
         return true;
       case "pending-first":
         return true;
@@ -318,11 +290,6 @@ export class ProfileWorkspaceComponent
     if (this.modelPicker) return this.modelPicker.render(width);
     if (this.selectPage) return this.selectPage.render(width);
     this.reconcile();
-    this.helpMaximum = Math.max(
-      0,
-      profileWorkspaceHelpLines(this.options.keybindingLabel, width - 2).length -
-        Math.max(1, this.options.getHeight() - 3),
-    );
     const profile = this.profile();
     const draft = this.draft();
     const pendingConfirmation =
@@ -353,8 +320,7 @@ export class ProfileWorkspaceComponent
         fieldIndex: this.fieldIndex,
         draft,
         expandedCandidates: this.selection().expanded,
-        helpOpen: this.helpOpen,
-        helpScroll: this.helpScroll,
+        hintsExpanded: this.hintsExpanded,
         editedProfiles: new Set(
           Arr.filter(PROFILE_IDS, (id) =>
             this.editVisit.isEdited(this.options.target, id, this.inspection),

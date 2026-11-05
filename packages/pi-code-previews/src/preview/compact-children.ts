@@ -33,6 +33,8 @@ const SETTLED_PRIORITY: Readonly<Record<CompactOutcome, number>> = {
   attention: 2,
   success: 3,
   returned: 3,
+  queued: 3,
+  paused: 3,
 };
 
 const priority = (child: CompactChild): number =>

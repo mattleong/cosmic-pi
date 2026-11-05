@@ -13,6 +13,7 @@ import * as Str from "effect/String";
 import {
   compactPlainText,
   expandedBody,
+  expandedDetails,
   expandedFields,
   expandedText,
   getTextContent,
@@ -211,17 +212,22 @@ const factField = (label: string, value: string): ExpandedField[] =>
   Str.isNonEmpty(value) ? [{ label, lines: [sanitizeTerminalLine(value)] }] : [];
 
 const expandedFacts = (record: CodexImageDetails, view: ImageView, theme: Theme): Component =>
-  expandedFields(theme, [
-    ...factField("Image", imageFormat(record, view)),
-    ...factField("Model", imageModels(record, true)),
-    ...factField("Saved to", savedPath(record, view)),
+  expandedFields(theme, factField("Image", imageFormat(record, view)));
+
+/** The model route and the saved file are technical facts, so they close the body in Details. */
+const technicalDetails = (record: CodexImageDetails, view: ImageView, theme: Theme): Component => {
+  const saved = savedPath(record, view);
+  return expandedDetails(theme, [
+    sanitizeTerminalLine(imageModels(record, true)),
+    saved ? `Saved to ${sanitizeTerminalLine(saved)}` : "",
   ]);
+};
 
 // An error that only restates its issue adds nothing; the issue above already shows it.
 const restatesIssue = (raw: string, error: boolean): boolean =>
   error && restatesText(raw, imageFailureIssue(raw).message);
 
-const expandedDetails = (
+const expandedExtras = (
   record: CodexImageDetails | undefined,
   raw: string,
   error: boolean,
@@ -260,7 +266,8 @@ export function renderImageBody(
     return expandedBody(
       cancelled,
       record && expandedFacts(record, view, theme),
-      options.expanded ? expandedDetails(record, raw, error, theme) : undefined,
+      options.expanded ? expandedExtras(record, raw, error, theme) : undefined,
+      record && technicalDetails(record, view, theme),
     );
   const container = new Container();
   if (cancelled) container.addChild(cancelled);

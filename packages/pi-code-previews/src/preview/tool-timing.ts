@@ -77,7 +77,7 @@ export function renderTimedResultFooter<TContext extends ToolTimingRenderContext
   );
   if (handles) handles.resultComponent = resultComponent;
   if (!timingLabel) return resultComponent;
-  return new ToolTimingFooter(resultComponent, theme.fg("muted", `└─ ${timingLabel}`));
+  return new ToolTimingFooter(resultComponent, theme.fg("muted", timingLabel));
 }
 
 type ToolCallTimingOptions = {

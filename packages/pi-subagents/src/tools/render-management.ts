@@ -18,18 +18,21 @@ import type {
   SubagentProfileCandidateCard,
   SubagentProfileRouteCard,
 } from "./details-schema.ts";
-import { COLLAPSED_AGENT_TEXT_ROWS, detailsSectionLines } from "../ui/agent-text.ts";
+import { COLLAPSED_AGENT_TEXT_ROWS, expandedRowsBody } from "../ui/agent-text.ts";
 import { cardFactLines, stateGroupLines } from "./render-run-cards.ts";
 
 type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
 type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;
 type AgentRouteCard = NonNullable<ModelsToolDetails["agents"]>[number];
 
+/** A candidate's model and effort; one that runs on the parent's model reads `inherit`. */
 const candidateRoute = (candidate: SubagentProfileCandidateCard): string =>
-  formatRunRoute({
-    ...candidate,
-    openaiFastMode: candidate.openaiFastMode && candidate.status === "eligible",
-  });
+  candidate.model === "parent"
+    ? `inherit${candidate.effort === "default" ? "" : ` (${sanitizeTerminalLine(candidate.effort)} effort)`}`
+    : formatRunRoute({
+        ...candidate,
+        openaiFastMode: candidate.openaiFastMode && candidate.status === "eligible",
+      });
 
 const PROFILE_SOURCE_LABELS = {
   session: "session override",
@@ -145,11 +148,11 @@ export const renderProfileRoutesComponent = (
   details: ModelsToolDetails,
   expanded: boolean,
   theme: Theme,
-): Component =>
-  renderComponent((width) => {
+): Component => {
+  const agents = details.agents ?? [];
+  const rows = [...Arr.map(details.profiles, profileRow), ...Arr.map(agents, agentRow)];
+  const lines = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
-    const agents = details.agents ?? [];
-    const rows = [...Arr.map(details.profiles, profileRow), ...Arr.map(agents, agentRow)];
     const shown =
       expanded || rows.length <= COLLAPSED_AGENT_TEXT_ROWS + 1
         ? rows
@@ -169,23 +172,19 @@ export const renderProfileRoutesComponent = (
       ...(details.contentOmitted
         ? [clipToWidth(theme.fg("dim", "Some route details were too long to keep"), safeWidth)]
         : []),
-      ...(expanded
-        ? detailsSectionLines(
-            [
-              `Fallback profile: ${details.fallbackProfile}`,
-              ...Arr.flatMap(details.profiles, profileFacts),
-              ...Arr.flatMap(agents, agentFacts),
-              ...Arr.map(
-                details.invalidAgents ?? [],
-                (agent) => `Invalid ${agent.scope} agent${agent.name ? `: ${agent.name}` : ""}`,
-              ),
-            ],
-            safeWidth,
-            theme,
-          )
-        : []),
     ];
-  });
+  };
+  if (!expanded) return renderComponent(lines);
+  return expandedRowsBody(theme, lines, [
+    `Fallback profile: ${details.fallbackProfile}`,
+    ...Arr.flatMap(details.profiles, profileFacts),
+    ...Arr.flatMap(agents, agentFacts),
+    ...Arr.map(
+      details.invalidAgents ?? [],
+      (agent) => `Invalid ${agent.scope} agent${agent.name ? `: ${agent.name}` : ""}`,
+    ),
+  ]);
+};
 
 /**
  * A stop or interrupt: its targets grouped by the state they reached, then, expanded, each run's
@@ -195,23 +194,18 @@ export const renderCompactResultComponent = (
   details: RunToolDetails,
   expanded: boolean,
   theme: Theme,
-): Component =>
-  renderComponent((width) => {
-    const safeWidth = Math.max(1, width);
-    // Each failure's message is its issue's detail; the details name the target and code.
-    const failures = Arr.map(
-      details.actionFailures ?? [],
-      (failure) =>
-        `${sanitizeTerminalLine(failure.id)}: not ${details.action === "stop" ? "stopped" : "interrupted"}${failure.code ? ` · ${sanitizeTerminalLine(failure.code)}` : ""}`,
-    );
-    return [
-      ...stateGroupLines(details.cards, safeWidth, theme),
-      ...(expanded
-        ? detailsSectionLines(
-            [...Arr.flatMap(details.cards, cardFactLines), ...failures],
-            safeWidth,
-            theme,
-          )
-        : []),
-    ];
-  });
+  note?: string | false,
+): Component => {
+  const rows = (width: number): string[] => [
+    ...stateGroupLines(details.cards, width, theme),
+    ...(note ? [clipToWidth(theme.fg("dim", note), width)] : []),
+  ];
+  if (!expanded) return renderComponent(rows);
+  // Each failure's message is its issue's detail; the details name the target and code.
+  const failures = Arr.map(
+    details.actionFailures ?? [],
+    (failure) =>
+      `${sanitizeTerminalLine(failure.id)}: not ${details.action === "stop" ? "stopped" : "interrupted"}${failure.code ? ` · ${sanitizeTerminalLine(failure.code)}` : ""}`,
+  );
+  return expandedRowsBody(theme, rows, [...Arr.flatMap(details.cards, cardFactLines), ...failures]);
+};

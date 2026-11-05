@@ -12,7 +12,7 @@ import { RESUME_HINT, type AskUserDialogBridge } from "./host-ui.ts";
 
 // The same words the questionnaire tool rows use for each state.
 const PHASE_SUMMARIES = {
-  open: "waiting for your answers",
+  open: "needs your input",
   // Activity renders a hidden row's summary verbatim as its resume affordance.
   hidden: RESUME_HINT,
   closing: "closing",

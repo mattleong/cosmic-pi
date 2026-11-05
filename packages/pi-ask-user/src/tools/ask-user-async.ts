@@ -72,7 +72,7 @@ export function registerAsyncAskUserTools(
     shell(
       defineTool({
         name: "ask_user_async",
-        label: "Ask User Async",
+        label: "Ask user",
         description:
           "Admit a structured questionnaire and return a pending request ID without waiting for answers. TUI only. If another questionnaire is active, return queued immediately; it opens automatically in order after earlier questionnaires and unrelated UI prompts close. Otherwise wait only for its overlay to mount. Same single/multiple choice or required text questions and limits as ask_user. Text mode omits choices and returns a trimmed nonblank answer of at most 4000 code units. All modes support optional notes of at most 2000 code units, plus nonblank independentWork and blockedWork descriptions of at most 500 characters each. Shares a FIFO queue of at most 16 pending questionnaires with blocking and routed child requests. Cannot admit during an unrelated UI prompt; queued requests wait for safe mounting. Answers arrive automatically as a custom steering message unless an await owns delivery. Separately, up to 16 session-local async results are retained. Only delivered, unclaimed terminal results can be evicted; full capacity otherwise rejects admission.",
         promptSnippet: "Ask for decisions while continuing specific independent work",
@@ -108,7 +108,7 @@ export function registerAsyncAskUserTools(
     shell(
       defineTool({
         name: "ask_user_async_control",
-        label: "Questionnaire Control",
+        label: "Questionnaire",
         description:
           "Inspect, await, or cancel a session-local async questionnaire. status returns the full request result, or metadata for all retained requests when requestId is omitted. await and cancel require requestId. Await interruption leaves the questionnaire open and restores automatic delivery. Cancel still closes it while another caller owns await delivery. Status is non-consuming. Results carry stable delivery IDs; sent means host call returned, not model acknowledgement. Delivery failures retain the answer for status/await recovery.",
         promptSnippet:

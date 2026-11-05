@@ -22,8 +22,8 @@ import {
   renderToolHeader,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
-import { agentTextLines, detailsSectionLines, indentedLines } from "../ui/agent-text.ts";
-import { formatRunRouteLine } from "../ui/run-presentation.ts";
+import { agentTextLines, expandedRowsBody, indentedLines } from "../ui/agent-text.ts";
+import { agentFactLines, runRoleLabel, runRouteFact } from "../ui/run-facts.ts";
 import type { SubagentStartEntry } from "./details-schema.ts";
 import type { SubagentStartFailure } from "./model.ts";
 import { isTextFragment } from "./text-fragments.ts";
@@ -96,63 +96,60 @@ export const renderSubagentStartCall = (
     container.addChild(new Text(renderToolHeader({ title }, theme), 0, 0));
     if (context) container.addChild(previewIssuesSlot(context));
   }
-  container.addChild(
-    renderComponent((width) => {
-      const safeWidth = Math.max(1, width);
-      const shown = expanded ? agents : agents.slice(0, COLLAPSED_LAUNCHES);
-      const hidden = agents.length - shown.length;
-      return [
-        ...Arr.flatMap(shown, (agent, index) => {
-          const name = theme.fg("toolTitle", requestedName(agent, index));
-          if (!expanded) {
-            const task = firstLine(agent.task);
-            return [
-              clipToWidth(`${name}${task ? theme.fg("muted", ` · ${task}`) : ""}`, safeWidth),
-            ];
-          }
-          return [
-            clipToWidth(name, safeWidth),
-            ...agentTextLines(agent.task, safeWidth, theme, { expanded: true }),
-            ...indentedLines(theme.fg("dim", requestRoute(agent)), safeWidth),
-          ];
-        }),
-        ...(hidden > 0
-          ? [
-              clipToWidth(
-                theme.fg("dim", `… ${countLabel(hidden, "more launch", "more launches")}`),
-                safeWidth,
-              ),
-            ]
-          : []),
-      ];
-    }),
-  );
+  const rows = (width: number): string[] => {
+    const safeWidth = Math.max(1, width);
+    const shown = expanded ? agents : agents.slice(0, COLLAPSED_LAUNCHES);
+    const hidden = agents.length - shown.length;
+    return [
+      ...Arr.flatMap(shown, (agent, index) => {
+        const name = theme.fg("toolTitle", requestedName(agent, index));
+        if (!expanded) {
+          const task = firstLine(agent.task);
+          return [clipToWidth(`${name}${task ? theme.fg("muted", ` · ${task}`) : ""}`, safeWidth)];
+        }
+        return [
+          clipToWidth(name, safeWidth),
+          ...agentTextLines(agent.task, safeWidth, theme, { expanded: true }),
+          ...indentedLines(theme.fg("dim", requestRoute(agent)), safeWidth),
+        ];
+      }),
+      ...(hidden > 0
+        ? [
+            clipToWidth(
+              theme.fg("dim", `… ${countLabel(hidden, "more launch", "more launches")}`),
+              safeWidth,
+            ),
+          ]
+        : []),
+    ];
+  };
+  // Expanded, the launches indent beneath the heading like every expanded body.
+  container.addChild(expanded ? expandedRowsBody(theme, rows) : renderComponent(rows));
   return container;
 };
 
-const entryFact = (
+const entryFacts = (
   entry: SubagentStartEntry,
   failure: SubagentStartFailure | undefined,
-): string => {
+): ReadonlyArray<string> => {
   const runId = Match.value(entry).pipe(
     Match.when({ status: "started" }, (started) => started.runId),
     Match.orElse(() => failure?.admittedRun?.runId),
   );
-  const role = entry.agent ? `${entry.agent} (${entry.profile})` : entry.profile || "generalist";
+  const role = runRoleLabel(entry);
   const route =
     entry.routeStatus === "selected"
-      ? formatRunRouteLine({ ...entry, profile: role })
+      ? runRouteFact(entry)
       : entry.status === "pending"
         ? `${role} · resolving its route`
         : `${role} · no eligible route`;
   const fallback =
     entry.routeStatus === "selected" &&
     entry.candidateIndex !== undefined &&
-    entry.candidateIndex > 0
-      ? // The route's earlier candidates were unavailable; the warning issue says why.
-        `fallback ${entry.candidateIndex}`
-      : undefined;
-  return Fn.pipe([runId, route, fallback], Arr.filter(isTextFragment), Arr.join(" · "));
+    entry.candidateIndex > 0 &&
+    // The route's earlier candidates were unavailable; the warning issue says why.
+    `fallback ${entry.candidateIndex}`;
+  return agentFactLines(entry.name, [runId, route, fallback]);
 };
 
 const receiptStatus = (
@@ -194,10 +191,10 @@ export const renderStartReceiptComponent = (
   expanded: boolean,
   theme: Theme,
   partial = false,
-): Component =>
-  renderComponent((width) => {
+): Component => {
+  const entries = receipt.startEntries;
+  const rows = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
-    const entries = receipt.startEntries;
     const status = receiptStatus(entries, partial, theme);
     const pending = partial ? Arr.filter(entries, (entry) => entry.status === "pending") : [];
     return [
@@ -208,21 +205,17 @@ export const renderStartReceiptComponent = (
           safeWidth,
         ),
       ),
-      ...(expanded
-        ? detailsSectionLines(
-            Arr.flatMap(entries, (entry) => {
-              const failure = Option.getOrUndefined(
-                Arr.findFirst(
-                  receipt.startFailures ?? [],
-                  (candidate) => candidate.index === entry.index,
-                ),
-              );
-              // A failure's message and recovery facts are its issue's detail.
-              return [`${sanitizeTerminalLine(entry.name)}: ${entryFact(entry, failure)}`];
-            }),
-            safeWidth,
-            theme,
-          )
-        : []),
     ];
-  });
+  };
+  if (!expanded) return renderComponent(rows);
+  // A failure's message and recovery facts are its issue's detail.
+  const facts = Arr.flatMap(entries, (entry) =>
+    entryFacts(
+      entry,
+      Option.getOrUndefined(
+        Arr.findFirst(receipt.startFailures ?? [], (candidate) => candidate.index === entry.index),
+      ),
+    ),
+  );
+  return expandedRowsBody(theme, rows, facts);
+};

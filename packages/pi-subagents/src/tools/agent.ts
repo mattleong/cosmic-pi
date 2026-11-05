@@ -11,7 +11,11 @@ import {
 import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import {
   escapeControlChars,
+  expandedAuthoredText,
+  expandedBody,
+  expandedFields,
   getTextContent,
+  previewIssuesSlot,
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
@@ -44,7 +48,6 @@ import {
   type AgentToolInput,
   type AgentToolParameters,
 } from "./schema.ts";
-import { isTextFragment } from "./text-fragments.ts";
 
 export interface AgentToolRuntime {
   /** Runs one call for this session's authenticated caller; `scripted` calls came from a script. */
@@ -287,16 +290,27 @@ export function registerAgentTools(
           const [heading, subtitle] = title(call);
           return previewCall(theme, context, { title: heading, subtitle });
         }
-        const { expanded } = context;
         const running = context.executionStarted && context.isPartial;
-        return composeToolComponent((width) => [
+        const heading = composeToolComponent((width) => [
           clipToWidth(
             renderToolHeader({ title: `Message → ${recipientLabel(context, call.to)}` }, theme),
             width,
           ),
-          ...agentTextLines(call.message, width, theme, { expanded }),
-          ...(running ? [toolRunningLine(theme)] : []),
         ]);
+        const container = new Container();
+        container.addChild(heading);
+        // Issues follow the heading, so the shell knows where the heading ends and the body begins.
+        container.addChild(previewIssuesSlot(context));
+        if (context.expanded)
+          container.addChild(expandedAuthoredText(theme, "Message", call.message));
+        else
+          container.addChild(
+            composeToolComponent((width) =>
+              agentTextLines(call.message, width, theme, { expanded: false }),
+            ),
+          );
+        if (running) container.addChild(new Text(toolRunningLine(theme), 0, 0));
+        return container;
       }),
       renderResult: (result, options, theme, context) => {
         rememberRecipient(context, decodeAgentToolDetails(result.details));
@@ -330,22 +344,29 @@ export function registerAgentTools(
         // named once the result resolved them.
         renderCall: (args, theme, { state }) => {
           const call = decodeAgentCall(args) ?? {};
-          return indentedBody(
-            theme,
-            composeToolComponent((width) => {
-              const requested = Arr.filter(
-                [
-                  requestedLine(call, state.piSubagentsAgentNames),
-                  call.to === undefined ? undefined : `To ${recipientLabel({ state }, call.to)}`,
-                ],
-                isTextFragment,
-              );
-              return [
-                ...agentTextLines(call.message, width, theme, { expanded: true, indent: 0 }),
-                ...Arr.flatMap(requested, (line) => wrapTextWithAnsi(theme.fg("dim", line), width)),
-              ];
-            }),
-          );
+          if (call.message !== undefined) {
+            const typed =
+              call.to === undefined
+                ? undefined
+                : expandedFields(theme, [{ label: "To", lines: [sanitizeTerminalLine(call.to)] }]);
+            return expandedBody(
+              expandedAuthoredText(theme, "Message", call.message),
+              // Until a result names the recipient in its Details, the call keeps what was typed.
+              typed &&
+                composeToolComponent((width) =>
+                  state.piSubagentsRecipient === undefined ? typed.render(width) : [],
+                ),
+            );
+          }
+          const requested = requestedLine(call, state.piSubagentsAgentNames);
+          return requested
+            ? indentedBody(
+                theme,
+                composeToolComponent((width) =>
+                  wrapTextWithAnsi(theme.fg("dim", requested), width),
+                ),
+              )
+            : new Container();
         },
         renderResult: (result, _options, theme, context) => {
           rememberRecipient(context, decodeAgentToolDetails(result.details));
@@ -356,10 +377,11 @@ export function registerAgentTools(
               : new Container();
           }
           const text = escapeControlChars(getTextContent(result.content));
-          return indentedBody(
-            theme,
+          return (
             detailsBody(name, result, true, theme) ??
-              (text ? new Text(theme.fg("toolOutput", text), 0, 0) : new Container()),
+            (text
+              ? indentedBody(theme, new Text(theme.fg("toolOutput", text), 0, 0))
+              : new Container())
           );
         },
       },

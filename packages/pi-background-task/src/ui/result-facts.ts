@@ -94,27 +94,27 @@ export function failureFactLines(failure: Failure): string[] {
   );
 }
 
-const taskFacts = (task: BackgroundTaskSnapshot, shownId?: string): string =>
+const taskFacts = (task: BackgroundTaskSnapshot): string =>
   joined([
-    task.id === shownId ? undefined : task.id,
+    sanitizeTerminalLine(task.id),
     sanitizeTerminalLine(task.cwd),
     task.pid === undefined ? undefined : `pid ${task.pid}`,
   ]);
 
 /**
- * The technical facts an expanded result shows: IDs, directories, processes, and cursors. The
- * request already shows `shownId`, so the facts don't repeat it.
+ * The technical facts an expanded result shows: the task ID first, then directories, processes,
+ * and cursors.
  */
-export function resultFactLines(details: BackgroundTaskToolDetails, shownId?: string): string[] {
+export function resultFactLines(details: BackgroundTaskToolDetails): string[] {
   switch (details.action) {
     case "start":
     case "status":
     case "stop":
-      return [taskFacts(details.snapshot, shownId)];
+      return [taskFacts(details.snapshot)];
     case "wait": {
       const { wait, appliedWaitSeconds } = details;
       return [
-        taskFacts(wait.snapshot, shownId),
+        taskFacts(wait.snapshot),
         joined([
           `cursor ${wait.matchCursor ?? wait.nextCursor}`,
           `wait limit ${formatDuration(appliedWaitSeconds * 1_000)}`,
@@ -125,7 +125,7 @@ export function resultFactLines(details: BackgroundTaskToolDetails, shownId?: st
       const { logs } = details;
       return [
         joined([
-          logs.id === shownId ? undefined : logs.id,
+          sanitizeTerminalLine(logs.id),
           `next cursor ${logs.nextCursor}`,
           `earliest ${logs.earliestAvailableCursor}`,
           logs.droppedBytes > 0 ? `${formatBytes(logs.droppedBytes)} discarded so far` : undefined,

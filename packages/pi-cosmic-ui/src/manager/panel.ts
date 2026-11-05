@@ -13,6 +13,7 @@ import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 import {
+  framedDivider,
   framedFill,
   framedScreen,
   listDetailFrame,
@@ -21,10 +22,10 @@ import {
 import { clipToWidth, joinInline } from "./chrome.ts";
 import { FullScreenKeymap, pageSteps, type FullScreenAction } from "./keymap.ts";
 import {
-  exitKeyHint,
+  framedKeyHintBar,
   keyHint,
-  keyHintBar,
-  wrapKeyHints,
+  keyHintRows,
+  type KeyHintBar,
   type SurfaceExitLevel,
 } from "./key-labels.ts";
 
@@ -120,18 +121,15 @@ export class TextPanelComponent implements Component {
     return Math.max(0, this.rowCount - this.bodyHeight);
   }
 
-  private hint(scrollable: boolean): string {
+  private hintBar(scrollable: boolean): KeyHintBar {
     const exit = this.options.exit ?? "top";
-    if (!scrollable) return exitKeyHint(exit);
-    return keyHintBar(
-      {
-        hints: [keyHint("↑↓", "Scroll")],
-        more: [keyHint("j/k", "Scroll"), keyHint("PgUp/PgDn", "Page"), keyHint("gg/G", "Ends")],
-        exit,
-        exitAliases: ["q"],
-      },
-      this.helpExpanded,
-    );
+    if (!scrollable) return { hints: [], exit };
+    return {
+      hints: [keyHint("↑↓", "Scroll")],
+      more: [keyHint("j/k", "Scroll"), keyHint("PgUp/PgDn", "Page"), keyHint("gg/G", "Ends")],
+      exit,
+      exitAliases: ["q"],
+    };
   }
 
   /**
@@ -158,29 +156,34 @@ export class TextPanelComponent implements Component {
         ? Math.max(1, Math.floor(limit) - 2)
         : Number.POSITIVE_INFINITY;
     const scrollable = rows.length > bodyLimit;
-    // Expanded help can outgrow the bottom border, so it moves into the body above it.
-    const help =
-      scrollable && this.helpExpanded
-        ? Arr.map(wrapKeyHints(this.hint(true), text), (row) => ` ${theme.fg("dim", row)}`)
-        : [];
+    // The border keeps the exit and the help toggle; pairs that don't fit wrap above it.
+    const hints = framedKeyHintBar(this.hintBar(scrollable), this.helpExpanded, inner);
+    const help = keyHintRows(hints.overflow, inner, (row) => theme.fg("dim", row));
+    const helpHeight = help.length ? help.length + 1 : 0;
     this.rowCount = rows.length;
-    this.bodyHeight = Math.max(1, Math.min(rows.length, bodyLimit - help.length));
+    this.bodyHeight = Math.max(1, Math.min(rows.length, bodyLimit - helpHeight));
     this.scroll = Math.min(this.scroll, this.maxScroll);
     const visible = Arr.take(Arr.drop(rows, this.scroll), this.bodyHeight);
     const position = scrollable
       ? `${this.scroll + 1}–${this.scroll + visible.length} of ${rows.length}`
       : undefined;
-    const bottom = help.length > 0 ? "" : this.hint(scrollable);
     return framedScreen(this.frame, {
       width: safeWidth,
-      height: this.bodyHeight + help.length + 2,
+      height: this.bodyHeight + helpHeight + 2,
       top: clipToWidth(
         ` ${joinInline([theme.bold(title), position && theme.fg("dim", position)])} `,
         inner,
         "…",
       ),
-      bottom: bottom ? clipToWidth(theme.fg("dim", ` ${bottom} `), inner, "") : "",
-      body: (height) => framedFill(this.frame, [...visible, ...help], height, inner),
+      bottom: hints.border ? theme.fg("dim", hints.border) : "",
+      body: (height) =>
+        help.length
+          ? [
+              ...framedFill(this.frame, visible, height - helpHeight, inner),
+              framedDivider(this.frame, inner),
+              ...framedFill(this.frame, help, help.length, inner),
+            ]
+          : framedFill(this.frame, visible, height, inner),
     });
   }
 

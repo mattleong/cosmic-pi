@@ -24,6 +24,7 @@ import {
   type ExtensionEventNamed,
 } from "pi-cosmic-core/testing";
 import cosmicUi from "../index.ts";
+import { WAITING_MESSAGE } from "../src/working/row.ts";
 import type { CosmicUiApplicationDependencies } from "../src/application.ts";
 import {
   COSMIC_UI_FOOTER_REMOVE,
@@ -542,7 +543,7 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "agent_start");
       yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
       yield* emitEvent(h, uiPrompt("ui_prompt_start"));
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for you");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === WAITING_MESSAGE);
 
       const replacement = withSession(h.ctx, {
         getCwd: () => "/tmp/replacement",
@@ -558,7 +559,7 @@ describe("Cosmic UI extension", () => {
       expect(h.setWorkingMessage).toHaveBeenCalledTimes(writesBeforeStaleEnd);
 
       yield* emitEvent(h, uiPrompt("ui_prompt_start"), replacement);
-      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Waiting for you");
+      yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === WAITING_MESSAGE);
       yield* emitEvent(h, uiPrompt("ui_prompt_end"), replacement);
       yield* waitUntil(() => h.setWorkingMessage.mock.calls.at(-1)?.[0] === "Working · 0s");
       yield* emit(h, "session_shutdown");

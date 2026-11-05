@@ -6,7 +6,12 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { expandedArguments, expandedFields, type ExpandedField } from "pi-code-previews";
+import {
+  expandedArguments,
+  expandedDetails,
+  expandedFields,
+  type ExpandedField,
+} from "pi-code-previews";
 import { formatDuration } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import type { BackgroundTaskToolInput } from "./schema.ts";
@@ -156,12 +161,10 @@ function requestRows(args: RequestArguments): ReadonlyArray<LabeledRow> {
   const wait = numberValue(args.waitSeconds);
   if (wait !== undefined) rows.push(row("Wait up to", wait > 0 ? secondsText(wait) : "no wait"));
   if (args.force === true) rows.push(row("Force", "immediate termination"));
-  const id = textValue(args.id);
-  if (id !== undefined) rows.push(row("Task ID", visibleText(id)));
   return rows;
 }
 
-/** Whether a present field reads in words, or is stated by the row's heading. */
+/** Whether a present field reads in words, is stated by the row's heading, or leads its Details. */
 function fieldShown(args: RequestArguments, field: RequestField): boolean {
   switch (field) {
     // A false force is the default, which needs no words.
@@ -212,15 +215,28 @@ export function backgroundTaskRequestRows(args: unknown): BackgroundTaskRequestV
   };
 }
 
-/** The expanded call: the request in words, plus the raw arguments when words can't show it all. */
+/** The task a request names, as its expanded Details show it. */
+export function requestTaskId(args: unknown): string | undefined {
+  const known = decodeKnownRequest(args);
+  const id = Option.isSome(known) ? textValue(known.value.id) : undefined;
+  return id === undefined ? undefined : visibleText(id);
+}
+
+/**
+ * The expanded call: the request in words, plus the raw arguments when words can't show it all.
+ * The task ID belongs to Details: the result's once it arrives, the request's until then.
+ */
 export function renderBackgroundTaskRequest(
   args: Partial<BackgroundTaskToolInput>,
   theme: Theme,
+  settled: boolean,
 ): Component {
   const { rows, complete } = backgroundTaskRequestRows(args);
   const children: Component[] = [];
   if (rows.length > 0) children.push(expandedFields(theme, rows));
   if (!complete) children.push(expandedArguments(theme, args));
+  const id = settled ? undefined : requestTaskId(args);
+  if (id !== undefined) children.push(expandedDetails(theme, [id]));
   return {
     render: (width) => Arr.flatMap(children, (child) => child.render(width)),
     invalidate: () => {

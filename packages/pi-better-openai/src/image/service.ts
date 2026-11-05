@@ -12,6 +12,7 @@ import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Str from "effect/String";
+import { formatDuration } from "pi-cosmic-core/display";
 import { AgentDirectory } from "pi-cosmic-core/platform/agent-directory";
 import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { StreamingHttpClient } from "pi-cosmic-core/platform/streaming-http";
@@ -26,6 +27,7 @@ import {
   DEFAULT_IMAGE_MODEL,
   fail,
   failWith,
+  generationFailure,
   prepareImageArguments,
   type CodexImageResult,
   type ToolParams,
@@ -139,7 +141,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
         const params = yield* prepareToolParams(rawParams);
         if (!cfg) return yield* fail("config", "Better OpenAI session has not started.");
         if (!cfg.image.enabled)
-          return yield* fail("config", "OpenAI image generation is disabled in config.");
+          return yield* fail("config", "Image generation is off: turn it on in /openai settings.");
         const cwd = yield* Effect.try({
           try: () => ctx.cwd,
           catch: failWith("context", "Unable to read the Pi working directory."),
@@ -193,7 +195,7 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
             }),
           )
           .pipe(
-            Effect.mapError(failWith("request", "Codex image request failed.")),
+            Effect.mapError(() => generationFailure("request", "OpenAI couldn't be reached.")),
             Effect.withSpan("pi-better-openai.image.request"),
           );
         if (response.status < 200 || response.status >= 300)
@@ -232,7 +234,13 @@ export class OpenAIImageService extends Context.Service<OpenAIImageService>()(
           return generate(params, ctx, cfg).pipe(
             Effect.timeoutOrElse({
               duration: timeoutMs,
-              orElse: () => Effect.fail(fail("timeout", "OpenAI image request timed out.")),
+              orElse: () =>
+                Effect.fail(
+                  generationFailure(
+                    "timeout",
+                    `OpenAI didn't finish within ${formatDuration(timeoutMs)}.`,
+                  ),
+                ),
             }),
           );
         });

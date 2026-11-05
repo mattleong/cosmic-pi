@@ -9,11 +9,14 @@ import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth, managerActivityColor, type ManagerStatusColor } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { SUBAGENT_RUN_STATES } from "../run/model.ts";
+import { expandedBody, expandedFields } from "pi-code-previews";
 import {
   agentTextBlockLines,
   COLLAPSED_AGENT_TEXT_ROWS,
-  detailsSectionLines,
+  expandedFactDetails,
+  expandedRowsBody,
 } from "../ui/agent-text.ts";
+import { agentFactLines, savedAgentFactLines } from "../ui/run-facts.ts";
 import {
   runStateColor,
   runStateLabel,
@@ -60,20 +63,20 @@ const SEND_STATUS: Record<
   readonly [word: string, explanation: string] | undefined
 > = {
   idle: undefined,
-  busy: ["queued", "It reads the message when its current turn ends."],
-  held: ["held", "It reads the message once its user answers or sends the next prompt."],
+  busy: ["queued", "It reads the message when its current turn ends"],
+  held: ["held", "It reads the message once you answer or send the next prompt"],
 };
 
 const sendOutcome = (details: SendDetails): readonly [string, string] | undefined => {
   switch (details.disposition) {
     case "answered":
-      return ["answered", "Answered its pending question."];
+      return ["answered", "Answered its pending question"];
     case "resumed":
-      return ["resumed", "Resumed the finished run with this message as its next assignment."];
+      return ["resumed", "Resumed the finished run with this message as its next assignment"];
     case "guided":
       if (details.mainState !== undefined) return SEND_STATUS[details.mainState];
       return details.parked
-        ? ["queued", "It reads the message once its own question is answered."]
+        ? ["queued", "It reads the message once its own question is answered"]
         : undefined;
   }
   return Fn.absurd(details.disposition);
@@ -82,28 +85,28 @@ const sendOutcome = (details: SendDetails): readonly [string, string] | undefine
 /** A send's outcome in a word, only when it departs from a plain delivery. */
 export const sendStatus = (details: SendDetails): string | undefined => sendOutcome(details)?.[0];
 
+/**
+ * A send's outcome: collapsed, a word only when it departs from a plain delivery; expanded, what
+ * the recipient does with the message and, in Details, who it is.
+ */
 export const renderSendResult = (
   details: SendDetails,
   expanded: boolean,
   theme: Theme,
-): Component =>
-  composeToolComponent((width) => {
-    const safeWidth = Math.max(1, width);
-    const outcome = sendOutcome(details);
-    return [
-      ...(outcome && !expanded ? [clipToWidth(theme.fg("muted", outcome[0]), safeWidth)] : []),
-      ...(expanded
-        ? detailsSectionLines(
-            [
-              ...(outcome ? [outcome[1]] : []),
-              `To ${sanitizeTerminalLine(details.name)} (${sanitizeTerminalLine(details.to)})`,
-            ],
-            safeWidth,
-            theme,
-          )
-        : []),
-    ];
-  });
+): Component => {
+  const outcome = sendOutcome(details);
+  if (!expanded)
+    return composeToolComponent((width) =>
+      outcome ? [clipToWidth(theme.fg("muted", outcome[0]), Math.max(1, width))] : [],
+    );
+  return expandedBody(
+    expandedFields(theme, [{ label: "Delivery", lines: outcome ? [outcome[1]] : [] }]),
+    expandedFactDetails(
+      theme,
+      details.to === details.name ? [] : agentFactLines(details.name, [details.to]),
+    ),
+  );
+};
 
 const listRow = (
   entry: NonNullable<ListDetails["entries"]>[number],
@@ -136,7 +139,7 @@ export const renderListResult = (
 ): Component | undefined => {
   const entries = details.entries;
   if (entries === undefined) return undefined;
-  return composeToolComponent((width) => {
+  const rows = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
     const shown =
       expanded || entries.length <= COLLAPSED_AGENT_TEXT_ROWS + 1
@@ -156,17 +159,16 @@ export const renderListResult = (
             ),
           ]
         : []),
-      ...(expanded
-        ? detailsSectionLines(
-            Arr.flatMap(entries, (entry) =>
-              entry.kind === "main" ? [] : [`${entry.name}: ${entry.facts ?? entry.id}`],
-            ),
-            safeWidth,
-            theme,
-          )
-        : []),
     ];
-  });
+  };
+  if (!expanded) return composeToolComponent(rows);
+  return expandedRowsBody(
+    theme,
+    rows,
+    Arr.flatMap(entries, (entry) =>
+      entry.kind === "main" ? [] : agentFactLines(entry.name, [entry.facts ?? entry.id]),
+    ),
+  );
 };
 
 const READ_SOURCE_NOTES = { report: "report", error: "failure", assistant: undefined } as const;
@@ -184,44 +186,38 @@ export const renderReadResult = (
     Arr.every(agents, (agent) => agent.textStatus === "text" && agent.text === undefined)
   )
     return undefined;
-  return composeToolComponent((width) => {
-    const safeWidth = Math.max(1, width);
-    const blocks = Arr.map(agents, (agent) => {
-      const { glyph, tone, label } = agentStatePresentation(agent.state);
-      // A failed run's words are its failure, which its state already says.
-      const source =
-        agent.source === undefined || (agent.source === "error" && agent.state === "failed")
-          ? undefined
-          : READ_SOURCE_NOTES[agent.source];
-      return {
-        glyph,
-        tone,
-        name: agent.name,
-        status: Arr.join(
-          Arr.filter([label, source], (part) => part !== undefined),
-          " · ",
-        ),
-        text: agent.text,
-        notes: [
-          ...(agent.notes ?? []),
-          ...(agent.text === undefined && !agent.notes?.length
-            ? [agent.source === "report" ? "Report saved to a file" : "No message yet"]
-            : []),
-          ...(agent.textCut ? ["Shown up to its display limit"] : []),
-        ],
-      };
-    });
-    return [
-      ...agentTextBlockLines(blocks, safeWidth, theme, expanded),
-      ...(expanded
-        ? detailsSectionLines(
-            Arr.flatMap(agents, (agent) =>
-              agent.facts === undefined ? [] : [`${agent.name}: ${Arr.join(agent.facts, " · ")}`],
-            ),
-            safeWidth,
-            theme,
-          )
-        : []),
-    ];
+  const blocks = Arr.map(agents, (agent) => {
+    const { glyph, tone, label } = agentStatePresentation(agent.state);
+    // A failed run's words are its failure, which its state already says.
+    const source =
+      agent.source === undefined || (agent.source === "error" && agent.state === "failed")
+        ? undefined
+        : READ_SOURCE_NOTES[agent.source];
+    return {
+      glyph,
+      tone,
+      name: agent.name,
+      status: Arr.join(
+        Arr.filter([label, source], (part) => part !== undefined),
+        " · ",
+      ),
+      text: agent.text,
+      notes: [
+        ...(agent.notes ?? []),
+        ...(agent.text === undefined && !agent.notes?.length
+          ? [agent.source === "report" ? "Report saved to a file" : "No message yet"]
+          : []),
+        ...(agent.textCut ? ["Shown up to its display limit"] : []),
+      ],
+    };
   });
+  const rows = (width: number) => agentTextBlockLines(blocks, width, theme, expanded);
+  if (!expanded) return composeToolComponent(rows);
+  return expandedRowsBody(
+    theme,
+    rows,
+    Arr.flatMap(agents, (agent) =>
+      agent.facts === undefined ? [] : savedAgentFactLines(agent.name, agent.facts),
+    ),
+  );
 };

@@ -46,6 +46,30 @@ describe("image compact summary", () => {
   });
 });
 
+describe("image generation failures", () => {
+  it("names the provider's cause collapsed and keeps the recovery step for expansion", () => {
+    const call = input();
+    const summary = imageCompactSummary({
+      ...call,
+      context: renderContextFixture({ isError: true }),
+      result: {
+        content: [
+          {
+            type: "text",
+            text: "Image generation failed: Your request was rejected by the safety system (HTTP 400).",
+          },
+        ],
+        details: {},
+      },
+    });
+    const [issue] = summary?.issues ?? [];
+    expect(summary?.outcome).toBe("error");
+    expect(issue?.message).toContain("rejected by the safety system");
+    expect(issue?.detail).toBeDefined();
+    expect(styleProblems(summary)).toEqual([]);
+  });
+});
+
 describe("image result notes", () => {
   it("keeps a completed image successful while surfacing its note", () => {
     const call = input();

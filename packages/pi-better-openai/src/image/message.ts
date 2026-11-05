@@ -7,14 +7,13 @@ import {
   getTextContent,
   planCompactPresentation,
   type CodePreviewMessagePresenter,
+  type CompactSummary,
 } from "pi-code-previews";
 import { imagePromptSubject, imageRecord, imageRecordSummary } from "./compact-summary.ts";
-import {
-  base64ByteLength,
-  IMAGE_TITLE,
-  renderImageBody,
-  renderImageRequest,
-} from "./presentation.ts";
+import { base64ByteLength, renderImageBody, renderImageRequest } from "./presentation.ts";
+
+// The message names its result, so the request's action would only repeat the tool row.
+const withoutAction = ({ action: _action, ...summary }: CompactSummary): CompactSummary => summary;
 
 const isImagePart = Schema.is(
   Schema.Struct({ type: Schema.Literal("image"), data: Schema.String, mimeType: Schema.String }),
@@ -22,7 +21,8 @@ const isImagePart = Schema.is(
 
 /**
  * A delivered image message: the request as its heading, its facts, then the native image Pi
- * draws below the frame. Compact rows add the facts only expanded.
+ * draws below the frame. Compact rows add the facts only expanded. Its heading names the result
+ * rather than the tool, so it never repeats an `openai_image` row above it.
  */
 export const presentImageMessage =
   (cwd: () => string): CodePreviewMessagePresenter =>
@@ -34,12 +34,13 @@ export const presentImageMessage =
     const image = Predicate.isString(content)
       ? undefined
       : Option.getOrUndefined(Arr.findFirst(content, isImagePart));
+    const summary = record && imageRecordSummary(record, { hasImage: image !== undefined });
     const { collapsedSummary } = planCompactPresentation({
-      summary: record && imageRecordSummary(record, { hasImage: image !== undefined }),
+      summary: summary && withoutAction(summary),
       phase: "settled",
       isError: false,
       expanded,
-      heading: record && { subject: imagePromptSubject(record.prompt), action: record.action },
+      heading: record && { subject: imagePromptSubject(record.prompt) },
     });
     const prompt = record?.prompt ?? "";
     const body = () =>
@@ -55,9 +56,10 @@ export const presentImageMessage =
       );
     // A preview heading names the prompt alone, as the tool's preview heading does.
     const { action: _action, metadata: _metadata, ...previewSummary } = collapsedSummary;
+    const ready = record?.status === "completed" && image !== undefined;
     return {
-      name: "openai_image",
-      label: IMAGE_TITLE,
+      name: ready ? "image_ready" : "image_result",
+      label: ready ? "Image ready" : "Image result",
       summary: compact ? collapsedSummary : previewSummary,
       ...(!compact && { collapsed: body }),
       expanded: () => {

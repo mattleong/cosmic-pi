@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { describe, expect, it } from "vitest";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
-import { createWorkingRow } from "../src/working/row.ts";
+import { createWorkingRow, WAITING_MESSAGE } from "../src/working/row.ts";
 
 function workingHarness() {
   let time = 0;
@@ -92,7 +92,7 @@ describe("working row", () => {
     h.row.agentStart();
     h.row.promptStart();
     h.row.deactivate();
-    expect(h.delivered.slice(-2)).toEqual(["Waiting for you", undefined]);
+    expect(h.delivered.slice(-2)).toEqual([WAITING_MESSAGE, undefined]);
     expect(h.tickers.size).toBe(0);
     expect(h.row.isPrompting()).toBe(false);
   });

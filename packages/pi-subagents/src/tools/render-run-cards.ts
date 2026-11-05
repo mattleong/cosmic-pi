@@ -1,5 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
@@ -9,10 +8,9 @@ import { isTerminalRunState, type SubagentRunState } from "../run/model.ts";
 import { agentTextBlockLines, type AgentTextBlock } from "../ui/agent-text.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { savedFileFact, workspaceNote } from "../ui/notice-facts.ts";
-import { formatRunRouteLine } from "../ui/run-presentation.ts";
+import { agentFactLines, runRouteFact, writerFact } from "../ui/run-facts.ts";
 import { runStateColor, runStateLabel, runStateSnapshotGlyph } from "../ui/run-state.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
-import { workspaceOutcomeLabel } from "./format.ts";
 import { runTiming } from "./render-run-rows.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
@@ -22,9 +20,6 @@ const REPORT_STATUS_NOTES = {
   delivered: "Its report was delivered earlier",
   available: "Its report isn't part of this result",
 } as const;
-
-const roleLabel = (card: SubagentRunCard): string =>
-  card.agent ? `${card.agent} (${card.profile ?? "generalist"})` : (card.profile ?? "generalist");
 
 /** A finished report's notes: where the rest of a cut report is, and a writer's proposal. */
 const reportNotes = (card: SubagentRunCard): ReadonlyArray<string> =>
@@ -95,37 +90,29 @@ export const cardBlockLines = (
   );
 
 /** One Details line per run: ID, route, writer, usage, and timing, then exceptional evidence. */
-export const cardFactLines = (card: SubagentRunCard): ReadonlyArray<string> => {
-  const usage = aggregateUsage([card]);
-  const summary = Fn.pipe(
+export const cardFactLines = (card: SubagentRunCard): ReadonlyArray<string> =>
+  agentFactLines(
+    card.name,
     [
       card.id,
-      formatRunRouteLine({ ...card, profile: roleLabel(card) }),
-      card.writeIntent === "writer"
-        ? card.workspaceId === undefined
-          ? "shared-checkout writer"
-          : `worktree ${sanitizeTerminalLine(card.workspaceId)}${card.workspaceOutcome ? ` · ${workspaceOutcomeLabel(card.workspaceOutcome)}` : ""}`
-        : undefined,
-      card.context === "fork" ? "forked context" : undefined,
-      card.reportGeneration > 1 ? `assignment ${card.reportGeneration}` : undefined,
-      usage || undefined,
-      runTiming(card) || undefined,
+      runRouteFact(card),
+      writerFact(card),
+      card.context === "fork" && "forked context",
+      card.reportGeneration > 1 && `assignment ${card.reportGeneration}`,
+      aggregateUsage([card]),
+      runTiming(card),
     ],
-    Arr.filter(isTextFragment),
-    Arr.join(" · "),
+    [
+      card.reportArchive && savedFileFact("Report file", card.reportArchive),
+      ...Arr.map(
+        card.selection.skippedCandidates,
+        (skipped) =>
+          `Skipped ${skippedCandidateLabel(skipped.candidate)}: ${sanitizeTerminalLine(skipped.reason)}`,
+      ),
+      // Cleanup evidence is its issue's detail.
+      card.selection.warning && `Launch note: ${card.selection.warning}`,
+    ],
   );
-  return [
-    `${sanitizeTerminalLine(card.name)}: ${summary}`,
-    ...(card.reportArchive ? [`  ${savedFileFact("Report file", card.reportArchive)}`] : []),
-    ...Arr.map(
-      card.selection.skippedCandidates,
-      (skipped) =>
-        `  Skipped ${skippedCandidateLabel(skipped.candidate)}: ${sanitizeTerminalLine(skipped.reason)}`,
-    ),
-    // Cleanup evidence is its issue's detail.
-    ...(card.selection.warning ? [`  Launch note: ${card.selection.warning}`] : []),
-  ];
-};
 
 const GROUP_VERBS: Readonly<Record<SubagentRunState, string>> = {
   starting: "Starting",

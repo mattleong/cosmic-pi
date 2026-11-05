@@ -68,7 +68,7 @@ export function registerParentConversationTool(
     shell(
       defineTool({
         name: PARENT_TOOL,
-        label: "Parent Conversation",
+        label: "Parent conversation",
         description: `Read the latest messages of the parent Pi session this BTW side session was opened from: what its user asked, what its agent answered, and the tools it ran, oldest first. The parent may be working right now, so read again whenever a question depends on its current state. Reads ${DEFAULT_PARENT_MESSAGES} messages unless messages says otherwise, at most ${MAX_PARENT_MESSAGES}. Read-only.`,
         promptSnippet: "Read the parent session's latest messages",
         promptGuidelines: [

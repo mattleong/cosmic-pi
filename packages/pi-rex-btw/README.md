@@ -31,7 +31,7 @@ Text after the command becomes the side session's first message. The side pane o
 Things to know:
 
 - Side sessions aren't saved. Closing a pane discards its conversation.
-- The side session can only see the parent once the parent has saved its session, which Pi does once you send its first message.
+- A side session needs to see the parent, so `/btw` opens nothing until the parent has saved its session, which Pi does once you send its first message. A session started without saving can't use `/btw`.
 - Both sessions share the working directory, so either can edit project files.
 - The first message is passed as a command-line argument, so other local processes can read it with `ps` while that Pi runs.
 - Panes are never closed for you. If Rex can't confirm whether a pane opened, the command reports it instead of trying again.

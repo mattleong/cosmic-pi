@@ -262,6 +262,9 @@ const harness = (
         ),
       alternate,
       notify,
+      /** Notices at one level: the info notice after a restore is separate from any warning. */
+      notices: (level: "info" | "warning") =>
+        Arr.filter(notify.mock.calls, ([, shown]) => shown === level),
       getEntries,
       getLeafId,
       setModel,
@@ -326,11 +329,31 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.start();
       expect(h.setModel).toHaveBeenCalledWith(h.remembered);
       expect(h.thinking()).toBe("high");
+      // One info notice names what the restore put in use.
+      expect(h.notices("info")).toEqual([
+        [expect.stringContaining(`${h.remembered.provider}/${h.remembered.id}`), "info"],
+      ]);
+      expect(h.notices("warning")).toEqual([]);
 
       h.select(h.initial, "low");
       yield* h.start("new");
       expect(h.setModel).toHaveBeenLastCalledWith(h.remembered);
       expect(h.thinking()).toBe("high");
+    }),
+  );
+
+  it.effect("restores silently when the session already uses the saved preference", () =>
+    Effect.gen(function* () {
+      const h = yield* harness();
+      yield* writePreference(h.agentDirectory, h.cwd, {
+        provider: h.initial.provider,
+        model: h.initial.id,
+        thinkingLevel: "low",
+      });
+
+      yield* h.start();
+      expect(h.setModel).not.toHaveBeenCalled();
+      expect(h.notify).not.toHaveBeenCalled();
     }),
   );
 
@@ -344,7 +367,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect(h.setModel).toHaveBeenCalledWith(h.remembered);
       expect(h.thinking()).toBe("high");
       expect(yield* h.preferenceModifiedAt()).toBe(UNCHANGED_STAMP_SECONDS);
-      expect(h.notify).not.toHaveBeenCalled();
+      expect(h.notices("warning")).toEqual([]);
     }),
   );
 
@@ -376,7 +399,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* Fiber.join(successor);
       expect(h.setModel).toHaveBeenCalledTimes(1);
       expect(h.thinking()).toBe("high");
-      expect(h.notify).not.toHaveBeenCalled();
+      expect(h.notices("warning")).toEqual([]);
     }).pipe(Effect.ensuring(Deferred.succeed(settlement, undefined)));
   });
 
@@ -588,7 +611,10 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         provider: "missing-provider",
         model: "missing-model",
       });
-      expect(h.notify.mock.calls).toEqual([[expect.any(String), "warning"]]);
+      // The warning names the saved model, so the user knows what to sign in to or replace.
+      expect(h.notify.mock.calls).toEqual([
+        [expect.stringContaining("missing-provider/missing-model"), "warning"],
+      ]);
     }),
   );
 
@@ -612,7 +638,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect(h.setModel).toHaveBeenCalledWith(h.remembered);
       expect(h.setThinkingLevel).not.toHaveBeenCalled();
       expect(h.thinking()).toBe("low");
-      expect(h.notify.mock.calls).toEqual([[expect.any(String), "warning"]]);
+      expect(h.notices("warning")).toEqual([[expect.any(String), "warning"]]);
       expect(yield* h.readPreference()).toMatchObject({
         provider: h.remembered.provider,
         model: h.remembered.id,

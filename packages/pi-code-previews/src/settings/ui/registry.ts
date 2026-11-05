@@ -35,7 +35,7 @@ export const SETTING_ITEM_DEFINITIONS = {
   toolCallBackground: {
     label: "Tool call background",
     description:
-      "Choose Pi's default colored background, no frame, or a border-only frame. Changes take effect after /reload.",
+      "on fills each tool row with Pi's status color, border draws only a colored frame around it, and off shows the row with neither. Changes take effect after /reload.",
     values: TOOL_CALL_BACKGROUND_MODES,
   },
   toolCallCollapsedStyle: {

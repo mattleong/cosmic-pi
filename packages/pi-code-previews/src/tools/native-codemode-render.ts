@@ -122,44 +122,49 @@ export function createNativeCodemodeRenderers(
   const previewStyle =
     (appearance.collapsedStyle ?? codePreviewSettings.toolCallCollapsedStyle) === "preview";
 
-  const renderOutput: RenderResult<unknown, unknown, RendererState> = (
-    result,
-    _options,
-    theme,
-    context,
-  ) => {
-    const raw = getFallbackResultText(result.content, context.showImages);
-    return safeContent(() => {
-      const body = new Container();
-      const evidence = nativeCodemodeEvidence(hostContainer(result.details));
-      const children = nativeCodemodeChildren(
-        evidence,
-        context.isPartial ? "running" : "settled",
-        cwd,
-      );
-      if (children.entries.length || evidence.kind === "unavailable" || !evidence.complete)
-        body.addChild(
-          expandedSection(theme, "Calls", renderCallList(children, evidence, theme, context.state)),
+  // The shared expanded composition states that the script is still running under its heading,
+  // so only the tool's own expanded body, drawn without that composition, says so here.
+  const outputRenderer =
+    (statesRunning: boolean): RenderResult<unknown, unknown, RendererState> =>
+    (result, _options, theme, context) => {
+      const raw = getFallbackResultText(result.content, context.showImages);
+      return safeContent(() => {
+        const body = new Container();
+        const evidence = nativeCodemodeEvidence(hostContainer(result.details));
+        const children = nativeCodemodeChildren(
+          evidence,
+          context.isPartial ? "running" : "settled",
+          cwd,
         );
-      if (
-        previewStyle &&
-        context.isPartial &&
-        !Arr.some(children.entries, (child) => child.status === "running")
-      )
-        body.addChild(runningLine(theme, context.state));
-      if (evidence.fullOutputPath && !nativeCodemodeHeader(result))
-        body.addChild(
-          expandedSection(
-            theme,
-            "Saved output",
-            new Text(theme.fg("muted", sanitizeDiagnosticContent(evidence.fullOutputPath)), 0, 0),
-          ),
-        );
-      for (const [label, text] of outputSections(result, evidence, context))
-        body.addChild(expandedSection(theme, label, new Text(text(theme), 0, 0)));
-      return body;
-    }, raw);
-  };
+        if (children.entries.length || evidence.kind === "unavailable" || !evidence.complete)
+          body.addChild(
+            expandedSection(
+              theme,
+              "Calls",
+              renderCallList(children, evidence, theme, context.state),
+            ),
+          );
+        if (
+          statesRunning &&
+          previewStyle &&
+          context.isPartial &&
+          !Arr.some(children.entries, (child) => child.status === "running")
+        )
+          body.addChild(runningLine(theme, context.state));
+        if (evidence.fullOutputPath && !nativeCodemodeHeader(result))
+          body.addChild(
+            expandedSection(
+              theme,
+              "Saved output",
+              new Text(theme.fg("muted", sanitizeDiagnosticContent(evidence.fullOutputPath)), 0, 0),
+            ),
+          );
+        for (const [label, text] of outputSections(result, evidence, context))
+          body.addChild(expandedSection(theme, label, new Text(text(theme), 0, 0)));
+        return body;
+      }, raw);
+    };
+  const renderOutput = outputRenderer(true);
 
   // Pi's header restates the outcome and timing the heading shows, and a script error that an
   // issue already details would otherwise appear twice.
@@ -278,8 +283,8 @@ export function createNativeCodemodeRenderers(
         });
         if (!projected)
           return safeContent(
-            () => new Text(theme.fg("muted", "Details on expand"), 0, 0),
-            "Details on expand",
+            () => new Text(renderExpansionAffordance("details", false, theme), 0, 0),
+            "▸ details",
           );
         let cached: { readonly key: string; readonly rows: string[] } | undefined;
         return safeContent(
@@ -319,7 +324,7 @@ export function createNativeCodemodeRenderers(
               cached = undefined;
             },
           }),
-          "Details on expand",
+          "▸ details",
         );
       },
     },
@@ -328,7 +333,10 @@ export function createNativeCodemodeRenderers(
       compactSummary: summary,
       animateProgress: true,
       showShortTiming: true,
-      expandedContent: { renderCall: renderSource(discovery), renderResult: renderOutput },
+      expandedContent: {
+        renderCall: renderSource(discovery),
+        renderResult: outputRenderer(false),
+      },
     },
   );
 }

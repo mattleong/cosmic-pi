@@ -5,6 +5,8 @@ import { CompactIssueSchema } from "./compact-issues";
 export const CompactOutcomeSchema = Schema.Literals([
   "success",
   "returned",
+  "queued",
+  "paused",
   "warning",
   "attention",
   "error",
@@ -14,6 +16,7 @@ export const CompactOutcomeSchema = Schema.Literals([
 const Labels = Schema.Array(Schema.String);
 const Fields = {
   compactSubject: Schema.optionalKey(Schema.String),
+  pathSubject: Schema.optionalKey(Schema.Literal(true)),
   action: Schema.optionalKey(Schema.String),
   counters: Schema.optionalKey(Labels),
   metadata: Schema.optionalKey(Labels),
@@ -25,8 +28,10 @@ const Summary = Schema.Struct({
   ...Fields,
   subject: Schema.String,
   outcome: Schema.optionalKey(CompactOutcomeSchema),
+  waiting: Schema.optionalKey(Schema.Literal(true)),
   messageIcon: Schema.optionalKey(Schema.Literals(["sent", "received"])),
   quote: Schema.optionalKey(Schema.String),
+  expandLabel: Schema.optionalKey(Schema.Union([Schema.String, Schema.Literal(false)])),
   children: Schema.optionalKey(
     Schema.Struct({
       total: Schema.Natural,

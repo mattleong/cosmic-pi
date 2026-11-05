@@ -18,6 +18,7 @@ import { ProfileDashboardDialog } from "./profile-dashboard-dialogs.ts";
 import { runProfileSetAction, type ProfileSetSaveDestination } from "./profile-set-actions.ts";
 import {
   profileDashboardChildHeight,
+  profileDashboardChildWidth,
   renderProfileDashboard,
 } from "./ui/profile-dashboard-render.ts";
 import { profileSetPickerEntries } from "./ui/profile-set-picker-model.ts";
@@ -61,6 +62,8 @@ export class ProfileDashboardComponent implements Component, Focusable {
       ...this.host(),
       inspection: this.inspection,
       projectTrusted: isProjectTrusted(options.ctx),
+      parentModel: options.workspace.parentModel,
+      parentEffort: options.workspace.parentEffort,
       close: (action) => {
         if (!this.current()) return;
         if (!action) this.options.workspace.close();
@@ -271,7 +274,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
               new ProfileDashboardDialog({
                 ...this.host(false),
                 title: "Save these profiles as a set",
-                body: "Copies all seven Current Session profiles. Does not apply the set or change the default.",
+                body: "Copies all seven profiles of the current session. Does not apply the set or change the default.",
                 kind: "name",
                 destination: { projectTrusted: isProjectTrusted(this.options.ctx) },
                 close,
@@ -365,15 +368,19 @@ export class ProfileDashboardComponent implements Component, Focusable {
   render(width: number): string[] {
     if (!this.current()) return [];
     const child = this.child();
-    const framedChild = !(child instanceof ProfileDashboardDialog);
+    const dialog =
+      child instanceof ProfileDashboardDialog
+        ? child.layout(profileDashboardChildWidth(width))
+        : undefined;
     return renderProfileDashboard(
       {
         tab: this.tab,
         message: this.message,
         blocked: this.blocked,
         busy: this.busy && !this.overlay,
-        rows: child.render(framedChild ? width : Math.max(0, width - 2)),
-        framedChild,
+        rows: dialog?.rows ?? child.render(width),
+        framedChild: dialog === undefined,
+        ...(dialog && { border: dialog.border }),
       },
       { theme: this.options.workspace.theme, width, height: this.options.workspace.getHeight() },
     );

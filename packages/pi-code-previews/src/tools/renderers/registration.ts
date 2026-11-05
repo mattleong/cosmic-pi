@@ -8,7 +8,7 @@ import { withCodePreviewRenderers } from "../cooperative-tools";
 import type { CORE_CODE_PREVIEW_TOOLS, CodePreviewToolName } from "../names";
 import { admitsPreviewSource } from "../preview-admission";
 import { getTextContent } from "../data/results";
-import { renderCodePreviewToolTitle } from "../presentation";
+import { CODE_PREVIEW_TOOL_ICONS, renderCodePreviewToolTitle } from "../presentation";
 import { getEnabledCodePreviewTools } from "../selection";
 import { setCodePreviewToolStatus } from "../status";
 import { bashPreviewRenderers } from "./bash";
@@ -37,7 +37,7 @@ export function createBuiltinPreviewRenderers(
 ): ToolRenderers | undefined {
   if (!session.enabledTools.includes(name)) return undefined;
   return withCodePreviewRenderers(
-    { name },
+    { name, label: `${CODE_PREVIEW_TOOL_ICONS[name]} ${name}` },
     rejectionAware(name, RENDERER_FACTORIES[name](session.cwd)),
     {
       ...session,

@@ -48,6 +48,7 @@ import {
 import { nativeMcpHeading } from "./native-mcp-subject";
 import { nativeMcpIdentity } from "./native-mcp-identity";
 import { plainRows, plainText, safeContent } from "./native-safe-content";
+import { parseNativeTruncatedOutput } from "./native-truncation";
 
 const DISPLAY_NAME = "mcp";
 const PREVIEW_LINES = 5;
@@ -138,8 +139,9 @@ function renderOutputPreview(
   result: AgentToolResult<unknown>,
   theme: Theme,
   context: Context,
+  envelope: string | undefined,
 ): Component {
-  const raw = Str.trim(getFallbackResultText(result.content, context.showImages));
+  const raw = Str.trim(envelope ?? getFallbackResultText(result.content, context.showImages));
   if (!raw) return new Container();
   const lines = Str.split(compactPlainText(raw), "\n");
   const color = context.isError ? "error" : "toolOutput";
@@ -168,6 +170,13 @@ function renderOutputPreview(
     };
   };
   return safeContent(() => preview(theme), preview(unstyled));
+}
+
+function affordance(label: string, theme: Theme): Component {
+  return safeContent(
+    () => new Text(renderExpansionAffordance(label, false, theme), 0, 0),
+    plainRows(`▸ ${label}`, 1),
+  );
 }
 
 export function createNativeMcpRenderers(
@@ -256,15 +265,23 @@ export function createNativeMcpRenderers(
     if (options.expanded) return renderExpandedOutput(result, options, theme, context);
     recordReceipt(result, context);
     if (options.isPartial) return renderProgress(result, theme, context.state);
-    if (
-      !context.isError &&
-      nativeMcpHasRecoverableClipping(identity, result, hostContainer(context.args))
-    )
-      return safeContent(
-        () => new Text(renderExpansionAffordance("output", false, theme), 0, 0),
-        plainRows("Output · expand", 1),
-      );
-    return renderOutputPreview(result, theme, context);
+    const args = hostContainer(context.args);
+    // The heading's issue states a failure; its full text and any recovery stay in expansion.
+    if (context.isError) return affordance("error", theme);
+    if (nativeMcpHasRecoverableClipping(identity, result, args)) return affordance("output", theme);
+    return renderOutputPreview(result, theme, context, ownedEnvelopeBody(result, args));
+  };
+  // Truncation issues explain a recognized, owned envelope, so its preview shows only the output.
+  const ownedEnvelopeBody = (
+    result: AgentToolResult<unknown>,
+    args: HostContainer | undefined,
+  ): string | undefined => {
+    const [first, ...rest] = result.content;
+    if (first?.type !== "text" || Arr.some(rest, (part) => part.type === "text")) return undefined;
+    const envelope = parseNativeTruncatedOutput(first.text);
+    return envelope && envelope.footer !== "unknown" && nativeMcpReceipt(identity, result, args)
+      ? envelope.body
+      : undefined;
   };
   return withCodePreviewRenderers(
     { name },

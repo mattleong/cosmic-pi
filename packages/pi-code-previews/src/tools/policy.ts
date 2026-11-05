@@ -20,17 +20,33 @@ export function formatToolsSettingValue(tools: readonly CodePreviewToolName[]): 
   return tools.length ? Arr.join(tools, ", ") : "none";
 }
 
+export type ToolPreviewSetting = keyof PreviewSettings;
+
+/**
+ * The tools whose renderer must stay installed because a preview setting that hides their output
+ * is off, each with the first such setting.
+ */
+export function requiredCodePreviewTools(
+  settings: PreviewSettings,
+): Map<CodePreviewToolName, ToolPreviewSetting> {
+  const required = new Map<CodePreviewToolName, ToolPreviewSetting>();
+  for (const { setting, tool } of PREVIEW_SETTINGS)
+    if (!settings[setting]) required.set(tool, setting);
+  const shellHidden = Arr.findFirst(
+    PREVIEW_SETTINGS,
+    (entry) => "commands" in entry && !settings[entry.setting],
+  );
+  if (!settings.bashResultPreview) required.set("bash", "bashResultPreview");
+  else if (Option.isSome(shellHidden)) required.set("bash", shellHidden.value.setting);
+  return required;
+}
+
 export function getEffectiveCodePreviewToolSet(
   configuredTools: Iterable<CodePreviewToolName>,
   settings: PreviewSettings,
 ): Set<CodePreviewToolName> {
   const enabled = new Set(configuredTools);
-  for (const { setting, tool } of PREVIEW_SETTINGS) if (!settings[setting]) enabled.add(tool);
-  const shellHidden = Arr.some(
-    PREVIEW_SETTINGS,
-    (entry) => "commands" in entry && !settings[entry.setting],
-  );
-  if (!settings.bashResultPreview || shellHidden) enabled.add("bash");
+  for (const tool of requiredCodePreviewTools(settings).keys()) enabled.add(tool);
   return enabled;
 }
 

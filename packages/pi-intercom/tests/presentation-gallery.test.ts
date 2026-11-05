@@ -15,6 +15,7 @@ import {
   withPresentationSettings,
   writeGallerySection,
 } from "pi-code-previews/testing";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { listReport, overview } from "../src/command.ts";
 import { frameMessage, INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
 import { renderIntercomMessage } from "../src/message.ts";
@@ -205,7 +206,7 @@ const scenarios = [
     result: result(sendText(sent("woken")), sent("woken")),
   },
   {
-    title: "sent to a session holding messages",
+    title: "sent to a session that holds messages",
     tool: SESSION_TOOL.send,
     args: { to: web.sessionId, message },
     result: result(sendText(sent("held")), sent("held")),
@@ -324,9 +325,24 @@ describe.skipIf(!directory)("presentation gallery", () => {
               }),
             );
           }
+          // A list names the sessions it found, so a later send names its addressee while running.
+          const listedResult = result(listText(listing), listing);
+          const { tools: listed } = captureRegistrations((pi) =>
+            registerSessionTools(pi, { run: <A>() => Promise.resolve(listedResult as A) }),
+          );
+          yield* Effect.promise(() =>
+            Promise.resolve(
+              listed[0]!.execute("gallery", {}, undefined, undefined, extensionContextFixture()),
+            ),
+          );
           lines.push(
             ...galleryFrames(tools[1]!, {
-              title: `${style} · sending`,
+              title: `${style} · sending to a session no result has named yet`,
+              args: { to: web.sessionId, message },
+              phase: "running",
+            }),
+            ...galleryFrames(listed[1]!, {
+              title: `${style} · sending to a session a list already named`,
               args: { to: web.sessionId, message },
               phase: "running",
             }),

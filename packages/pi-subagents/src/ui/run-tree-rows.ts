@@ -118,6 +118,6 @@ export const projectFleetTree = <Node extends RunTreeNode = SubagentRunView>(
 export const runTreeBranch = <Node extends RunTreeNode>(row: RunTreeRow<Node>): string =>
   `${Fn.pipe(
     row.ancestorContinues,
-    Arr.map((continued) => (continued ? "│   " : "    ")),
+    Arr.map((continued) => (continued ? "│  " : "   ")),
     Arr.join(""),
-  )}${row.isLastSibling ? "└── " : "├── "}`;
+  )}${row.isLastSibling ? "└─ " : "├─ "}`;

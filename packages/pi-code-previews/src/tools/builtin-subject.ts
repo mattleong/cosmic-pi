@@ -28,3 +28,8 @@ export function describeBuiltinCompactSubject(
   if (tool === "read") return path + getReadLineRange(args);
   return path || (tool === "ls" ? "." : "");
 }
+
+/** Every builtin subject except a shell command names a file or folder, or ends in one. */
+export function builtinSubjectIsPath(tool: BuiltinCompactTool): boolean {
+  return tool !== "bash";
+}

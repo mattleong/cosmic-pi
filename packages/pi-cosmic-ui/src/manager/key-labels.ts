@@ -165,20 +165,37 @@ export interface KeyHintBar {
   readonly exitKey?: string | undefined;
 }
 
+export interface KeyHintBarParts {
+  /** The surface's own pairs, plus `more` while expanded. */
+  readonly hints: ReadonlyArray<string>;
+  /** The exit and the help toggle, which a framed surface keeps in its border. */
+  readonly tail: ReadonlyArray<string>;
+}
+
+/**
+ * The pairs of a suite hint bar, split so a framed surface can keep the exit and `? More` in its
+ * border. Expanded, the exit names every alias in one pair, `Esc/C-c/q Close`.
+ */
+export const keyHintBarParts = (bar: KeyHintBar, expanded: boolean): KeyHintBarParts => {
+  const more = presentHints(bar.more ?? []);
+  const aliases = bar.exitAliases ?? [];
+  const expandable = more.length > 0 || (bar.exit !== undefined && aliases.length > 0);
+  return {
+    hints: presentHints([...bar.hints, ...(expanded ? more : [])]),
+    tail: presentHints([
+      bar.exit && exitKeyHint(bar.exit, expanded ? aliases : [], bar.exitKey),
+      expandable && helpKeyHint(expanded),
+    ]),
+  };
+};
+
 /**
  * Composes a suite hint bar: `hints · exit · ? More`, or, expanded,
  * `hints · more · exit/aliases · ? Less`. `? More` appears only when expansion adds something.
  */
 export const keyHintBar = (bar: KeyHintBar, expanded: boolean): string => {
-  const more = presentHints(bar.more ?? []);
-  const aliases = bar.exitAliases ?? [];
-  const expandable = more.length > 0 || (bar.exit !== undefined && aliases.length > 0);
-  return joinKeyHints([
-    ...bar.hints,
-    ...(expanded ? more : []),
-    bar.exit && exitKeyHint(bar.exit, expanded ? aliases : [], bar.exitKey),
-    expandable && helpKeyHint(expanded),
-  ]);
+  const { hints, tail } = keyHintBarParts(bar, expanded);
+  return joinKeyHints([...hints, ...tail]);
 };
 
 /**
@@ -253,6 +270,16 @@ export const framedKeyHints = (
   const full = joinKeyHints([...hints, ...tail]);
   if (fitsBorder(full, inner)) return { border: borderKeyHint(full, inner), overflow: "" };
   return { border: borderKeyHint(joinKeyHints(tail), inner), overflow: joinKeyHints(hints) };
+};
+
+/** `keyHintBar` laid out for a framed surface: the border keeps the exit and the help toggle. */
+export const framedKeyHintBar = (
+  bar: KeyHintBar,
+  expanded: boolean,
+  inner: number,
+): FramedKeyHints => {
+  const { hints, tail } = keyHintBarParts(bar, expanded);
+  return framedKeyHints(hints, tail, inner);
 };
 
 export const configuredKeyLabels = (

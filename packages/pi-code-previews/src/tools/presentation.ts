@@ -1,7 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { isCodePreviewToolName, type CodePreviewToolName } from "./names";
 
-const CODE_PREVIEW_TOOL_ICONS = {
+export const CODE_PREVIEW_TOOL_ICONS = {
   bash: "🔧",
   read: "📖",
   write: "✏️",

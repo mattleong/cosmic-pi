@@ -11,10 +11,15 @@ import {
 
 const relayFailure = (message: string) => AskUserHostError.make({ operation: "relay", message });
 
+/**
+ * Asks in this session, or through the root's relay in a child. `shown` runs once a local
+ * questionnaire opens; a relayed one opens in the root, which doesn't report it.
+ */
 export const askAtQuestionnaireBoundary = (
   events: QuestionnaireEvents,
   sessionId: string,
   request: AskUserRequest,
+  shown?: Effect.Effect<void>,
 ) =>
   Effect.suspend(() => {
     const relay = queryQuestionnaireRelay(events, sessionId);
@@ -25,7 +30,7 @@ export const askAtQuestionnaireBoundary = (
               "The root questionnaire relay is unavailable. Do not fall back to a child-local dialog.",
             ),
           )
-        : AskUserService.use((service) => service.ask(request));
+        : AskUserService.use((service) => service.ask(request, shown));
     return Effect.tryPromise({
       try: (signal) => Promise.resolve<unknown>(relay.ask(request, signal)),
       catch: () => relayFailure("The root questionnaire relay failed or was revoked."),

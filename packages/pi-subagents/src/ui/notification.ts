@@ -1,7 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
@@ -17,10 +16,11 @@ import {
   agentTextBlockLines,
   agentTextLines,
   bodyIndent,
+  expandedRowsBody,
   indentedBody,
-  detailsSectionLines,
   indentedLines,
 } from "./agent-text.ts";
+import { agentFactLines, savedAgentFactLines } from "./run-facts.ts";
 import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
 import { NoticeDetailsSchema, type NoticeDetails, type NoticeRun } from "./notice-details.ts";
 
@@ -33,17 +33,17 @@ const UNTYPED_NOTICES = new Map<string, NoticeHeading>([
   [
     "pi-subagents-proxy-notification",
     {
-      name: "agent_update",
-      label: "Agent update",
-      summary: { subject: "a nested subagent", outcome: "returned" },
+      name: "descendant_update",
+      label: "Descendant update",
+      summary: { subject: "from a subagent you started", outcome: "returned" },
     },
   ],
   [
     "pi-subagents-peer-notice",
     {
-      name: "agent_peers",
-      label: "Agent peers",
-      summary: { subject: "shared directory", outcome: "returned" },
+      name: "shared_checkout",
+      label: "Shared checkout",
+      summary: { subject: "other agents in this directory", outcome: "returned" },
     },
   ],
 ]);
@@ -67,14 +67,14 @@ const namesOrCount = (names: ReadonlyArray<string>, total: number, noun: string)
 
 const peerSummary = (details: PeerDetails): CompactSummary =>
   details.total === 0
-    ? { subject: "none", counters: ["no shared directory"], outcome: "returned" }
+    ? { subject: "no other agents in this directory", outcome: "returned" }
     : {
         subject: namesOrCount(
           Arr.map(details.peers, (peer) => peer.name),
           details.total,
           "other subagent",
         ),
-        counters: ["share this directory"],
+        counters: [details.total === 1 ? "also works here" : "also work here"],
         outcome: "returned",
       };
 
@@ -105,21 +105,24 @@ const failureIssues = (details: CompletedDetails): CompactIssue[] => {
 const completedSummary = (details: CompletedDetails): CompactSummary => {
   const finished = details.total - details.failed;
   const outcome = details.failed ? "error" : details.warnings ? "warning" : "success";
-  // A single report's icon says how it ended; several get counts.
-  const subject =
-    details.total === 1 && details.name
-      ? details.name
-      : Fn.pipe(
-          [
-            finished ? `${finished} finished` : "",
-            details.failed ? `${details.failed} failed` : "",
-            details.warnings ? `${details.warnings} with warnings` : "",
-          ],
-          Arr.filter(Boolean),
-          Arr.join(", "),
-        );
   const issues = failureIssues(details);
-  return { subject, outcome, ...(issues.length > 0 && { issues }) };
+  // A single report's icon says how it ended; several get counts.
+  if (details.total === 1 && details.name)
+    return { subject: details.name, outcome, ...(issues.length > 0 && { issues }) };
+  const counts = Arr.filter(
+    [
+      finished ? `${finished} finished` : "",
+      details.failed ? `${details.failed} failed` : "",
+      details.warnings ? `${details.warnings} with warnings` : "",
+    ],
+    Str.isNonEmpty,
+  );
+  return {
+    subject: "",
+    counters: [Arr.join(counts, " · ")],
+    outcome,
+    ...(issues.length > 0 && { issues }),
+  };
 };
 
 const stoppedSummary = (details: StoppedDetails): CompactSummary => {
@@ -128,10 +131,11 @@ const stoppedSummary = (details: StoppedDetails): CompactSummary => {
     names.length === 0 && details.total === 1 && details.name
       ? details.name
       : namesOrCount(names, details.total, "subagent");
+  // A routine stop: the runs were stopped on purpose, which is no warning.
   return {
     subject,
     ...(details.cause && { counters: [STOP_CAUSES[details.cause]] }),
-    outcome: "warning",
+    outcome: "cancelled",
   };
 };
 
@@ -146,9 +150,13 @@ const notificationHeading = (
       summary: { subject: details.name ?? "a subagent", outcome: "attention" },
     };
   if (details?.kind === "stopped" && details.total > 0)
-    return { name: "agent_stopped", label: "Agents stopped", summary: stoppedSummary(details) };
+    return {
+      name: "subagents_stopped",
+      label: "Subagents stopped",
+      summary: stoppedSummary(details),
+    };
   if (details?.kind === "peers")
-    return { name: "agent_peers", label: "Agent peers", summary: peerSummary(details) };
+    return { name: "shared_checkout", label: "Shared checkout", summary: peerSummary(details) };
   if (
     details?.kind === "completed" &&
     details.total > 0 &&
@@ -158,9 +166,9 @@ const notificationHeading = (
     return { name: "agent_report", label: "Agent report", summary: completedSummary(details) };
   return (
     UNTYPED_NOTICES.get(customType ?? "") ?? {
-      name: "agent_update",
-      label: "Agent update",
-      summary: { subject: "a subagent", outcome: "returned" },
+      name: "subagent_update",
+      label: "Subagent update",
+      summary: { subject: "from a subagent", outcome: "returned" },
     }
   );
 };
@@ -197,19 +205,24 @@ const hasDisplayCopy = (details: NoticeDetails | undefined): boolean => {
   );
 };
 
-/** The body a notice shows below its heading; undefined when its details carry no display copy. */
-const noticeBody = (
-  details: NoticeDetails | undefined,
-  width: number,
+interface NoticeBody {
+  /** The rows beneath the heading: the words agents wrote and short notes. */
+  readonly rows: (width: number) => string[];
+  /** Technical facts shown only expanded, in the `Details` section. */
+  readonly facts: ReadonlyArray<string>;
+}
+
+const completedBody = (
+  runs: NonNullable<CompletedDetails["runs"]>,
   theme: Theme,
   expanded: boolean,
-  indent = 2,
-): string[] | undefined => {
-  if (details?.kind === "completed" && details.runs !== undefined && details.runs.length > 0) {
-    const [only] = details.runs;
-    // A failure's words are its heading issue and that issue's detail.
-    const words =
-      details.runs.length === 1 && only !== undefined
+  indent: number,
+): NoticeBody => {
+  const [only] = runs;
+  return {
+    rows: (width) =>
+      // A failure's words are its heading issue and that issue's detail.
+      runs.length === 1 && only !== undefined
         ? [
             ...(only.outcome === "failed"
               ? []
@@ -219,7 +232,7 @@ const noticeBody = (
             ),
           ]
         : agentTextBlockLines(
-            Arr.map(details.runs, (run) => {
+            Arr.map(runs, (run) => {
               const kind = run.outcome === "failed" ? "failed" : "done";
               return {
                 glyph: managerActivityGlyph(kind),
@@ -232,76 +245,84 @@ const noticeBody = (
             width,
             theme,
             expanded,
-          );
-    if (!expanded) return words;
-    return [
-      ...words,
-      ...detailsSectionLines(
-        Arr.flatMap(details.runs, (run) => [
-          `${run.name}: ${Arr.join(run.facts ?? [`ID ${run.id}`], " · ")}`,
-        ]),
-        width,
-        theme,
-      ),
-    ];
-  }
-  if (details?.kind === "question" && details.question !== undefined)
-    return [
-      ...agentTextLines(details.question, width, theme, { expanded, indent }),
-      ...(expanded && details.id ? detailsSectionLines([`ID ${details.id}`], width, theme) : []),
-    ];
-  if (details?.kind === "stopped" && details.runs !== undefined) {
-    const stopped = details.runs;
-    const hidden = details.total - stopped.length;
-    const note = indentedLines(
+          ),
+    facts: Arr.flatMap(runs, (run) => savedAgentFactLines(run.name, run.facts ?? [run.id])),
+  };
+};
+
+const stoppedBody = (
+  details: StoppedDetails,
+  stopped: NonNullable<StoppedDetails["runs"]>,
+  theme: Theme,
+  expanded: boolean,
+  indent: number,
+): NoticeBody => {
+  const hidden = details.total - stopped.length;
+  const pad = Str.repeat(indent)(" ");
+  const note = (width: number) =>
+    indentedLines(
       theme.fg("muted", "They won't report; partial work they left in the checkout remains."),
       width,
       indent,
     );
-    if (!expanded) return note;
-    return [
-      ...Arr.map(stopped, (run) =>
+  return {
+    rows: (width) =>
+      expanded
+        ? [
+            ...Arr.map(stopped, (run) =>
+              clipToWidth(
+                `${pad}${theme.fg("muted", managerActivityGlyph("stopped"))} ${sanitizeTerminalLine(run.name)} ${theme.fg("muted", `· was ${sanitizeTerminalLine(run.state)}`)}`,
+                width,
+              ),
+            ),
+            ...(hidden > 0
+              ? [clipToWidth(theme.fg("dim", `${pad}… ${countLabel(hidden, "more")}`), width)]
+              : []),
+            ...note(width),
+          ]
+        : note(width),
+    facts: Arr.flatMap(stopped, (run) => agentFactLines(run.name, [run.id])),
+  };
+};
+
+const peersBody = (details: PeerDetails, theme: Theme, expanded: boolean, indent: number) => {
+  const pad = Str.repeat(indent)(" ");
+  return {
+    rows: (width: number) => {
+      const rows = Arr.map(details.peers, (peer) =>
         clipToWidth(
-          `${Str.repeat(indent)(" ")}${theme.fg("muted", managerActivityGlyph("stopped"))} ${sanitizeTerminalLine(run.name)} ${theme.fg("muted", `· was ${sanitizeTerminalLine(run.state)}`)}`,
+          `${pad}${theme.fg("toolTitle", sanitizeTerminalLine(peer.name))}${theme.fg("muted", ` · ${sanitizeTerminalLine(peer.ownership)} · ${sanitizeTerminalLine(peer.state)}${peer.task ? ` · ${sanitizeTerminalLine(peer.task)}` : ""}`)}`,
           width,
         ),
-      ),
-      ...(hidden > 0
-        ? [
-            clipToWidth(
-              theme.fg("dim", `${Str.repeat(indent)(" ")}… ${countLabel(hidden, "more")}`),
-              width,
-            ),
-          ]
-        : []),
-      ...note,
-      ...detailsSectionLines(
-        Arr.map(stopped, (run) => `${run.name}: ID ${run.id}`),
-        width,
-        theme,
-      ),
-    ];
+      );
+      return expanded ? rows : rows.slice(0, 3);
+    },
+    facts: [
+      ...(details.ownership ? [`This agent: ${details.ownership}`] : []),
+      ...Arr.flatMap(details.peers, (peer) => agentFactLines(peer.name, [peer.id])),
+    ],
+  } satisfies NoticeBody;
+};
+
+/** The body a notice shows below its heading; undefined when its details carry no display copy. */
+const noticeBody = (
+  details: NoticeDetails | undefined,
+  theme: Theme,
+  expanded: boolean,
+  indent: number,
+): NoticeBody | undefined => {
+  if (details?.kind === "completed" && details.runs !== undefined && details.runs.length > 0)
+    return completedBody(details.runs, theme, expanded, indent);
+  if (details?.kind === "question" && details.question !== undefined) {
+    const question = details.question;
+    return {
+      rows: (width) => agentTextLines(question, width, theme, { expanded, indent }),
+      facts: details.id ? agentFactLines(details.name ?? details.id, [details.id]) : [],
+    };
   }
-  if (details?.kind === "peers") {
-    const rows = Arr.map(details.peers, (peer) =>
-      clipToWidth(
-        `${Str.repeat(indent)(" ")}${theme.fg("toolTitle", sanitizeTerminalLine(peer.name))}${theme.fg("muted", ` · ${sanitizeTerminalLine(peer.ownership)} · ${sanitizeTerminalLine(peer.state)}${peer.task ? ` · ${sanitizeTerminalLine(peer.task)}` : ""}`)}`,
-        width,
-      ),
-    );
-    if (!expanded) return rows.slice(0, 3);
-    return [
-      ...rows,
-      ...detailsSectionLines(
-        [
-          ...(details.ownership ? [`This agent: ${details.ownership}`] : []),
-          ...Arr.map(details.peers, (peer) => `${peer.name}: ID ${peer.id}`),
-        ],
-        width,
-        theme,
-      ),
-    ];
-  }
+  if (details?.kind === "stopped" && details.runs !== undefined)
+    return stoppedBody(details, details.runs, theme, expanded, indent);
+  if (details?.kind === "peers") return peersBody(details, theme, expanded, indent);
   return undefined;
 };
 
@@ -321,14 +342,20 @@ export const presentSubagentNotification: CodePreviewMessagePresenter = (input, 
           new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
         ),
     };
-  const body = (expanded: boolean) =>
-    composeToolComponent(
-      (width) =>
-        noticeBody(details, width, theme, expanded, bodyIndent({ ...options, expanded })) ?? [],
-    );
   return {
     ...presentation,
-    collapsed: () => body(false),
-    expanded: () => indentedBody(theme, body(true)),
+    collapsed: () =>
+      composeToolComponent(
+        (width) =>
+          noticeBody(details, theme, false, bodyIndent({ ...options, expanded: false }))?.rows(
+            width,
+          ) ?? [],
+      ),
+    expanded: () => {
+      const body = noticeBody(details, theme, true, 0);
+      return body
+        ? expandedRowsBody(theme, body.rows, body.facts)
+        : indentedBody(theme, new Text("", 0, 0));
+    },
   };
 };

@@ -7,7 +7,7 @@ import * as Str from "effect/String";
 import { expandedArguments, expandedSection, previewIssuesSlot } from "pi-code-previews";
 import { failureMessage, restatesText } from "pi-cosmic-core/message-text";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { clipToWidth, INLINE_SEPARATOR } from "pi-cosmic-ui/manager";
+import { clipToWidth, INLINE_SEPARATOR, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderExpansionAffordance,
@@ -63,6 +63,10 @@ export const waitingState = (
   alternatives: readonly string[],
   theme: Pick<Theme, "fg">,
 ): Component => stateLine(alternatives, (text) => toolStatusLine(theme, "waiting", text), 2);
+
+/** Questionnaires waiting their turn behind earlier ones, marked as Activity marks them. */
+export const queuedState = (alternatives: readonly string[], theme: Pick<Theme, "fg">): Component =>
+  stateLine(alternatives, (text) => theme.fg("muted", `${SUITE_STATUS_GLYPHS.queued} ${text}`), 2);
 
 interface AnswerEntry {
   readonly label: string;

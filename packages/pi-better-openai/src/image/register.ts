@@ -17,7 +17,7 @@ import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-se
 import { registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
 import { type ExtensionCommand } from "pi-cosmic-core/host-command";
 import { containCommandFailure, safeHostSignal } from "../boundary/host-ui.ts";
-import { imageCompactSummary, isSignInFailure } from "./compact-summary.ts";
+import { imageCompactSummary, imageGenerationCause, isSignInFailure } from "./compact-summary.ts";
 import { presentImageMessage } from "./message.ts";
 import {
   renderImageCall,
@@ -107,7 +107,7 @@ export function registerOpenAIImage(
       if (!isCurrent()) return Promise.resolve();
       const prompt = Str.trim(args);
       if (!prompt) {
-        notifyAtHostBoundary(ctx, "Usage: /openai image <prompt>", "warning");
+        notifyAtHostBoundary(ctx, "Add a prompt: /openai image <prompt>", "warning");
         return Promise.resolve();
       }
       notifyAtHostBoundary(ctx, "Requesting an image from OpenAI…", "info");
@@ -120,7 +120,7 @@ export function registerOpenAIImage(
         ctx,
         {
           failed: (message) =>
-            `Couldn't generate the image: ${isSignInFailure(message) ? "sign in with /login openai-codex" : failureMessage(message, "unknown error")}`,
+            `Couldn't generate the image: ${isSignInFailure(message) ? "sign in with /login openai-codex" : (imageGenerationCause(message) ?? failureMessage(message, "unknown error"))}`,
           unexpected: "Couldn't generate the image",
           defect: "Better OpenAI image command raised an unexpected defect.",
         },

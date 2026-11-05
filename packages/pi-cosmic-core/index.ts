@@ -96,6 +96,7 @@ export { withCapturedHostSignal } from "./src/host-invocation.ts";
 export {
   extensionCommandOverview,
   registerExtensionCommand,
+  unknownSubcommandText,
   type ExtensionCommand,
   type ExtensionSubcommand,
   type ExtensionSubcommandHelp,
@@ -147,6 +148,7 @@ export {
   clipText,
   countLabel,
   formatBytes,
+  formatClockTime,
   formatCost,
   formatDuration,
   formatElapsed,

@@ -12,8 +12,12 @@ import { abbreviateHomePath } from "pi-cosmic-core/platform/paths";
 import type { CodePreviewSettings } from "../../config/schema";
 import { formatOnOff, formatSettingValue } from "../../config/values";
 import { ALL_CODE_PREVIEW_TOOLS } from "../../tools/names";
-import { getEffectiveCodePreviewToolSet } from "../../tools/policy";
-import { createThemeSelectSubmenu, ToolPreviewSettingsSubmenu } from "./submenus";
+import { requiredCodePreviewTools } from "../../tools/policy";
+import {
+  createThemeSelectSubmenu,
+  createToolPreviewSettingsSubmenu,
+  ENABLED_TOOLS_LABEL,
+} from "./submenus";
 import {
   SETTING_ITEM_DEFINITIONS,
   type SettingItemDefinition,
@@ -134,22 +138,22 @@ export function createSettingsCategoryItems(
     ...Arr.map(SETTINGS_CATEGORY_GROUPS.slice(0, 2), groupItem),
     {
       id: "tools",
-      label: "Enabled tools",
+      label: ENABLED_TOOLS_LABEL,
       description:
         "Toggle tool previews individually. Changes take effect after /reload. Tools already owned by another extension are skipped automatically.",
       currentValue:
         tools.length === 0
           ? "none"
           : tools.length === ALL_CODE_PREVIEW_TOOLS.length
-            ? "all tools"
-            : `${tools.length}/${ALL_CODE_PREVIEW_TOOLS.length} tools`,
+            ? "all"
+            : `${tools.length} of ${ALL_CODE_PREVIEW_TOOLS.length}`,
       submenu: (_currentValue, done) => {
         const settings = getCurrent();
-        return new ToolPreviewSettingsSubmenu(
+        return createToolPreviewSettingsSubmenu(
           settings.tools,
           done,
           theme,
-          getEffectiveCodePreviewToolSet([], settings),
+          requiredCodePreviewTools(settings),
         );
       },
     },

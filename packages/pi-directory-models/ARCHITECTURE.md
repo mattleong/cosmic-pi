@@ -41,8 +41,9 @@ Pi's current level while the saved model still applies.
 Unreadable, invalid, and foreign documents are not overwritten, and each reason has its own
 warning. Read, restore, and write failures become bounded warnings rather than breaking the
 session. Shutdown disposes the runtime, and inactive events do not write.
-Service warnings check the slot's captured authority when published, so neither restoration
-nor persistence can report a late warning after its owning session retires.
+Service notices check the slot's captured authority when published, so neither restoration
+nor persistence can report a late warning after its owning session retires. A restore that
+changed the model or thinking level publishes one info notice; an unchanged restore stays silent.
 
 [Application tests](tests/application.test.ts) exercise restoration, concurrent replacement,
 failure recovery, alias identity, and persistence. [CLI tests](tests/host-cli.test.ts) cover

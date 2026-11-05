@@ -19,10 +19,11 @@ import {
   activityQueued,
   activityStatus,
   addAttention,
+  type ActivityAttentionCounts,
 } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
-import { renderActivityRow, STATUS_DROP, type ActivityStatusPart } from "./row-render.ts";
+import { renderActivityRowLines, STATUS_DROP, type ActivityStatusPart } from "./row-render.ts";
 
 const REASON_WIDTH = 32;
 const REASON_MINIMUM_WIDTH = 10;
@@ -101,13 +102,38 @@ const memberAttention = (row: ActivityRow, widget: boolean): string =>
     ? activityStatus(row)
     : "");
 
+const NO_ATTENTION: ActivityAttentionCounts = { user: 0, parent: 0, blocked: 0, failed: 0 };
+
+/**
+ * A folded branch's attention, one part per kind. Input the user owes stays longest; parent waits
+ * give way first, since the waiting agent's own row says so once the branch opens.
+ */
+const warningParts = (counts: ActivityAttentionCounts): ActivityStatusPart[] =>
+  Arr.flatMap(
+    [
+      ["user", undefined],
+      ["parent", STATUS_DROP.elapsed],
+      ["blocked", STATUS_DROP.state],
+      ["failed", STATUS_DROP.state],
+    ] as const,
+    ([kind, drop]) =>
+      Arr.map(activityAttentionLabels({ ...NO_ATTENTION, [kind]: counts[kind] }), (text) => ({
+        text,
+        ...(drop !== undefined && { drop }),
+      })),
+  );
+
 const memberStatus = (
   row: ActivityRow,
-  { warnings, attention, reason }: { warnings: string; attention: string; reason: string },
+  {
+    warnings,
+    attention,
+    reason,
+  }: { warnings: ActivityStatusPart[]; attention: string; reason: string },
   width: number,
   now: number | undefined,
 ): ActivityStatusPart[] => {
-  if (warnings) return [{ text: warnings }];
+  if (warnings.length) return warnings;
   if (reason)
     return [
       { text: attention, drop: STATUS_DROP.progress },
@@ -129,17 +155,18 @@ const liveActivity = (row: ActivityRow): string | undefined => {
     : undefined;
 };
 
-export function groupedMemberLine(
+/** A member row's lines: one in the widget, and in the manager two when its identity wraps. */
+export function groupedMemberLines(
   entry: Extract<GroupedActivityRow, { readonly type: "member" }>,
   width: number,
   options: RowPaint,
   presentation: "manager" | "widget",
   focusedStyle?: (text: string) => string,
-): string {
+): readonly string[] {
   const { row } = entry;
   const interactive = presentation === "manager";
   const descendants = addAttention(entry.summary.attention, activityAttentionCounts(row), -1);
-  const warnings = entry.expanded ? "" : Arr.join(activityAttentionLabels(descendants), " · ");
+  const warnings = entry.expanded ? [] : warningParts(descendants);
   const attention = memberAttention(row, !interactive);
   const ended = memberReason(row, !interactive);
   const reason = ended
@@ -147,7 +174,7 @@ export function groupedMemberLine(
     : "";
   const status = memberStatus(row, { warnings, attention, reason }, width, options.now);
   const { glyph, color } = activityMark(row, options.now);
-  return renderActivityRow(
+  return renderActivityRowLines(
     {
       kind: activityType(row),
       title: row.title,
@@ -157,13 +184,12 @@ export function groupedMemberLine(
       glyph,
       color,
       status,
-      statusSeparator: reason ? " · " : " ",
-      statusColor: warnings
+      statusSeparator: reason || warnings.length ? " · " : " ",
+      statusColor: warnings.length
         ? activityAttentionColor(descendants)
         : !interactive && !attention
           ? "muted"
           : color,
-      compactStatus: warnings.length > 0,
       ...(entry.history && { history: true }),
       ...(row.kind === "agent" && row.profile && { profile: row.profile }),
       ...(row.kind === "agent" &&

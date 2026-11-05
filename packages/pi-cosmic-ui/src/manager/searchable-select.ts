@@ -16,8 +16,10 @@ import {
 } from "@earendil-works/pi-tui";
 import { clipToWidth } from "./chrome.ts";
 import {
+  FRAME_GUTTER,
   framedBodyWithHints,
   framedFill,
+  framedGutter,
   framedScreen,
   listDetailFrame,
 } from "./list-detail-shell.ts";
@@ -30,9 +32,8 @@ import {
 } from "./keymap.ts";
 import {
   configuredKeyLabels,
-  exitKeyHint,
+  framedKeyHintBar,
   framedKeyHints,
-  helpKeyHint,
   keyHint,
   keyHintRows,
   TEXT_INPUT_KEY_LABELS,
@@ -340,16 +341,20 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     if (this.searchMode)
       return framedKeyHints(["Type to filter", move, select], [this.searchCancel()], inner);
     const pages = `${key("tui.select.pageUp", "PgUp")}/${key("tui.select.pageDown", "PgDn")}`;
-    const expanded = this.alternateHelp;
-    const more = [
-      keyHint("j/k", "Move"),
-      keyHint(`${pages}/C-u/C-d`, "Page"),
-      keyHint("gg/G", "Ends"),
-      keyHint("l", "Select"),
-    ];
-    return framedKeyHints(
-      [move, select, keyHint("/", "Filter"), ...(expanded ? more : [])],
-      [exitKeyHint("nested", expanded ? ["h", "q"] : [], cancel), helpKeyHint(expanded)],
+    return framedKeyHintBar(
+      {
+        hints: [move, select, keyHint("/", "Filter")],
+        more: [
+          keyHint("j/k", "Move"),
+          keyHint(`${pages}/C-u/C-d`, "Page"),
+          keyHint("gg/G", "Ends"),
+          keyHint("l", "Select"),
+        ],
+        exit: "nested",
+        exitKey: cancel,
+        exitAliases: ["h", "q"],
+      },
+      this.alternateHelp,
       inner,
     );
   }
@@ -423,6 +428,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
     if (safeWidth < 4)
       return Array.from({ length: height }, () => Fn.pipe(" ", Str.repeat(safeWidth)));
     const inner = safeWidth - 2;
+    const textWidth = Math.max(1, inner - 2 * FRAME_GUTTER);
     const title = clipToWidth(` ${this.options.breadcrumb} `, inner, "");
     const frame = listDetailFrame(this.options.theme, "list");
     const activeNotice = this.feedback ?? this.options.notice;
@@ -437,9 +443,13 @@ export class SearchableSelectPage<A> implements Component, Focusable {
         framedBodyWithHints(frame, { height: fullHeight, inner, hints }, (bodyHeight) =>
           framedFill(
             frame,
-            height < 10
-              ? this.compactBody(bodyHeight, inner, activeNotice)
-              : this.fullBody(bodyHeight, inner, activeNotice),
+            // Text keeps a one-column gutter on each side of the frame.
+            framedGutter(
+              height < 10
+                ? this.compactBody(bodyHeight, textWidth, activeNotice)
+                : this.fullBody(bodyHeight, textWidth, activeNotice),
+              inner,
+            ),
             bodyHeight,
             inner,
             "list",

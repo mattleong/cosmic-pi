@@ -20,14 +20,10 @@ import {
 import { MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { AGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
-import {
-  nextCandidateFact,
-  savedFileFact,
-  workspaceFact,
-  workspaceNote,
-} from "../ui/notice-facts.ts";
+import { nextCandidateFact, savedFileFact, workspaceNote } from "../ui/notice-facts.ts";
 import { noticeText } from "../ui/notice-details.ts";
-import { formatRunRouteLine, formatSessionAge } from "../ui/run-presentation.ts";
+import { runRouteFact, writerFact } from "../ui/run-facts.ts";
+import { formatSessionAge } from "../ui/run-presentation.ts";
 import { compactRunIssues } from "./compact-run-issues.ts";
 import { projectName } from "./contract.ts";
 import { projectSubagentRunCard } from "./details-projection.ts";
@@ -57,13 +53,6 @@ const facts = (lines: ReadonlyArray<string | undefined>): ReadonlyArray<string> 
 const status = (text: string): string =>
   clipText(sanitizeTerminalLine(text), MAX_AGENT_STATUS_CHARS);
 
-const roleLabel = (run: Pick<SubagentRunView, "agent" | "profile">): string =>
-  run.agent ? `${run.agent} (${run.profile ?? "generalist"})` : (run.profile ?? "generalist");
-
-/** The route a run took, such as `reviewer → openai/gpt-5.5:high`. */
-const routeFact = (run: SubagentRunView): string =>
-  `Route ${formatRunRouteLine({ ...run, profile: roleLabel(run) })}`;
-
 /** A short human status for a run, only when it departs from its state's expected course. */
 const runStatus = (run: SubagentRunView, now: number): string | undefined => {
   const attention = runAttention(run);
@@ -88,12 +77,8 @@ const listFacts = (entry: AgentListEntry, names: ReadonlyMap<string, string>): s
       Arr.filter(
         [
           entry.id,
-          run ? formatRunRouteLine({ ...run, profile: roleLabel(run) }) : undefined,
-          run?.writeIntent === "writer"
-            ? run.workspaceId === undefined
-              ? "shared-checkout writer"
-              : `worktree ${run.workspaceId}`
-            : undefined,
+          run ? runRouteFact(run) : undefined,
+          run ? writerFact({ ...run, workspaceOutcome: undefined }) : undefined,
           entry.parentId === undefined
             ? undefined
             : `child of ${parentLabel(entry.parentId, names)}`,
@@ -176,26 +161,28 @@ const runReadFacts = (
   const usage = aggregateUsage([run]);
   const elapsed = formatSessionAge(run.endedAt ?? now, run.startedAt);
   const next = run.state === "failed" ? failedRunNextCandidate(run) : undefined;
+  // The first fact is the run's one line of short facts; the rest nest beneath it.
   return facts([
-    `ID ${run.id}`,
-    routeFact(run),
-    run.parentRunId === undefined || run.parentRunId === SUBAGENT_ROOT_RUN_ID
-      ? undefined
-      : `Parent ${run.parentRunId}`,
-    run.depth !== undefined && run.depth > 1 ? `Depth ${run.depth}` : undefined,
-    run.workspaceId === undefined
-      ? undefined
-      : workspaceFact(run.workspaceId, run.workspaceOutcome),
-    readout.reportFile ? savedFileFact("Report file", readout.reportFile) : undefined,
-    readout.reportGeneration > 1 ? `Assignment ${readout.reportGeneration}` : undefined,
-    next === undefined ? undefined : nextCandidateFact(next),
     Arr.join(
       Arr.filter(
-        [usage, elapsed, run.context === "fork" ? "forked context" : undefined],
+        [
+          run.id,
+          runRouteFact(run),
+          writerFact(run),
+          run.parentRunId === undefined || run.parentRunId === SUBAGENT_ROOT_RUN_ID
+            ? undefined
+            : `child of ${run.parentRunId}`,
+          run.context === "fork" ? "forked context" : undefined,
+          readout.reportGeneration > 1 ? `assignment ${readout.reportGeneration}` : undefined,
+          usage,
+          elapsed,
+        ],
         isTextFragment,
       ),
       " · ",
-    ) || undefined,
+    ),
+    readout.reportFile ? savedFileFact("Report file", readout.reportFile) : undefined,
+    next === undefined ? undefined : nextCandidateFact(next),
   ]);
 };
 

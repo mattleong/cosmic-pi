@@ -10,8 +10,11 @@ import { beforeEach, describe, expect, it, vi } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
+import { stripAnsi } from "pi-cosmic-core/security";
 import { plainTheme } from "pi-cosmic-core/testing";
+import { clipToWidth } from "../src/manager/chrome.ts";
 import {
+  framedKeyHintBar,
   framedKeyHints,
   joinKeyHints,
   keyHintBar,
@@ -299,6 +302,23 @@ describe("key hints", () => {
     }
   });
 
+  it("names every exit alias in one pair and keeps it in the border while help is expanded", () => {
+    const bar = {
+      hints: ["↑↓ Scroll"],
+      more: ["j/k Scroll", "PgUp/PgDn Page", "gg/G Ends"],
+      exit: "top" as const,
+      exitKey: "Esc",
+      exitAliases: ["C-c", "q"],
+    };
+    for (const inner of [30, 55, 178]) {
+      const { border, overflow } = framedKeyHintBar(bar, true, inner);
+      expect(border).toContain("Esc/C-c/q Close");
+      expect(border).toContain("? Less");
+      const pairs = Arr.map(Str.split(`${Str.trim(border)} · ${overflow}`, " · "), Str.trim);
+      expect(Arr.filter(pairs, Str.endsWith(" Close"))).toEqual(["Esc/C-c/q Close"]);
+    }
+  });
+
   it("wraps between pairs, never inside one", () => {
     const pairs = ["↑↓ Move", "Enter Change", "/ Filter", "PgUp/PgDn/C-u/C-d Page", "Esc Close"];
     const hint = joinKeyHints(pairs);
@@ -308,5 +328,13 @@ describe("key hints", () => {
       for (const row of wrapped)
         for (const part of Str.split(row, " · ")) expect(pairs).toContain(Fn.pipe(part, Str.trim));
     }
+  });
+});
+
+describe("width-safe clipping", () => {
+  it("closes up a word-boundary cut before the ellipsis", () => {
+    const clipped = clipToWidth("Approve the dependency", 9);
+    expect(stripAnsi(clipped)).toBe("Approve…");
+    expect(visibleWidth(clipped)).toBeLessThanOrEqual(9);
   });
 });

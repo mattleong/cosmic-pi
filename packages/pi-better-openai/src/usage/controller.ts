@@ -205,10 +205,16 @@ export const makeUsageRefreshController = Effect.fn("UsageRefreshController.make
       .pipe(Effect.orDie, Effect.asVoid);
   yield* provideDependencies(synchronize(true));
 
-  const installState = Effect.fnUntraced(function* (next: (current: P) => P, notify: boolean) {
+  // Usage hidden for the current model is a normal state; only a failed read warns.
+  const installState = Effect.fnUntraced(function* (
+    next: (current: P) => P,
+    notify: boolean,
+    hidden = false,
+  ) {
     const latest = yield* updateState(next);
     yield* notifyChanged;
-    if (notify) yield* notifyUser(latest.statusText, latest.snapshot ? "info" : "warning");
+    if (notify)
+      yield* notifyUser(latest.statusText, hidden || latest.snapshot ? "info" : "warning");
   });
   const installHidden = (statusText: string, notify: boolean) =>
     installState(
@@ -221,6 +227,7 @@ export const makeUsageRefreshController = Effect.fn("UsageRefreshController.make
           statusText,
         }),
       notify,
+      true,
     );
   const installUnavailable = (
     message: string,

@@ -128,3 +128,64 @@ test("content construction or drawing failure falls back in that slot and keeps 
     }
   }
 });
+
+test.each(modes)(
+  "an expanded preview row keeps the state its collapsed preview shows, once, in %s mode",
+  (mode) => {
+    applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallTiming: false });
+    const preview = (
+      collapsedResult: string,
+      expandedResult: string,
+      summary: { readonly counters?: readonly string[]; readonly metadata?: readonly string[] },
+    ) =>
+      createToolPresentationHarness(
+        withCodePreviewShell(
+          {
+            ...createReadToolDefinition("/project"),
+            renderCall: textRenderer("Task status"),
+            renderResult: textRenderer(collapsedResult),
+          },
+          {
+            mode,
+            compactSummary: ({ phase }) => ({
+              subject: "server",
+              ...summary,
+              ...(phase === "settled" && { outcome: "returned" as const }),
+            }),
+            expandedContent: {
+              renderCall: textRenderer("Command pnpm dev"),
+              renderResult: textRenderer(expandedResult),
+            },
+          },
+        ),
+        { width: 120 },
+      );
+    const states = (h: ReturnType<typeof preview>, state: RegExp) =>
+      Arr.map(h.cycle({ path: "file" }, result), ({ expanded, text }) => ({
+        expanded,
+        count: Option.match(Str.match(state)(Str.toLowerCase(text)), {
+          onNone: () => 0,
+          onSome: (found) => found.length,
+        }),
+      }));
+
+    // Content-only bodies leave the state to the heading, which a preview heading doesn't show.
+    for (const { count: shown } of states(
+      preview("running · pnpm dev", "Output ready in 412 ms", { metadata: ["running"] }),
+      /\brunning\b/gu,
+    ))
+      expect(shown).toBe(1);
+    // A body that states it already isn't repeated.
+    for (const { count: shown } of states(
+      preview("running · pnpm dev", "State running", { metadata: ["running"] }),
+      /\brunning\b/gu,
+    ))
+      expect(shown).toBe(1);
+    // A fact the collapsed preview never showed isn't added on expansion.
+    for (const { expanded, count: shown } of states(
+      preview("No active tasks", "No active tasks", { counters: ["0 tasks"] }),
+      /\b0 tasks\b/gu,
+    ))
+      expect({ expanded, shown }).toEqual({ expanded, shown: 0 });
+  },
+);

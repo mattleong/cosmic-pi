@@ -16,6 +16,7 @@ import { failureMessage } from "pi-cosmic-core/message-text";
 import {
   CodexImageDetailsSchema,
   IMAGE_ACTIONS,
+  GENERATION_FAILED,
   type CodexImageDetails,
   type ToolParams,
 } from "./types.ts";
@@ -44,12 +45,22 @@ const UNCONFIRMED_COMPLETION = uncertain(
   "image-missing",
   "Image generation finished, but no image is attached",
 );
+/** What to do after OpenAI failed a request: shown expanded under the failure. */
+const RETRY_HINT =
+  "Try again. If it fails the same way, rephrase the prompt or wait a few minutes.";
 const STATUS_SUMMARIES = new Map<string, StatusSummary>([
   [
     "failed",
     {
       outcome: "error",
-      issues: [{ severity: "error", code: "image-failed", message: "Image generation failed" }],
+      issues: [
+        {
+          severity: "error",
+          code: "image-failed",
+          message: `${GENERATION_FAILED}: OpenAI gave no reason`,
+          detail: RETRY_HINT,
+        },
+      ],
     },
   ],
   ["cancelled", { outcome: "cancelled" }],
@@ -93,13 +104,40 @@ export const isSignInFailure = (text: string): boolean =>
     ),
   );
 
+// Collapsed, a cause stays one short line; the full text shows expanded.
+const CAUSE_LIMIT = 90;
+const GENERATION_CAUSE = new RegExp(
+  `^\\s*(?:[A-Za-z]*Error: )?${GENERATION_FAILED}: ([^\\n]*)`,
+  "u",
+);
+
+/** The cause of a failed OpenAI request, without its lead-in, or undefined for other failures. */
+export const imageGenerationCause = (text: string): string | undefined => {
+  const cause = GENERATION_CAUSE.exec(text)?.[1];
+  return cause === undefined
+    ? undefined
+    : failureMessage(cause, "OpenAI gave no reason", CAUSE_LIMIT);
+};
+
 export function imageFailureIssue(text: string): CompactIssue {
-  return isSignInFailure(text)
-    ? { severity: "error", code: "image-sign-in", message: "Sign-in required: /login openai-codex" }
-    : {
+  if (isSignInFailure(text))
+    return {
+      severity: "error",
+      code: "image-sign-in",
+      message: "Sign-in required: /login openai-codex",
+    };
+  const cause = imageGenerationCause(text);
+  return cause === undefined
+    ? {
         severity: "error",
         code: "image-error",
         message: failureMessage(text, "Image generation reported an error"),
+      }
+    : {
+        severity: "error",
+        code: "image-failed",
+        message: `${GENERATION_FAILED}: ${cause}`,
+        detail: RETRY_HINT,
       };
 }
 

@@ -16,8 +16,8 @@ export interface ActivityStatusPart {
 }
 export const STATUS_DROP = { state: 1, progress: 2, elapsed: 3 } as const;
 
-const MINIMUM_TITLE_WIDTH = 14;
-const PROFILE_RESERVE_WIDTH = 12;
+// A title keeps at least this many columns, ellipsis included, before an identity moves below it.
+const TITLE_FLOOR = 12;
 
 export interface ActivityRowVisual {
   /** A quiet word after the title saying what the row is, when its profile doesn't. */
@@ -31,7 +31,6 @@ export interface ActivityRowVisual {
   readonly status: readonly ActivityStatusPart[];
   readonly statusSeparator?: string;
   readonly statusColor: Tone;
-  readonly compactStatus?: boolean;
   readonly profile?: string;
   /** An agent's model: `label` adds effort and qualifiers to `name` (`provider/model`). */
   readonly model?: { readonly name: string; readonly label: string };
@@ -44,8 +43,10 @@ export interface ActivityRowVisual {
 
 const MINIMUM_ACTIVITY_WIDTH = 8;
 
-// The widget uses compact three-column connectors. The manager's four-column connectors carry
-// the fold marker in place of the last stroke, so glyphs sit right after their connector.
+// Every tree uses three-column connectors. In the manager a branch's fold marker takes the
+// connector's second stroke (`├▾ `, `└▸ `), so glyphs line up whether or not a row has children.
+const GUIDE_WIDTH = 3;
+const through = (continues: boolean) => (continues ? "│  " : "   ");
 const treeGuide = (
   continuations: readonly boolean[],
   levels: number,
@@ -53,12 +54,9 @@ const treeGuide = (
 ): string => {
   const clipped = continuations.length > levels;
   const shown = levels > 0 ? continuations.slice(-levels) : [];
-  const wide = fold !== undefined;
-  const last = (continues: boolean) =>
-    wide ? `${continues ? "├─" : "└─"}${fold || "─"} ` : continues ? "├─ " : "└─ ";
-  const through = (continues: boolean) =>
-    wide ? (continues ? "│   " : "    ") : continues ? "│  " : "   ";
-  const root = wide && fold && shown.length === 0 ? `${fold} ` : "";
+  const stroke = fold !== undefined && Str.isNonEmpty(fold) ? fold : "─";
+  const last = (continues: boolean) => `${continues ? "├" : "└"}${stroke} `;
+  const root = fold && shown.length === 0 ? `${fold} ` : "";
   return `${clipped ? "… " : ""}${root}${Arr.join(
     Arr.map(shown, (continues, index) =>
       index === shown.length - 1 ? last(continues) : through(continues),
@@ -66,7 +64,16 @@ const treeGuide = (
     "",
   )}`;
 };
-const guideWidth = (fold: string | undefined) => (fold === undefined ? 3 : 4);
+/** The guide beneath a row: its ancestors' rules continue, and so does its own branch. */
+const continuationGuide = (continuations: readonly boolean[], levels: number): string => {
+  const shown = levels > 0 ? continuations.slice(-levels) : [];
+  return `${continuations.length > levels ? "  " : ""}${Arr.join(Arr.map(shown, through), "")}`;
+};
+const guideLevels = (continuations: readonly boolean[], budget: number): number => {
+  const all = Math.min(12, continuations.length);
+  if (all * GUIDE_WIDTH <= budget) return all;
+  return Math.min(all, Math.max(0, Math.floor((budget - 2) / GUIDE_WIDTH)));
+};
 
 const mostDroppable = (parts: readonly ActivityStatusPart[]) => {
   let found: { readonly index: number; readonly part: ActivityStatusPart } | undefined;
@@ -146,42 +153,178 @@ const rowSuffixes = (row: ActivityRowVisual): readonly string[] => {
   return profile ? [...withProfile, model.name] : withProfile;
 };
 
-const minimumLeftWidth = (
-  row: ActivityRowVisual,
-  { continuations, awaited, fold, omitted }: RowMarkers,
-  suffix: string,
-): number =>
-  visibleWidth(treeGuide(continuations, Math.min(12, continuations.length), fold)) +
-  visibleWidth(awaited) +
-  2 +
-  (suffix ? Math.min(PROFILE_RESERVE_WIDTH, visibleWidth(suffix) + 3) : 0) +
-  Math.min(MINIMUM_TITLE_WIDTH, visibleWidth(`${row.title}${omitted}`));
-
 const statusColumnWidth = (
-  row: ActivityRowVisual,
   status: string,
   width: number,
   rightBudget: number,
 ): number | undefined => {
   if (status.length === 0 || rightBudget < Math.min(9, visibleWidth(status))) return undefined;
-  if (width < 48 && !(row.compactStatus && width >= 32)) return undefined;
+  if (width < 32) return undefined;
   return Math.min(visibleWidth(status), rightBudget);
 };
 
-const rowName = (
-  row: ActivityRowVisual,
-  interactive: boolean,
+interface RowLayout {
+  readonly row: ActivityRowVisual;
+  readonly interactive: boolean;
+  readonly paint: Paint;
+  readonly focusedStyle: ((text: string) => string) | undefined;
+  readonly omitted: string;
+}
+
+const quietName = (
+  { row, interactive, paint, focusedStyle, omitted }: RowLayout,
+  title: string,
   suffix: string,
-  paint: Paint,
-  focusedStyle: ((text: string) => string) | undefined,
 ): string => {
   const quiet = suffix ? ` · ${suffix}` : "";
-  if (focusedStyle) return focusedStyle(`${row.title}${quiet}`);
+  if (focusedStyle) return `${focusedStyle(`${title}${quiet}`)}${paint("dim", omitted)}`;
   const recede = row.history && interactive ? "muted" : undefined;
   const identityTone = recede ?? (interactive ? managerTone.identity : "text");
-  return `${paint(identityTone, row.title)}${paint(recede ?? "muted", quiet)}`;
+  return `${paint(identityTone, title)}${paint("dim", omitted)}${paint(recede ?? "muted", quiet)}`;
 };
 
+const nameWidth = (title: string, omitted: string, suffix: string): number =>
+  visibleWidth(title) + visibleWidth(omitted) + (suffix ? visibleWidth(suffix) + 3 : 0);
+
+type NameFit =
+  | {
+      readonly lines: 1;
+      readonly title: string;
+      readonly suffix: string;
+      readonly activity: string;
+    }
+  | { readonly lines: 2; readonly title: string; readonly suffix: string };
+
+/**
+ * Fits the title and its identity into `room`. Live activity gives way first, then the model's
+ * qualifiers, then the profile, then the title shortens to its floor. Past that the manager moves
+ * the identity to a continuation line so `provider/model` is never cut; the widget, which keeps
+ * one line per row, cuts the title further and the model only as a last resort.
+ */
+const fitName = (
+  layout: RowLayout,
+  room: number,
+  activityRoom: (used: number) => number,
+): NameFit => {
+  const { row, omitted, interactive } = layout;
+  const suffixes = rowSuffixes(row);
+  const narrowest = suffixes.at(-1) ?? "";
+  const fits = (suffix: string) => nameWidth(row.title, omitted, suffix) <= room;
+  // Live activity outranks the model's qualifiers but not the profile.
+  const withProfile = row.model && row.profile ? suffixes.slice(0, -1) : suffixes;
+  if (row.activity) {
+    const busy = Arr.findFirst(
+      withProfile,
+      (suffix) =>
+        fits(suffix) &&
+        activityRoom(nameWidth(row.title, omitted, suffix)) >= MINIMUM_ACTIVITY_WIDTH,
+    );
+    if (Option.isSome(busy)) {
+      const used = nameWidth(row.title, omitted, busy.value);
+      return {
+        lines: 1,
+        title: row.title,
+        suffix: busy.value,
+        activity: clipToWidth(row.activity, activityRoom(used), "…"),
+      };
+    }
+  }
+  const whole = Arr.findFirst(suffixes, fits);
+  if (Option.isSome(whole))
+    return { lines: 1, title: row.title, suffix: whole.value, activity: "" };
+  const titleRoom = room - nameWidth("", omitted, narrowest);
+  const floor = Math.min(TITLE_FLOOR, visibleWidth(row.title));
+  if (titleRoom >= floor || (!interactive && titleRoom >= 2))
+    return {
+      lines: 1,
+      title: clipToWidth(row.title, titleRoom, "…"),
+      suffix: narrowest,
+      activity: "",
+    };
+  if (interactive) return { lines: 2, title: row.title, suffix: narrowest };
+  return { lines: 1, title: row.title, suffix: narrowest, activity: "" };
+};
+
+const minimumLeftWidth = (
+  layout: RowLayout,
+  guide: string,
+  awaited: string,
+  suffix: string,
+): number =>
+  visibleWidth(guide) +
+  visibleWidth(awaited) +
+  2 +
+  // The manager can move the identity below the title, so only the widget reserves room for it,
+  // ahead of the status: `provider/model` stays whole.
+  (!layout.interactive && suffix ? visibleWidth(suffix) + 3 : 0) +
+  Math.min(TITLE_FLOOR, nameWidth(layout.row.title, layout.omitted, ""));
+
+const padTo = (text: string, width: number): string =>
+  `${text}${Fn.pipe(" ", Str.repeat(Math.max(0, width - visibleWidth(text))))}`;
+
+/**
+ * One Activity row: tree guide, glyph, title, identity, and a right-aligned status. In the
+ * manager a row that can't keep its whole `provider/model` beside a readable title takes a
+ * second line for the identity.
+ */
+export function renderActivityRowLines(
+  row: ActivityRowVisual,
+  width: number,
+  theme: Pick<Theme, "fg"> | undefined,
+  presentation: "manager" | "widget",
+  focusedStyle?: (text: string) => string,
+): readonly string[] {
+  const interactive = presentation === "manager";
+  const paint: Paint = (tone, text) => theme?.fg(tone, text) ?? text;
+  const { continuations, awaited, fold, omitted } = rowMarkers(row, interactive);
+  const layout: RowLayout = { row, interactive, paint, focusedStyle, omitted };
+  const markerWidth = visibleWidth(awaited);
+  const narrowest = rowSuffixes(row).at(-1) ?? "";
+  const fullGuide = treeGuide(continuations, Math.min(12, continuations.length), fold);
+  const statusBudget = width - minimumLeftWidth(layout, fullGuide, awaited, narrowest) - 2;
+  const status = fitStatus(row.status, row.statusSeparator ?? " · ", statusBudget);
+  const rightWidth = statusColumnWidth(status, width, Math.max(0, statusBudget));
+  const leftWidth = Math.max(0, width - (rightWidth === undefined ? 0 : rightWidth + 2));
+  const levels = guideLevels(
+    continuations,
+    leftWidth - markerWidth - 2 - Math.min(TITLE_FLOOR, visibleWidth(row.title)),
+  );
+  const guide = treeGuide(continuations, levels, fold);
+  const prefixWidth = visibleWidth(guide) + markerWidth + 2;
+  const prefix = `${paint("dim", guide)}${paint("accent", awaited)}${paint(row.color, row.glyph)} `;
+  const room = Math.max(0, leftWidth - prefixWidth);
+  // Keep one space before the status column so the activity never runs into it.
+  const activityRoom = (used: number) => room - used - 3 - Number(rightWidth !== undefined);
+  const fit = fitName(layout, room, activityRoom);
+  const statusText =
+    rightWidth === undefined ? "" : paint(row.statusColor, clipToWidth(status, rightWidth, "…"));
+  const withStatus = (left: string) =>
+    rightWidth === undefined ? left : `${padTo(left, width - rightWidth)}${statusText}`;
+  if (fit.lines === 1) {
+    const activity = fit.activity ? paint("muted", ` · ${fit.activity}`) : "";
+    const name = quietName(layout, fit.title, fit.suffix);
+    return [withStatus(clipToWidth(`${prefix}${name}${activity}`, leftWidth, "…"))];
+  }
+  const title = clipToWidth(
+    `${prefix}${quietName(layout, clipToWidth(row.title, Math.max(1, room - visibleWidth(omitted)), "…"), "")}`,
+    leftWidth,
+    "…",
+  );
+  // Beneath the row its own children's branch continues from the glyph column.
+  const below = padTo(
+    `${continuationGuide(continuations, levels)}${row.children && row.expanded ? "│" : ""}`,
+    prefixWidth,
+  );
+  const identityRoom = Math.max(1, width - prefixWidth);
+  const identity = Option.getOrElse(
+    Arr.findFirst(rowSuffixes(row), (suffix) => visibleWidth(suffix) <= identityRoom),
+    () => clipToWidth(narrowest, identityRoom, "…"),
+  );
+  const quiet = focusedStyle ? focusedStyle(identity) : paint("muted", identity);
+  return [withStatus(title), `${paint("dim", below)}${quiet}`];
+}
+
+/** A single-line Activity row, as the widget draws it. */
 export function renderActivityRow(
   row: ActivityRowVisual,
   width: number,
@@ -189,54 +332,5 @@ export function renderActivityRow(
   presentation: "manager" | "widget",
   focusedStyle?: (text: string) => string,
 ): string {
-  const interactive = presentation === "manager";
-  const paint: Paint = (tone, text) => theme?.fg(tone, text) ?? text;
-  const markers = rowMarkers(row, interactive);
-  const { continuations, awaited, fold, omitted } = markers;
-  const markerWidth = visibleWidth(awaited);
-  const suffixes = rowSuffixes(row);
-  // Budget for the narrowest identity so the status column survives; the lead widens into room.
-  const suffix = suffixes.at(-1) ?? "";
-  const identityWidth = suffix ? visibleWidth(suffix) + 3 : 0;
-  const status = fitStatus(
-    row.status,
-    row.statusSeparator ?? " · ",
-    width - minimumLeftWidth(row, markers, suffix) - 2,
-  );
-  const rightWidth = statusColumnWidth(
-    row,
-    status,
-    width,
-    Math.max(0, width - identityWidth - markerWidth - 6),
-  );
-  const leftWidth = Math.max(0, width - (rightWidth === undefined ? 0 : rightWidth + 2));
-  const guideBudget = Math.max(0, leftWidth - identityWidth - markerWidth - 3);
-  const levels = Math.min(12, Math.max(0, Math.floor((guideBudget - 2) / guideWidth(fold))));
-  const guide = paint("dim", clipToWidth(treeGuide(continuations, levels, fold), guideBudget, ""));
-  const glyph = paint(row.color, row.glyph);
-  const leadWith = (text: string) =>
-    `${guide}${paint("accent", awaited)}${glyph} ${rowName(row, interactive, text, paint, focusedStyle)}${paint("dim", omitted)}`;
-  // Keep one space before the status column so the activity never runs into it.
-  const roomAfter = (lead: string) =>
-    leftWidth - visibleWidth(lead) - 3 - Number(rightWidth !== undefined);
-  const leads = Arr.map(suffixes, leadWith);
-  // Live activity outranks the model's qualifiers but not the profile.
-  const withProfile = row.model && row.profile ? leads.slice(0, -1) : leads;
-  const busy = row.activity
-    ? Arr.findFirst(withProfile, (lead) => roomAfter(lead) >= MINIMUM_ACTIVITY_WIDTH)
-    : Option.none();
-  const lead = Option.getOrElse(busy, () =>
-    Option.getOrElse(
-      Arr.findFirst(leads, (candidate) => visibleWidth(candidate) <= leftWidth),
-      () => leads.at(-1) ?? leadWith(suffix),
-    ),
-  );
-  const activity =
-    row.activity && Option.isSome(busy)
-      ? paint("muted", ` · ${clipToWidth(row.activity, roomAfter(lead), "…")}`)
-      : "";
-  const left = clipToWidth(`${lead}${activity}`, Math.max(0, leftWidth), "…");
-  return rightWidth === undefined
-    ? left
-    : `${left}${Fn.pipe(" ", Str.repeat(Math.max(1, width - visibleWidth(left) - rightWidth)))}${paint(row.statusColor, clipToWidth(status, rightWidth, "…"))}`;
+  return renderActivityRowLines(row, width, theme, presentation, focusedStyle)[0] ?? "";
 }

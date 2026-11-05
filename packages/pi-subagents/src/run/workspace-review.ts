@@ -83,7 +83,10 @@ const engineRecord = (service: WorkspaceServiceContract, { handle }: WorkspaceBi
     .pipe(Effect.mapError(mapWorkspaceError));
 
 const staleRevision = () =>
-  invalid("workspace_revision_stale", "The immutable workspace revision no longer matches.");
+  invalid(
+    "workspace_revision_stale",
+    "The proposal changed since that revision; review it again.\nThe requested revision is no longer the proposal's current revision.",
+  );
 
 const engineRevision = (service: WorkspaceServiceContract, { handle }: WorkspaceBinding) =>
   service

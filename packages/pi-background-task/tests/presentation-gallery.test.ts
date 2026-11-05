@@ -15,7 +15,15 @@ import {
   type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
+import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
+import {
+  KeybindingsManager as TuiKeybindingsManager,
+  setKeybindings,
+  TUI_KEYBINDINGS,
+} from "@earendil-works/pi-tui";
+import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
+import { taskSettingsSubcommand } from "../src/settings/task-settings.ts";
 import { beforeAll, describe, it } from "@effect/vitest";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import {
@@ -721,6 +729,57 @@ const activityLines = (): ReadonlyArray<string> => {
   ];
 };
 
+/**
+ * `/tasks settings` through its subcommand: the scope groups, the Global group opened, and one
+ * size's choice list. The global file sets a per-task size the project row inherits, and the
+ * project sets its own running limit.
+ */
+const settingsLines = (): Effect.Effect<string[]> =>
+  Effect.gen(function* () {
+    setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
+    const command = taskSettingsSubcommand({
+      config: () => ({ ...DEFAULT_BACKGROUND_TASK_CONFIG, logBufferBytesPerTask: 1024 ** 2 }),
+      captureAuthority: () => () => true,
+      read: (location) =>
+        Promise.resolve(
+          location.scope === "global"
+            ? { logBufferBytesPerTask: 1024 ** 2, stopGraceMs: 5_000 }
+            : { maxRunning: 16 },
+        ),
+      write: () => Promise.resolve(),
+    });
+    const surface = fakeCustomSurfaceHost();
+    const ctx = extensionContextFixture({
+      cwd: "/project",
+      mode: "tui",
+      hasUI: true,
+      signal: new AbortController().signal,
+      isProjectTrusted: () => true,
+      ui: { custom: surface.ctx.ui.custom.bind(surface.ctx.ui), notify: () => undefined },
+    });
+    const opened = Promise.resolve(command.handler("", ctx));
+    yield* macrotask;
+    surface.mount();
+    const frames = (title: string) =>
+      Arr.flatMap([180, 57], (width) => [
+        `── /tasks settings · ${title} · ${width} cols`,
+        ...Arr.map(surface.editor?.render(width) ?? [], (line) => Str.trimEnd(line)),
+        "",
+      ]);
+    const lines = [...frames("scope groups")];
+    surface.editor?.handleInput?.("\r");
+    lines.push(...frames("the Global group opened"));
+    for (const key of ["j", "j", "j"]) surface.editor?.handleInput?.(key);
+    lines.push(...frames("the Global group on output per task"));
+    surface.editor?.handleInput?.("\r");
+    lines.push(...frames("output per task choices"));
+    for (const key of ["\u001b", "\u001b", "j", "\r"]) surface.editor?.handleInput?.(key);
+    lines.push(...frames("the Project group opened"));
+    for (const key of ["\u001b", "\u001b"]) surface.editor?.handleInput?.(key);
+    yield* Effect.promise(() => opened);
+    return lines;
+  });
+
 const directory = galleryDirectory(process.env) ?? "";
 
 const titled = <A extends { readonly title: string }>(entries: ReadonlyArray<A>, title: string) =>
@@ -793,6 +852,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         }
       }
       lines.push(...activityLines());
+      lines.push(...(yield* settingsLines()));
       yield* writeGallerySection(directory, "pi-background-task", lines);
     }),
   );

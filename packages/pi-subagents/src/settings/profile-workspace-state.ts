@@ -56,9 +56,7 @@ export abstract class ProfileWorkspaceState {
   protected refreshBlocked = false;
   protected message: WorkspaceMessage | undefined;
   protected pendingAction: "remove" | "reset" | undefined;
-  protected helpOpen = false;
-  protected helpScroll = 0;
-  protected helpMaximum = 0;
+  protected hintsExpanded = false;
   protected catalogLoad: AbortController | undefined;
   protected modelPicker: ReturnType<typeof profileModelPickerPage> | undefined;
   protected selectPage: SearchableSelectPage<string> | undefined;
@@ -113,7 +111,6 @@ export abstract class ProfileWorkspaceState {
       this.modelPicker !== undefined ||
       this.selectPage !== undefined ||
       this.pendingAction !== undefined ||
-      this.helpOpen ||
       this.catalogLoad !== undefined
     );
   }

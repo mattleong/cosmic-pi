@@ -23,6 +23,8 @@ import {
 const warn = (ctx: ExtensionContext, message: string) =>
   notifyAtHostBoundary(ctx, message, "warning");
 
+const RETRY_HINT = "Start a new session with /new to try again";
+
 interface DirectoryModelSession extends DirectoryModelSessionInput {
   readonly ctx: ExtensionContext;
 }
@@ -38,22 +40,28 @@ export function registerDirectoryModelsApplication(
       const isCurrent = slot.captureAuthority();
       return makePiManagedRuntime(
         pi,
-        directoryModelsLayer(input, (message) => {
-          if (isCurrent()) warn(input.ctx, message);
+        directoryModelsLayer(input, (message, level) => {
+          if (isCurrent()) notifyAtHostBoundary(input.ctx, message, level);
         }),
         { agentDirectory: getAgentDir, packageName: "pi-directory-models" },
       );
     },
     startup: () => DirectoryModelPreferenceService.use((service) => service.initialize),
     onStartFailure: ({ ctx }) => {
-      warn(ctx, "Directory Models couldn't start");
+      warn(
+        ctx,
+        `Directory Models couldn't start, so models aren't restored or saved\n${RETRY_HINT}`,
+      );
     },
   });
 
   pi.on("session_start", (event, ctx) => {
     const captured = captureDirectorySession(event, ctx);
     if (!captured) {
-      warn(ctx, "Directory Models isn't available in this session");
+      warn(
+        ctx,
+        `Directory Models couldn't read this session, so models aren't restored or saved\n${RETRY_HINT}`,
+      );
       return slot.shutdown();
     }
     return slot

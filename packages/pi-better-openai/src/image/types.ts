@@ -153,5 +153,11 @@ export class OpenAIImageError extends Schema.TaggedError<
 }) {}
 export const fail = (operation: OpenAIImageOperation, message: string) =>
   OpenAIImageError.make({ operation, message });
+
+/** How every failure of the OpenAI request itself begins, so presentation can find its cause. */
+export const GENERATION_FAILED = "Image generation failed";
+/** A failure of the request to OpenAI, with its cause: the provider's words where it gave any. */
+export const generationFailure = (operation: OpenAIImageOperation, cause: string) =>
+  fail(operation, `${GENERATION_FAILED}: ${cause}`);
 export const failWith = (operation: OpenAIImageOperation, message: string) => () =>
   fail(operation, message);

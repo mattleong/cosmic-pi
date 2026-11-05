@@ -66,7 +66,7 @@ export function selectPreviewTextLines(text: string, limit: number) {
 }
 
 export function hiddenLinesMarker(theme: Theme, hidden: number): string {
-  return theme.fg("muted", `      --- ${countLabel(hidden, "line")} hidden ---`);
+  return theme.fg("muted", `      … ${countLabel(hidden, "line")} hidden`);
 }
 
 export function trimSingleTrailingNewline(text: string): string {
@@ -88,5 +88,5 @@ export function showingFooter(theme: Theme, shown: number, total: number, label:
 }
 
 export function previewFooter(theme: Theme, text: string): string {
-  return `\n${theme.fg("muted", `└─ ${text}`)}`;
+  return `\n${theme.fg("muted", text)}`;
 }

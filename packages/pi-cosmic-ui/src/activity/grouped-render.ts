@@ -6,6 +6,7 @@ import {
   type MarkdownTheme,
 } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { LIST_CURSOR, focusedField } from "../manager/style.ts";
 import {
@@ -15,28 +16,28 @@ import {
   managerNoticeGlyph,
 } from "../manager/chrome.ts";
 import {
-  borderKeyHint,
   configuredKeyLabels,
   exitKeyHint,
   exitKeyVerb,
   fittedBorderKeyHint,
-  framedKeyHints,
-  helpKeyHint,
+  framedKeyHintBar,
   joinKeyHints,
   keyHint,
   keyHintRows,
   moveKeyHint,
+  type KeyHintBar,
 } from "../manager/key-labels.ts";
 import {
   detailWindowPositionLabel,
-  padListDetailRow,
   stackedListHeight,
   wideListDetailGeometry,
   type DetailWindowPosition,
 } from "../manager/list-detail.ts";
 import {
+  FRAME_GUTTER,
   framedBodyWithHints,
   framedFill,
+  framedGutter,
   framedScreen,
   framedWideRows,
   framedStackedRows,
@@ -44,14 +45,9 @@ import {
   type ListDetailShell,
 } from "../manager/list-detail-shell.ts";
 import { activityActionHints, activityShortcuts, type ActivityActionHints } from "./action-keys.ts";
-import {
-  activityAttentionLabels,
-  compactNotices,
-  needsYou,
-  type ActivityAttentionCounts,
-} from "./attention.ts";
+import { activityAttentionLabels, needsYou, type ActivityAttentionCounts } from "./attention.ts";
 import { activityStartupGlyph, activityOwnerLabel } from "./widget.ts";
-import { groupedMemberLine } from "./row-line.ts";
+import { groupedMemberLines } from "./row-line.ts";
 import { groupedActivitySource, type GroupedActivityRow } from "./grouped-tree.ts";
 import { groupSummaryLabels, summarizeGroup } from "./group-summary.ts";
 import { groupedDetail, type ActivityDetailBlock } from "./grouped-detail.ts";
@@ -61,30 +57,36 @@ import { isFinished, type ActivityRow } from "./model.ts";
 import type { ActivityDetail } from "./protocol.ts";
 
 const CURSOR = `${LIST_CURSOR} `;
+// The list needs room for a tree, a title, and a whole `provider/model` beside the detail pane.
+const ACTIVITY_LIST_MIN_WIDTH = 46;
+const ACTIVITY_LIST_SHARE = 0.45;
 const NO_CURSOR = "  ";
 
-function rowLine(
+function rowLines(
   entry: GroupedActivityRow,
   width: number,
   options: ActivityComponentOptions,
   focused: boolean,
-): string {
+): readonly string[] {
   const theme = options.theme;
   const focusedStyle = focused ? (text: string) => focusedField(theme, text) : undefined;
   const paint = { now: options.now?.(), theme };
   if (entry.type === "member")
-    return groupedMemberLine(entry, width, paint, "manager", focusedStyle);
+    return groupedMemberLines(entry, width, paint, "manager", focusedStyle);
   const fold = entry.children ? (entry.expanded ? "▾ " : "▸ ") : "  ";
-  const full = joinInline(groupSummaryLabels(entry.summary));
-  const summary =
-    visibleWidth(`${fold}${entry.title} · ${full}`) <= width
-      ? full
-      : joinInline(groupSummaryLabels(entry.summary, true));
-  return clipToWidth(
-    `${theme.fg("dim", fold)}${focused ? focusedField(theme, entry.title) : theme.fg("accent", entry.title)}${summary ? theme.fg("muted", ` · ${summary}`) : ""}`,
-    width,
-    "…",
+  const fits = (summary: string) =>
+    visibleWidth(`${fold}${entry.title}${summary ? ` · ${summary}` : ""}`) <= width;
+  const tiers = Arr.map(["full", "live", "attention", "urgent"] as const, (detail) =>
+    joinInline(groupSummaryLabels(entry.summary, detail)),
   );
+  const summary = Option.getOrElse(Arr.findFirst(tiers, fits), () => tiers.at(-1) ?? "");
+  return [
+    clipToWidth(
+      `${theme.fg("dim", fold)}${focused ? focusedField(theme, entry.title) : theme.fg("accent", entry.title)}${summary ? theme.fg("muted", ` · ${summary}`) : ""}`,
+      width,
+      "…",
+    ),
+  ];
 }
 
 interface ActivityKeys {
@@ -110,71 +112,61 @@ function confirmationFooter(
   );
 }
 
-interface NavigationHints {
-  readonly hints: ReadonlyArray<string | undefined>;
-  readonly more: ReadonlyArray<string | undefined>;
-  readonly close: string;
-}
+const JUMP_TO_INPUT = keyHint("w", "Next input");
 
-const navigationHints = (
+/** The Activity bar; an empty list offers nothing to move through or inspect. */
+const navigationBar = (
   listFocused: boolean,
+  empty: boolean,
   actions: ActivityActionHints,
   view: { readonly follow: boolean; readonly selectable: boolean; readonly live: boolean },
   keys: ActivityKeys,
-): NavigationHints => {
+): KeyHintBar => {
   // Finished work no longer changes, so there is nothing to follow.
   const follow =
     view.selectable && view.live ? keyHint("f", view.follow ? "Unfollow" : "Follow") : undefined;
   const technical = view.selectable ? keyHint("t", "Technical") : undefined;
-  const exit = listFocused ? "top" : "nested";
+  const refresh = view.selectable ? keyHint("r", "Refresh") : undefined;
+  const paging = [
+    keyHint("C-u/C-d", "Half-page"),
+    keyHint("PgUp/PgDn", "Page"),
+    keyHint("gg/G", "Ends"),
+  ];
+  if (listFocused)
+    return {
+      hints: empty
+        ? []
+        : [moveKeyHint(keys.move), keyHint(keys.confirm, "Inspect"), actions.primary, follow],
+      more: empty
+        ? []
+        : [
+            keyHint("j/k", "Move"),
+            keyHint("h/l", "Fold"),
+            ...paging,
+            technical,
+            keyHint("z", "Zoom"),
+            JUMP_TO_INPUT,
+            refresh,
+          ],
+      exit: "top",
+      exitKey: keys.cancel,
+      exitAliases: [...keys.cancelAliases, "q"],
+    };
   return {
-    hints: listFocused
-      ? [moveKeyHint(keys.move), keyHint(keys.confirm, "Inspect"), actions.primary, follow]
-      : [keyHint(keys.move, "Scroll"), actions.primary, follow, technical],
+    hints: [keyHint(keys.move, "Scroll"), actions.primary, follow, technical],
     more: [
-      listFocused ? "j/k Move · h/l Fold" : "j/k Scroll · h Back",
-      "C-u/C-d Half-page · PgUp/PgDn Page · gg/G Ends",
-      listFocused ? technical : undefined,
-      "z Zoom",
-      "w Next input",
-      view.selectable ? "r Refresh" : undefined,
-      keys.cancelAliases.length
-        ? keyHint(Arr.join(keys.cancelAliases, "/"), exitKeyVerb(exit))
-        : undefined,
-      "q Close",
+      keyHint("j/k", "Scroll"),
+      ...paging,
+      keyHint("z", "Zoom"),
+      JUMP_TO_INPUT,
+      refresh,
+      keyHint("q", exitKeyVerb("top")),
     ],
-    close: exitKeyHint(exit, [], keys.cancel),
+    exit: "nested",
+    exitKey: keys.cancel,
+    exitAliases: [...keys.cancelAliases, "h"],
   };
 };
-
-interface NavigationFooter {
-  readonly bottom: string;
-  /** Hints that didn't fit the border, shown in wrapped rows above it. */
-  readonly overflow: string | undefined;
-}
-
-/**
- * The bottom border carries the whole bar when it fits. Otherwise it keeps exit and help, and
- * the other hints wrap between pairs into rows above it, so none is dropped at any width.
- * Expanded help always lists everything above the border.
- */
-function navigationFooter(
-  { hints, close }: NavigationHints,
-  expanded: boolean,
-  inner: number,
-): NavigationFooter {
-  const tail = [close, helpKeyHint(expanded)];
-  if (expanded) return { bottom: borderKeyHint(joinKeyHints(tail), inner), overflow: undefined };
-  const { border, overflow } = framedKeyHints(hints, tail, inner);
-  return { bottom: border, overflow: overflow || undefined };
-}
-
-/**
- * Expanded help lists every default hint plus aliases, paging, and the remaining views; the
- * bottom bar keeps the exit and help toggle.
- */
-const expandedHelp = ({ hints, more }: NavigationHints): string =>
-  joinKeyHints([...hints, ...more]);
 
 interface GroupedActivityState {
   readonly shell: ListDetailShell;
@@ -208,18 +200,19 @@ interface GroupedBodyContext {
 function needsYouLine(
   { options, rows, urgent }: GroupedBodyContext,
   first: ActivityRow,
-  listWidth: number,
+  width: number,
 ): string {
   const more = urgent.length > 1 ? ` +${urgent.length - 1}` : "";
-  const jump = " · w Jump";
+  const jump = ` · ${JUMP_TO_INPUT}`;
   const prefix = `${managerNoticeGlyph("attention")} Needs your input: `;
+  const owner = activityOwnerLabel(
+    rows,
+    first,
+    Math.max(0, width - visibleWidth(prefix) - visibleWidth(more) - visibleWidth(jump)),
+  );
   return options.theme.fg(
     managerNoticeColor("attention"),
-    clipToWidth(
-      `${prefix}${activityOwnerLabel(rows, first, Math.max(0, listWidth - prefix.length - more.length - jump.length))}${more}${jump}`,
-      listWidth,
-      "…",
-    ),
+    clipToWidth(`${prefix}${owner}${more}${jump}`, width, "…"),
   );
 }
 
@@ -229,6 +222,8 @@ const paneHeading = (
   focused: boolean,
 ): string => (focused ? theme.fg("accent", theme.bold(text)) : theme.fg("muted", text));
 
+const EMPTY_ACTIVITY = "Subagents, tasks, and questions appear here.";
+
 function activityList(
   context: GroupedBodyContext,
   listHeight: number,
@@ -237,6 +232,27 @@ function activityList(
   const { options, state, urgent, listFocused } = context;
   const { shell, entries, selected } = state;
   const showHeading = listHeight > 1;
+  // Text keeps a one-column gutter on each side, off the frame and the pane divider.
+  const textWidth = Math.max(0, listWidth - 2 * FRAME_GUTTER);
+  const rowWidth = Math.max(0, textWidth - CURSOR.length);
+  const rows = listHeight - Number(showHeading);
+  // A row that wraps its identity takes two lines. Only rows near the selection can be on
+  // screen, so only those are drawn.
+  const reach = Math.max(1, rows);
+  const nearFirst = Math.max(0, shell.state.selected - reach);
+  const nearEnd = Math.min(entries.length, shell.state.selected + reach + 1);
+  const drawn = new Map(
+    Arr.map(entries.slice(nearFirst, nearEnd), (entry) => {
+      const isSelected = entry.id === selected?.id;
+      const lines = rowLines(entry, rowWidth, options, isSelected && listFocused);
+      const cursor = isSelected ? options.theme.fg("accent", CURSOR) : NO_CURSOR;
+      return [
+        entry.id,
+        Arr.map(lines, (line, index) => `${index === 0 ? cursor : NO_CURSOR}${line}`),
+      ] as const;
+    }),
+  );
+  const heights = Arr.map(entries, (entry) => drawn.get(entry.id)?.length ?? 1);
   const listed = (start: number, end: number) =>
     new Set(
       Arr.flatMap(entries.slice(start, end), (entry) =>
@@ -244,24 +260,22 @@ function activityList(
       ),
     );
   // The banner points at waiting work the list doesn't show; a visible row speaks for itself.
-  const rows = listHeight - Number(showHeading);
-  const full = shell.visibleWindow(entries.length, rows);
+  const full = shell.visibleWindow(entries.length, rows, heights);
   const shown = listed(full.start, full.end);
   const unseen = Arr.filter(urgent, (row) => !shown.has(row.key));
   const first = listHeight > 2 ? unseen[0] : undefined;
-  const window = first ? shell.visibleWindow(entries.length, rows - 1) : full;
-  // A one-column gutter keeps right-aligned times off the frame and the pane divider.
-  const rowWidth = Math.max(0, listWidth - CURSOR.length - 1);
-  const list = Arr.map(entries.slice(window.start, window.end), (entry) => {
-    const isSelected = entry.id === selected?.id;
-    const prefix = isSelected ? CURSOR : NO_CURSOR;
-    return padListDetailRow(
-      `${isSelected ? options.theme.fg("accent", prefix) : prefix}${rowLine(entry, rowWidth, options, isSelected && listFocused)}`,
-      listWidth,
+  const window = first ? shell.visibleWindow(entries.length, rows - 1, heights) : full;
+  const list = Arr.flatMap(
+    entries.slice(window.start, window.end),
+    (entry) => drawn.get(entry.id) ?? [],
+  );
+  if (!entries.length)
+    list.push(
+      ...Arr.map(wrapTextWithAnsi(EMPTY_ACTIVITY, Math.max(1, textWidth)), (line) =>
+        options.theme.fg("dim", line),
+      ),
     );
-  });
-  if (!list.length) list.push(options.theme.fg("dim", "No activity yet"));
-  if (first) list.unshift(needsYouLine({ ...context, urgent: unseen }, first, listWidth));
+  if (first) list.unshift(needsYouLine({ ...context, urgent: unseen }, first, textWidth));
   if (showHeading) {
     const above = window.start;
     const below = Math.max(0, entries.length - window.end);
@@ -274,15 +288,16 @@ function activityList(
             above ? `${above} more above` : undefined,
             below ? `${below} more below` : undefined,
           ]),
-          listWidth,
+          textWidth,
           "…",
         ),
         listFocused,
       ),
     );
   }
-  while (list.length < listHeight) list.push("");
-  return list;
+  const body = framedGutter(list.slice(0, listHeight), listWidth);
+  while (body.length < listHeight) body.push("");
+  return body;
 }
 
 type BodyTheme = ActivityComponentOptions["theme"];
@@ -415,18 +430,26 @@ function activityDetail(context: GroupedBodyContext, detailHeight: number, detai
   ];
 }
 
-// A narrow title shortens parent waits before it clips, so attention stays readable.
+// A narrow title drops its item count, then parent waits, before it clips.
 const activityTitle = (
-  items: string,
+  items: string | undefined,
   counts: ActivityAttentionCounts,
   startup: string,
   following: boolean,
   width: number,
 ): string => {
-  const title = (labels: readonly string[]) =>
-    ` ${joinInline(["Activity", items, ...labels, following ? "following" : undefined])}${startup ? ` ${startup}` : ""} `;
-  const full = title(activityAttentionLabels(counts));
-  return visibleWidth(full) <= width ? full : title(compactNotices(counts));
+  const title = (count: string | undefined, attention: ActivityAttentionCounts) =>
+    ` ${joinInline(["Activity", count, ...activityAttentionLabels(attention), following ? "following" : undefined])}${startup ? ` ${startup}` : ""} `;
+  // Parent waits go last; their rows and section still say so.
+  const candidates = [
+    title(items, counts),
+    title(undefined, counts),
+    title(undefined, { ...counts, parent: 0 }),
+  ];
+  return Option.getOrElse(
+    Arr.findFirst(candidates, (candidate) => visibleWidth(candidate) <= width),
+    () => candidates.at(-1) ?? "",
+  );
 };
 
 const movementLabel = (up: string, down: string): string =>
@@ -460,8 +483,9 @@ export function renderGroupedActivity(
   const row = groupedActivitySource(selected);
   const context: GroupedBodyContext = { options, state, rows, urgent, row, listFocused };
   const actions = activityActionHints(row, state.actionPage);
-  const navigation = navigationHints(
+  const navigation = navigationBar(
     listFocused,
+    entries.length === 0,
     actions,
     {
       follow: state.follow,
@@ -470,15 +494,15 @@ export function renderGroupedActivity(
     },
     keys,
   );
+  // The border keeps the exit and the help toggle; other pairs wrap into rows above it.
   const footer = state.confirmation
-    ? { bottom: confirmationFooter(state.confirmation, keys, inner), overflow: undefined }
-    : navigationFooter(navigation, state.alternateHelp, inner);
-  const bottom = footer.bottom;
-  const hintText =
-    state.alternateHelp && !state.confirmation ? expandedHelp(navigation) : footer.overflow;
-  const help = hintText
-    ? keyHintRows(hintText, inner, (line) => options.theme.fg("dim", line))
+    ? { border: confirmationFooter(state.confirmation, keys, inner), overflow: "" }
+    : framedKeyHintBar(navigation, state.alternateHelp, inner);
+  const bottom = footer.border;
+  const help = footer.overflow
+    ? keyHintRows(footer.overflow, inner, (line) => options.theme.fg("dim", line))
     : [];
+  const textWidth = Math.max(1, inner - 2 * FRAME_GUTTER);
   const activityBody = (
     bodyHeight: number,
     { listWidth, detailWidth }: { readonly listWidth: number; readonly detailWidth: number },
@@ -486,7 +510,7 @@ export function renderGroupedActivity(
     if (state.confirmation)
       return framedFill(
         frame,
-        wrapTextWithAnsi(state.confirmation.text, Math.max(1, inner)),
+        framedGutter(wrapTextWithAnsi(state.confirmation.text, textWidth), inner),
         bodyHeight,
         inner,
       );
@@ -495,25 +519,28 @@ export function renderGroupedActivity(
         ? Math.min(bodyHeight, stackedListHeight(bodyHeight, entries.length))
         : bodyHeight;
     const list = activityList(context, listHeight, listWidth);
-    const detailRows = activityDetail(
-      context,
-      tier === "stacked" ? Math.max(0, bodyHeight - listHeight - 1) : bodyHeight,
-      // A one-column gutter keeps detail text off the pane divider.
-      tier === "wide" ? Math.max(1, detailWidth - 1) : detailWidth,
-    );
+    // An empty list has no item to describe.
+    const detailRows = entries.length
+      ? activityDetail(
+          context,
+          tier === "stacked" ? Math.max(0, bodyHeight - listHeight - 1) : bodyHeight,
+          tier === "wide" ? Math.max(1, detailWidth - 2 * FRAME_GUTTER) : textWidth,
+        )
+      : [];
+    const detail = framedGutter(detailRows, tier === "wide" ? detailWidth : inner);
     if (tier === "wide")
       return framedWideRows(frame, {
         left: list,
-        right: Arr.map(detailRows, (line) => ` ${line}`),
+        right: detail,
         height: bodyHeight,
         listWidth,
         detailWidth,
       });
     if (tier === "stacked")
-      return framedStackedRows(frame, { list, detail: detailRows, height: bodyHeight, inner });
+      return framedStackedRows(frame, { list, detail, height: bodyHeight, inner });
     return framedFill(
       frame,
-      shell.state.details ? detailRows : list,
+      shell.state.details ? detail : list,
       bodyHeight,
       inner,
       shell.state.pane,
@@ -527,7 +554,7 @@ export function renderGroupedActivity(
         "accent",
         clipToWidth(
           activityTitle(
-            countLabel(state.itemCount, "item"),
+            state.itemCount ? countLabel(state.itemCount, "item") : undefined,
             counts,
             startup,
             // Without a visible detail heading, the title says the cursor row is followed.
@@ -543,7 +570,7 @@ export function renderGroupedActivity(
         // Wrapped or expanded hints take rows at the bottom so each stays readable at any width.
         const geometry =
           tier === "wide"
-            ? wideListDetailGeometry(width, 38, 0.4)
+            ? wideListDetailGeometry(width, ACTIVITY_LIST_MIN_WIDTH, ACTIVITY_LIST_SHARE)
             : { listWidth: inner, detailWidth: Math.max(1, inner) };
         return framedBodyWithHints(
           frame,

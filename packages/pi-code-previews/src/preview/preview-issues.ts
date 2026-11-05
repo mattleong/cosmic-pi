@@ -3,6 +3,8 @@ import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, toolStatusLine } from "pi-cosmic-ui/tool";
@@ -12,6 +14,7 @@ import { planCompactPresentation } from "../tools/compact-presentation";
 import {
   compactStatus,
   type CompactPhase,
+  type CompactStatus,
   type CompactSummary,
   type CompactSummaryProvider,
 } from "../tools/compact-summary";
@@ -23,9 +26,12 @@ interface PreviewResult<TDetails> {
   readonly partial: boolean;
 }
 
-interface PreviewIssues {
+export interface PreviewIssues {
   readonly issues: readonly CompactIssue[];
   readonly cancelled: boolean;
+  /** The tool's valid summary; expanded rows compose from it, and without it keep their bodies. */
+  readonly summary: CompactSummary | undefined;
+  readonly status: CompactStatus;
 }
 
 interface PreviewFrame<TArgs, TDetails, TState> {
@@ -82,7 +88,7 @@ export const compactPresentationInput = <TArgs, TDetails, TState>(
   errorText: context.isError ? getTextContent(result?.content ?? []) : "",
 });
 
-function previewIssues<TArgs, TDetails, TState extends object>(
+export function previewIssues<TArgs, TDetails, TState extends object>(
   frames: PreviewFrames<TArgs, TDetails, TState>,
   provider: CompactSummaryProvider<TArgs, TDetails, TState>,
   context: ToolRenderContext<TState, TArgs>,
@@ -101,11 +107,13 @@ function previewIssues<TArgs, TDetails, TState extends object>(
   const cached = frame.issues;
   if (cached && Arr.every(inputs, (value, index) => Object.is(value, cached.inputs[index])))
     return cached.value;
-  const { collapsedSummary } = planCompactPresentation({
+  const { summary, collapsedSummary } = planCompactPresentation({
     ...compactPresentationInput(provider, phase, result, context),
     expanded: true,
   });
   const value = {
+    summary,
+    status: compactStatus(phase, collapsedSummary),
     issues: collapsedSummary.issues ?? [],
     cancelled:
       phase === "settled" &&
@@ -140,12 +148,90 @@ interface IssueSlot {
 
 const issueSlots = new WeakMap<object, IssueSlot>();
 
+/** A preview row's issues, or `Cancelled` for a stop without one; plain if the theme fails. */
+export function previewIssueRows(
+  value: PreviewIssues,
+  theme: Pick<Theme, "fg">,
+  width: number,
+  expanded: boolean,
+  indent: string,
+): string[] {
+  const draw = (style: Pick<Theme, "fg">) => {
+    const rows = renderCompactIssues(value.issues, style, width, expanded, indent);
+    return rows.length === 0 && value.cancelled && width > 0
+      ? [clipToWidth(`${indent}${toolStatusLine(style, "stopped", "Cancelled")}`, width, "")]
+      : rows;
+  };
+  try {
+    return draw(theme);
+  } catch {
+    return draw(UNSTYLED);
+  }
+}
+
 export function previewIssuesSlot(context: { readonly state: unknown }): Component {
   if (!Predicate.isObject(context.state)) return EMPTY;
   const slot = issueSlots.get(context.state);
   if (!slot) return EMPTY;
   slot.placed = true;
   return slot.lines;
+}
+
+// Drawn where a call body places its issues slot, so the rows before it are the heading.
+const HEADING_END = "\u2063code-previews:heading-end\u2063";
+const headingEnd = composeToolComponent(() => [HEADING_END]);
+
+/** A row's collapsed call body, drawn apart from the row. */
+export interface CapturedPreviewCall {
+  /**
+   * The tool's own collapsed preview heading: the rows drawn up to where the body places
+   * `previewIssuesSlot`, or every row when it places none. Undefined when the body fails or the
+   * heading is blank, so the caller can fall back to a heading built from the summary.
+   */
+  readonly heading: (width: number) => string[] | undefined;
+  /** Every row the collapsed body draws, apart from its issues. */
+  readonly rows: (width: number) => readonly string[];
+}
+
+export function capturePreviewCall<TArgs, TState extends object>(
+  render: (context: ToolRenderContext<TState, TArgs>) => Component,
+  context: ToolRenderContext<TState, TArgs>,
+): CapturedPreviewCall | undefined {
+  if (!Predicate.isObject(context.state)) return undefined;
+  issueSlots.set(context.state, { lines: headingEnd, placed: false });
+  let body: Component;
+  try {
+    body = render({ ...context, expanded: false, lastComponent: undefined });
+  } catch {
+    return undefined;
+  } finally {
+    issueSlots.delete(context.state);
+  }
+  let drawn:
+    | {
+        readonly width: number;
+        readonly heading: string[] | undefined;
+        readonly rows: readonly string[];
+      }
+    | undefined;
+  const draw = (width: number) => {
+    if (drawn?.width === width) return drawn;
+    let all: string[];
+    try {
+      all = body.render(width);
+    } catch {
+      all = [];
+    }
+    const end = Arr.findFirstIndex(all, (row) => Str.includes(HEADING_END)(row));
+    const heading = Option.isSome(end) ? all.slice(0, end.value) : all;
+    drawn = {
+      width,
+      heading: Arr.some(heading, (row) => Str.trim(row) !== "") ? heading : undefined,
+      rows: Arr.filter(all, (row) => !Str.includes(HEADING_END)(row)),
+    };
+    return drawn;
+  };
+  return { heading: (width) => draw(width).heading, rows: (width) => draw(width).rows };
 }
 
 export function renderWithPreviewIssues<TArgs, TDetails, TState extends object>(
@@ -171,18 +257,7 @@ export function renderWithPreviewIssues<TArgs, TDetails, TState extends object>(
     const { expanded } = current;
     if (drawn?.value === value && drawn.width === width && drawn.expanded === expanded)
       return drawn.rows;
-    const draw = (style: Pick<Theme, "fg">) => {
-      const rows = renderCompactIssues(value.issues, style, width, expanded, "");
-      return rows.length === 0 && value.cancelled && width > 0
-        ? [clipToWidth(toolStatusLine(style, "stopped", "Cancelled"), width, "")]
-        : rows;
-    };
-    let rows: string[];
-    try {
-      rows = draw(theme);
-    } catch {
-      rows = draw(UNSTYLED);
-    }
+    const rows = previewIssueRows(value, theme, width, expanded, "");
     drawn = { value, width, expanded, rows };
     return rows;
   });

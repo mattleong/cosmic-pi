@@ -122,7 +122,7 @@ export function openProfileDashboard(
               (cause: unknown) => {
                 if (Predicate.isTagged(cause, "SessionProfileConflictError"))
                   return refreshInspection(
-                    "Current Session changed while you were editing. The editor now shows the latest profiles. Try again.",
+                    "Current session changed while you were editing. The editor now shows the latest profiles. Try again.",
                   );
                 throw cause;
               },

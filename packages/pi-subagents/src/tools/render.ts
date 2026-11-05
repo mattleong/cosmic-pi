@@ -2,11 +2,19 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { escapeControlChars, expandedSection, getTextContent } from "pi-code-previews";
+import {
+  escapeControlChars,
+  expandedAuthoredText,
+  expandedBody,
+  expandedSection,
+  expandedText,
+  getTextContent,
+} from "pi-code-previews";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import {
   sanitizeTerminalLine,
@@ -39,13 +47,17 @@ import { renderCompactResultComponent, renderProfileRoutesComponent } from "./re
 import { formatAwaitCounters, renderAwaitProgressComponent } from "./render-await.ts";
 import { textResultBody } from "./render-preview.ts";
 import { cardBlockLines, cardFactLines } from "./render-run-cards.ts";
-import { agentTextLines, detailsSectionLines, indentedBody } from "../ui/agent-text.ts";
+import { expandedFactDetails, expandedRowsBody, indentedBody } from "../ui/agent-text.ts";
 import { renderStartReceiptComponent } from "./render-start.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
 type ToolTextContent = ReadonlyArray<{ readonly type: string; readonly text?: string }>;
 
-const rawResultSection = (content: ToolTextContent, theme: Theme, label = "Raw result") => {
+export const rawResultSection = (
+  content: ToolTextContent,
+  theme: Theme,
+  label = "Raw result",
+): Component | undefined => {
   const text = boundToolOutput(sanitizeTerminalText(getTextContent(content)));
   return text
     ? expandedSection(theme, label, new Text(theme.fg("toolOutput", text), 0, 0))
@@ -59,15 +71,20 @@ const CallArgumentsSchema = Schema.Record(Schema.String, Schema.Json);
 
 export const decodeCallArguments = decodeUnknownOrUndefined(CallArgumentsSchema);
 
-/** Every argument of a call, one per line, so expansion shows what the heading can't. */
+/**
+ * Every argument of a call the heading doesn't already show exactly, one per line, so expansion
+ * shows what the heading can't. A string named in `shown` is the heading's subject.
+ */
 export const renderSubagentInputContent = (
   args: typeof CallArgumentsSchema.Type | undefined,
   theme: Theme,
+  shown: ReadonlyArray<string> = [],
 ): Component => {
   if (!args) return new Text("", 0, 0);
-  const lines = Arr.map(
-    Rec.toEntries(args),
-    ([key, value]) => `${key}: ${Predicate.isString(value) ? value : JSON.stringify(value)}`,
+  const lines = Arr.filterMap(Rec.toEntries(args), ([key, value]) =>
+    Arr.contains(shown, key) && Predicate.isString(value) && sanitizeTerminalLine(value) === value
+      ? Result.failVoid
+      : Result.succeed(`${key}: ${Predicate.isString(value) ? value : JSON.stringify(value)}`),
   );
   return new Text(theme.fg("toolOutput", escapeControlChars(Arr.join(lines, "\n"))), 0, 0);
 };
@@ -79,38 +96,38 @@ const WORKSPACE_ARGUMENT_LABELS = new Map([
 ]);
 
 /**
- * A worktree call expanded: a revise's message to the writer as written, then its other arguments
- * on one dim line. The heading already names the action.
+ * A worktree call expanded, at the heading's column: a revise's message to the writer as written,
+ * then its other arguments on one dim line. The heading already names the action.
  */
 export const renderWorkspaceCallArguments = (
   args: typeof CallArgumentsSchema.Type | undefined,
   theme: Theme,
-): Component =>
-  renderComponent((width) => {
-    const safeWidth = Math.max(1, width);
-    const message = args?.message;
-    const rest = Arr.filter(
-      Rec.toEntries(args ?? {}),
-      ([key, value]) => key !== "action" && key !== "message" && value !== false,
-    );
-    const facts = Arr.map(rest, ([key, value]) =>
-      value === true
-        ? key
-        : `${WORKSPACE_ARGUMENT_LABELS.get(key) ?? key} ${Predicate.isString(value) ? value : JSON.stringify(value)}`,
-    );
-    return [
-      ...agentTextLines(Predicate.isString(message) ? message : undefined, safeWidth, theme, {
-        expanded: true,
-        indent: 0,
-      }),
-      ...(facts.length > 0
-        ? wrapTextWithAnsi(
-            theme.fg("dim", sanitizeTerminalLine(`Requested ${Arr.join(facts, " · ")}`)),
-            safeWidth,
-          )
-        : []),
-    ];
-  });
+): Component => {
+  const message = args?.message;
+  const rest = Arr.filter(
+    Rec.toEntries(args ?? {}),
+    ([key, value]) => key !== "action" && key !== "message" && value !== false,
+  );
+  const facts = Arr.map(rest, ([key, value]) =>
+    value === true
+      ? key
+      : `${WORKSPACE_ARGUMENT_LABELS.get(key) ?? key} ${Predicate.isString(value) ? value : JSON.stringify(value)}`,
+  );
+  return expandedBody(
+    expandedAuthoredText(theme, "Message", Predicate.isString(message) ? message : undefined),
+    facts.length > 0
+      ? indentedBody(
+          theme,
+          renderComponent((width) =>
+            wrapTextWithAnsi(
+              theme.fg("dim", sanitizeTerminalLine(`Requested ${Arr.join(facts, " · ")}`)),
+              Math.max(1, width),
+            ),
+          ),
+        )
+      : undefined,
+  );
+};
 
 // Run names an await or lifecycle result resolved, by tool call. Only recent rows redraw their
 // requested line, so the oldest entries go first once the bound is reached.
@@ -198,7 +215,13 @@ const renderPartialStartAwait = (
   if (details.action === "start")
     return renderStartReceiptComponent(details, expanded, theme, true);
   const { hierarchy } = awaitScope(details);
-  return renderAwaitProgressComponent(details.cards, details.awaitUntil, theme, hierarchy);
+  const progress = renderAwaitProgressComponent(
+    details.cards,
+    details.awaitUntil,
+    theme,
+    hierarchy,
+  );
+  return expanded ? indentedBody(theme, progress) : progress;
 };
 
 /**
@@ -214,18 +237,18 @@ const renderAwaitResult = (
 ): Component => {
   const { hierarchy, targets } = awaitScope(details);
   const counters = formatAwaitCounters(details.cards, hierarchy, details.awaitUntil, true);
-  return renderComponent((width) => {
+  const rows = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
     return [
       clipToWidth(theme.fg("muted", counters), safeWidth),
       ...cardBlockLines(targets, safeWidth, theme, expanded),
       // Details too large for their reports keep the rest; the agent still received every report.
       ...(details.contentOmitted ? [clipToWidth(theme.fg("dim", OMITTED_NOTE), safeWidth)] : []),
-      ...(expanded
-        ? detailsSectionLines(Arr.flatMap(details.cards, cardFactLines), safeWidth, theme)
-        : []),
     ];
-  });
+  };
+  return expanded
+    ? expandedRowsBody(theme, rows, Arr.flatMap(details.cards, cardFactLines))
+    : renderComponent(rows);
 };
 
 const renderSettledStartAwait = (
@@ -241,15 +264,15 @@ const renderCompactDetails = (
   compact: CompactSubagentToolDetails,
   expanded: boolean,
   theme: Theme,
-): Component => {
-  if (compact.action === "models") return renderProfileRoutesComponent(compact, expanded, theme);
-  const rendered = renderCompactResultComponent(compact, expanded, theme);
-  if (!compact.contentOmitted) return rendered;
-  return renderComponent((width) => [
-    ...rendered.render(width),
-    clipToWidth(theme.fg("dim", OMITTED_NOTE), Math.max(1, width)),
-  ]);
-};
+): Component =>
+  compact.action === "models"
+    ? renderProfileRoutesComponent(compact, expanded, theme)
+    : renderCompactResultComponent(
+        compact,
+        expanded,
+        theme,
+        compact.contentOmitted && OMITTED_NOTE,
+      );
 
 const COLLAPSED_TEXT_LINES = 11;
 
@@ -343,21 +366,22 @@ const workspaceView = (
   };
 };
 
-const workspaceBodyLines = (
+/** A receipt's body and technical facts at the heading's column; a review labels its diff. */
+const workspaceExpandedBody = (
   receipt: WorkspaceToolDetails,
-  body: string | undefined,
-  width: number,
+  view: WorkspaceView,
   theme: Theme,
-): string[] => {
-  if (body === undefined) return [];
-  const text = new Text(theme.fg("toolOutput", escapeControlChars(body)), 0, 0);
-  if (receipt.operation !== "review") return text.render(width);
-  // Labeled like the Details beside it, whose section the caller indents with this one.
-  return [
-    clipToWidth(theme.fg("muted", "Diff"), width),
-    ...Arr.map(text.render(Math.max(1, width - 2)), (line) => (line === "" ? "" : `  ${line}`)),
-  ];
-};
+): Component =>
+  expandedBody(
+    view.body === undefined
+      ? undefined
+      : expandedText(
+          theme,
+          receipt.operation === "review" ? "Diff" : undefined,
+          Str.split(view.body, "\n"),
+        ),
+    expandedFactDetails(theme, view.facts),
+  );
 
 const renderWorkspaceContent = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
@@ -367,16 +391,7 @@ const renderWorkspaceContent = (
   if (!receipt) return undefined;
   const view = workspaceView(receipt, result.content);
   if (!view) return rawResultSection(result.content, theme) ?? renderComponent(() => []);
-  return indentedBody(
-    theme,
-    renderComponent((width) => {
-      const safeWidth = Math.max(1, width);
-      return [
-        ...workspaceBodyLines(receipt, view.body, safeWidth, theme),
-        ...detailsSectionLines(view.facts, safeWidth, theme),
-      ];
-    }),
-  );
+  return workspaceExpandedBody(receipt, view, theme);
 };
 
 const renderWorkspacePreview = (
@@ -391,59 +406,44 @@ const renderWorkspacePreview = (
   const view = workspaceView(receipt, result.content);
   const raw = view ? undefined : rawResultSection(result.content, theme);
   const expandable = view ? view.body !== undefined || view.facts.length > 0 : raw !== undefined;
+  const lineRows = (width: number) =>
+    line ? [clipToWidth(theme.fg("muted", line), Math.max(1, width))] : [];
+  if (expanded && expandable)
+    return expandedBody(
+      indentedBody(theme, renderComponent(lineRows)),
+      view ? workspaceExpandedBody(receipt, view, theme) : raw,
+    );
   return renderComponent((width) => {
-    const safeWidth = Math.max(1, width);
     const label = receipt.operation === "review" && view?.body ? "diff page" : "details";
     return [
-      ...(line ? [clipToWidth(theme.fg("muted", line), safeWidth)] : []),
-      ...(!expandable
-        ? []
-        : !expanded
-          ? [clipToWidth(renderExpansionAffordance(label, false, theme), safeWidth)]
-          : view
-            ? [
-                ...workspaceBodyLines(receipt, view.body, safeWidth, theme),
-                ...detailsSectionLines(view.facts, safeWidth, theme),
-              ]
-            : (raw?.render(safeWidth) ?? [])),
+      ...lineRows(width),
+      ...(expandable && !expanded
+        ? [clipToWidth(renderExpansionAffordance(label, false, theme), Math.max(1, width))]
+        : []),
     ];
   });
 };
 
 /**
- * A compact row's expanded result, indented beneath its heading. Labeled sections such as a
- * failure's Error or a raw result already indent themselves.
+ * A compact row's expanded result at the heading's column. Labeled sections such as a failure's
+ * Error or a raw result indent themselves.
  */
 export const renderSubagentExpandedContent = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   isPartial: boolean,
   theme: Theme,
   options: SubagentResultRenderOptions = {},
-): Component => {
-  const workspace = renderWorkspaceContent(result, theme);
-  if (workspace) return workspace;
-  const details = decodeStartAwaitCardDetails(result.details);
-  if (details)
-    return indentedBody(
-      theme,
-      isPartial
-        ? renderPartialStartAwait(details, true, theme, options)
-        : renderSettledStartAwait(details, true, theme),
-    );
-  const compact = decodeCompactToolDetails(result.details);
-  if (!compact) {
-    const fallback = renderTextFallback(result, isPartial, true, theme, options.isError);
-    return options.isError ? fallback : indentedBody(theme, fallback);
-  }
-  return indentedBody(theme, renderCompactDetails(compact, true, theme));
-};
+): Component =>
+  renderWorkspaceContent(result, theme) ??
+  renderSubagentResult(result, isPartial, true, theme, { ...options, workspace: false });
 
+/** A result collapsed, or expanded at the heading's column as every workspace tool's body is. */
 export const renderSubagentResult = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   isPartial: boolean,
   expanded: boolean,
   theme: Theme,
-  options: SubagentResultRenderOptions = {},
+  options: SubagentResultRenderOptions & { readonly workspace?: false } = {},
 ): Component => {
   const details = decodeStartAwaitCardDetails(result.details);
   if (details)
@@ -452,7 +452,10 @@ export const renderSubagentResult = (
       : renderSettledStartAwait(details, expanded, theme);
   const compact = decodeCompactToolDetails(result.details);
   if (compact) return renderCompactDetails(compact, expanded, theme);
-  const workspace = options.isError ? undefined : renderWorkspacePreview(result, expanded, theme);
+  const workspace =
+    options.isError || options.workspace === false
+      ? undefined
+      : renderWorkspacePreview(result, expanded, theme);
   if (workspace) return workspace;
   return renderTextFallback(result, isPartial, expanded, theme, options.isError);
 };

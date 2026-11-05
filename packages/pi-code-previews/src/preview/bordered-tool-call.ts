@@ -74,7 +74,7 @@ export function borderColorKey(context: { isError: boolean; isPartial: boolean }
 
 /** The border tone of a settled or live row from its strongest status. */
 export function statusBorderColor(status: CompactStatus, isPartial: boolean): BorderColorKey {
-  if (status === "cancelled") return "borderMuted";
+  if (status === "cancelled" || status === "queued" || status === "paused") return "borderMuted";
   if (status === "warning" || status === "uncertain") return "warning";
   if (status === "attention") return "accent";
   return borderColorKey({ isError: status === "error", isPartial });

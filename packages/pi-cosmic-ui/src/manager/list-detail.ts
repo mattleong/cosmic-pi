@@ -249,6 +249,41 @@ export const wideListDetailGeometry = (
 export const stackedListHeight = (height: number, rowCount: number): number =>
   Math.max(3, Math.min(rowCount + 1, Math.floor(height * 0.4)));
 
+/** Rows `start` up to, not including, `end`. */
+export interface ListWindow {
+  readonly start: number;
+  readonly end: number;
+}
+
+/**
+ * Rows of varying height that fit `limit` lines with the selected row whole and centred where
+ * the list allows, as `listWindowStart` does for single-line rows.
+ */
+export const listWindowByHeight = (
+  heights: ReadonlyArray<number>,
+  selected: number,
+  limit: number,
+): ListWindow => {
+  const lines = Math.max(1, limit);
+  const tops: number[] = [];
+  let total = 0;
+  for (const height of heights) {
+    tops.push(total);
+    total += Math.max(1, height);
+  }
+  if (!heights.length) return { start: 0, end: 0 };
+  const index = clampListIndex(selected, heights.length);
+  const top = tops[index] ?? 0;
+  const own = Math.max(1, heights[index] ?? 1);
+  const first = Math.max(0, Math.min(total - lines, top - Math.floor((lines - own) / 2)));
+  let start = index;
+  while (start > 0 && (tops[start - 1] ?? 0) >= first) start--;
+  let end = start;
+  const bottom = (tops[start] ?? 0) + lines;
+  while (end < heights.length && (tops[end] ?? 0) + Math.max(1, heights[end] ?? 1) <= bottom) end++;
+  return { start, end: Math.max(end, Math.min(heights.length, index + 1)) };
+};
+
 export const listWindowStart = (count: number, selected: number, limit: number): number => {
   const size = Math.max(1, limit);
   return Math.max(0, Math.min(Math.max(0, count - size), selected - Math.floor(size / 2)));

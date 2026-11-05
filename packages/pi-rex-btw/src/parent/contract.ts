@@ -5,7 +5,7 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { countLabel } from "pi-cosmic-core/display";
+import { countLabel, formatClockTime } from "pi-cosmic-core/display";
 import {
   MAX_PARENT_MESSAGES,
   ParentConversationSchema,
@@ -108,25 +108,12 @@ const FAILURE_TEXT: Record<ParentReadFailure["failure"], string> = {
 
 export const failureText = (failure: ParentReadFailure): string => FAILURE_TEXT[failure.failure];
 
-const localDay = (at: DateTime.DateTime): string =>
-  DateTime.formatLocal(at, { locale: "en-US", year: "numeric", month: "numeric", day: "numeric" });
-
 /** A short display form of an entry's time: `10:59 PM` today, otherwise `Nov 3, 10:59 PM`. */
-export const entryTime = (at: string | undefined, now: number): string => {
-  const moment = at === undefined ? Option.none() : DateTime.make(at);
-  if (Option.isNone(moment)) return "";
-  const today = DateTime.make(now);
-  const sameDay = Option.isSome(today) && localDay(today.value) === localDay(moment.value);
-  return Fn.pipe(
-    DateTime.formatLocal(moment.value, {
-      locale: "en-US",
-      ...(sameDay ? {} : { month: "short", day: "numeric" }),
-      hour: "numeric",
-      minute: "2-digit",
-    }),
-    Str.replace(/\s+/gu, " "),
-  );
-};
+export const entryTime = (at: string | undefined, now: number): string =>
+  Option.match(at === undefined ? Option.none() : DateTime.make(at), {
+    onNone: () => "",
+    onSome: (moment) => formatClockTime(moment, now),
+  });
 
 export const trimmedLines = (text: string): ReadonlyArray<string> =>
   Fn.pipe(text, Str.trimEnd, Str.split("\n"));

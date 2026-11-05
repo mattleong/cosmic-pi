@@ -3,12 +3,14 @@ import type { ToolRenderContext } from "../tools/renderers/shared/types";
 import { Box, Container, Text, type Component, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import type { ToolCallBackgroundMode } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
 import { fallbackArguments } from "../tools/data/args";
-import { hostValue } from "../shared/untrusted-value";
+import { hostObject, hostValue, type HostObject } from "../shared/untrusted-value";
 import { getFallbackResultText } from "../tools/data/results";
 import {
   compactStatus,
@@ -44,6 +46,8 @@ const isSlotDrawFailure = Schema.is(CompactSlotDrawFailure);
 
 export interface CompactShellOptions<TArgs, TDetails, TState> {
   name: string;
+  /** The preview style's expanded heading title; defaults to `name`. */
+  previewTitle?: string | undefined;
   compactSummary: CompactSummaryProvider<TArgs, TDetails, TState>;
   scheduleAnimation?: CompactAnimationScheduler | undefined;
   animateProgress?: boolean | undefined;
@@ -177,6 +181,11 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
           elapsedMs: this.timing?.elapsedMs,
           timingEnabled: codePreviewSettings.toolCallTiming,
           animationFrame: frame,
+          expandLabel: compactExpandLabel(
+            plan.collapsedSummary,
+            result,
+            hostObject(this.context.args),
+          ),
         },
         this.theme,
         width,
@@ -304,7 +313,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
       this.mode === "on" ? new Box(1, 1, (text) => theme.bg(background, text)) : new Container();
     shell.addChild(callSection);
     shell.addChild(details);
-    if (timing && !content) shell.addChild(new Text(theme.fg("muted", `└─ ${timing.label}`), 0, 0));
+    if (timing && !content) shell.addChild(new Text(theme.fg("muted", timing.label), 0, 0));
     return shell;
   }
 
@@ -337,6 +346,28 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
     this.forget();
     this.slots.invalidate();
   }
+}
+
+/**
+ * What expanding a collapsed row reveals that it doesn't show: the result's content, issues kept for
+ * expansion, or, before a result, the call's arguments. Undefined when expansion adds nothing.
+ */
+const visiblePart = (part: AgentToolResult<unknown>["content"][number]) =>
+  part.type === "image" || Str.isNonEmpty(Str.trim(part.text));
+
+function compactExpandLabel(
+  summary: CompactSummary,
+  result: AgentToolResult<unknown> | undefined,
+  input: HostObject | undefined,
+): string | undefined {
+  if (summary.expandLabel === false) return undefined;
+  if (result && Arr.some(result.content, visiblePart)) return summary.expandLabel ?? "output";
+  const detailed = Arr.some(
+    summary.issues ?? [],
+    (issue) => issue.severity === "info" || issue.detail !== undefined,
+  );
+  const pendingInput = result === undefined && input !== undefined && Rec.keys(input).length > 0;
+  return detailed || pendingInput ? (summary.expandLabel ?? "details") : undefined;
 }
 
 export function createCompactToolShell<TArgs, TDetails, TState extends object>(

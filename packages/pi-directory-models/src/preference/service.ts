@@ -4,10 +4,12 @@ import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 import { PiApi } from "pi-cosmic-core/runtime/pi-api";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import {
   applyHostPreference,
   captureContextModel,
   preferenceFromSelectedModel,
+  savedModelLabel,
   type DirectoryModelHost,
 } from "../boundary/host-model.ts";
 import {
@@ -28,34 +30,48 @@ export interface DirectoryModelSessionInput {
   readonly explicitPreference: boolean;
 }
 
-export type DirectoryModelWarn = (message: string) => void;
+export type DirectoryModelNotify = (message: string, level: "info" | "warning") => void;
 
-const readWarning = (reason: DirectoryModelStoreError["reason"]) =>
+/** The preference file as the user would find it, with the home directory as `~`. */
+const shownPath = (identified: DirectoryIdentity) =>
+  formatDisplayPath(identified.preferencePath, identified.canonicalCwd);
+
+// Choosing a model or thinking level rewrites the file, so that is every read warning's recovery.
+const readWarning = (reason: DirectoryModelStoreError["reason"], identified: DirectoryIdentity) =>
   Match.value(reason).pipe(
     Match.when(
       "invalid",
-      () => "The saved model for this directory is invalid, so Pi kept its current model",
+      () =>
+        `The saved model for this directory is invalid, so Pi kept its current model\nPick a model with /model to replace it, or fix ${shownPath(identified)}`,
     ),
     Match.when(
       "foreign",
       () =>
-        "The saved model file for this directory belongs to another directory, so Pi kept its current model",
+        `The saved model file for this directory names another directory, so Pi kept its current model\nPick a model with /model to replace it, or check ${shownPath(identified)}`,
     ),
     Match.orElse(
-      () => "Couldn't read the saved model for this directory, so Pi kept its current model",
+      () =>
+        `Couldn't read the saved model for this directory, so Pi kept its current model\nCheck that ${shownPath(identified)} is readable`,
     ),
   );
 const THINKING_LEVEL_WARNING =
-  "The thinking level saved for this directory is invalid, so Pi kept its current thinking level";
-const IDENTIFY_WARNING = "Couldn't identify this directory to remember its model";
+  "The thinking level saved for this directory is invalid, so Pi kept its current level\nChoose a thinking level to replace it";
+const IDENTIFY_WARNING =
+  "Couldn't resolve this directory's path, so its model isn't remembered in this session";
 export const WRITE_WARNING = "Couldn't save the model for this directory";
+const writeWarning = (identified: DirectoryIdentity) =>
+  `${WRITE_WARNING}\nCheck that ${shownPath(identified)} can be written`;
+
+/** The muted notice after a restore changed the session: what is in use, and why. */
+const restoredNotice = (preference: DirectoryModelPreference) =>
+  `Using ${savedModelLabel(preference)} · thinking ${preference.thinkingLevel}, saved for this directory`;
 
 export class DirectoryModelPreferenceService extends Context.Service<DirectoryModelPreferenceService>()(
   "pi-directory-models/preference/service/DirectoryModelPreferenceService",
   {
     make: Effect.fn("DirectoryModelPreferenceService.make")(function* (
       input: DirectoryModelSessionInput,
-      warn: DirectoryModelWarn,
+      notify: DirectoryModelNotify,
     ) {
       const pi = yield* PiApi;
       const store = yield* DirectoryModelStore;
@@ -67,7 +83,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
         Effect.sync(() => {
           if (warned.has(key)) return;
           warned.add(key);
-          warn(message);
+          notify(message, "warning");
         });
 
       const recovered = <Value, E>(
@@ -93,7 +109,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
           Effect.flatMap((stored) =>
             stored && equivalentPreference(stored, preference)
               ? Effect.void
-              : recovered(store.write(identified, preference), "write", WRITE_WARNING),
+              : recovered(store.write(identified, preference), "write", writeWarning(identified)),
           ),
         );
 
@@ -104,7 +120,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
           return recovered(
             preferenceFromSelectedModel(pi, canonicalCwd, selected),
             "current",
-            "Couldn't read Pi's current model",
+            "Couldn't read Pi's current model, so it wasn't saved for this directory",
           );
         });
 
@@ -124,7 +140,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
           const identified = yield* recovered(identity, "identify", IDENTIFY_WARNING);
           if (!identified) return;
           const loaded = yield* store.read(identified).pipe(
-            Effect.tapError((error) => warnOnce("read", readWarning(error.reason))),
+            Effect.tapError((error) => warnOnce("read", readWarning(error.reason, identified))),
             Effect.option,
           );
           if (Option.isNone(loaded)) return;
@@ -141,7 +157,10 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
               Effect.as(warnOnce(`restore:${error.operation}`, error.message), undefined),
             ),
           );
-          if (restored) yield* write(identified, restored);
+          if (!restored) return;
+          if (restored.changed)
+            yield* Effect.sync(() => notify(restoredNotice(restored.preference), "info"));
+          yield* write(identified, restored.preference);
         }),
       );
 

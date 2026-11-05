@@ -451,6 +451,8 @@ const panelFrames = (): string[] => {
   scrolling.handleInput("?");
   lines.push(
     ...frame("Panel · scrolled, expanded help", (width) => scrolling.render(width), 60),
+    ...frame("Panel · scrolled, expanded help", (width) => scrolling.render(width), 57),
+    ...frame("Panel · scrolled, expanded help", (width) => scrolling.render(width), 120),
     ...frame("Panel · nested (Esc Back)", (width) => nested.render(width), 48),
   );
   return lines;
@@ -518,9 +520,9 @@ const fieldPickerFrames = (): string[] => {
   const fieldPicker = (height: number) =>
     new SearchableSelectPage<string>({
       theme: plainTheme,
-      breadcrumb: "Session · reviewer · Primary · Reasoning",
+      breadcrumb: "Current session › reviewer › Primary › Reasoning",
       title: "Choose reasoning",
-      subtitle: "Editing Current Session",
+      subtitle: "Editing current session",
       choices,
       current: "high",
       markedValue: "high",

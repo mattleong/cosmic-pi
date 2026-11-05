@@ -9,7 +9,11 @@ import {
   type BuiltinCompactPolicy,
   type BuiltinBeforeWrite,
 } from "./builtin-projection";
-import { describeBuiltinCompactSubject, type BuiltinCompactTool } from "./builtin-subject";
+import {
+  builtinSubjectIsPath,
+  describeBuiltinCompactSubject,
+  type BuiltinCompactTool,
+} from "./builtin-subject";
 import { isTruncated } from "./data/results";
 
 export function captureBuiltinCompactPolicy(): BuiltinCompactPolicy {
@@ -59,6 +63,7 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
     return projected;
   return {
     subject: describeBuiltinCompactSubject(tool, input, context.cwd),
+    ...(builtinSubjectIsPath(tool) && { pathSubject: true }),
     outcome: "success",
     issues: [{ severity: "warning", code: "output-truncated", message: "Output was cut off" }],
   };

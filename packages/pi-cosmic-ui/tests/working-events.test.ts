@@ -72,7 +72,7 @@ const workingHost = Effect.gen(function* () {
       const value =
         message === undefined
           ? undefined
-          : Option.getOrUndefined(Fn.pipe(message, Str.match(/(~?)([\d.]+) tok\/s/u)));
+          : Option.getOrUndefined(Fn.pipe(message, Str.match(/(~?)([\d.]+) tokens\/s/u)));
       return value ? { approximate: value[1] === "~", value: Number(value[2]) } : undefined;
     },
   };

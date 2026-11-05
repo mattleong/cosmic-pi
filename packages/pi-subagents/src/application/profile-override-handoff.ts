@@ -24,7 +24,7 @@ export const createProfileOverrideHandoff = () => {
       seedIsAuthoritative ? cloneSessionProfileOverrideSeed(seed) : undefined,
     /** The current owner's latest base configuration, which /tree keeps. */
     captureBaseConfig: () => baseConfig,
-    /** The current owner's latest committed Current Session, for prompt and footer views. */
+    /** The current owner's latest committed current session, for prompt and footer views. */
     captureSnapshot: () => snapshot,
     open: () => ++owner,
     publish,

@@ -56,6 +56,44 @@ export const addresseeSubject = (to: string | undefined): string => {
     : clipText(target, MAX_SUBJECT_CHARS);
 };
 
+/** The most sessions {@link SessionNames} remembers; the oldest is forgotten first. */
+const MAX_REMEMBERED_SESSIONS = 256;
+
+/**
+ * Sessions this runtime's tools have already seen, so a call can name its addressee while it runs
+ * instead of showing its id. Results feed it; renderers only read it.
+ */
+export interface SessionNames {
+  readonly remember: (sessions: ReadonlyArray<SessionIdentity>) => void;
+  readonly lookup: (sessionId: string) => SessionIdentity | undefined;
+}
+
+export const sessionNameCache = (): SessionNames => {
+  const known = new Map<string, SessionIdentity>();
+  return {
+    remember: (sessions) => {
+      for (const session of sessions) {
+        known.delete(session.sessionId);
+        known.set(session.sessionId, session);
+      }
+      for (const id of known.keys()) {
+        if (known.size <= MAX_REMEMBERED_SESSIONS) break;
+        known.delete(id);
+      }
+    },
+    lookup: (sessionId) => known.get(sessionId),
+  };
+};
+
+/** How a heading names an addressee before a result does: by name when it is known. */
+export const knownAddresseeSubject = (
+  to: string | undefined,
+  names: SessionNames | undefined,
+): string => {
+  const known = to === undefined ? undefined : names?.lookup(to);
+  return known === undefined ? addresseeSubject(to) : sessionSubject(known);
+};
+
 const uniqueSuffixLength = (ids: ReadonlyArray<string>): number => {
   const longest = Math.max(SHORT_ID_CHARS, ...Arr.map(ids, (id) => idCharacters(id).length));
   for (let length = SHORT_ID_CHARS; length < longest; length++)

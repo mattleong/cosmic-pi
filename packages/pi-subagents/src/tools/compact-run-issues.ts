@@ -189,8 +189,11 @@ function cleanupIssues(card: SubagentRunCard, label: string, add: AddIssue): voi
   const attention = runCleanupAttention(card);
   if (attention === undefined) return;
   const messages = {
-    quarantined: "cleanup remains unconfirmed",
-    "pool-quarantined": "writer admission is blocked by cleanup quarantine",
+    quarantined:
+      card.cleanup?.recovery === "stop"
+        ? "couldn't confirm its processes ended; stop it to check again"
+        : "couldn't confirm its processes ended; check them by hand",
+    "pool-quarantined": "new writers wait until an earlier writer's cleanup is confirmed",
   };
   add(
     "warning",

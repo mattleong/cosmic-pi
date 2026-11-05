@@ -94,12 +94,12 @@ const summarizeList = (
         : [
             ...(waiting > 0
               ? [
-                  `${countLabel(details.agentCount, "agent")}, ${waiting} ${stateLabel("waiting_for_parent")}`,
+                  `${countLabel(details.agentCount, "agent")} · ${waiting} ${stateLabel("waiting_for_parent")}`,
                 ]
               : []),
             countLabel(details.agentCount, "agent"),
           ],
-      metadata: details.only ? [] : Arr.filter([Arr.join(states, ", ")], Boolean),
+      metadata: details.only ? [] : Arr.filter([Arr.join(states, " · ")], Boolean),
     },
     missingIssue(details.missingIds),
   );
@@ -116,7 +116,7 @@ const sendIssues = (details: SendDetails): CompactIssue[] =>
         {
           severity: "info",
           code: "agent-message-held",
-          message: "The main agent is waiting on the user",
+          message: "The main agent needs your input first",
           detail:
             "The message is in the main agent's conversation. It reaches the model when an open dialog closes, or after an interrupt, on the user's next prompt.",
         },

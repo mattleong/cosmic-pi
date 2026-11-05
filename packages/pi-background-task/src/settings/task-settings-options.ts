@@ -1,10 +1,11 @@
 import * as Arr from "effect/Array";
-import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
-import { settingOnOff } from "pi-cosmic-ui/manager/settings-surface";
 import { completeSettingsArguments } from "pi-cosmic-core/settings-completion";
-import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { BACKGROUND_TASK_SETTINGS } from "../config/options.ts";
+import {
+  BACKGROUND_TASK_SETTINGS,
+  formatSettingValue,
+  type BackgroundTaskSetting,
+} from "../config/options.ts";
 import type { BackgroundTaskConfig, BackgroundTaskSettingId } from "../config/schema.ts";
 
 export const SCOPES = [
@@ -14,12 +15,16 @@ export const SCOPES = [
 
 export const INHERIT = "inherit";
 
-/** A stored or effective value as settings show it: booleans read `on`/`off`. */
-export const settingDisplayValue = (value: BackgroundTaskConfig[BackgroundTaskSettingId]) =>
-  Predicate.isBoolean(value) ? settingOnOff(value) : sanitizeTerminalLine(String(value ?? ""));
+/** A stored or effective value as settings show it, such as `on`, `256 KB`, or `2s`. */
+export const settingDisplayValue = (
+  setting: Pick<BackgroundTaskSetting, "kind">,
+  value: BackgroundTaskConfig[BackgroundTaskSettingId],
+) => formatSettingValue(setting.kind, value);
 
-export const sessionValue = (config: BackgroundTaskConfig, id: BackgroundTaskSettingId) =>
-  settingDisplayValue(config[id]);
+export const sessionValue = (
+  config: BackgroundTaskConfig,
+  setting: Pick<BackgroundTaskSetting, "id" | "kind">,
+) => settingDisplayValue(setting, config[setting.id]);
 
 /** `inherit (on)` and other inherited labels mean `inherit` when chosen. */
 export const inheritChoice = (value: string): string =>
@@ -30,9 +35,9 @@ export const inheritChoice = (value: string): string =>
 export const TASK_SETTING_DESCRIPTORS = Arr.map(BACKGROUND_TASK_SETTINGS, (setting) => ({
   id: setting.id,
   description: setting.description,
-  ...(setting.values.length > 0 && { values: [...setting.values, INHERIT] }),
+  ...(setting.commandValues.length > 0 && { values: [...setting.commandValues, INHERIT] }),
   openValues: setting.openValues,
-  currentValue: (config: BackgroundTaskConfig) => sessionValue(config, setting.id),
+  currentValue: (config: BackgroundTaskConfig) => sessionValue(config, setting),
 }));
 
 export const TASK_SETTINGS_COMMAND = {

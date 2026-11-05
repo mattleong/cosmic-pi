@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { CompactIssue, CompactSummary, CompactSummaryProvider } from "pi-code-previews";
 import { countLabel } from "pi-cosmic-core/display";
@@ -10,12 +11,20 @@ import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import {
   decodeSessionToolDetails,
   SESSION_TOOL,
+  type ListedSession,
   type SessionRefusal,
   type SessionToolArgs,
   type SessionToolDetails,
   type ToolRefusalCode,
 } from "./contract.ts";
-import { addresseeSubject, SESSION_STATE_LABELS, sessionSubject } from "../identity.ts";
+import {
+  addresseeSubject,
+  knownAddresseeSubject,
+  SESSION_STATE_LABELS,
+  sessionSubject,
+  type SessionNames,
+} from "../identity.ts";
+import { joinInline } from "pi-cosmic-ui/manager";
 import { sessionText } from "../display.ts";
 import { UNCERTAIN_TEXT } from "./text.ts";
 
@@ -73,25 +82,43 @@ export const uncertainIssue = (
 });
 
 /** Delivery worth a word: a woken session reading the message at once is the plain case. */
-export const DISPOSITION_WORDS = { woken: "", queued: "queued", held: "holding" } as const;
+export const DISPOSITION_WORDS = { woken: "", queued: "queued", held: "held" } as const;
 
-const pending = (tool: string, to: string | undefined): CompactSummary => {
+const pending = (
+  tool: string,
+  to: string | undefined,
+  names: SessionNames | undefined,
+): CompactSummary => {
   if (tool === SESSION_TOOL.list) return { subject: "sessions" };
-  return { subject: addresseeSubject(to) };
+  return { subject: knownAddresseeSubject(to, names) };
+};
+
+const UNUSABLE_STATES = ["unavailable", "unresponsive", "unreachable"] as const;
+
+/**
+ * Sessions that can't take a message now. The heading shows one counter, so the counts are one
+ * combined fact, with a shorter total when they don't fit.
+ */
+const unusableCounters = (sessions: ReadonlyArray<ListedSession>): string[] => {
+  const counts = Arr.filterMap(UNUSABLE_STATES, (state) => {
+    const count = Arr.filter(sessions, (session) => session.state === state).length;
+    return count > 0 ? Result.succeed(`${count} ${SESSION_STATE_LABELS[state]}`) : Result.failVoid;
+  });
+  const total = Arr.filter(sessions, (session) =>
+    Arr.contains(UNUSABLE_STATES, session.state),
+  ).length;
+  if (total === 0) return [];
+  return [...new Set([joinInline(counts), `${total} can't be messaged`])];
 };
 
 const listSummary = (
   details: Extract<SessionToolDetails, { readonly tool: "session_list" }>,
 ): CompactSummary => {
   const total = details.sessions.length + details.omitted;
-  const counted = (state: "unavailable" | "unresponsive" | "unreachable") => {
-    const count = Arr.filter(details.sessions, (session) => session.state === state).length;
-    return count > 0 ? [`${count} ${SESSION_STATE_LABELS[state]}`] : [];
-  };
   const duplicates = Arr.filter(details.sessions, ({ duplicate }) => duplicate).length;
   return {
     subject: countLabel(total, "session"),
-    counters: [...counted("unavailable"), ...counted("unresponsive"), ...counted("unreachable")],
+    counters: unusableCounters(details.sessions),
     metadata: duplicates > 0 ? [countLabel(duplicates, "duplicate id")] : [],
     outcome: "success",
   };
@@ -152,7 +179,7 @@ export const sessionToolDetails = (
   );
 
 export const sessionToolCompactSummary =
-  (tool: string): CompactSummaryProvider<SessionToolArgs> =>
+  (tool: string, names?: SessionNames): CompactSummaryProvider<SessionToolArgs> =>
   ({ phase, args, result }) => {
     // The words a send carries, shown beneath its collapsed compact row.
     const words =
@@ -161,7 +188,7 @@ export const sessionToolCompactSummary =
       Str.isNonEmpty(Str.trim(args.message))
         ? { quote: sessionText(args.message) }
         : {};
-    if (phase !== "settled") return { ...pending(tool, args.to), ...words };
+    if (phase !== "settled") return { ...pending(tool, args.to, names), ...words };
     const details = sessionToolDetails(tool, result);
     return details ? { ...settled(details), ...words } : undefined;
   };

@@ -116,5 +116,12 @@ export function projectWriteResultDetail(
   if (!changes) return undefined;
   const count = (side: "added" | "removed") =>
     Arr.reduce(changes, 0, (total, change) => total + (change[side] ? (change.count ?? 0) : 0));
-  return `+${count("added")} −${count("removed")}`;
+  const counts = { additions: count("added"), removals: count("removed") };
+  // The collapsed preview says the same when a write leaves the file as it was.
+  return counts.additions === 0 && counts.removals === 0 ? "no changes" : diffCountLabel(counts);
+}
+
+/** Added and removed line counts as `+4 −2`, with the Unicode minus. */
+export function diffCountLabel(counts: { additions: number; removals: number }): string {
+  return `+${counts.additions} −${counts.removals}`;
 }

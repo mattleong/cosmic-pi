@@ -61,7 +61,7 @@ function cardCounters(
   const text = Fn.pipe(
     [...counts],
     Arr.map(([state, count]) => `${count} ${state}`),
-    Arr.join(", "),
+    Arr.join(" · "),
   );
   return text ? [text] : [];
 }
@@ -129,7 +129,7 @@ function awaitCounter(cards: readonly SubagentRunCard[], total: number, subject:
       ...(failed ? [`${failed} failed`] : []),
       ...(stopped ? [`${stopped} stopped`] : []),
     ],
-    ", ",
+    " · ",
   );
 }
 
@@ -238,7 +238,12 @@ function awaitIssues(
   if (details.attentionRequired && !details.cancelled) {
     // A problem outranks every outcome; a question or a held run outranks only routine ones.
     const outcome = parentActionOutcome([...cards, ...asking]);
-    if (outcome === "warning" || summary.outcome === "success" || summary.outcome === "returned")
+    if (
+      outcome === "warning" ||
+      summary.outcome === "success" ||
+      summary.outcome === "returned" ||
+      summary.outcome === "paused"
+    )
       summary.outcome = outcome;
   }
 }
@@ -251,7 +256,7 @@ function runIssues(
 ): void {
   if (details.runCount > details.cards.length) {
     summary.counters = [
-      `${details.cards.length}/${details.runCount} shown, ${Arr.join(cardCounters(cards), ", ")}`,
+      `${details.cards.length}/${details.runCount} shown · ${Arr.join(cardCounters(cards), " · ")}`,
     ];
     if (summary.outcome === "success") summary.outcome = "uncertain";
     issues.push({
@@ -330,7 +335,7 @@ function summarizeModels(
   if (disabled) counters.push(`${disabled} disabled`);
   if (unavailable) counters.push(`${unavailable} unavailable`);
   if (agents.length > 0) counters.push(countLabel(agents.length, "custom agent"));
-  summary.counters = [Arr.join(counters, ", ")];
+  summary.counters = [Arr.join(counters, " · ")];
   if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
     summary.outcome = "warning";
   return summary;
@@ -358,6 +363,7 @@ function labelChangesToReview(summary: CompactSummary, cards: readonly SubagentR
 const ROUTINE_OR_WAITING: ReadonlyArray<CompactSummary["outcome"]> = [
   "success",
   "returned",
+  "paused",
   "attention",
 ];
 
@@ -374,7 +380,7 @@ function cardOutcome(
   if (action !== "stop" && Arr.some(cards, (card) => card.state === "stopped")) return "cancelled";
   // A pause the caller didn't request is a held state: the call returned, nothing went wrong.
   return action !== "interrupt" && Arr.some(cards, (card) => card.state === "paused")
-    ? "returned"
+    ? "paused"
     : "success";
 }
 
@@ -384,7 +390,7 @@ function parentActionOutcome(
 ): NonNullable<CompactSummary["outcome"]> {
   if (Arr.some(cards, (card) => runCleanupAttention(card) !== undefined)) return "warning";
   if (Arr.some(cards, isAsking)) return "attention";
-  return Arr.some(cards, (card) => card.state === "paused") ? "returned" : "warning";
+  return Arr.some(cards, (card) => card.state === "paused") ? "paused" : "warning";
 }
 
 function omissionIssue(

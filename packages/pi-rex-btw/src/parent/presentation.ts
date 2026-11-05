@@ -1,5 +1,5 @@
-import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
-import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import type { AgentToolResult, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import { Container, Text, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Str from "effect/String";
@@ -13,8 +13,9 @@ import {
   previewIssuesSlot,
   type CompactIssue,
   type CompactSummaryProvider,
-  type ExpandedLine,
 } from "pi-code-previews";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
+import { SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import {
   decodeParentToolDetails,
@@ -100,21 +101,47 @@ const roleLabel = (item: ConversationItem): string =>
 const itemLabel = (item: ConversationItem, now: number): string =>
   Arr.join(Arr.filter([roleLabel(item), entryTime(item.at, now)], Str.isNonEmpty), " · ");
 
-const TOOL_TONES = { done: "dim", failed: "error", pending: "muted" } as const;
+// A call's outcome as codemode's calls mark theirs. One still running when the parent's file was
+// read is neutral, since a spinner would freeze.
+const TOOL_STATUS = {
+  done: { glyph: SUITE_STATUS_GLYPHS.succeeded, color: "success", text: "dim" },
+  failed: { glyph: SUITE_STATUS_GLYPHS.failed, color: "error", text: "toolOutput" },
+  pending: { glyph: SUITE_STATUS_GLYPHS.neutral, color: "accent", text: "muted" },
+} as const satisfies Record<
+  ToolUse["outcome"],
+  {
+    readonly glyph: string;
+    readonly color: ThemeColor;
+    readonly text: ThemeColor;
+  }
+>;
 
-const TOOL_STATES = { done: "finished", failed: "failed", pending: "running" } as const;
-
-/** A call as the transcript names it: `bash pnpm test · failed`. */
-const toolLine = (tool: ToolUse): ExpandedLine => ({
-  text: Arr.join(
-    [
-      Str.isEmpty(tool.subject) ? tool.name : `${tool.name} ${tool.subject}`,
-      TOOL_STATES[tool.outcome],
-    ],
-    " · ",
-  ),
-  tone: TOOL_TONES[tool.outcome],
-});
+/** The calls a message made, one per row as `✗ bash pnpm test`, wrapping beneath the call. */
+const toolRows = (tools: ReadonlyArray<ToolUse>, theme: Theme): Component => {
+  let cached: { readonly width: number; readonly rows: string[] } | undefined;
+  return {
+    render(width) {
+      if (!Number.isFinite(width) || width < 1) return [];
+      if (cached?.width === width) return cached.rows;
+      const rows = Arr.flatMap(tools, (tool) => {
+        const status = TOOL_STATUS[tool.outcome];
+        const call = sanitizeTerminalLine(
+          Str.isEmpty(tool.subject) ? tool.name : `${tool.name} ${tool.subject}`,
+        );
+        return Arr.map(wrapTextWithAnsi(call, Math.max(1, width - 2)), (part, index) =>
+          index === 0
+            ? `${theme.fg(status.color, status.glyph)} ${theme.fg(status.text, part)}`
+            : `  ${theme.fg(status.text, part)}`,
+        );
+      });
+      cached = { width, rows };
+      return rows;
+    },
+    invalidate() {
+      cached = undefined;
+    },
+  };
+};
 
 const authored = (text: string, theme: Theme, verbatim: boolean): Component => ({
   render: (width) =>
@@ -125,15 +152,15 @@ const authored = (text: string, theme: Theme, verbatim: boolean): Component => (
 });
 
 /** One message: a muted label with its time, its words as markdown, then the tools it ran. */
-const itemSection = (item: ConversationItem, theme: Theme, now: number): Component => {
-  const tools = Arr.map(item.tools, toolLine);
-  return expandedSection(
+const itemSection = (item: ConversationItem, theme: Theme, now: number): Component =>
+  expandedSection(
     theme,
     itemLabel(item, now),
     ...(Str.isNonEmpty(item.text) ? [authored(item.text, theme, item.role === "shell")] : []),
-    ...(tools.length > 0 ? [expandedText(theme, undefined, tools)] : []),
+    ...(item.tools.length > 0
+      ? [expandedSection(theme, undefined, toolRows(item.tools, theme))]
+      : []),
   );
-};
 
 /**
  * Expanded, every message the read returned in order, then the parent session's id. A compact
@@ -162,9 +189,14 @@ const readSummary = (conversation: ParentConversation): string =>
     " · ",
   );
 
+/** What the call heading names once a result says it: the read, as the compact heading does. */
+export interface ParentRenderState {
+  read?: string | undefined;
+}
+
 /**
- * The body below the heading. Expanded, the whole read; collapsed, a preview heading adds how much
- * it read, which a compact heading already says.
+ * The body below the heading. Expanded, the whole read; collapsed, nothing more, since the heading
+ * says how much it read.
  */
 export const parentResultBody = (
   result: AgentToolResult<unknown>,
@@ -174,17 +206,13 @@ export const parentResultBody = (
   const details = decodeParentToolDetails(result);
   if (details === undefined)
     return options.expanded ? fallbackText(result, theme) : new Container();
-  if (isReadFailure(details)) return new Container();
-  if (options.expanded)
-    return conversationBody(
-      details,
-      theme,
-      DateTime.toEpochMillis(DateTime.nowUnsafe()),
-      options.compact,
-    );
-  return options.compact
-    ? new Container()
-    : new Text(theme.fg("muted", readSummary(details)), 0, 0);
+  if (isReadFailure(details) || !options.expanded) return new Container();
+  return conversationBody(
+    details,
+    theme,
+    DateTime.toEpochMillis(DateTime.nowUnsafe()),
+    options.compact,
+  );
 };
 
 interface RenderContext {
@@ -193,32 +221,44 @@ interface RenderContext {
   readonly isPartial: boolean;
 }
 
-/** The preview heading: `Parent conversation latest messages`, with its issues once settled. */
+/**
+ * The preview heading: `Parent conversation last 15 messages` as requested, then what the read
+ * found once settled, such as `all 4 messages`; its issues follow.
+ */
 export const renderParentCall = (
-  _args: ParentToolArgs,
+  args: ParentToolArgs,
   theme: Theme,
-  context: RenderContext & { readonly state: object },
+  context: RenderContext & { readonly state: ParentRenderState },
 ): Component => {
   const header = composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
-    const lines = new Text(
-      renderToolHeader({ title: "Parent conversation", subtitle: "latest messages" }, theme),
+    const subtitle = context.state.read ?? requestLabel(parentMessageCount(args.messages));
+    return new Text(
+      renderToolHeader({ title: "Parent conversation", subtitle }, theme),
       0,
       0,
     ).render(width);
-    return context.executionStarted && context.isPartial
-      ? [...lines, toolRunningLine(theme)]
-      : lines;
   });
-  const issues = previewIssuesSlot(context);
-  return composeToolComponent((width) => [...header.render(width), ...issues.render(width)]);
+  const running = composeToolComponent((width) =>
+    width >= 1 && context.executionStarted && context.isPartial ? [toolRunningLine(theme)] : [],
+  );
+  // Issues follow the heading, so an expanded preview row reuses only the heading above them.
+  const body = new Container();
+  body.addChild(header);
+  body.addChild(previewIssuesSlot(context));
+  body.addChild(running);
+  return body;
 };
 
 export const renderParentResult = (
   result: AgentToolResult<unknown>,
   options: { readonly expanded: boolean; readonly isPartial: boolean },
   theme: Theme,
-): Component =>
-  options.isPartial
-    ? new Container()
-    : parentResultBody(result, theme, { expanded: options.expanded, compact: false });
+  context: { readonly state: ParentRenderState },
+): Component => {
+  if (options.isPartial) return new Container();
+  const details = decodeParentToolDetails(result);
+  context.state.read =
+    details === undefined || isReadFailure(details) ? undefined : readSummary(details);
+  return parentResultBody(result, theme, { expanded: options.expanded, compact: false });
+};

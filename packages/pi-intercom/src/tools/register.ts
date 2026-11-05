@@ -8,6 +8,7 @@ import { withCodePreviewShell } from "pi-code-previews";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import type { IntercomRegistry, IntercomRegistryError } from "../registry/store.ts";
 import type { IntercomSession } from "../session/service.ts";
+import { sessionNameCache } from "../identity.ts";
 import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import {
   contractEnvelope,
@@ -88,6 +89,14 @@ export function registerSessionTools(
   runner: SessionToolRunner,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
+  // Sessions results named, so a later call can name its addressee before it settles.
+  const names = sessionNameCache();
+  const remember = <Result extends AgentToolResult<SessionToolDetails>>(result: Result): Result => {
+    const { details } = result;
+    if (details?.tool === SESSION_TOOL.list) names.remember(details.sessions);
+    else if (details && "session" in details && details.session) names.remember([details.session]);
+    return result;
+  };
   pi.registerTool(
     shell(
       defineTool({
@@ -101,18 +110,20 @@ export function registerSessionTools(
         prepareArguments: prepareSessionListArguments,
         outputSchema: toPiToolOutputSchema(SessionListContractSchema),
         execute: (_id, _args, signal) =>
-          runner.run(
-            listSessions().pipe(
-              Effect.map(
-                (details): AgentToolResult<SessionToolDetails> => ({
-                  content: [{ type: "text", text: listText(details) }],
-                  details,
-                  structuredContent: details,
-                }),
+          runner
+            .run(
+              listSessions().pipe(
+                Effect.map(
+                  (details): AgentToolResult<SessionToolDetails> => ({
+                    content: [{ type: "text", text: listText(details) }],
+                    details,
+                    structuredContent: details,
+                  }),
+                ),
               ),
-            ),
-            signal,
-          ),
+              signal,
+            )
+            .then(remember),
         renderCall: renderSessionCall(SESSION_TOOL.list),
         renderResult: renderSessionResult(SESSION_TOOL.list),
       }),
@@ -127,7 +138,7 @@ export function registerSessionTools(
       defineTool({
         name: SESSION_TOOL.send,
         label: "Session Send",
-        description: `Send a message of at most ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters to the main agent of another live Pi session, by sessionId from session_list. An idle session starts a turn to read it, a busy one reads it after its current turn, and one holding messages reads it after its user's next prompt. Nothing is stored for later: an unreachable session gets nothing. A timeout or lost connection is uncertain: the message may have arrived, so don't resend.`,
+        description: `Send a message of at most ${MAX_MESSAGE_CHARS.toLocaleString("en-US")} characters to the main agent of another live Pi session, by sessionId from session_list. An idle session starts a turn to read it, a busy one reads it after its current turn, and one that holds messages reads it after its user's next prompt. Nothing is stored for later: an unreachable session gets nothing. A timeout or lost connection is uncertain: the message may have arrived, so don't resend.`,
         promptSnippet: "Message the main agent of another live Pi session",
         promptGuidelines: GUIDELINES,
         parameters: SessionSendParameters,
@@ -140,12 +151,12 @@ export function registerSessionTools(
             sendToSession(args.to, args.message),
             (details) => ({ content: [{ type: "text", text: sendText(details) }], details }),
             (refusal) => refusedResult(SESSION_TOOL.send, args.to, refusal),
-          ),
-        renderCall: renderSessionCall(SESSION_TOOL.send),
+          ).then(remember),
+        renderCall: renderSessionCall(SESSION_TOOL.send, names),
         renderResult: renderSessionResult(SESSION_TOOL.send),
       }),
       {
-        compactSummary: sessionToolCompactSummary(SESSION_TOOL.send),
+        compactSummary: sessionToolCompactSummary(SESSION_TOOL.send, names),
         expandedContent: sessionExpandedContent(SESSION_TOOL.send),
       },
     ),
@@ -173,12 +184,12 @@ export function registerSessionTools(
               structuredContent: details,
             }),
             (refusal) => refusedResult(SESSION_TOOL.read, args.to, refusal),
-          ),
-        renderCall: renderSessionCall(SESSION_TOOL.read),
+          ).then(remember),
+        renderCall: renderSessionCall(SESSION_TOOL.read, names),
         renderResult: renderSessionResult(SESSION_TOOL.read),
       }),
       {
-        compactSummary: sessionToolCompactSummary(SESSION_TOOL.read),
+        compactSummary: sessionToolCompactSummary(SESSION_TOOL.read, names),
         expandedContent: sessionExpandedContent(SESSION_TOOL.read),
       },
     ),

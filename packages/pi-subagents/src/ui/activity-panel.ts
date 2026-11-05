@@ -311,7 +311,7 @@ const panelHeader = (
       active > 0 && { color: "muted", text: `${active} active`, priority: 2 },
       waiting > 0 && {
         color: runStateColor("waiting_for_parent"),
-        text: `${waiting} waiting`,
+        text: `${waiting} waiting for reply`,
         priority: 0,
       },
       paused > 0 && { color: runStateColor("paused"), text: `${paused} paused`, priority: 0 },

@@ -54,8 +54,11 @@ export const textResultBody = (
   if (!text) return new Container();
   if (state.isError) return state.expanded ? errorSection(theme, text) : new Container();
   const lines = Str.split(text, "\n");
-  if (state.expanded || lines.length <= collapsedLines + 1)
-    return new Text(theme.fg("toolOutput", text), 0, 0);
+  if (state.expanded || lines.length <= collapsedLines + 1) {
+    const body = new Text(theme.fg("toolOutput", text), 0, 0);
+    // Expanded, the text indents beneath the heading like every expanded body.
+    return state.expanded ? expandedSection(theme, undefined, body) : body;
+  }
   return new Text(
     Arr.join(
       [

@@ -194,10 +194,15 @@ function renderQuestion(
   appendCustomRow(model, question, draft, append);
   if (question.mode === "multiple")
     appendContinueRow(model, question.choices.length, draft, append);
+  // An action row, as the suite writes them: its one key in brackets, then what it does.
   const note = draft.note
-    ? `n Edit note — ${clipToWidth(stripTerminalControls(draft.note), 48)}`
-    : "n Add an optional note";
-  append("  ", model.theme.fg(draft.note ? "muted" : "dim", note));
+    ? `Edit note — ${clipToWidth(stripTerminalControls(draft.note), 48)}`
+    : "Add a note";
+  append(
+    "  ",
+    `${model.theme.fg("dim", "[n]")} ${model.theme.fg(draft.note ? "muted" : "dim", note)}`,
+    4,
+  );
   return lines;
 }
 

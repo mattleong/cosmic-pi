@@ -61,6 +61,18 @@ const captureRequest = (
     },
   );
 
+/**
+ * Why a BTW pane couldn't read this conversation: Pi writes a session's file with its first
+ * message, and a session started without saving never has one.
+ */
+const unreadableParentMessage = (ctx: ExtensionCommandContext): string => {
+  const sessionFile = invokeHostCallback(() => ctx.sessionManager.getSessionFile(), undefined);
+  if (sessionFile === undefined) return "BTW can only read a saved session; this one isn't saved";
+  return isRegularFile(sessionFile)
+    ? "BTW can't read this conversation's session file"
+    : "Send a message first so BTW can read this conversation";
+};
+
 export default function rexBtw(pi: ExtensionAPI): void {
   registerParentReference(pi);
   registerParentConversation(pi);
@@ -77,7 +89,7 @@ export default function rexBtw(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand(BTW_COMMAND, {
-    description: "Open a new side conversation in a Rex pane",
+    description: "Ask a side question in a new Rex pane: /btw [question]",
     handler: (args, ctx) => {
       if (invokeHostCallback(() => ctx.mode, undefined) !== "tui") {
         notify(ctx, "Open Pi in an interactive terminal to use /btw", "warning");
@@ -95,17 +107,14 @@ export default function rexBtw(pi: ExtensionAPI): void {
         return Promise.resolve();
       }
       const request = captureRequest(pi, ctx, prompt);
+      // A pane that can't read this conversation can't answer about it, so none opens.
+      if (request.parent === undefined) {
+        notify(ctx, unreadableParentMessage(ctx), "warning");
+        return Promise.resolve();
+      }
       const isCurrent = slot.captureAuthority();
       return slot.run(RexBtw.use((btw) => btw.open(request))).then(
-        () => {
-          if (isCurrent() && request.parent === undefined)
-            notify(
-              ctx,
-              "Opened a BTW pane, but it can't see this conversation because this session isn't saved yet",
-              "warning",
-            );
-          return undefined;
-        },
+        () => undefined,
         (cause: unknown) => {
           if (isCurrent())
             notify(ctx, isRexBtwError(cause) ? cause.message : "Couldn't open a BTW pane", "error");

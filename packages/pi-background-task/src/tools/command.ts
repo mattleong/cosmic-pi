@@ -311,7 +311,7 @@ const formatLogs = (slice: BackgroundLogSlice, request: ReadBackgroundLogs, maxB
   const header = (cursor: number) =>
     `[${slice.id} state=${slice.state} cursor=${cursor} earliest=${slice.earliestAvailableCursor}]\n`;
   // The page decides what it skipped. The whole slice's loss line approximates its length; unit
-  // changes (1023 bytes vs 1.0 KB) can make the page's line a few bytes longer, which the notice
+  // changes (1023 bytes vs 1 KB) can make the page's line a few bytes longer, which the notice
   // reserve absorbs.
   const lossRoom = utf8ByteLength(lossNotice(skippedWithin(slice), request.afterCursor));
   const reserved = utf8ByteLength(header(slice.nextCursor)) + lossRoom + LOG_NOTICE_RESERVE_BYTES;

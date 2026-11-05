@@ -51,7 +51,7 @@ export const InboundMessageSchema = Schema.Struct({
 });
 export type InboundMessage = typeof InboundMessageSchema.Type;
 
-/** How the recipient took a delivered message: started a turn, appended it, or is holding it. */
+/** How the recipient took a delivered message: started a turn, appended it, or held it. */
 export const DispositionSchema = Schema.Literals(["woken", "queued", "held"]);
 export type Disposition = typeof DispositionSchema.Type;
 

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Str from "effect/String";
-import { addresseeSubject, distinctSessionLabels, sessionSubject } from "../src/identity.ts";
+import * as Arr from "effect/Array";
+import {
+  addresseeSubject,
+  distinctSessionLabels,
+  knownAddresseeSubject,
+  sessionNameCache,
+  sessionSubject,
+} from "../src/identity.ts";
 
 const cosmic = (sessionId: string) => ({ sessionId, cwd: "/Users/me/dev/cosmic-pi/" });
 
@@ -30,5 +37,22 @@ describe("session identity", () => {
   it("shortens a full session id an agent addressed, but keeps other addressees", () => {
     expect(addresseeSubject("01a19957-15d8-7047-8e3f-7bccf1353038")).not.toContain("01a19957");
     expect(addresseeSubject("web work")).toBe("web work");
+  });
+
+  it("names an addressee a result already named, and falls back to its id otherwise", () => {
+    const id = "01a19957-15d8-7047-8e3f-7bccf1353038";
+    const names = sessionNameCache();
+    expect(knownAddresseeSubject(id, names)).toBe(addresseeSubject(id));
+    names.remember([{ sessionId: id, name: "web work", cwd: "/w/web" }]);
+    expect(knownAddresseeSubject(id, names)).toBe("web work");
+    expect(knownAddresseeSubject(id, undefined)).toBe(addresseeSubject(id));
+  });
+
+  it("remembers a bounded number of sessions, forgetting the oldest first", () => {
+    const names = sessionNameCache();
+    const sessions = Arr.makeBy(300, (index) => ({ sessionId: `id-${index}`, cwd: `/w/${index}` }));
+    names.remember(sessions);
+    expect(names.lookup("id-0")).toBeUndefined();
+    expect(names.lookup("id-299")?.cwd).toBe("/w/299");
   });
 });

@@ -36,9 +36,10 @@ const fixture = (overrides: Partial<Options>) =>
   Effect.gen(function* () {
     const projection = MutableRef.make(initialUsageProjection<UsageControllerConfig, number>());
     const notifications: string[] = [];
+    const levels: string[] = [];
     const controller = yield* makeUsageRefreshController<Projection, UsageControllerConfig, number>(
       {
-        context: MutableRef.make(hostContext(notifications)),
+        context: MutableRef.make(hostContext(notifications, {}, levels)),
         projection,
         onChange: () => undefined,
         initialConfig: config,
@@ -53,13 +54,22 @@ const fixture = (overrides: Partial<Options>) =>
         ...overrides,
       },
     );
-    return { controller, projection, notifications };
+    return { controller, projection, notifications, levels };
   });
 
-const hostContext = (notifications: string[], overrides: ExtensionContextOverrides = {}) =>
+const hostContext = (
+  notifications: string[],
+  overrides: ExtensionContextOverrides = {},
+  levels: string[] = [],
+) =>
   extensionContextFixture({
     hasUI: true,
-    ui: { notify: (text: string) => void notifications.push(text) },
+    ui: {
+      notify: (text: string, level?: string) => {
+        notifications.push(text);
+        levels.push(level ?? "info");
+      },
+    },
     ...overrides,
   });
 
@@ -145,6 +155,15 @@ it.effect(
       expect(changes).toBe(0);
       expect(h.notifications).toEqual([]);
     }).pipe(Effect.provide(testLayer)),
+);
+
+it.effect("asking for usage on a model without it informs instead of warning", () =>
+  Effect.gen(function* () {
+    const h = yield* fixture({ eligibility: () => Effect.succeed(false) });
+    yield* h.controller.refresh({ notify: true, force: true });
+    expect(h.notifications).toEqual(["ineligible"]);
+    expect(h.levels).toEqual(["info"]);
+  }).pipe(Effect.provide(testLayer)),
 );
 
 it.effect("polling starts even when the initial forced refresh dies", () => {

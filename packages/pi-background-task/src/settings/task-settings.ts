@@ -12,6 +12,7 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { isProjectTrusted, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -28,10 +29,13 @@ import {
   type BackgroundTaskSettingId,
   type BackgroundTaskSettingValue,
 } from "../config/schema.ts";
-import { settingInherited } from "pi-cosmic-ui/manager/settings-surface";
+import { settingInherited, type SettingsSurfaceItem } from "pi-cosmic-ui/manager/settings-surface";
+import { joinInline } from "pi-cosmic-ui/manager";
 import { BackgroundTaskConfigError, type BackgroundTaskSettingsLocation } from "../config/store.ts";
 import {
   BACKGROUND_TASK_SETTINGS,
+  formatSettingValue,
+  type BackgroundTaskSetting,
   type BackgroundTaskSettingDescriptor,
 } from "../config/options.ts";
 
@@ -62,9 +66,28 @@ const scopeOf = (scope: string | undefined): TaskSettingsScope =>
 const rowKey = (scope: TaskSettingsScope, id: string) => `${scope}:${id}`;
 const scopeLabel = (scope: TaskSettingsScope) => (scope === "project" ? "Project" : "Global");
 
+const SCOPE_DESCRIPTIONS = {
+  global: "Background task settings for every project. Changes apply after /reload.",
+  project:
+    "Background task settings for this trusted project, which win over global ones. Changes apply after /reload.",
+} as const satisfies Record<TaskSettingsScope, string>;
+
+// A group row has one line, so its summary names each value as briefly as it stays clear.
+const SETTING_SUMMARIES = {
+  enabled: (value) => `tasks ${value}`,
+  maxRunning: (value) => `${value} running`,
+  maxRetained: (value) => `${value} kept`,
+  logBufferBytesPerTask: (value) => `${value} per task`,
+  totalLogBufferBytes: (value) => `${value} total`,
+  stopGraceMs: (value) => `${value} grace`,
+  maxWaitSeconds: (value) => `${value} wait`,
+  showFooterStatus: (value) => `footer ${value}`,
+  shellPath: (value) => value,
+} as const satisfies Record<BackgroundTaskSettingId, (value: string) => string>;
+
 const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): SettingItem => ({
   id: rowKey(scope, "file"),
-  label: `${scopeLabel(scope)} · Settings file`,
+  label: scopeLabel(scope),
   description: problem,
   currentValue: "unavailable",
 });
@@ -72,17 +95,22 @@ const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): Setting
 const settingDescriptor = (id: string) =>
   Option.getOrUndefined(Arr.findFirst(BACKGROUND_TASK_SETTINGS, (entry) => entry.id === id));
 
-/** Writes a checked value, or removes the scope's own value for `inherit`; false when invalid. */
+/**
+ * Writes a checked value, or removes the scope's own value for `inherit`. Resolves to the value as
+ * the list shows it, such as `256 KB` for `256k`, or undefined when the value is invalid.
+ */
 const writeSetting = <Id extends BackgroundTaskSettingId>(
   write: TaskSettingsActions["write"],
   location: BackgroundTaskSettingsLocation,
   setting: BackgroundTaskSettingDescriptor<Id>,
   value: string,
-): Promise<boolean> => {
+): Promise<string | undefined> => {
   const inherit = inheritChoice(value) === INHERIT;
   const parsed = inherit ? undefined : setting.parse(value);
-  if (!inherit && parsed === undefined) return Promise.resolve(false);
-  return write(location, setting.id, parsed).then(() => true);
+  if (!inherit && parsed === undefined) return Promise.resolve(undefined);
+  return write(location, setting.id, parsed).then(() =>
+    parsed === undefined ? value : formatSettingValue(setting.kind, parsed),
+  );
 };
 
 export function taskSettingsSubcommand(actions: TaskSettingsActions): ExtensionSubcommand {
@@ -98,41 +126,68 @@ function createTaskSettingsSubcommand(
 ): ExtensionSubcommand {
   const known = new Map<string, string>();
 
-  const pickerItems = (config: BackgroundTaskConfig, files: ReadonlyArray<ScopeFile>) => {
+  const pickerItems = (
+    config: BackgroundTaskConfig,
+    files: ReadonlyArray<ScopeFile>,
+  ): SettingsSurfaceItem[] => {
     const globalOwn = Option.getOrUndefined(
       Arr.findFirst(files, (file) => file.scope === "global" && "own" in file),
     );
+    const listed = Arr.filter(BACKGROUND_TASK_SETTINGS, (setting) => setting.values.length > 0);
     // What `inherit` resolves to in each scope: the default globally, else the global value.
-    const inheritedValue = (scope: TaskSettingsScope, id: BackgroundTaskSettingId) => {
-      const global = globalOwn && "own" in globalOwn ? globalOwn.own[id] : undefined;
+    const inheritedValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting) => {
+      const global = globalOwn && "own" in globalOwn ? globalOwn.own[setting.id] : undefined;
       return settingDisplayValue(
-        scope === "project" && global !== undefined ? global : DEFAULT_BACKGROUND_TASK_CONFIG[id],
+        setting,
+        scope === "project" && global !== undefined
+          ? global
+          : DEFAULT_BACKGROUND_TASK_CONFIG[setting.id],
       );
     };
-    const settingRows = (scope: TaskSettingsScope, own: Partial<BackgroundTaskConfig>) =>
-      Arr.map(
-        Arr.filter(BACKGROUND_TASK_SETTINGS, (setting) => setting.values.length > 0),
-        (setting) => {
-          const stored = own[setting.id];
-          const inherited = settingInherited(inheritedValue(scope, setting.id));
-          const currentValue = stored === undefined ? inherited : settingDisplayValue(stored);
-          known.set(rowKey(scope, setting.id), currentValue);
-          const values = [...setting.values, inherited];
-          const effective = sessionValue(config, setting.id);
-          return {
-            id: rowKey(scope, setting.id),
-            label: `${scopeLabel(scope)} · ${setting.label}`,
-            description: `${setting.description} This session uses ${effective}. Applies after /reload.`,
-            currentValue,
-            values: values.includes(currentValue) ? values : [currentValue, ...values],
-          };
-        },
-      );
-    return Arr.flatMap(files, (file): SettingItem[] =>
-      "problem" in file
-        ? [unavailableScopeRow(file.scope, file.problem)]
-        : settingRows(file.scope, file.own),
-    );
+    const settingRow = (
+      scope: TaskSettingsScope,
+      own: Partial<BackgroundTaskConfig>,
+      setting: BackgroundTaskSetting,
+    ): SettingsSurfaceItem => {
+      const stored = own[setting.id];
+      const inherited = settingInherited(inheritedValue(scope, setting));
+      const currentValue = stored === undefined ? inherited : settingDisplayValue(setting, stored);
+      known.set(rowKey(scope, setting.id), currentValue);
+      const values = [...setting.values, inherited];
+      return {
+        id: rowKey(scope, setting.id),
+        label: setting.label,
+        // A no-break space keeps a value such as `1 MB` on one line when the description wraps.
+        description: `${setting.description} This session uses ${Str.replaceAll(" ", "\u00a0")(sessionValue(config, setting))}. Applies after /reload.`,
+        currentValue,
+        values: values.includes(currentValue) ? values : [currentValue, ...values],
+      };
+    };
+    // A scope's value: the settings it sets itself, such as `16 running · 1 MB per task`.
+    const summary = (scope: TaskSettingsScope) => () => {
+      const own = Arr.filterMap(listed, (setting) => {
+        const value = known.get(rowKey(scope, setting.id)) ?? INHERIT;
+        return inheritChoice(value) === INHERIT
+          ? Result.failVoid
+          : Result.succeed(SETTING_SUMMARIES[setting.id](value));
+      });
+      return own.length === 0 ? INHERIT : joinInline(own);
+    };
+    // Each scope is one group row, so the list reads by scope instead of repeating it.
+    return Arr.map(files, (file): SettingsSurfaceItem => {
+      if ("problem" in file) return unavailableScopeRow(file.scope, file.problem);
+      const children = Arr.map(listed, (setting) => settingRow(file.scope, file.own, setting));
+      const scopeSummary = summary(file.scope);
+      return {
+        id: `group:${file.scope}`,
+        label: scopeLabel(file.scope),
+        kind: "group",
+        description: SCOPE_DESCRIPTIONS[file.scope],
+        currentValue: scopeSummary(),
+        children,
+        summary: scopeSummary,
+      };
+    });
   };
 
   return settingsSubcommand<BackgroundTaskConfig>({
@@ -142,7 +197,12 @@ function createTaskSettingsSubcommand(
     title: "Background Tasks",
     isCurrent,
     descriptors: TASK_SETTING_DESCRIPTORS,
-    examples: ["maxRunning 16", "project maxWaitSeconds 60", `project maxRunning ${INHERIT}`],
+    examples: [
+      "maxRunning 16",
+      "logBufferBytesPerTask 1MiB",
+      "project maxWaitSeconds 1m",
+      `project maxRunning ${INHERIT}`,
+    ],
     notes: () => [
       `Scope defaults to global; ${INHERIT} removes a scope's own value.`,
       "Changes take effect after /reload.",
@@ -159,7 +219,7 @@ function createTaskSettingsSubcommand(
           "Background Tasks settings (as this session started)",
           ...Arr.map(
             BACKGROUND_TASK_SETTINGS,
-            (setting) => `  ${setting.id} = ${sessionValue(config, setting.id) || "default"}`,
+            (setting) => `  ${setting.id} = ${sessionValue(config, setting) || "default"}`,
           ),
         ],
         "\n",
@@ -170,9 +230,9 @@ function createTaskSettingsSubcommand(
       if (!setting) return Promise.resolve(Result.fail({ message: `Unknown setting: ${id}` }));
       const scope = scopeOf(requested);
       return writeSetting(actions.write, { cwd: ctx.cwd, scope }, setting, value).then(
-        (written) => {
-          if (!written) return Result.fail({ message: setting.invalid });
-          known.set(rowKey(scope, setting.id), value);
+        (shown) => {
+          if (shown === undefined) return Result.fail({ message: setting.invalid });
+          known.set(rowKey(scope, setting.id), shown);
           return Result.succeed(undefined);
         },
         (cause: unknown) =>

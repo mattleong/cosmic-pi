@@ -38,6 +38,42 @@ export function middleElide(text: string, width: number): string {
   return `${head}…${tail}`;
 }
 
+/** How a subject that doesn't fit is shortened. */
+export type CompactSubjectKind = "prose" | "path";
+
+// A word-boundary cut that would discard more than this share of the room cuts mid-word instead.
+const WORD_CUT_SLACK = 0.4;
+const TRAILING_BREAK = /[\s,;:.\-–—…]+$/u;
+
+/**
+ * Cuts prose at the end on a word boundary, ending in `…`, so every word that remains is whole.
+ * One word wider than the room is cut where it reaches the edge.
+ */
+export function endElide(text: string, width: number): string {
+  if (width <= 0) return "";
+  if (visibleWidth(text) <= width) return text;
+  let head = "";
+  let headWidth = 0;
+  let lastBreak: string | undefined;
+  for (const { segment } of graphemes.segment(text)) {
+    const segmentWidth = visibleWidth(segment);
+    if (headWidth + segmentWidth > width - 1) break;
+    if (/\s/u.test(segment)) lastBreak = head;
+    head += segment;
+    headWidth += segmentWidth;
+  }
+  const atWord = lastBreak === undefined ? undefined : Str.replace(TRAILING_BREAK, "")(lastBreak);
+  const kept =
+    atWord && visibleWidth(atWord) >= (width - 1) * (1 - WORD_CUT_SLACK)
+      ? atWord
+      : Str.replace(TRAILING_BREAK, "")(head);
+  return `${kept || head}…`;
+}
+
+export function elideSubject(text: string, width: number, kind: CompactSubjectKind): string {
+  return kind === "path" ? middleElide(text, width) : endElide(text, width);
+}
+
 export function layoutCompactHeader(
   identity: string,
   subject: string,
@@ -46,6 +82,7 @@ export function layoutCompactHeader(
   width: number,
   separator = " · ",
   timing?: string,
+  subjectKind: CompactSubjectKind = "prose",
 ) {
   const counters = Arr.filter(candidateCounters, (value) => Str.isNonEmpty(Str.trim(value)));
   const extra = counters.length
@@ -75,7 +112,11 @@ export function layoutCompactHeader(
     counterWidth + visibleWidth(timingToken) <= counterBudget
       ? timingToken
       : "";
-  const target = middleElide(subject, remaining - counterWidth - visibleWidth(timingText) - 1);
+  const target = elideSubject(
+    subject,
+    remaining - counterWidth - visibleWidth(timingText) - 1,
+    subjectKind,
+  );
   if (subject && !target)
     return {
       row: clipToWidth(`${identity} ${subject}`, width),

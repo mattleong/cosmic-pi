@@ -4,9 +4,10 @@ import * as Str from "effect/String";
 import {
   defineTool,
   type ExtensionAPI,
+  type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { expandedSection, withCodePreviewShell } from "pi-code-previews";
+import { previewIssuesSlot, withCodePreviewShell } from "pi-code-previews";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import { createSubagentCompactSummary } from "./compact-summary.ts";
 import { isTypedReceipt, requestedRunIds, type SummaryArguments } from "./compact-heading.ts";
@@ -39,6 +40,7 @@ import {
   renderWorkspaceCallArguments,
   rememberRunNames,
   renderRequestedRuns,
+  rawResultSection,
 } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
 import { registerAgentTools, ROOT_SCRIPT_NAMESPACE } from "./agent.ts";
@@ -61,6 +63,12 @@ import {
   NESTED_START_GUIDELINE,
   NORMAL_START_GUIDELINE,
 } from "../delegation/prompt.ts";
+
+/** The raw call arguments an expanded call reads beyond its heading's. */
+interface ExpandedCallArguments extends SummaryArguments {
+  readonly until?: unknown;
+  readonly timeoutSeconds?: unknown;
+}
 
 const targetsLabel = (args: SummaryArguments) =>
   countLabel(requestedRunIds(args)?.length ?? 0, "subagent");
@@ -265,6 +273,40 @@ export function registerSubagentTools(
       !isPartial &&
       hasRecordedFailure(result) &&
       (project({ phase: "settled", args: context.args, result, context })?.issues?.length ?? 0) > 0;
+    /**
+     * What an expanded call shows beneath its heading, at the heading's column, beyond the heading's
+     * own facts: the runs an
+     * await or lifecycle call requested, named once its result resolved them (run IDs are opaque,
+     * so the result lists each among its details), or a worktree call's message and arguments.
+     */
+    const expandedCallContent = (
+      args: ExpandedCallArguments,
+      theme: Theme,
+      toolCallId: string,
+    ): Component | undefined => {
+      const ids = requestedRunIds(args);
+      if (ids && (name === SUBAGENT_TOOL_NAME.await || name === SUBAGENT_TOOL_NAME.lifecycle))
+        return indentedBody(
+          theme,
+          renderRequestedRuns(
+            ids,
+            {
+              until: awaitUntil({
+                ...(args.until === "any_finished" && { until: "any_finished" }),
+              }),
+              ...(Predicate.isNumber(args.timeoutSeconds) && {
+                timeoutSeconds: args.timeoutSeconds,
+              }),
+            },
+            name,
+            theme,
+            toolCallId,
+          ),
+        );
+      if (name === SUBAGENT_TOOL_NAME.workspace)
+        return renderWorkspaceCallArguments(decodeCallArguments(args), theme);
+      return undefined;
+    };
     const tool = defineTool<SubagentToolParameters<N>>({
       ...spec,
       ...(name === SUBAGENT_TOOL_NAME.start && {
@@ -292,7 +334,19 @@ export function registerSubagentTools(
       }),
       parameters: toolParameters[name],
       prepareArguments: argumentPreparers[name],
-      renderCall: rejectionAwareCall(spec.label, renderCall),
+      renderCall: rejectionAwareCall(spec.label, (args, theme, context) => {
+        const heading = renderCall(args, theme, context);
+        const body = context.expanded
+          ? expandedCallContent(args, theme, context.toolCallId)
+          : undefined;
+        if (!body) return heading;
+        // Expanded, the requested runs or arguments follow the heading and its issues, indented.
+        const container = new Container();
+        container.addChild(heading);
+        container.addChild(previewIssuesSlot(context));
+        container.addChild(body);
+        return container;
+      }),
       execute: (id, args, ...rest) => {
         const input = TOOL_INPUTS[name](args);
         return settlePresentation(
@@ -323,51 +377,30 @@ export function registerSubagentTools(
           },
         );
       },
-      renderResult: (result, options, theme, context) =>
-        issueCarriesFailure(result, options.isPartial, context)
+      renderResult: (result, options, theme, context) => {
+        // The requested line beside this result draws later and names its runs from here.
+        rememberRunNames(context.toolCallId, decodeOutcomeDetails(result.details));
+        return issueCarriesFailure(result, options.isPartial, context)
           ? new Container()
           : renderSubagentResult(result, options.isPartial, options.expanded, theme, {
               panelOwnsLiveHierarchy: panelOwnsHierarchy(result, options.isPartial, context),
               isError: context.isError,
-            }),
+            });
+      },
     });
     const wrapped = shell(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       expandedContent: {
         // Expanded bodies indent beneath the heading, as every workspace tool's do.
-        renderCall: (args, theme, context) => {
-          const content = (): Component => {
-            if (
-              tool.name === SUBAGENT_TOOL_NAME.start &&
-              "agents" in args &&
-              Arr.isArray(args.agents)
-            )
-              return renderSubagentStartCall(args.agents, theme, true, true);
-            // Run IDs are opaque; the result names each run and lists its ID among its details.
-            const ids = requestedRunIds(args);
-            if (
-              ids &&
-              (tool.name === SUBAGENT_TOOL_NAME.await || tool.name === SUBAGENT_TOOL_NAME.lifecycle)
-            )
-              return renderRequestedRuns(
-                ids,
-                {
-                  until: awaitUntil(args),
-                  ...("timeoutSeconds" in args &&
-                    Predicate.isNumber(args.timeoutSeconds) && {
-                      timeoutSeconds: args.timeoutSeconds,
-                    }),
-                },
-                tool.name,
+        renderCall: (args, theme, context) =>
+          tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Arr.isArray(args.agents)
+            ? renderSubagentStartCall(args.agents, theme, true, true)
+            : (expandedCallContent(args, theme, context.toolCallId) ??
+              indentedBody(
                 theme,
-                context.toolCallId,
-              );
-            if (tool.name === SUBAGENT_TOOL_NAME.workspace)
-              return renderWorkspaceCallArguments(decodeCallArguments(args), theme);
-            return renderSubagentInputContent(decodeCallArguments(args), theme);
-          };
-          return indentedBody(theme, content());
-        },
+                // Profile routes' heading names the profile it asked for.
+                renderSubagentInputContent(decodeCallArguments(args), theme, ["profile"]),
+              )),
         renderResult: (result, options, theme, context) => {
           // The requested line beside this result draws later and names its runs from here.
           rememberRunNames(context.toolCallId, decodeOutcomeDetails(result.details));
@@ -379,9 +412,11 @@ export function registerSubagentTools(
             context,
           });
           if (!summary)
-            return indentedBody(
+            return renderSubagentResult(
+              { content: result.content },
+              options.isPartial,
+              true,
               theme,
-              renderSubagentResult({ content: result.content }, options.isPartial, true, theme),
             );
           if (issueCarriesFailure(result, options.isPartial, context)) return new Container();
           const content = renderSubagentExpandedContent(result, options.isPartial, theme, {
@@ -398,13 +433,8 @@ export function registerSubagentTools(
           if (!context.isError && !hasReturnedFailureEvidence(result.details)) return content;
           const container = new Container();
           container.addChild(content);
-          container.addChild(
-            expandedSection(
-              theme,
-              "Output",
-              renderSubagentResult({ content: result.content }, options.isPartial, true, theme),
-            ),
-          );
+          const output = rawResultSection(result.content, theme, "Output");
+          if (output) container.addChild(output);
           return container;
         },
       },

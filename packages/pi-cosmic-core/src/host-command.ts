@@ -4,6 +4,7 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
+import { clipText } from "./display.ts";
 import { notifyAtHostBoundary } from "./host-session.ts";
 
 interface CommandCompletion {
@@ -121,17 +122,12 @@ export const extensionCommandOverview = (
   );
 };
 
-const extensionCommandUsage = (
-  name: string,
-  subcommands: ReadonlyArray<ExtensionSubcommand>,
-  bare?: ExtensionCommandBare,
-): string => {
-  const names = Arr.join(
-    Arr.map(subcommands, (entry) => entry.name),
-    "|",
-  );
-  return `Usage: /${name} ${bare ? `[${names}]` : `<${names}>`}`;
-};
+// Leaves room for the longest command name on a 55-column notice line.
+const UNKNOWN_SUBCOMMAND_COLUMNS = 24;
+
+/** What an unrecognized subcommand shows: which word wasn't known, then the overview. */
+export const unknownSubcommandText = (name: string, subcommand: string, overview: string): string =>
+  `Unknown /${name} command: ${clipText(subcommand, UNKNOWN_SUBCOMMAND_COLUMNS)}\n${overview}`;
 
 const settle = (run: () => Promise<void> | void): Promise<void> => {
   try {
@@ -169,7 +165,14 @@ export function registerExtensionCommand(
       if (subcommand) return settle(() => subcommand.handler(rest, ctx));
       return bare?.text
         ? settle(() => bare.handler(trimmed, ctx))
-        : notify(extensionCommandUsage(name, list(), bare), "warning");
+        : notify(
+            unknownSubcommandText(
+              name,
+              head,
+              extensionCommandOverview(name, description, list(), overviewNotes),
+            ),
+            "warning",
+          );
     },
   });
   return { add: (subcommand) => void subcommands.set(subcommand.name, subcommand) };

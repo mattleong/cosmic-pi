@@ -14,7 +14,6 @@ import { deferredPromise, extensionContextFixture, macrotask } from "pi-cosmic-c
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { vi } from "vitest";
-import { BACKGROUND_TASK_SETTINGS } from "../src/config/options.ts";
 import { DEFAULT_BACKGROUND_TASK_CONFIG } from "../src/config/schema.ts";
 import { BackgroundTaskConfigError } from "../src/config/store.ts";
 import { taskSettingsSubcommand, type TaskSettingsActions } from "../src/settings/task-settings.ts";
@@ -85,11 +84,15 @@ const pickerHarness = (
     opened,
     open,
     close: () => input("\u001b"),
-    // Enter opens the row's choice list, which starts on the current value; Enter picks another.
+    // Enter opens the Global group; its second row's choice list starts on the current value, and
+    // Enter picks another. Esc returns to the scope groups.
     choose: () => {
+      input("\r");
+      input("j");
       input("\r");
       input("k");
       input("\r");
+      input("\u001b");
     },
     isOpen: () => {
       host.mount();
@@ -156,6 +159,52 @@ describe("/tasks settings", () => {
     }),
   );
 
+  it.effect("accepts durations in the units settings show, counted in the setting's own unit", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      for (const value of ["2s", "1500ms", "0", "2500"]) yield* h.run(`stopGraceMs ${value}`);
+      for (const value of ["1m", "90", "1m 30s", "1h"]) yield* h.run(`maxWaitSeconds ${value}`);
+      expect(Arr.map(h.write.mock.calls, ([, id, value]) => [id, value])).toEqual([
+        ["stopGraceMs", 2_000],
+        ["stopGraceMs", 1_500],
+        ["stopGraceMs", 0],
+        ["stopGraceMs", 2_500],
+        ["maxWaitSeconds", 60],
+        ["maxWaitSeconds", 90],
+        ["maxWaitSeconds", 90],
+        ["maxWaitSeconds", 3_600],
+      ]);
+      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "error")).toEqual([]);
+
+      for (const value of ["1.5s", "500ms", "2x", "-1s", "1d"])
+        yield* h.run(`maxWaitSeconds ${value}`);
+      yield* h.run("stopGraceMs 31s");
+      expect(h.write).toHaveBeenCalledTimes(8);
+      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "error")).toHaveLength(6);
+    }),
+  );
+
+  it.effect("a size the list offers saves as bytes", () =>
+    Effect.gen(function* () {
+      const h = pickerHarness(true);
+      yield* macrotask;
+      expect(h.isOpen()).toBe(true);
+      // The Global group, then its output-per-task row, whose list starts on the inherited value.
+      h.input("\r");
+      for (const _ of [1, 2, 3]) h.input("j");
+      h.input("\r");
+      h.input("k");
+      h.input("\r");
+      yield* macrotask;
+      expect(
+        Arr.map(h.write.mock.calls, ([location, id, value]) => [location.scope, id, value]),
+      ).toEqual([["global", "logBufferBytesPerTask", 1_048_576]]);
+      h.input("\u001b");
+      h.close();
+      yield* Effect.promise(() => h.opened);
+    }),
+  );
+
   it.effect("status and help report the session's values on single sanitized lines", () =>
     Effect.gen(function* () {
       const h = harness();
@@ -194,7 +243,9 @@ describe("/tasks settings", () => {
       );
       yield* macrotask;
       expect(h.isOpen()).toBe(true);
-      // The global row shows its own `off`; its list offers on, off, then the inherited default.
+      // The Global group's first row shows its own `off`; its list offers on, off, then the
+      // inherited default.
+      h.input("\r");
       h.input("\r");
       h.input("j");
       h.input("\r");
@@ -202,6 +253,7 @@ describe("/tasks settings", () => {
       expect(
         Arr.map(h.write.mock.calls, ([location, id, value]) => [location.scope, id, value]),
       ).toEqual([["global", "enabled", undefined]]);
+      h.input("\u001b");
       h.close();
       yield* Effect.promise(() => h.opened);
     }),
@@ -209,7 +261,6 @@ describe("/tasks settings", () => {
 
   it.effect("opens the readable scopes and keeps a broken file's scope unavailable", () =>
     Effect.gen(function* () {
-      const rows = Arr.filter(BACKGROUND_TASK_SETTINGS, (setting) => setting.values.length > 0);
       const path = "/project/.pi/extensions/pi-background-task.json";
       const h = pickerHarness(true, (location) =>
         location.scope === "project"
@@ -221,7 +272,8 @@ describe("/tasks settings", () => {
       yield* macrotask;
       expect(h.isOpen()).toBe(true);
       expect(h.notify).not.toHaveBeenCalled();
-      for (const _ of rows) h.input("j");
+      // The Global group, then the Project scope its broken file leaves unavailable.
+      h.input("j");
       const reason = Fn.pipe(
         Arr.findFirst(Str.split(h.screen(), "\n"), (line) => Fn.pipe(line, Str.includes(path))),
         Option.map(Str.trim),

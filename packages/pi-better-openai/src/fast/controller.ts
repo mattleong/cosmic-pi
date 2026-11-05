@@ -28,7 +28,7 @@ export function fastStateText(ctx: ExtensionContext, snapshot: FastSnapshot): st
 }
 
 export const inactiveForModelMessage = (ctx: ExtensionContext): string =>
-  `Fast mode is paused: ${currentModelKey(ctx)} doesn't support it`;
+  `Fast mode is paused until you switch from ${currentModelKey(ctx)} to an OpenAI model`;
 
 export function settingsSummary(ctx: ExtensionContext, snapshot: FastSnapshot): string {
   if (isFastActive(ctx, snapshot)) return "on";

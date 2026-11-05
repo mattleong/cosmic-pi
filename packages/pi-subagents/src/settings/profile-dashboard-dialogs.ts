@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import {
   Input,
   Key,
@@ -16,6 +17,8 @@ import type { ProfileSetSaveDestination } from "./profile-set-actions.ts";
 import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { clipToWidth } from "pi-cosmic-ui/manager";
+import { framedKeyHintBar, keyHint, wrapKeyHints } from "pi-cosmic-ui/manager/key-labels";
+import { FRAME_GUTTER } from "pi-cosmic-ui/manager/list-detail-shell";
 
 type DialogOptions = SearchableSelectHostOptions & {
   readonly theme: Theme;
@@ -35,6 +38,12 @@ type DialogOptions = SearchableSelectHostOptions & {
         readonly close: (value: ProfileSetSaveDestination | undefined) => void;
       }
   );
+
+export interface ProfileDashboardDialogLayout {
+  readonly rows: string[];
+  /** Text for the dashboard's bottom border. */
+  readonly border: string;
+}
 
 export class ProfileDashboardDialog implements Component, Focusable {
   private readonly input = new Input();
@@ -111,35 +120,69 @@ export class ProfileDashboardDialog implements Component, Focusable {
     if (destination.projectTrusted) this.scope = this.scope === "project" ? "global" : "project";
     return true;
   }
-  render(width: number): string[] {
-    if (this.disposed) return [];
+  /**
+   * The dialog's rows inside the dashboard's frame, and the hint for its bottom border. \`width\`
+   * is the text width between the frame's gutters; pairs that don't fit the border wrap into rows
+   * at the bottom of the dialog.
+   */
+  layout(width: number): ProfileDashboardDialogLayout {
+    if (this.disposed) return { rows: [], border: "" };
     const label = this.options.keybindingLabel ?? ((_id, fallback) => fallback);
     const height = Math.max(0, this.options.getHeight());
-    const bodyHeight = Math.max(0, height - 3);
     const text = wrapTextWithAnsi(this.options.body ?? "", Math.max(1, width));
     const destination = this.options.kind === "name" && this.options.destination;
     const scopeRows = destination
       ? [
-          `Destination: ${this.scope === "project" ? "Project · For this project" : "Global · For all projects"} ${this.options.theme.fg("dim", destination.projectTrusted ? "(↑/↓ change)" : "(Project requires trust)")}`,
+          `Destination: ${this.scope === "project" ? "Project · For this project" : "Global · For all projects"}${destination.projectTrusted ? "" : this.options.theme.fg("dim", " (Project requires trust)")}`,
         ]
       : [];
+    const cancel = label("tui.select.cancel", "Esc");
+    const hints = (scrolls: boolean) => {
+      const { border, overflow } = framedKeyHintBar(
+        {
+          hints: [
+            scrolls && keyHint("↑↓", "Scroll"),
+            destination && destination.projectTrusted && keyHint("↑↓", "Destination"),
+            keyHint(label("tui.select.confirm", "Enter"), "Confirm"),
+          ],
+          exit: "decision",
+          exitKey: Str.split(cancel, "/")[0] ?? cancel,
+        },
+        false,
+        width + 2 * FRAME_GUTTER,
+      );
+      return {
+        border,
+        rows: Arr.map(wrapKeyHints(overflow, width), (row) => this.options.theme.fg("dim", row)),
+      };
+    };
     const body =
       this.options.kind === "confirm"
         ? text
         : this.input.render(Math.max(1, width)).concat(scopeRows, this.options.body ? text : []);
+    // Scroll appears only when the body doesn't fit beside the hint without it.
+    const scrolls =
+      this.options.kind === "confirm" && body.length > height - 2 - hints(false).rows.length;
+    const hint = hints(scrolls);
+    const bodyHeight = Math.max(0, height - 2 - hint.rows.length);
     this.maxOffset = this.options.kind === "confirm" ? Math.max(0, body.length - bodyHeight) : 0;
     this.offset = Math.min(this.offset, this.maxOffset);
     if (bodyHeight > 0 && this.offset === this.maxOffset) this.reviewed = true;
-    const hint = `${label("tui.select.confirm", "Enter")} Confirm · ${label("tui.select.cancel", "Esc")} Back${this.maxOffset ? " · ↑/↓ Scroll" : ""}`;
-    return Arr.map(
-      [
-        this.options.theme.fg("accent", this.options.title),
-        ...body.slice(this.offset, this.offset + bodyHeight),
-        this.message,
-        hint,
-      ].slice(0, height),
-      (line) => clipToWidth(line, Math.max(0, width)),
-    );
+    return {
+      border: hint.border,
+      rows: Arr.map(
+        [
+          this.options.theme.fg("accent", this.options.title),
+          ...body.slice(this.offset, this.offset + bodyHeight),
+          this.message,
+          ...hint.rows,
+        ].slice(0, height),
+        (line) => clipToWidth(line, Math.max(0, width)),
+      ),
+    };
+  }
+  render(width: number): string[] {
+    return this.layout(width).rows;
   }
   invalidate(): void {
     this.input.invalidate();

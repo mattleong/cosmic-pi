@@ -139,7 +139,8 @@ const gitTone = (gitStatus: FooterGitStatus): CosmicFooterTextContribution["tone
 
 const GIT_LINE_STATS = [
   ["linesAdded", "+"],
-  ["linesRemoved", "-"],
+  // Count summaries use the Unicode minus; ASCII `-` stays a diff line prefix.
+  ["linesRemoved", "−"],
   ["linesChanged", "~"],
 ] as const satisfies ReadonlyArray<readonly [keyof FooterGitStatus, string]>;
 

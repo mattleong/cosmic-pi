@@ -13,7 +13,7 @@ import * as Str from "effect/String";
 import { isStrictlyInsidePathWith } from "pi-cosmic-core/platform/paths";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
 import { IMAGE_OUTPUT_FORMATS, type ImageOutputFormat } from "../config/schema.ts";
-import { fail, failWith, type ExtractedImageResult } from "./types.ts";
+import { fail, failWith, generationFailure, type ExtractedImageResult } from "./types.ts";
 
 const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
 const imageVerificationLostMessage =
@@ -54,14 +54,14 @@ export const imageOutput = (dependencies: {
     outputFormat: ImageOutputFormat,
   ) {
     const bytes = decodeStrictBase64(parsed.data);
-    if (!bytes) return yield* fail("response", "Codex returned invalid image base64.");
+    if (!bytes) return yield* generationFailure("response", "OpenAI returned invalid image data.");
     const metadata = yield* sharp
       .decode(bytes)
       .pipe(
         Effect.mapError((error) =>
           error.operation === "unavailable"
             ? fail("sharp", error.message)
-            : fail("response", "Codex returned unreadable image data."),
+            : generationFailure("response", "OpenAI returned unreadable image data."),
         ),
       );
     const actual = metadata.format === "jpg" ? "jpeg" : metadata.format;

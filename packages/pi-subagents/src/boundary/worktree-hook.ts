@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-import { clipText } from "pi-cosmic-core/display";
+import { clipText, formatDuration } from "pi-cosmic-core/display";
 import { runBoundedProcessNode } from "pi-cosmic-core/platform/process";
 import { sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core/security";
 import {
@@ -89,6 +89,8 @@ export const runWorktreeHook = (
 ): Effect.Effect<void, WorktreeHookError> => {
   const [executable, ...args] = hook.command;
   const label = `${input.event} hook \`${describeWorktreeHook(hook)}\``;
+  // The first line names what failed in the user's terms; the hook and its output follow.
+  const step = input.event === "WorktreeCreate" ? "Workspace setup" : "Workspace cleanup";
   if (executable === undefined)
     return Effect.fail(WorktreeHookError.make({ message: `${input.event} hook has no command.` }));
   const timeoutSeconds = hook.timeout ?? DEFAULT_WORKTREE_HOOK_TIMEOUT_SECONDS[input.event];
@@ -120,13 +122,15 @@ export const runWorktreeHook = (
       if (error.operation === "spawn")
         return Effect.fail(
           WorktreeHookError.make({
-            message: `${label} couldn't start; check that the command exists on PATH.`,
+            message: `${step} couldn't start.\n${label} couldn't start; check that the command exists on PATH.`,
           }),
         );
       return cleanupWarning.pipe(
         Effect.andThen(
           Effect.fail(
-            WorktreeHookError.make({ message: `${label} couldn't be read to completion.` }),
+            WorktreeHookError.make({
+              message: `${step} failed.\n${label} couldn't be read to completion.`,
+            }),
           ),
         ),
       );
@@ -134,8 +138,14 @@ export const runWorktreeHook = (
     Effect.flatMap((result) => {
       const warned = result.cleanupUnconfirmed ? cleanupWarning : Effect.void;
       if (result.code === 0 && !result.timedOut && !result.overflowed) return warned;
+      const timeout = formatDuration(timeoutSeconds * 1000);
+      const summary = result.timedOut
+        ? `${step} timed out after ${timeout}`
+        : result.overflowed
+          ? `${step} produced too much output`
+          : `${step} failed`;
       const reason = result.timedOut
-        ? `timed out after ${timeoutSeconds}s`
+        ? `timed out after ${timeout}`
         : result.overflowed
           ? "produced too much output"
           : `exited with ${result.code === null ? `signal ${result.signal ?? "unknown"}` : `code ${result.code}`}`;
@@ -143,7 +153,9 @@ export const runWorktreeHook = (
       return warned.pipe(
         Effect.andThen(
           Effect.fail(
-            WorktreeHookError.make({ message: `${label} ${reason}${line ? `: ${line}` : "."}` }),
+            WorktreeHookError.make({
+              message: `${summary}.\n${label} ${reason}${line ? `: ${line}` : "."}`,
+            }),
           ),
         ),
       );

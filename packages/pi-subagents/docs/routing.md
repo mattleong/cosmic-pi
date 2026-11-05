@@ -16,7 +16,7 @@ Only configuration version 6 is accepted. Any other version fails activation and
 - Set names are 1–64 characters, start and end with a letter or number, and may otherwise contain letters, numbers, spaces, `.`, `_`, or `-`. Each set has a required `profiles` object, which may be empty.
 - Resolution starts from built-ins, overlays the selected global set route by route, then the selected trusted-project set. Omitting a global default selects built-ins; omitting a project default selects the global layer.
 - A malformed or missing declared default fails that scope's routes closed while leaving configuration inspection available for repair. A present-invalid route fails closed.
-- A complete in-memory session route overlays the persistent result with source `session`; removing it reveals the activation-time base again ([Current Session](settings-workspace.md#current-session)).
+- A complete in-memory session route overlays the persistent result with source `session`; removing it reveals the activation-time base again ([current session](settings-workspace.md#current-session)).
 - Every built-in is a `parent` candidate using the profile's context, write-intent, and effort defaults.
 
 ### Routes and candidates

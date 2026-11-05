@@ -1,8 +1,10 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
+import { lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 
 const BRAILLE_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const STARTING_SPINNER_FRAMES = ["◌", "◔", "◑", "◕"] as const;
@@ -120,9 +122,34 @@ const MANAGER_ACTIVITY_LABELS = {
 export const managerActivityLabel = (kind: ManagerActivityKind): string =>
   MANAGER_ACTIVITY_LABELS[kind];
 
+const STYLE_RESET = "\u001b[0m";
+
+// A cut at a word boundary leaves no space before the ellipsis: `Approve…`, not `Approve …`.
+const closeUpMarker = (clipped: string, marker: string): string => {
+  const at = lastIndexOfFrom(clipped, marker, clipped.length);
+  if (at <= 0) return clipped;
+  let head = Fn.pipe(clipped, Str.slice(0, at));
+  let reset = false;
+  let trimmed = false;
+  for (;;) {
+    if (Fn.pipe(head, Str.endsWith(STYLE_RESET))) {
+      head = Fn.pipe(head, Str.slice(0, head.length - STYLE_RESET.length));
+      reset = true;
+    } else if (Fn.pipe(head, Str.endsWith(" "))) {
+      head = Fn.pipe(head, Str.slice(0, -1));
+      trimmed = true;
+    } else break;
+  }
+  if (!trimmed || head.length === 0) return clipped;
+  return `${head}${reset ? STYLE_RESET : ""}${Fn.pipe(clipped, Str.slice(at))}`;
+};
+
 // visibleWidth caches and has an ASCII fast path; truncateToWidth segments any non-ASCII text.
-export const clipToWidth = (text: string, width: number, marker = "…"): string =>
-  width > 0 && visibleWidth(text) <= width ? text : truncateToWidth(text, width, marker);
+export const clipToWidth = (text: string, width: number, marker = "…"): string => {
+  if (width > 0 && visibleWidth(text) <= width) return text;
+  const clipped = truncateToWidth(text, width, marker);
+  return marker ? closeUpMarker(clipped, marker) : clipped;
+};
 
 export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: number): string => {
   const full = `  ${Arr.join(tabs, "  ")}`;

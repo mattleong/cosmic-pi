@@ -18,8 +18,8 @@ import {
   decodeCompactAsyncRows,
   decodeCompactChoices,
   decodeOutcome,
-  isPendingState,
   isStatusList,
+  questionsShown,
   storedTitlesLabel,
   questionnaireState,
   stateCounts,
@@ -47,13 +47,21 @@ function identity(args: QuestionnaireArgs, storedTitles?: string): CompactSummar
   return { subject: callTitles(args) ?? "questionnaire" };
 }
 
-function liveSummary(args: QuestionnaireArgs): CompactSummary | undefined {
+/**
+ * A call still in progress. Once its questions are on screen, or while it awaits answers, it waits
+ * on the user rather than spinning.
+ */
+function liveSummary(args: QuestionnaireArgs, waiting = false): CompactSummary | undefined {
+  // Metadata words the wait; a compact heading shows it only when no counter takes the place.
+  const waits = waiting
+    ? { waiting: true as const, metadata: [stateWords("waiting")[0] ?? ""] }
+    : {};
   const questions = decodeCallQuestions(args)?.questions;
   if (questions?.length)
-    return { ...identity(args), counters: [countLabel(questions.length, "question")] };
+    return { ...identity(args), counters: [countLabel(questions.length, "question")], ...waits };
   const control = decodeAsyncControl(args);
   if (!control || (control.action !== "status" && !control.requestId)) return undefined;
-  return identity(args);
+  return { ...identity(args), ...waits };
 }
 
 type CompactQuestion = NonNullable<ReturnType<typeof decodeCompactChoices>>["questions"][number];
@@ -150,7 +158,8 @@ export const askUserCompactSummary: CompactSummaryProvider<AskUserRequest> = ({
   result,
   context,
 }) => {
-  if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
+  if (phase !== "settled")
+    return context.isError ? undefined : liveSummary(args, questionsShown(result?.details));
   const decoded = decodeOutcome(result?.details);
   if (decoded?.outcome === "cancelled") return settledSummary(args, decoded);
   if (context.isError) return { ...identity(args), outcome: "error" };
@@ -160,22 +169,35 @@ export const askUserCompactSummary: CompactSummaryProvider<AskUserRequest> = ({
 const QUEUED_ORDER = "Queued questionnaires open automatically in order.";
 const DELIVERY_RETAINED = "The saved result stays available to the agent.";
 
+/** `2 questionnaires need your input; 1 is queued`, naming only the states present. */
+function pendingCounts(waiting: number, queued: number): string {
+  const parts = [
+    ...(waiting > 0
+      ? [`${countLabel(waiting, "questionnaire")} ${waiting === 1 ? "needs" : "need"} your input`]
+      : []),
+    ...(queued > 0
+      ? [
+          `${waiting > 0 ? queued : countLabel(queued, "questionnaire")} ${queued === 1 ? "is" : "are"} queued`,
+        ]
+      : []),
+  ];
+  return Arr.join(parts, "; ");
+}
+
 function answersPending(
   states: readonly QuestionnaireState[],
   list: boolean,
 ): CompactIssue | undefined {
   const queued = Arr.filter(states, (state) => state === "queued").length;
-  const pending = queued + Arr.filter(states, (state) => state === "waiting").length;
+  const waiting = Arr.filter(states, (state) => state === "waiting").length;
+  const pending = queued + waiting;
   if (pending === 0) return undefined;
-  const one = pending === 1;
+  // A lone open questionnaire's heading already says it needs the user's input.
+  if (pending === 1 && !list && !queued) return undefined;
   const message =
-    one && !list
-      ? queued
-        ? "Queued until earlier questionnaires close"
-        : "Waiting for your answers"
-      : queued === pending
-        ? `${countLabel(pending, "questionnaire")} ${one ? "is" : "are"} queued`
-        : `${countLabel(pending, "questionnaire")} still ${one ? "needs" : "need"} your answers`;
+    pending === 1 && !list
+      ? "Queued until earlier questionnaires close"
+      : pendingCounts(waiting, queued);
   return {
     severity: "info",
     code: queued === pending ? "questionnaire-queued" : "answers-pending",
@@ -236,13 +258,16 @@ function rowsSummary(args: QuestionnaireArgs, rows: readonly ClassifiedRow[]): C
     ],
     Predicate.isNotUndefined,
   );
+  // An open questionnaire needs the user now; a queued one only waits its turn, as Activity marks it.
   const outcome: CompactOutcome = states.includes("failed")
     ? "error"
     : states.length > 0 && Arr.every(states, (state) => state === "cancelled")
       ? "cancelled"
-      : Arr.some(states, isPendingState)
+      : states.includes("waiting")
         ? "attention"
-        : "success";
+        : states.includes("queued")
+          ? "queued"
+          : "success";
   const [only] = rows;
   const counters =
     list || !only
@@ -257,13 +282,18 @@ function rowsSummary(args: QuestionnaireArgs, rows: readonly ClassifiedRow[]): C
     outcome,
     ...(counters.length > 0 && { counters }),
     ...(issues.length > 0 && { issues }),
+    // An empty list's heading already says everything expansion would.
+    ...(rows.length === 0 && { expandLabel: false as const }),
   };
 }
 
 export const asyncAskUserCompactSummary: CompactSummaryProvider<
   AskUserAsyncRequest | AskUserAsyncControl
 > = ({ phase, args, result, context }) => {
-  if (phase !== "settled") return context.isError ? undefined : liveSummary(args);
+  if (phase !== "settled")
+    return context.isError
+      ? undefined
+      : liveSummary(args, phase === "running" && decodeAsyncControl(args)?.action === "await");
   const decoded = decodeCompactAsyncRows(result?.details);
   const rows =
     decoded &&

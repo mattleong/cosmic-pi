@@ -51,7 +51,12 @@ describe("registered extension command", () => {
       yield* h.run("");
       expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("usage"), "info");
       yield* h.run("nope");
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("usage"), "warning");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("nope"), "warning");
+      // The overview follows, so the user sees every command they could have meant.
+      expect(h.notify).toHaveBeenLastCalledWith(
+        expect.stringContaining("usage description"),
+        "warning",
+      );
     }),
   );
 

@@ -28,6 +28,8 @@ export interface CompactChild {
   action?: string;
   subject?: string;
   compactSubject?: string;
+  /** See `CompactSummary.pathSubject`. */
+  pathSubject?: true;
   counters?: readonly string[];
   metadata?: readonly string[];
   issues?: readonly CompactIssue[];
@@ -43,6 +45,12 @@ export interface CompactChild {
 export interface CompactSummary {
   subject: string;
   compactSubject?: string;
+  /**
+   * The subject is a file path, or ends in one, such as `src/app.ts` or `TODO in src`: when it
+   * doesn't fit, it loses its middle so the file name stays visible. Every other subject is prose,
+   * cut at the end on a word boundary.
+   */
+  pathSubject?: true;
   action?: string;
   counters?: readonly string[];
   metadata?: readonly string[];
@@ -50,12 +58,24 @@ export interface CompactSummary {
   showShortTiming?: true;
   outcome?: CompactOutcome;
   /**
+   * The call is open but waiting on a person's or agent's reply, such as an open question: while
+   * pending or running, its status glyph is the attention `?` instead of the spinner. Elapsed time
+   * and the rest of the row are unchanged; settled rows ignore it.
+   */
+  waiting?: true;
+  /**
    * A delivered message someone wrote: a successful or neutral heading shows which way it went
    * instead of its check or dot. Problems and attention keep their own icons.
    */
   messageIcon?: "sent" | "received";
   /** Words someone wrote, such as a sent message: a collapsed compact row shows them beneath it. */
   quote?: string;
+  /**
+   * What expansion reveals, named by the collapsed compact row's `▸ label · C-o Expand`. Without it
+   * the row says `output` when the result has content and `details` otherwise; `false` omits the
+   * affordance because expansion only repeats what the collapsed row shows.
+   */
+  expandLabel?: string | false;
   issues?: readonly CompactIssue[];
   children?: { entries: readonly CompactChild[]; total: number };
 }
@@ -139,6 +159,6 @@ export function compactSettledStatus(summary: CompactSummary): CompactOutcome {
   if (outcome === "cancelled" || outcome === "error") return outcome;
   if (severity === "error") return "error";
   if (outcome === "uncertain" || outcome === "warning") return outcome;
-  // Attention never outranks a warning, and outranks only routine outcomes.
+  // Attention never outranks a warning, and outranks only routine outcomes, queued included.
   return severity ?? outcome;
 }

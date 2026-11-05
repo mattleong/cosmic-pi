@@ -355,6 +355,11 @@ const dialogScenarios: ReadonlyArray<DialogScenario> = [
     keys: ["n", "Prefer the canary first"],
   },
   {
+    title: "several questions · a saved note",
+    request: { questions: [environment, checks, library, summary] },
+    keys: ["n", "Prefer the canary first, then widen the rollout after an hour", ENTER],
+  },
+  {
     title: "several questions · review with one unanswered",
     request: { questions: [environment, checks, library] },
     keys: ["1", "1", RIGHT, RIGHT],
@@ -395,9 +400,15 @@ describe.skipIf(!directory)("presentation gallery", () => {
   it.effect("renders questionnaire states in both collapsed styles", () =>
     Effect.gen(function* () {
       const scenarios = yield* Effect.all([
-        live("ask_user", "waiting for answers", {
+        live("ask_user", "opening the questionnaire", {
           questions: [environment, checks, library, summary],
         }),
+        live(
+          "ask_user",
+          "questions shown, needs your input",
+          { questions: [environment, checks, library, summary] },
+          { content: [], details: { questionnaire: "open" } },
+        ),
         asked("one choice selected", { questions: [environment] }, oneChoice),
         asked("several choices selected", { questions: [checks] }, severalChoices),
         asked("custom answer with a note", { questions: [library] }, customWithNote),
@@ -454,7 +465,11 @@ describe.skipIf(!directory)("presentation gallery", () => {
         controlled("questionnaire failed", { action: "await", requestId: "ask-3" }, [
           snapshot("ask-3", { ...settled, status: "failed", delivery: "waiter" }),
         ]),
-        controlled("questionnaires waiting for answers", { action: "status" }, [open, queued]),
+        controlled("one questionnaire open and one queued", { action: "status" }, [open, queued]),
+        controlled("only queued questionnaires", { action: "status" }, [
+          queued,
+          { ...queued, requestId: "ask-4", deliveryId: "ask-4-answer" },
+        ]),
         controlled("finished and waiting questionnaires", { action: "status" }, [
           snapshot("ask-1", { ...settled, status: "submitted", delivery: "sent" }),
           snapshot("ask-2", { ...settled, status: "cancelled", delivery: "sent" }),
@@ -463,7 +478,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         controlled("answers saved but not delivered", { action: "status", requestId: "ask-1" }, [
           answered("failed"),
         ]),
-        controlled("no questionnaires retained", { action: "status" }, []),
+        controlled("no questionnaires", { action: "status" }, []),
         failed(
           "ask_user_async_control",
           "request no longer retained",

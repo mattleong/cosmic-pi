@@ -6,12 +6,12 @@ import { DirectoryModelStore } from "./config/store.ts";
 import {
   DirectoryModelPreferenceService,
   type DirectoryModelSessionInput,
-  type DirectoryModelWarn,
+  type DirectoryModelNotify,
 } from "./preference/service.ts";
 
 export const directoryModelsLayer = (
   input: DirectoryModelSessionInput,
-  warn: DirectoryModelWarn,
+  notify: DirectoryModelNotify,
 ) => {
   const platform = Layer.merge(nodeFilePlatformLayer, AgentDirectory.layerFromHost(getAgentDir));
   const store = Layer.effect(DirectoryModelStore, DirectoryModelStore.make).pipe(
@@ -19,6 +19,6 @@ export const directoryModelsLayer = (
   );
   return Layer.effect(
     DirectoryModelPreferenceService,
-    DirectoryModelPreferenceService.make(input, warn),
+    DirectoryModelPreferenceService.make(input, notify),
   ).pipe(Layer.provide(store));
 };
