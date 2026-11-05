@@ -257,6 +257,82 @@ const scopedSettingsFrames = (): string[] => {
   return lines;
 };
 
+/**
+ * Scoped rows stay live: Global's save lands while Project's group and its choice list are open,
+ * and an optimistic save that fails puts Project's inherited value back.
+ */
+const liveScopedSettingsFrames = (): string[] => {
+  const own = new Map<string, string | undefined>();
+  const inherited = (scope: string) =>
+    `inherit (${scope === "project" ? (own.get("global") ?? "8") : "8"})`;
+  const row = (scope: string): SettingsSurfaceItem => ({
+    id: `${scope}:maxRunning`,
+    label: "Running at once",
+    description: "How many tasks may run at once.",
+    currentValue: own.get(scope) ?? inherited(scope),
+    values: [inherited(scope), "4", "8", "16", "32"],
+  });
+  const effective = (scope: string) =>
+    own.get(scope) ?? (scope === "project" ? (own.get("global") ?? "8") : "8");
+  const group = (scope: string, label: string): SettingsSurfaceItem => ({
+    kind: "group",
+    id: `group:${scope}`,
+    label,
+    description: `Background tasks settings for ${scope === "global" ? "every" : "this trusted"} project. Changes apply after /reload.`,
+    currentValue: `on · ${effective(scope)} running`,
+    children: () => [row(scope)],
+    summary: () => `on · ${effective(scope)} running`,
+  });
+  let land: (() => void) | undefined;
+  let optimistic = false;
+  const surface = settingsSurface(
+    withSettingsGroupChildren(
+      [group("global", "Global"), group("project", "Project")],
+      listTheme,
+      (id, value, show) => {
+        const [scope] = Str.split(id, ":");
+        const chosen = Str.startsWith("inherit")(value) ? undefined : value;
+        const replaced = own.get(scope);
+        if (optimistic) own.set(scope, chosen);
+        land = () => {
+          own.set(scope, optimistic ? replaced : chosen);
+          show(own.get(scope) ?? inherited(scope));
+        };
+      },
+    ),
+    "Background tasks settings",
+  );
+  const render = (width: number) => surface.render(width);
+  const input = (...keys: ReadonlyArray<string>) => {
+    for (const key of keys) surface.handleInput?.(key);
+  };
+  // Global's running limit to 16; the write is still in flight when Project's list opens.
+  input("\r", "\r", DOWN, DOWN, DOWN, "\r", ESC, DOWN, "\r", "\r");
+  const lines = [
+    ...frame("Settings · Project's choices while Global's save is in flight", render, 57),
+  ];
+  land?.();
+  lines.push(
+    ...frame("Settings · Global's save lands while Project's choices are open", render, 57),
+  );
+  lines.push(
+    ...frame("Settings · Global's save lands while Project's choices are open", render, 100),
+  );
+  input(ESC);
+  lines.push(...frame("Settings · Project's row after Global's save landed", render, 57));
+  lines.push(...frame("Settings · Project's row after Global's save landed", render, 100));
+  // Global back to inherit, optimistically, and the write then fails while Project is open.
+  optimistic = true;
+  input(ESC, UP, "\r", "\r", UP, UP, UP, "\r", ESC, DOWN, "\r");
+  lines.push(
+    ...frame("Settings · Project's row while Global's optimistic save is pending", render, 57),
+  );
+  land?.();
+  lines.push(...frame("Settings · Project's row after Global's save rolled back", render, 57));
+  lines.push(...frame("Settings · Project's row after Global's save rolled back", render, 100));
+  return lines;
+};
+
 /** A value listing facts clips at a fact boundary, never after a dangling separator. */
 const factSummarySettingsFrames = (): string[] => {
   const surface = settingsSurface(
@@ -426,6 +502,7 @@ const groupedSettingsFrames = (): string[] => {
   surface.handleInput?.(DOWN);
   surface.handleInput?.("?");
   lines.push(...frame("Settings · inside a group, expanded help", render, 100));
+  lines.push(...frame("Settings · inside a group, expanded help", render, 57));
   surface.handleInput?.("?");
   surface.handleInput?.(UP);
   surface.handleInput?.(ESC);
@@ -624,6 +701,7 @@ export const sharedSurfaceGalleryLines = (): string[] => {
     ...cosmicUiSettingsFrames(),
     ...groupedSettingsFrames(),
     ...scopedSettingsFrames(),
+    ...liveScopedSettingsFrames(),
     ...factSummarySettingsFrames(),
     ...panelFrames(),
     ...tableFrames(),

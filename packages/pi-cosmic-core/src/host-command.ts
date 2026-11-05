@@ -24,6 +24,8 @@ export interface ExtensionSubcommand {
 interface ExtensionCommandBare {
   readonly handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
   readonly text?: boolean | undefined;
+  /** What bare `/<name>` does, listed first in the overview, such as "Open background tasks". */
+  readonly description?: string | undefined;
 }
 
 interface ExtensionCommandOptions {
@@ -41,7 +43,7 @@ export interface ExtensionCommand {
 
 export const completeExtensionCommand = (
   prefix: string,
-  subcommands: ReadonlyArray<ExtensionSubcommand>,
+  subcommands: ReadonlyArray<Pick<ExtensionSubcommand, "name" | "description" | "complete">>,
 ): CommandCompletion[] | null => {
   const normalized = Str.trimStart(prefix);
   const split = /^(\S+)\s([\s\S]*)$/u.exec(normalized);
@@ -87,8 +89,8 @@ const wrapWords = (text: string, first: string, rest: string): string[] =>
   });
 
 /**
- * The shared overview a bare `/<name>` shows: a title, then one line per subcommand with its
- * description in a padded column. When any line wouldn't fit a phone, every description moves
+ * The shared overview `/<name> help` shows: a title, then one line per subcommand with its
+ * description in a padded column; an entry with an empty name stands for bare `/<name>`. When any line wouldn't fit a phone, every description moves
  * to its own indented line beneath its command instead. `notes` follow as written.
  */
 export const extensionCommandOverview = (
@@ -97,9 +99,11 @@ export const extensionCommandOverview = (
   subcommands: ReadonlyArray<ExtensionSubcommandHelp>,
   notes: ReadonlyArray<string> = [],
 ): string => {
-  const usages = Arr.map(
-    subcommands,
-    (entry) => `/${name} ${entry.name}${entry.arguments ? ` ${entry.arguments}` : ""}`,
+  const usages = Arr.map(subcommands, (entry) =>
+    Arr.join(
+      Arr.filter([`/${name}`, entry.name, entry.arguments ?? ""], (part) => part !== ""),
+      " ",
+    ),
   );
   const column = Math.max(0, ...Arr.map(usages, (usage) => usage.length));
   const aligned = Arr.map(
@@ -139,6 +143,9 @@ const settle = (run: () => Promise<void> | void): Promise<void> => {
   }
 };
 
+/** The subcommand every registered command has unless it declares its own `help`. */
+const HELP_SUBCOMMAND = { name: "help", description: "Show this help" } as const;
+
 export function registerExtensionCommand(
   pi: Pick<ExtensionAPI, "registerCommand">,
   options: ExtensionCommandOptions,
@@ -147,32 +154,34 @@ export function registerExtensionCommand(
   for (const subcommand of options.subcommands ?? []) subcommands.set(subcommand.name, subcommand);
   const list = () => [...subcommands.values()];
   const { name, description, bare, overviewNotes } = options;
+  const withHelp = () => [
+    ...list(),
+    ...(subcommands.has(HELP_SUBCOMMAND.name) ? [] : [HELP_SUBCOMMAND]),
+  ];
+  const overview = () =>
+    extensionCommandOverview(
+      name,
+      description,
+      [...(bare?.description ? [{ name: "", description: bare.description }] : []), ...withHelp()],
+      overviewNotes,
+    );
   pi.registerCommand(name, {
     description,
-    getArgumentCompletions: (prefix) => completeExtensionCommand(prefix, list()),
+    getArgumentCompletions: (prefix) => completeExtensionCommand(prefix, withHelp()),
     handler: (args, ctx) => {
       const notify = (message: string, level: "info" | "warning") => {
         notifyAtHostBoundary(ctx, message, level);
         return Promise.resolve();
       };
       const trimmed = Str.trim(args);
-      if (!trimmed)
-        return bare
-          ? settle(() => bare.handler("", ctx))
-          : notify(extensionCommandOverview(name, description, list(), overviewNotes), "info");
+      if (!trimmed) return bare ? settle(() => bare.handler("", ctx)) : notify(overview(), "info");
       const [head = "", rest = ""] = /^(\S+)\s*([\s\S]*)$/u.exec(trimmed)?.slice(1) ?? [];
       const subcommand = subcommands.get(head);
       if (subcommand) return settle(() => subcommand.handler(rest, ctx));
+      if (head === HELP_SUBCOMMAND.name) return notify(overview(), "info");
       return bare?.text
         ? settle(() => bare.handler(trimmed, ctx))
-        : notify(
-            unknownSubcommandText(
-              name,
-              head,
-              extensionCommandOverview(name, description, list(), overviewNotes),
-            ),
-            "warning",
-          );
+        : notify(unknownSubcommandText(name, head, overview()), "warning");
     },
   });
   return { add: (subcommand) => void subcommands.set(subcommand.name, subcommand) };

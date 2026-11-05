@@ -21,10 +21,11 @@ export const settingDisplayValue = (
   value: BackgroundTaskConfig[BackgroundTaskSettingId],
 ) => formatSettingValue(setting.kind, value);
 
+/** The value this session started with; an empty shell reads `default`, Pi's own shell. */
 export const sessionValue = (
   config: BackgroundTaskConfig,
   setting: Pick<BackgroundTaskSetting, "id" | "kind">,
-) => settingDisplayValue(setting, config[setting.id]);
+) => settingDisplayValue(setting, config[setting.id]) || "default";
 
 /** `inherit (on)` and other inherited labels mean `inherit` when chosen. */
 export const inheritChoice = (value: string): string =>
@@ -47,8 +48,8 @@ export const TASK_SETTINGS_COMMAND = {
       prefix,
       TASK_SETTING_DESCRIPTORS,
       [
-        { value: "status", label: "status", description: "Show effective values" },
-        { value: "help", label: "help", description: "Show setting ids and usage" },
+        { value: "status", label: "status", description: "Show current values" },
+        { value: "help", label: "help", description: "Show setting ids" },
       ],
       Arr.map(SCOPES, (scope) => ({
         value: scope.name,

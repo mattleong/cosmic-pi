@@ -39,10 +39,14 @@ const plainParts = (text: string): string[] =>
     "\n",
   );
 
+// A wrapped Details line hangs two columns past a nested fact, so it never reads as one.
+const NESTED_INDENT = 2;
+const DETAILS_HANGING = pad(NESTED_INDENT * 2);
+
 /**
  * A plain line wrapped to `width` and drawn in its tone; long paths break after a separator. A
- * line of facts wraps between whole `·` facts with continuation rows hanging two columns, so no
- * row ends with `·` or `→`.
+ * line of facts wraps between whole `·` facts with continuation rows hanging by `hanging` (two
+ * columns unless given), so no row ends with `·` or `→`.
  */
 const wrappedLine = (
   theme: BodyTheme,
@@ -50,12 +54,15 @@ const wrappedLine = (
   tone: ExpandedTone,
   width: number,
   facts = false,
+  hanging?: string,
 ): string[] => {
   const text = Predicate.isString(line) ? line : line.text;
   const color = Predicate.isString(line) ? tone : line.tone;
   return Arr.flatMap(plainParts(text), (part) =>
     Arr.map(
-      facts ? wrapFacts(part, Math.max(1, width)) : wrapPlainText(part, Math.max(1, width)),
+      facts
+        ? wrapFacts(part, Math.max(1, width), hanging)
+        : wrapPlainText(part, Math.max(1, width)),
       (row) => (row === "" ? "" : theme.fg(color, row)),
     ),
   );
@@ -148,8 +155,9 @@ export function expandedAuthoredText(
 
 /**
  * The expanded-only `Details` section: technical facts such as IDs, routes, paths, and usage, one
- * dim line each. Leading spaces nest a fact beneath the one before it; a wrapped line breaks between
- * whole `·` facts and hangs two columns beneath its first row.
+ * dim line each. Leading spaces nest a fact beneath the one before it, two columns per level; a
+ * wrapped line breaks between whole `·` facts and hangs four columns beneath its first row, two past
+ * a nested fact, so a continuation never sits in a nested fact's column.
  */
 export function expandedDetails(
   theme: BodyTheme,
@@ -161,7 +169,14 @@ export function expandedDetails(
   const rows = cachedComponent((width) =>
     Arr.flatMap(facts, (line) => {
       const nested = Math.min(line.length - Str.trimStart(line).length, Math.max(0, width - 2));
-      const wrapped = wrappedLine(theme, Str.trim(line), "dim", width - nested, true);
+      const wrapped = wrappedLine(
+        theme,
+        Str.trim(line),
+        "dim",
+        width - nested,
+        true,
+        DETAILS_HANGING,
+      );
       return Arr.map(wrapped, (row) => `${pad(nested)}${row}`);
     }),
   );

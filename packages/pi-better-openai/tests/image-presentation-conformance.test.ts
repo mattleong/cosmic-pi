@@ -66,6 +66,22 @@ describe("registered image presentation", () => {
     }
   });
 
+  it("shows a whole one-line prompt once and keeps a multi-line prompt's line breaks when expanded", () => {
+    const { tool } = register("compact");
+    const expanded = (prompt: string) => {
+      const harness = createToolPresentationHarness(tool, { theme, width: 180 });
+      const shown = Arr.findFirst(
+        harness.cycle({ prompt }, { details: { ...details, prompt }, content: [image] }),
+        (state) => state.expanded,
+      );
+      return Option.getOrThrow(shown).text;
+    };
+    const once = expanded("A short otter prompt");
+    expect(Str.split(once, "A short otter prompt").length - 1).toBe(1);
+    const lines = Str.split(expanded("First line\nSecond line"), "\n");
+    expect(Arr.some(lines, (line) => Str.trim(line) === "Second line")).toBe(true);
+  });
+
   it("uses the registering owner's scheduler and releases it after settlement", () => {
     const scheduler = animationSchedulerProbe();
     const { tool } = register("compact", scheduler.schedule);

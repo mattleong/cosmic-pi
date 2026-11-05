@@ -9,7 +9,8 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
-import { clipText, countLabel } from "pi-cosmic-core/display";
+import { endElide } from "pi-code-previews";
+import { countLabel } from "pi-cosmic-core/display";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import {
   callTitles,
@@ -139,8 +140,9 @@ function writtenAnswer(text: string, maxWidth = MAX_WRITTEN_ANSWER_WIDTH): strin
     () => "",
   );
   const more = Str.trim(stripTerminalControls(text)) !== first;
-  // Plain clipping: the row escapes control text, so a styled ellipsis would show its codes.
-  const clipped = clipText(first, maxWidth);
+  // Plain text at a word boundary: the row escapes control text, so a styled ellipsis would show
+  // its codes.
+  const clipped = endElide(first, maxWidth);
   return `“${more && clipped === first ? `${first}…` : clipped}”`;
 }
 

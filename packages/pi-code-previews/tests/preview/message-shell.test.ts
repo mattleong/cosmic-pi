@@ -5,7 +5,11 @@ import * as Str from "effect/String";
 import { stripAnsi } from "pi-cosmic-core";
 import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect, it } from "vitest";
-import { withCodePreviewMessageShell, type CodePreviewMessagePresenter } from "../../index";
+import {
+  headingShowedSubject,
+  withCodePreviewMessageShell,
+  type CodePreviewMessagePresenter,
+} from "../../index";
 import { withPresentationSettings } from "../../testing";
 import { publishSharedPresentation } from "../../src/config/state";
 
@@ -47,6 +51,18 @@ const draw = (
       "\n",
     ),
   );
+
+// The body repeats the subject unless the heading reports it drew the subject whole.
+const subjectBody =
+  (subject: string): CodePreviewMessagePresenter =>
+  () => ({
+    name: "example",
+    summary: { subject, outcome: "success" },
+    expanded: (headingState) => ({
+      render: () => (headingShowedSubject(headingState) ? ["BODY"] : ["BODY", "SUBJECT AGAIN"]),
+      invalidate: () => undefined,
+    }),
+  });
 
 const STYLES = ["compact", "preview"] as const;
 const MODES = ["border", "on", "off"] as const;
@@ -116,6 +132,20 @@ describe("message shell", () => {
         expect(draw(render, true)).toContain(WORDS[29]);
       },
     ));
+
+  it("lets an expanded body leave out a subject only its compact heading showed whole", () => {
+    const long = Arr.join(Arr.replicate("word", 60), " ");
+    const repeats = (style: "compact" | "preview", subject: string) =>
+      Str.includes("SUBJECT AGAIN")(
+        withPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: "off" }, () =>
+          draw(withCodePreviewMessageShell(subjectBody(subject)), true, message, 57),
+        ),
+      );
+    expect(repeats("compact", "A short subject")).toBe(false);
+    // A subject too long for the heading's rows is shortened there, so the body keeps it.
+    expect(repeats("compact", long)).toBe(true);
+    expect(repeats("preview", "A short subject")).toBe(true);
+  });
 
   it("falls back to the message's text when a presenter or body throws", () => {
     const failing = withCodePreviewMessageShell(() => {

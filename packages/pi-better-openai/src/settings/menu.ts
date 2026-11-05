@@ -7,6 +7,7 @@ import * as Str from "effect/String";
 import { invokeBestEffort, invokeHostCallback } from "pi-cosmic-core/host-session";
 import { redactDiagnosticValue } from "pi-cosmic-core/security";
 import { formatDuration } from "pi-cosmic-core/display";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { type SettingsOptionDescriptor } from "pi-cosmic-core/settings-completion";
 import {
   openSettingsList,
@@ -30,6 +31,14 @@ import type { ResolvedConfig } from "../config/schema.ts";
 import { settingsSummary } from "../fast/controller.ts";
 import { OpenAIConfigService } from "../config/store.ts";
 import type { SettingsControllerOptions } from "./controller.ts";
+
+interface MenuGroup {
+  readonly id: string;
+  readonly label: string;
+  readonly description: string;
+  readonly items: () => SettingsSurfaceItem[];
+  readonly summary: () => string;
+}
 
 export function openOpenAISettingsMenu(
   ctx: ExtensionCommandContext,
@@ -105,9 +114,9 @@ export function openOpenAISettingsMenu(
                 textPanel(
                   "Config paths",
                   [
-                    `Selected: ${cfg.configPath}`,
-                    `Project:  ${cfg.projectConfigPath}`,
-                    `Global:   ${cfg.globalConfigPath}`,
+                    `Selected: ${formatDisplayPath(cfg.configPath, ctx.cwd)}`,
+                    `Project:  ${formatDisplayPath(cfg.projectConfigPath, ctx.cwd)}`,
+                    `Global:   ${formatDisplayPath(cfg.globalConfigPath, ctx.cwd)}`,
                   ],
                   complete,
                 ),
@@ -125,25 +134,18 @@ export function openOpenAISettingsMenu(
                 ),
             },
           ];
-          const groups = [
-            {
-              id: "section.fast",
-              label: "Fast mode",
-              description: "Request priority processing on OpenAI models, and remember the choice.",
-              items: () =>
-                settingsItemsFromDescriptors(
-                  [fastEnabledDescriptor, ...FAST_SETTING_DESCRIPTORS],
-                  cfg,
-                ),
-              summary: () => settingsSummary(ctx, MutableRef.get(fastProjection)),
-            },
-            {
-              id: "section.compaction",
-              label: "Compaction",
-              description: "Use OpenAI native compaction when Pi triggers compaction.",
-              items: () => settingsItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, cfg),
-              summary: () => (cfg.compaction.enabled ? "OpenAI native" : "Pi default"),
-            },
+          const fastGroup: MenuGroup = {
+            id: "section.fast",
+            label: "Fast mode",
+            description: "Request priority processing on OpenAI models, and remember the choice.",
+            items: () =>
+              settingsItemsFromDescriptors(
+                [fastEnabledDescriptor, ...FAST_SETTING_DESCRIPTORS],
+                cfg,
+              ),
+            summary: () => settingsSummary(ctx, MutableRef.get(fastProjection)),
+          };
+          const laterGroups: ReadonlyArray<MenuGroup> = [
             {
               id: "section.usage",
               label: "Usage",
@@ -170,27 +172,29 @@ export function openOpenAISettingsMenu(
               summary: () => "debug info · config",
             },
           ];
-          const sections = () =>
-            Arr.map(
-              groups,
-              (group): SettingsSurfaceItem => ({
-                kind: "group",
-                id: group.id,
-                label: group.label,
-                currentValue: group.summary(),
+          const groupItem = (group: MenuGroup): SettingsSurfaceItem => ({
+            kind: "group",
+            id: group.id,
+            label: group.label,
+            currentValue: group.summary(),
+            description: group.description,
+            submenu: (_value, complete) =>
+              createSettingsGroupSubmenu({
+                title: group.label,
                 description: group.description,
-                submenu: (_value, complete) =>
-                  createSettingsGroupSubmenu({
-                    title: group.label,
-                    description: group.description,
-                    items: group.items,
-                    onChange: writeSetting,
-                    done: complete,
-                    summary: group.summary,
-                    listTheme: managerSettingsTheme(theme),
-                  }),
+                items: group.items,
+                onChange: writeSetting,
+                done: complete,
+                summary: group.summary,
+                listTheme: managerSettingsTheme(theme),
               }),
-            );
+          });
+          // Compaction has one setting, so it is a row of its own rather than a group.
+          const sections = (): SettingsSurfaceItem[] => [
+            groupItem(fastGroup),
+            ...settingsItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, cfg),
+            ...Arr.map(laterGroups, groupItem),
+          ];
           const reconcilePicker = () =>
             invokeBestEffort(() => {
               if (!isCurrent()) return;
@@ -229,7 +233,9 @@ export function openOpenAISettingsMenu(
             header: "Better OpenAI settings",
             items: sections(),
             height: 8,
-            onChange: reconcilePicker,
+            // Group rows never reach here, so every change is a top-level setting row's.
+            onChange: (id: string, value: string) =>
+              void writeSetting(id, value).catch(() => reconcilePicker()),
             afterInput: () => invokeBestEffort(() => tui.requestRender()),
             onList: (list) => {
               outerList = list;

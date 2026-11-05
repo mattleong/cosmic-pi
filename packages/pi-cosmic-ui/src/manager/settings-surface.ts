@@ -27,6 +27,7 @@ import {
   moveSettingsList,
   settingRowAffordance,
   settingsListHint,
+  settingsListFocus,
   settingsListMotion,
   settingsSurfaceBridge,
   VimSettingsAdapter,
@@ -150,8 +151,10 @@ const withClippedValueMarker = (
  *
  * In a `SettingsSession.picker`, a group row may list its rows as `children` instead of building a
  * submenu: the picker opens them as a nested list and saves them like top-level rows. Children
- * given as a function are derived again each time the group opens, so rows whose labels or choices
- * depend on another group's values, such as `inherit (16)`, show that group's latest save.
+ * given as a function are derived again when the group opens and, while it is open, whenever any
+ * save settles or rolls back, keeping the cursor on its row. Rows whose labels or choices depend
+ * on another group's values, such as `inherit (16)`, then show that group's latest outcome, so the
+ * function must read the owner's current state, including a value restored after a failed save.
  * `summary` supplies the group's value; the surface reads it again whenever it draws, so every
  * group row reflects a save made anywhere in the picker.
  */
@@ -185,8 +188,10 @@ const refreshGroupSummaries = (
 interface SettingsChoiceSubmenuOptions {
   readonly title: string;
   readonly description?: string | undefined;
-  readonly values: ReadonlyArray<string>;
-  readonly current: string;
+  /** The choices, or a function the list reads each time it draws so its choices stay live. */
+  readonly values: ReadonlyArray<string> | (() => ReadonlyArray<string>);
+  /** The marked value, or a function read each time the list draws. */
+  readonly current: string | (() => string);
   readonly theme: SettingsListTheme;
   /** Receives the chosen value, or undefined when cancelled or unchanged. */
   readonly done: (value?: string) => void;
@@ -203,18 +208,47 @@ class SettingsChoiceSubmenu implements Component {
   private readonly options: SettingsChoiceSubmenuOptions;
   private readonly keymap = new FullScreenKeymap();
   private index: number;
-
-  private readonly values: ReadonlyArray<string>;
+  private values: ReadonlyArray<string>;
 
   constructor(options: SettingsChoiceSubmenuOptions) {
     this.options = options;
-    this.values = inheritChoiceFirst(options.values);
+    this.values = this.readValues();
     this.index = Math.max(
       0,
       Option.getOrElse(
-        Arr.findFirstIndex(this.values, (value) => value === options.current),
+        Arr.findFirstIndex(this.values, (value) => value === this.current),
         () => 0,
       ),
+    );
+  }
+
+  private get current(): string {
+    const { current } = this.options;
+    return Predicate.isFunction(current) ? current() : current;
+  }
+
+  private readValues(): ReadonlyArray<string> {
+    const { values } = this.options;
+    return inheritChoiceFirst(Predicate.isFunction(values) ? values() : values);
+  }
+
+  /**
+   * Reads the choices again, keeping the cursor on the same choice: by value, or on the inherit
+   * choice when only the value it names changed, such as `inherit (8)` becoming `inherit (16)`.
+   */
+  private sync(): void {
+    const previous = this.values[this.index];
+    const values = this.readValues();
+    this.values = values;
+    const found = Option.orElse(
+      Arr.findFirstIndex(values, (value) => value === previous),
+      () =>
+        previous !== undefined && isInheritedSettingValue(previous)
+          ? Arr.findFirstIndex(values, isInheritedSettingValue)
+          : Option.none(),
+    );
+    this.index = Option.getOrElse(found, () =>
+      Math.max(0, Math.min(this.index, values.length - 1)),
     );
   }
 
@@ -244,8 +278,9 @@ class SettingsChoiceSubmenu implements Component {
   render(width: number): string[] {
     const safeWidth = Math.max(0, Math.floor(width));
     if (safeWidth === 0) return [];
-    const { theme, current, title, description } = this.options;
-    const { values } = this;
+    this.sync();
+    const { theme, title, description } = this.options;
+    const { values, current } = this;
     const visible = this.visible;
     const start = Math.max(
       0,
@@ -263,6 +298,7 @@ class SettingsChoiceSubmenu implements Component {
   }
 
   handleInput(data: string): void {
+    this.sync();
     const resolution = this.keymap.resolve(data, { mode: "navigation" });
     const action = Predicate.isTagged(resolution, "Action") ? resolution.action : undefined;
     const kb = getKeybindings();
@@ -280,7 +316,7 @@ class SettingsChoiceSubmenu implements Component {
     else if (matchesKey(data, Key.end) || action === "last") this.index = last;
     else if (kb.matches(data, "tui.select.confirm") || data === " " || action === "forward") {
       const value = this.values[this.index];
-      this.options.done(value === this.options.current ? undefined : value);
+      this.options.done(value === this.current ? undefined : value);
     } else if (kb.matches(data, "tui.select.cancel") || action === "cancel" || action === "back")
       this.options.done(undefined);
   }
@@ -292,6 +328,29 @@ class SettingsChoiceSubmenu implements Component {
 export const createSettingsChoiceSubmenu = (options: SettingsChoiceSubmenuOptions): Component =>
   new SettingsChoiceSubmenu(options);
 
+// Choice lists this surface gave a row, so a refresh can tell them from an owner's own submenu.
+const choiceListSubmenus = new WeakSet<NonNullable<SettingItem["submenu"]>>();
+
+/**
+ * A row's choice list reads the row each time it draws, so a refresh that changes the row's values
+ * or value shows in a list that is already open.
+ */
+const withChoiceList = <Item extends SettingItem>(item: Item, theme: SettingsListTheme): Item => {
+  if (item.submenu || settingRowAffordance(item) !== "change" || !item.values) return item;
+  const submenu: NonNullable<SettingItem["submenu"]> = (_current, done) =>
+    createSettingsChoiceSubmenu({
+      title: item.label,
+      description: item.description,
+      values: () => item.values ?? [],
+      current: () => item.currentValue,
+      theme,
+      done,
+    });
+  choiceListSubmenus.add(submenu);
+  item.submenu = submenu;
+  return item;
+};
+
 /**
  * Gives every multi-valued, non-boolean row a choice list so Enter opens alternatives instead of
  * cycling and saving each one. Booleans keep toggling in place.
@@ -300,20 +359,52 @@ export const withSettingChoiceLists = <Item extends SettingItem>(
   items: Item[],
   theme: SettingsListTheme,
 ): Item[] => {
-  for (const item of items) {
-    if (item.submenu || settingRowAffordance(item) !== "change" || !item.values) continue;
-    const values = [...item.values];
-    item.submenu = (current, done) =>
-      createSettingsChoiceSubmenu({
-        title: item.label,
-        description: item.description,
-        values,
-        current,
-        theme,
-        done,
-      });
-  }
+  for (const item of items) withChoiceList(item, theme);
   return items;
+};
+
+/**
+ * Updates a shown row from its derived form in place, so an open choice list reading the row stays
+ * live. A row with a save still pending keeps the value it shows.
+ */
+const refreshRow = (
+  row: SettingsSurfaceItem,
+  fresh: SettingsSurfaceItem,
+  keepValue: boolean,
+  theme: SettingsListTheme,
+): SettingsSurfaceItem => {
+  if (row === fresh) return row;
+  row.label = fresh.label;
+  if (fresh.description === undefined) delete row.description;
+  else row.description = fresh.description;
+  if (fresh.values === undefined) delete row.values;
+  else row.values = [...fresh.values];
+  if (!keepValue) row.currentValue = fresh.currentValue;
+  if (fresh.submenu) row.submenu = fresh.submenu;
+  else if (row.submenu && choiceListSubmenus.has(row.submenu)) delete row.submenu;
+  return withChoiceList(row, theme);
+};
+
+/** Shown to every open group so it derives its rows again once a save settles anywhere. */
+export interface SettingsSaveEvents {
+  /** A save settled, showed the value that persisted, or rolled back. */
+  readonly settled: () => void;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
+export const settingsSaveEvents = (): SettingsSaveEvents => {
+  const listeners = new Set<() => void>();
+  return {
+    settled: () => {
+      for (const listener of Array.from(listeners)) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
 };
 
 export const withoutGroupRowChanges = (
@@ -350,11 +441,19 @@ export const settingsItemsFromDescriptors = <Config>(
 interface SettingsGroupSubmenuOptions {
   readonly title: string;
   readonly description?: string | undefined;
+  /** The group's rows as they are now; read again whenever a save settles. */
   readonly items: () => SettingsSurfaceItem[];
-  readonly onChange: (id: string, value: string) => void | Promise<void>;
+  /** Saves a row; `show` puts the value that persisted on the row, such as a restored one. */
+  readonly onChange: (
+    id: string,
+    value: string,
+    show: (shown: string) => void,
+  ) => void | Promise<void>;
   readonly done: (summary?: string) => void;
   readonly summary?: (() => string) | undefined;
   readonly listTheme: SettingsListTheme;
+  /** Saves elsewhere in the surface; the open group derives its rows again when one settles. */
+  readonly saves?: SettingsSaveEvents | undefined;
 }
 
 // The surface adapter replays ends and pages as these keys while a submenu is open.
@@ -369,18 +468,28 @@ const groupMotion = (data: string) => {
 class SettingsGroupSubmenu extends Container {
   private readonly options: SettingsGroupSubmenuOptions;
   private readonly list: SettingsList;
+  private readonly rows: SettingsSurfaceItem[];
+  private readonly saves: SettingsSaveEvents;
+  // Rows with a save still in flight keep the value they show until it settles.
+  private readonly pending = new Map<string, number>();
 
   constructor(options: SettingsGroupSubmenuOptions) {
     super();
     this.options = options;
-    const items = withSettingChoiceLists(options.items(), options.listTheme);
-    const notifyChange = withoutGroupRowChanges(items, (id, value) => this.change(id, value));
+    this.saves = options.saves ?? settingsSaveEvents();
+    const rows = withSettingChoiceLists(options.items(), options.listTheme);
+    this.rows = rows;
+    const notifyChange = withoutGroupRowChanges(rows, (id, value) => this.change(id, value));
+    const unsubscribe = this.saves.subscribe(() => this.refresh());
     this.list = new SettingsList(
-      items,
-      Math.min(items.length + 2, 12),
-      withClippedValueMarker(options.listTheme, items),
+      rows,
+      Math.min(rows.length + 2, 12),
+      withClippedValueMarker(options.listTheme, rows),
       notifyChange,
-      () => options.done(options.summary?.()),
+      () => {
+        unsubscribe();
+        options.done(options.summary?.());
+      },
       { enableSearch: false },
     );
     this.addChild({
@@ -397,7 +506,7 @@ class SettingsGroupSubmenu extends Container {
   }
 
   override render(width: number): string[] {
-    refreshGroupSummaries(this.options.items(), (id, value) => this.list.updateValue(id, value));
+    refreshGroupSummaries(this.rows, (id, value) => this.list.updateValue(id, value));
     return super.render(width);
   }
 
@@ -408,18 +517,52 @@ class SettingsGroupSubmenu extends Container {
   }
 
   private change(id: string, value: string): void {
-    const reconcile = (): void => this.reconcile();
+    this.pending.set(id, (this.pending.get(id) ?? 0) + 1);
+    const settle = (): void => {
+      const left = (this.pending.get(id) ?? 1) - 1;
+      if (left > 0) this.pending.set(id, left);
+      else this.pending.delete(id);
+      this.saves.settled();
+    };
+    const show = (shown: string): void => {
+      this.list.updateValue(id, shown);
+      this.saves.settled();
+    };
     try {
-      Promise.resolve(this.options.onChange(id, value))
-        .then(reconcile, reconcile)
+      Promise.resolve(this.options.onChange(id, value, show))
+        .then(settle, settle)
         .catch(() => undefined);
     } catch {
-      reconcile();
+      settle();
     }
   }
 
-  private reconcile(): void {
-    for (const item of this.options.items()) this.list.updateValue(item.id, item.currentValue);
+  /**
+   * Derives the rows again, values and choices alike, keeping the cursor on the same row. Rows
+   * that can't be derived keep the ones shown.
+   */
+  private refresh(): void {
+    let fresh: ReadonlyArray<SettingsSurfaceItem>;
+    try {
+      fresh = this.options.items();
+    } catch {
+      return;
+    }
+    const focus = settingsListFocus(this.list);
+    const { listTheme } = this.options;
+    const next = Arr.map(fresh, (row) =>
+      Option.match(
+        Arr.findFirst(this.rows, (shown) => shown.id === row.id),
+        {
+          onNone: () => withChoiceList({ ...row }, listTheme),
+          onSome: (shown) => refreshRow(shown, row, this.pending.has(row.id), listTheme),
+        },
+      ),
+    );
+    this.rows.splice(0, this.rows.length, ...next);
+    const kept = focus?.id !== undefined && Arr.some(next, (row) => row.id === focus.id);
+    const target = kept ? focus?.id : next[Math.min(focus?.index ?? 0, next.length - 1)]?.id;
+    if (target !== undefined) this.list.selectItem(target);
   }
 }
 
@@ -428,7 +571,7 @@ export const createSettingsGroupSubmenu = (options: SettingsGroupSubmenuOptions)
 
 /**
  * Saves one row and calls `show` with the value that persisted, so a failed save restores it.
- * A returned Promise lets the nested list reconcile its rows once the save settles.
+ * A returned Promise lets open groups derive their rows again once the save settles.
  */
 export type SettingsRowChange = (
   id: string,
@@ -438,24 +581,24 @@ export type SettingsRowChange = (
 
 /**
  * Turns rows that list `children` into group rows (`Enter Open`) whose nested list saves each
- * child through `change`, exactly like a top-level row.
+ * child through `change`, exactly like a top-level row. Children given as a function are derived
+ * again when the group opens and whenever a save made anywhere in the surface settles, shows its
+ * value, or rolls back, so pass `saves` shared with the surface's top-level changes.
  */
 export const withSettingsGroupChildren = (
   items: ReadonlyArray<SettingsSurfaceItem>,
   listTheme: SettingsListTheme,
   change: SettingsRowChange,
+  saves: SettingsSaveEvents = settingsSaveEvents(),
 ): SettingsSurfaceItem[] =>
   Arr.map(items, (item): SettingsSurfaceItem => {
     const { children } = item;
     if (!children) return item;
     const copy = (source: ReadonlyArray<SettingsSurfaceItem>) =>
       Arr.map(source, (child): SettingsSurfaceItem => ({ ...child }));
+    // Fixed rows persist what each save showed; derived rows come from the owner's current state.
     let rows = Predicate.isFunction(children) ? [] : copy(children);
-    // A save shows in the rows of the group that is open when it settles.
-    const show = (id: string) => (shown: string) => {
-      for (const row of rows) if (row.id === id) row.currentValue = shown;
-    };
-    const open = (): SettingsSurfaceItem[] => {
+    const derive = (): SettingsSurfaceItem[] => {
       if (!Predicate.isFunction(children)) return rows;
       try {
         rows = copy(children());
@@ -467,18 +610,17 @@ export const withSettingsGroupChildren = (
     return {
       ...item,
       kind: "group",
-      submenu: (_value, done) => {
-        const opened = open();
-        return createSettingsGroupSubmenu({
+      submenu: (_value, done) =>
+        createSettingsGroupSubmenu({
           title: item.label,
           description: item.description,
-          items: () => opened,
-          onChange: (id, value) => change(id, value, show(id)),
+          items: derive,
+          onChange: change,
           done,
           summary: item.summary,
           listTheme,
-        });
-      },
+          saves,
+        }),
     };
   });
 

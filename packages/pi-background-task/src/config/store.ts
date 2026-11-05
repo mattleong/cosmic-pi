@@ -34,7 +34,7 @@ const decodeConfigFields = decodeTolerantFields(BackgroundTaskConfigSchema.field
 
 const store = makeScopedConfigStore({
   error: BackgroundTaskConfigError,
-  label: "Background Tasks",
+  label: "background tasks",
   spanPrefix: "BackgroundTaskConfig",
   projectConfigDirectory: CONFIG_DIR_NAME,
   basename: "pi-background-task.json",

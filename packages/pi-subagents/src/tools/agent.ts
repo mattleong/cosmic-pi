@@ -322,7 +322,7 @@ export function registerAgentTools(
             : textResultBody(
                 theme,
                 stripTerminalControls(rejectedFailureText(result)),
-                { expanded: options.expanded, isError: true },
+                { expanded: options.expanded, isError: true, args: context.args },
                 COLLAPSED_RESULT_LINES,
               );
         return (
@@ -373,7 +373,7 @@ export function registerAgentTools(
           if (context.isError) {
             const failure = escapeControlChars(rejectedFailureText(result));
             return failure && !issueCarriesFailure(result, context)
-              ? errorSection(theme, failure)
+              ? errorSection(theme, failure, context.args)
               : new Container();
           }
           const text = escapeControlChars(getTextContent(result.content));

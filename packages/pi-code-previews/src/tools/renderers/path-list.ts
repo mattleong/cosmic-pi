@@ -2,15 +2,15 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../../paths/display";
-import { trimSingleTrailingNewline } from "../../preview/format";
+import { metadata, trimSingleTrailingNewline } from "../../preview/format";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
 import { escapeControlChars } from "../../shared/terminal-text";
-import { stringArg } from "../data/args";
+import { numericArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { createPathListRenderer } from "../path-list-render";
 import { renderCodePreviewToolTitle } from "../presentation";
-import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
+import { splitListingNotice, withAgentNotes, withCollapsedLimit } from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
@@ -48,7 +48,8 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
         tool === "find"
           ? `${theme.fg("accent", escapeControlChars(pattern || "*"))} ${theme.fg("muted", "in")} `
           : "";
-      const text = `${renderCodePreviewToolTitle(tool, theme)} ${search}${renderDisplayPath(path, cwd, theme)}`;
+      const limit = numericArg(input, "limit");
+      const text = `${renderCodePreviewToolTitle(tool, theme)} ${search}${renderDisplayPath(path, cwd, theme)}${metadata(theme, [limit ? `limit ${limit}` : undefined])}`;
       return previewHeadingText(() => text);
     },
 
@@ -93,7 +94,10 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
         config.footerItem,
         pathList.renderChunk,
       );
-      return withAgentNotes(new Text(text, 0, 0), theme, notes);
+      const shown = expanded
+        ? text
+        : withCollapsedLimit(text, theme, tool, hostObject(result.details), notice);
+      return withAgentNotes(new Text(shown, 0, 0), theme, notes);
     },
   };
 }

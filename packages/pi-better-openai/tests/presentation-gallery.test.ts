@@ -16,20 +16,31 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { stripTerminalControls } from "pi-cosmic-core";
+import { nodeFilePlatformLayer, stripTerminalControls } from "pi-cosmic-core";
+import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { fastStateText, inactiveForModelMessage } from "../src/fast/controller.ts";
 import { imageResultText } from "../src/image/result-text.ts";
 import { diagnosticLines } from "../src/settings/diagnostics.ts";
 import { HIDDEN_USAGE_STATUS_TEXT, initialProjection } from "../src/usage/projection.ts";
+import { extensionHarness } from "./extension-harness.ts";
 import { makeResolvedConfig, testModel } from "./helpers.ts";
 import { input, settingsHarnessWith, type SettingsHarnessOptions } from "./settings-harness.ts";
 import { formatUsageDetails, formatUsageStatus, type UsageSnapshot } from "../src/usage/format.ts";
 import type { CodexImageDetails } from "../src/image/types.ts";
 import { registerImagePresentation, textPart } from "./image-fixtures.ts";
 
+// Under the real home directory, so the gallery shows paths as users see them: `~/…`.
+const agentPath = (file: string) => `${nodeDisplayHomeDirectory()}/.pi/agent/${file}`;
 const settingsHarness = (options?: SettingsHarnessOptions) =>
-  settingsHarnessWith(makeResolvedConfig({ configPath: "/tmp/openai-settings.json" }), options);
+  settingsHarnessWith(
+    makeResolvedConfig({
+      configPath: agentPath("extensions/pi-better-openai.json"),
+      globalConfigPath: agentPath("extensions/pi-better-openai.json"),
+      projectConfigPath: "/tmp/.pi/extensions/pi-better-openai.json",
+    }),
+    options,
+  );
 
 const text = (value: string) => [textPart(value)];
 const image = {
@@ -40,6 +51,9 @@ const image = {
 
 const prompt = "A watercolor otter reading a newspaper on a riverbank at dawn";
 const args = { prompt, action: "generate" };
+// The compact heading shows a prompt on one line, so its Prompt section keeps the line breaks.
+const TWO_LINE_PROMPT =
+  "A watercolor otter reading a newspaper.\nSoft morning light on the riverbank.";
 const details = (status: string, request = prompt): CodexImageDetails => ({
   id: "ig_0a1b2c3d",
   status,
@@ -86,6 +100,11 @@ const toolScenarios: ReadonlyArray<GalleryScenario> = [
     title: "completed with a short prompt",
     args: { prompt: "An otter", action: "generate" },
     result: imageResult("completed", "An otter"),
+  },
+  {
+    title: "completed with a prompt over two lines",
+    args: { prompt: TWO_LINE_PROMPT, action: "generate" },
+    result: imageResult("completed", TWO_LINE_PROMPT),
   },
   {
     title: "completed without an image",
@@ -195,7 +214,7 @@ const noticeLines = (): string[] => [
 const diagnosticsFor = (compactionUnavailable: string | undefined) => (ctx: ExtensionContext) =>
   diagnosticLines({
     ctx: { ...ctx, model: testModel("gpt-5.6-sol", "openai-codex") },
-    configPath: "/home/dev/.pi/agent/extensions/pi-better-openai.json",
+    configPath: agentPath("extensions/pi-better-openai.json"),
     fast: { desiredActive: false, active: false },
     usage: {
       ...initialProjection(),
@@ -204,7 +223,7 @@ const diagnosticsFor = (compactionUnavailable: string | undefined) => (ctx: Exte
       accountId: "acct_7f3c9a2e41b8",
       lastFetchAt: now,
       updatedAt: now,
-      authPath: "/home/dev/.pi/agent/auth.json",
+      authPath: agentPath("auth.json"),
     },
     footerUsageVisible: true,
     compactionUnavailable,
@@ -229,14 +248,25 @@ const settingsLines = Effect.gen(function* () {
     for (let step = 0; step < downs; step++) component.handleInput?.(input.up);
     return shown;
   };
-  // Diagnostics, the fifth group, opens Debug info from its first row.
-  const debugInfo = () => {
+  // Diagnostics, the fifth row, opens Debug info from its first row and Config paths from its
+  // second.
+  const diagnostic = (title: string, row: number) => {
     for (let step = 0; step < 4; step++) component.handleInput?.(input.down);
     component.handleInput?.(input.enter);
+    for (let step = 0; step < row; step++) component.handleInput?.(input.down);
     component.handleInput?.(input.enter);
-    const shown = frames("Diagnostics › Debug info");
+    const shown = frames(`Diagnostics › ${title}`);
     component.handleInput?.(input.escape);
+    for (let step = 0; step < row; step++) component.handleInput?.(input.up);
     component.handleInput?.(input.escape);
+    for (let step = 0; step < 4; step++) component.handleInput?.(input.up);
+    return shown;
+  };
+  // OpenAI compaction, the second row, is a setting of its own; its description shows beneath.
+  const compactionRow = () => {
+    component.handleInput?.(input.down);
+    const shown = frames("OpenAI compaction row focused");
+    component.handleInput?.(input.up);
     return shown;
   };
   return [
@@ -244,7 +274,9 @@ const settingsLines = Effect.gen(function* () {
     ...group("Fast mode group", 0),
     ...group("Usage group", 2),
     ...group("Image tool group", 3),
-    ...debugInfo(),
+    ...compactionRow(),
+    ...diagnostic("Debug info", 0),
+    ...diagnostic("Config paths", 1),
   ];
 });
 
@@ -268,6 +300,14 @@ const settingsCommandLines = Effect.gen(function* () {
   yield* posted("/openai settings image.outputFormat png", "image.outputFormat png");
   return lines;
 });
+
+/** `/openai help`, from the registered extension: the shared overview of every subcommand. */
+const commandHelpLines = Effect.gen(function* () {
+  const h = yield* extensionHarness();
+  yield* Effect.promise(() => Promise.resolve(h.commands.get("openai")?.handler("help", h.ctx)));
+  const notice: unknown = h.notify.mock.lastCall?.[0];
+  return noticeFrames("/openai help", Predicate.isString(notice) ? notice : "(nothing shown)");
+}).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer));
 
 const directory = galleryDirectory(process.env) ?? "";
 
@@ -318,6 +358,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ...noticeLines(),
         ...(yield* settingsLines),
         ...(yield* settingsCommandLines),
+        ...(yield* commandHelpLines),
       );
       yield* writeGallerySection(directory, "pi-better-openai", lines);
     }),

@@ -111,7 +111,7 @@ describe("lazy /subagents command implementations", () => {
     Effect.gen(function* () {
       const h = harness();
       yield* Effect.promise(() => h.run("help"));
-      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
       const settings = yield* Effect.promise(() =>
         Promise.resolve(h.command.getArgumentCompletions?.("settings project delegation ")),
       );

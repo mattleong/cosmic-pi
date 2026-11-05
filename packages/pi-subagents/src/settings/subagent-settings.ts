@@ -198,7 +198,7 @@ const scopedSettingItem = (
   own: string,
   inherited: string,
 ): SettingItem => {
-  const reloadNote = scope === "session" ? "" : " Takes effect after /reload.";
+  const reloadNote = scope === "session" ? "" : " Changes apply after /reload.";
   const inheritedLabel = settingInherited(inherited);
   const currentValue = own === INHERIT ? inheritedLabel : own;
   return {
@@ -547,20 +547,28 @@ function subagentSettingsCommand(
       scope === "project" && !isProjectTrusted(ctx) ? UNTRUSTED : undefined,
     config: () => undefined,
     status: statusText,
-    // Rows show a change as soon as it is chosen, so values derived from it do too; a failed
-    // save puts back the value it replaced.
+    // Rows show a change as soon as it is chosen, so values derived from it do too; a save that
+    // fails or can't run puts back the value it replaced, and open groups derive their rows again.
     apply: (ctx, id, value, _signal, scope) => {
       const key = rowId(id, scope);
       const chosen = id === WORKSPACE ? shownValue(id, value) : inheritChoice(value);
       const replaced = committed.get(key);
       committed.set(key, chosen);
-      return apply(ctx, id, value, settingScope(scope)).then((result) => {
-        if (Result.isFailure(result) && committed.get(key) === chosen) {
-          if (replaced === undefined) committed.delete(key);
-          else committed.set(key, replaced);
-        }
-        return result;
-      });
+      const restore = () => {
+        if (committed.get(key) !== chosen) return;
+        if (replaced === undefined) committed.delete(key);
+        else committed.set(key, replaced);
+      };
+      return apply(ctx, id, value, settingScope(scope)).then(
+        (result) => {
+          if (Result.isFailure(result)) restore();
+          return result;
+        },
+        (cause: unknown) => {
+          restore();
+          throw cause;
+        },
+      );
     },
     displayValue: (_ctx, id, scope) => shownRowValue(id, scope),
     open,

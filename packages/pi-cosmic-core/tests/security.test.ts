@@ -66,6 +66,6 @@ describe("security formatting", () => {
     const sparse = [1];
     sparse[2] = 3;
     expect(redactDiagnosticValue({ sparse })).toEqual({ sparse: [1, null, 3] });
-    expect(maskIdentifier("account-123456789")).toBe("acco...6789");
+    expect(maskIdentifier("account-123456789")).toBe("acco…6789");
   });
 });

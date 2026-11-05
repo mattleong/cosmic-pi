@@ -9,7 +9,12 @@ import { savedFileFact, workspaceFact } from "../ui/notice-facts.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { cleanupEvidenceText, proposalDiffStatLines } from "./format.ts";
 import { countLabel } from "pi-cosmic-core/display";
-import { failureMessage, firstLineMessage, quoteText } from "pi-cosmic-core/message-text";
+import {
+  failureMessage,
+  firstLineMessage,
+  quoteText,
+  restatesText,
+} from "pi-cosmic-core/message-text";
 import { isTextFragment } from "./text-fragments.ts";
 
 type AddIssue = (
@@ -142,6 +147,30 @@ function quote(add: AddIssue, label: string, code: string, text: string, fallbac
 }
 
 /**
+ * A question's quote for its `asks:` row: its first line, ending with `…` when the question goes
+ * on past it, and the whole question as detail unless the quote holds all of it.
+ */
+const questionQuote = (question: string) => {
+  const { line, detail } = quoteText(question, { limit: QUOTED_TEXT_LIMIT });
+  const shown = line ?? firstLineMessage(question, "a question", QUOTED_TEXT_LIMIT);
+  const cut = detail !== undefined && !restatesText(question, shown);
+  return {
+    quote: cut && !Fn.pipe(shown, Str.endsWith("…")) ? `${shown}…` : shown,
+    cut,
+    ...(detail && { detail }),
+  };
+};
+
+/** Whether an `asks:` row quotes only part of `question`, so expanding shows the rest. */
+export const quotesPartOfQuestion = (question: string): boolean => questionQuote(question).cut;
+
+/** Whether a run's `asks:` row quotes only part of its question. */
+export const asksPartOfQuestion = (card: SubagentRunCard): boolean => {
+  const attention = runAttention(card);
+  return attention?.kind === "question" && quotesPartOfQuestion(attention.message);
+};
+
+/**
  * A run's question reads `name asks: …` on every surface. Its whole text is the issue's detail
  * unless the surface draws it (`questionShown`), as a shown failure's is.
  */
@@ -160,12 +189,12 @@ function attentionIssues(
       return;
     case "question": {
       // The whole question is detail only when the message can't show all of it.
-      const { line, detail } = quoteText(attention.message, { limit: QUOTED_TEXT_LIMIT });
+      const asked = questionQuote(attention.message);
       add(
         "attention",
         "parent-question",
-        `${label} asks: ${line ?? firstLineMessage(attention.message, "a question", QUOTED_TEXT_LIMIT)}`,
-        questionShown ? undefined : detail,
+        `${label} asks: ${asked.quote}`,
+        questionShown ? undefined : asked.detail,
       );
       return;
     }

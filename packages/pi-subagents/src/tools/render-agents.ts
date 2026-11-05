@@ -27,6 +27,9 @@ import { quotesWhole } from "./compact-run-issues.ts";
 import type { AgentToolDetails } from "./details-schema.ts";
 
 type ListDetails = Extract<AgentToolDetails, { readonly action: "agent_list" }>;
+
+/** Columns a listed agent's row nests beneath its parent's. */
+const NESTED_ROW_INDENT = 2;
 type SendDetails = Extract<AgentToolDetails, { readonly action: "agent_send" }>;
 type ReadDetails = Extract<AgentToolDetails, { readonly action: "agent_read" }>;
 type AgentState = ReadDetails["agents"][number]["state"];
@@ -117,7 +120,8 @@ const listRowLines = (
   expanded: boolean,
 ): string[] => {
   const { glyph, tone, label } = agentStatePresentation(entry.state);
-  const indent = 2 * (entry.kind === "main" ? 0 : Math.max(0, (entry.depth ?? 1) - 1));
+  const indent =
+    NESTED_ROW_INDENT * (entry.kind === "main" ? 0 : Math.max(0, (entry.depth ?? 1) - 1));
   // A question or a pause is the run's own state, in its tone; other statuses flag a problem.
   const statusTone =
     entry.state === "waiting_for_parent" || entry.state === "paused" ? tone : "warning";
@@ -134,7 +138,8 @@ const listRowLines = (
     width,
     theme,
     expanded,
-    { indent, hang: visibleWidth(`${glyph} `) },
+    // A wrapped row hangs two past its children's column, so its task never reads as a child.
+    { indent, hang: visibleWidth(`${glyph} `) + NESTED_ROW_INDENT },
   );
 };
 

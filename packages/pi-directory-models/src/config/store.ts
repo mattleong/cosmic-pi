@@ -12,7 +12,8 @@ import {
   type DirectoryModelPreference,
 } from "./schema.ts";
 
-const STORE_DIRECTORY = "pi-directory-models";
+/** The agent-directory folder that holds every directory's preference file. */
+export const STORE_DIRECTORY = "pi-directory-models";
 
 export interface DirectoryIdentity {
   readonly canonicalCwd: string;

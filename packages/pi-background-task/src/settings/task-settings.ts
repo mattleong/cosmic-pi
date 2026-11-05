@@ -60,7 +60,7 @@ export interface TaskSettingsActions {
 type TaskSettingsScope = (typeof SCOPES)[number]["name"];
 
 const isConfigError = Schema.is(BackgroundTaskConfigError);
-const UNTRUSTED = "Trust this project before changing its background task settings";
+const UNTRUSTED = "Trust this project before changing its background tasks settings";
 
 type ScopeFile =
   | { readonly scope: TaskSettingsScope; readonly own: Partial<BackgroundTaskConfig> }
@@ -72,9 +72,9 @@ const rowKey = (scope: TaskSettingsScope, id: string) => `${scope}:${id}`;
 const scopeLabel = (scope: TaskSettingsScope) => (scope === "project" ? "Project" : "Global");
 
 const SCOPE_DESCRIPTIONS = {
-  global: "Background task settings for every project. Changes apply after /reload.",
+  global: "Background tasks settings for every project. Changes apply after /reload.",
   project:
-    "Background task settings for this trusted project, which win over global ones. Changes apply after /reload.",
+    "Background tasks settings for this trusted project, which win over global ones. Changes apply after /reload.",
 } as const satisfies Record<TaskSettingsScope, string>;
 
 // A group row has one line, so its summary names each value as briefly as it stays clear.
@@ -182,7 +182,8 @@ function createTaskSettingsSubcommand(
         );
       }
     }
-    // Derived each time its group opens, so a project row names the global value saved last.
+    // Derived when its group opens and again whenever a save settles, so a project row names the
+    // global value saved last, even if that save landed after the group opened.
     // The group already says changes apply after /reload; a row doesn't repeat it.
     const settingRow = (
       scope: TaskSettingsScope,
@@ -248,7 +249,7 @@ function createTaskSettingsSubcommand(
     owner,
     root: "tasks",
     description: TASK_SETTINGS_COMMAND.description,
-    title: "Background Tasks",
+    title: "Background tasks",
     isCurrent,
     descriptors: TASK_SETTING_DESCRIPTORS,
     examples: [
@@ -259,7 +260,7 @@ function createTaskSettingsSubcommand(
     ],
     notes: () => [
       `Scope defaults to global; ${INHERIT} removes a scope's own value.`,
-      "Changes take effect after /reload.",
+      "Changes apply after /reload.",
     ],
     // The picker's groups already say so; a command-line change's confirmation does too.
     confirmationNote: "applies after /reload",
@@ -269,15 +270,15 @@ function createTaskSettingsSubcommand(
     config: () => actions.config(),
     status: () => {
       const config = actions.config();
-      if (!config) throw new Error("Background Tasks hasn't started");
+      if (!config) throw new Error("Background tasks haven't started");
       return settingsStatusText({
-        title: "Background Tasks settings",
+        title: "Background tasks settings",
         sections: [
           {
             rows: Arr.map(BACKGROUND_TASK_SETTINGS, (setting) => ({
               id: setting.id,
               label: setting.label,
-              value: sessionValue(config, setting) || "default",
+              value: sessionValue(config, setting),
             })),
           },
         ],
@@ -296,7 +297,7 @@ function createTaskSettingsSubcommand(
         },
         (cause: unknown) =>
           Result.fail({
-            message: `Couldn't save background task settings: ${failureMessage(
+            message: `Couldn't save background tasks settings: ${failureMessage(
               cause instanceof Error ? cause.message : "",
               "unknown error",
             )}`,

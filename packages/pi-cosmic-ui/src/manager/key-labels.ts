@@ -1,6 +1,7 @@
 import { getKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -189,16 +190,72 @@ export interface KeyHintBarParts {
   readonly tail: ReadonlyArray<string>;
 }
 
+interface KeyHintPair {
+  readonly keys: ReadonlyArray<string>;
+  readonly verb: string;
+}
+
+// `Key Verb`: keys never contain a space, and the verb is everything after the first one.
+const hintPair = (hint: string): KeyHintPair | undefined => {
+  const space = Option.getOrElse(Fn.pipe(hint, Str.indexOf(" ")), () => -1);
+  return space > 0 && space < hint.length - 1
+    ? {
+        keys: splitKeyLabel(Fn.pipe(hint, Str.slice(0, space))),
+        verb: Fn.pipe(hint, Str.slice(space + 1)),
+      }
+    : undefined;
+};
+
+/**
+ * Joins pairs that share a verb into one pair at the first one's place, keys in order and named
+ * once: `↑↓ Move` and `j/k Move` read `↑↓/j/k Move`. Text that isn't a pair stays as it is.
+ */
+export const mergeKeyHintPairs = (hints: ReadonlyArray<KeyHintPart>): ReadonlyArray<string> => {
+  const keysByVerb = new Map<string, string[]>();
+  const order: Array<{ readonly verb: string } | { readonly text: string }> = [];
+  for (const hint of presentHints(hints)) {
+    const pair = hintPair(hint);
+    if (!pair) {
+      order.push({ text: hint });
+      continue;
+    }
+    const keys = keysByVerb.get(pair.verb);
+    if (keys) {
+      for (const key of pair.keys) if (!Arr.contains(keys, key)) keys.push(key);
+      continue;
+    }
+    keysByVerb.set(pair.verb, [...pair.keys]);
+    order.push({ verb: pair.verb });
+  }
+  return Arr.map(order, (entry) =>
+    "text" in entry
+      ? entry.text
+      : keyHint(Arr.join(keysByVerb.get(entry.verb) ?? [], "/"), entry.verb),
+  );
+};
+
 /**
  * The pairs of a suite hint bar, split so a framed surface can keep the exit and `? More` in its
- * border. Expanded, the exit names every alias in one pair, `Esc/C-c/q Close`.
+ * border. Pairs that share a verb merge into one, `↑↓/j/k Move`, and expanded, the exit names
+ * every alias in one pair, `Esc/C-c/q Close`, including a `more` pair with the exit's verb.
  */
 export const keyHintBarParts = (bar: KeyHintBar, expanded: boolean): KeyHintBarParts => {
-  const more = presentHints(bar.more ?? []);
-  const aliases = bar.exitAliases ?? [];
+  const exitVerb = bar.exit && exitKeyVerb(bar.exit);
+  const extra = presentHints(bar.more ?? []);
+  const isExit = (hint: string) => exitVerb !== undefined && hintPair(hint)?.verb === exitVerb;
+  const more = Arr.filter(extra, (hint) => !isExit(hint));
+  const exitKey = bar.exitKey ?? "Esc";
+  const named: ReadonlyArray<string> = [
+    ...(bar.exitAliases ?? []),
+    ...Arr.flatMap(
+      extra,
+      (hint: string): ReadonlyArray<string> => (isExit(hint) ? (hintPair(hint)?.keys ?? []) : []),
+    ),
+  ];
+  const aliases = Arr.filter(Arr.dedupe(named), (alias) => alias !== exitKey);
   const expandable = more.length > 0 || (bar.exit !== undefined && aliases.length > 0);
   return {
-    hints: presentHints([...bar.hints, ...(expanded ? more : [])]),
+    hints: mergeKeyHintPairs([...bar.hints, ...(expanded ? more : [])]),
     tail: presentHints([
       bar.exit && exitKeyHint(bar.exit, expanded ? aliases : [], bar.exitKey),
       expandable && helpKeyHint(expanded),

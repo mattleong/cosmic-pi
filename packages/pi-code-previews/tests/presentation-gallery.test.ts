@@ -42,6 +42,10 @@ import {
 } from "../src/application/tool-renderers";
 import { nativeCall as callRecord, nativeReceipt, scriptResult } from "./support/native-codemode";
 import { builtinToolInfo, inertScheduler } from "./support/renderer-host";
+import {
+  clearCodePreviewSessionCapability,
+  installCodePreviewSessionCapability,
+} from "../src/application/capability";
 import * as Match from "effect/Match";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -1527,6 +1531,71 @@ const scenarios: ReadonlyArray<
     border: true,
   },
   {
+    tool: "read",
+    title: "read longer than the preview names the hidden lines where they are hidden",
+    args: { path: "/project/src/config.ts" },
+    result: text(
+      Arr.join(
+        Arr.map(Arr.range(1, 30), (index) => `export const setting${index} = ${index};`),
+        "\n",
+      ),
+    ),
+    border: true,
+  },
+  {
+    tool: "grep",
+    title: "grep longer than the preview names the hidden matches where they are hidden",
+    args: { pattern: "TODO", path: "/project/src" },
+    result: text(
+      Arr.join(
+        Arr.map(Arr.range(1, 24), (index) => `file-${index}.ts:${index}: // TODO item ${index}`),
+        "\n",
+      ),
+    ),
+  },
+  {
+    tool: "find",
+    title: "find longer than the preview names the hidden paths where they are hidden",
+    args: { pattern: "*.ts", path: "/project/src" },
+    result: text(
+      Arr.join(
+        Arr.map(Arr.range(1, 30), (index) => `module-${index}.ts`),
+        "\n",
+      ),
+    ),
+  },
+  {
+    tool: "ls",
+    title: "ls longer than the preview names the hidden entries where they are hidden",
+    args: { path: "/project/src" },
+    result: text(
+      Arr.join(
+        Arr.map(Arr.range(1, 30), (index) => `entry-${index}.ts`),
+        "\n",
+      ),
+    ),
+  },
+  {
+    tool: "find",
+    title: "find result limit with agent notes",
+    args: { pattern: "*.ts", path: "/project/src", limit: 2 },
+    result: text(
+      "a.ts\nb.ts\n\n[2 results limit reached. Use limit=4 for more, or refine pattern]",
+      { resultLimitReached: 2 },
+    ),
+  },
+  {
+    tool: "status_demo",
+    title: "an expanded heading wraps its counter instead of cutting the subject",
+    args: {
+      subject: "Release checklist for the authentication refactor",
+      waiting: true,
+      counter: "needs your input",
+    },
+    result: text("Asked 4 questions"),
+    phase: "running",
+  },
+  {
     tool: "grep",
     title: "grep in a deeply nested directory",
     args: {
@@ -1598,11 +1667,20 @@ const commandOverviewFrames = Effect.fn("Gallery.commandOverviewFrames")(functio
   if (invoke) {
     yield* Effect.promise(() => invoke(""));
     yield* Effect.promise(() => invoke("health"));
+    // Settings status reads the session's settings, which an installed session capability admits.
+    installCodePreviewSessionCapability({
+      ...inertScheduler,
+      run: () => Promise.reject(new Error("unexpected settings runtime call")),
+    });
+    yield* Effect.promise(() => invoke("settings status")).pipe(
+      Effect.ensuring(Effect.sync(() => clearCodePreviewSessionCapability())),
+    );
   }
   return Arr.flatMap(
     [
       ["help", notices[0] ?? ""],
       ["health", notices[1] ?? ""],
+      ["settings status", notices[2] ?? ""],
     ] as const,
     ([command, notice]) =>
       Arr.flatMap([180, 57], (width) => [

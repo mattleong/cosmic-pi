@@ -45,6 +45,7 @@ export function registerTasksCommand(
     name: "tasks",
     description: "Background tasks",
     bare: {
+      description: "Open background tasks",
       handler: (_args, ctx) =>
         invoke(ctx, (invocation, isCurrent) => {
           if (invocation.mode !== "tui") {
@@ -59,7 +60,7 @@ export function registerTasksCommand(
           if (!actions.isAvailable()) {
             notifyAtHostBoundary(
               invocation,
-              "Background Tasks aren't running; run /reload, then reopen /tasks",
+              "Background tasks aren't running; run /reload, then reopen /tasks",
               "warning",
             );
             return Promise.resolve();

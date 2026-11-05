@@ -636,6 +636,17 @@ const agentRoutes = profileServiceFor({
   },
 });
 
+const unavailableAgentRoutes = profileServiceFor({
+  profiles: { reviewer: [candidate({ model: "openai/retired-model" })] },
+  agents: {
+    "auth-reviewer": {
+      description: "Reviews authentication changes against the threat model.",
+      instructions: "Review only authentication code and cite file and line for every finding.",
+      profile: "reviewer",
+    },
+  },
+});
+
 const modelScenarios = Effect.all([
   scenario(
     "all profile routes",
@@ -651,6 +662,11 @@ const modelScenarios = Effect.all([
     "profile routes with custom agents",
     { tool: "agent_profiles", args: {} },
     { profiles: agentRoutes },
+  ),
+  scenario(
+    "custom agent and its profile have no eligible route",
+    { tool: "agent_profiles", args: { profile: "reviewer" } },
+    { profiles: unavailableAgentRoutes },
   ),
 ]);
 
@@ -874,6 +890,20 @@ const agentScenarios = Effect.all([
     { tool: "agent_read", args: { agentIds: ["agent-6"] } },
     read([
       runReadout(dbMigration, "Migration 0007 is written; one question before the seed data."),
+    ]),
+  ),
+  agentScenario(
+    "child asks a long question",
+    { tool: "agent_read", args: { agentIds: ["agent-6"] } },
+    read([
+      runReadout({
+        ...dbMigration,
+        question: {
+          requestId: "q-2",
+          message:
+            "The 0007 migration renames sessions.token to sessions.refresh_token, and three services still read the old column.\n\nShould I add a compatibility view for one release, or update the services in this change?",
+        },
+      }),
     ]),
   ),
   agentScenario(

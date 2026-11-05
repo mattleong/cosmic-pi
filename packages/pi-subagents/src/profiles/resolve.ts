@@ -89,15 +89,15 @@ type PiModelSkips = typeof PARENT_MODEL_SKIPS | typeof LOCAL_PI_MODEL_SKIPS;
 const PARENT_MODEL_SKIPS = {
   ambiguousCode: "parent_model_ambiguous",
   unresolvedCode: "parent_model_unavailable",
-  subject: "Parent model",
-  unresolvedPredicate: "is unavailable",
+  ambiguous: "The parent model's name matches several Pi models",
+  unresolved: "The parent model is unavailable",
 } as const;
 
 const LOCAL_PI_MODEL_SKIPS = {
   ambiguousCode: "pi_model_ambiguous",
   unresolvedCode: "pi_model_unknown",
-  subject: "Pi candidate",
-  unresolvedPredicate: "is unknown or unauthenticated",
+  ambiguous: "This model name matches several Pi models",
+  unresolved: "Pi doesn't know this model or isn't signed in to its provider",
 } as const;
 
 const resolveCandidate = (
@@ -143,8 +143,8 @@ const resolveCandidate = (
       return skipCandidate(
         resolved.kind === "ambiguous" ? skips.ambiguousCode : skips.unresolvedCode,
         resolved.kind === "ambiguous"
-          ? `${skips.subject} is ambiguous: ${Arr.join(resolved.candidates, ", ")}.`
-          : `${skips.subject} ${skips.unresolvedPredicate}${
+          ? `${skips.ambiguous}: ${Arr.join(resolved.candidates, ", ")}.`
+          : `${skips.unresolved}${
               resolved.nearMatches.length > 0
                 ? `; close matches: ${Arr.join(resolved.nearMatches, ", ")}`
                 : ""

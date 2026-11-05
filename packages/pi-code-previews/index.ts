@@ -32,7 +32,11 @@ export {
   mergeCompactIssues,
   type CompactIssue,
 } from "./src/tools/compact-issues";
-export { argumentFailureIssue, isRejectedEmptyCall } from "./src/tools/argument-failure";
+export {
+  argumentFailureIssue,
+  isRejectedEmptyCall,
+  receivedArguments,
+} from "./src/tools/argument-failure";
 export {
   exitStatusMeaning,
   outputFailureLine,
@@ -58,7 +62,8 @@ export {
 
 export { selectCompactChildren, renderCompactChildren } from "./src/preview/compact-children";
 export { compactPlainText, renderCompactRow } from "./src/preview/compact-row";
-export { middleElide } from "./src/preview/compact-header";
+export { endElide, middleElide } from "./src/preview/compact-header";
+export { headingShowedSubject } from "./src/preview/heading-coverage";
 export { expandedArguments, expandedSection } from "./src/preview/expanded-section";
 export {
   expandedAuthoredText,

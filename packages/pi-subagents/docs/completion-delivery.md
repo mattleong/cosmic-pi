@@ -274,7 +274,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 ### Shell coverage
 
 - All eight root tools and the child proxies use the shared presentation shell and the shared compact setting, projected from decoded domain details.
-- Pi parses malformed tool-call JSON as `{}` and refuses to run the call; while `isRejectedEmptyCall` holds, preview headings show only the tool's label instead of describing argument defaults, and the shared argument issue explains the rejection.
+- Pi parses malformed tool-call JSON as `{}` and refuses to run the call; while `isRejectedEmptyCall` holds, preview headings show only the tool's label instead of describing argument defaults, and the shared argument issue explains the rejection. Expanded, as for a rejected builtin, the issue's detail carries Pi's diagnostic and a `Received arguments` section the arguments it echoed, without an `Error` section repeating Pi's text.
 - `agent_contact_parent` uses content-only callbacks; arbitrary replies stay verbatim, prefixed once with `PARENT_REPLY_PREFIX`. Warning calls keep the full warning as issue detail; settled questions and replies decline compaction.
 
 ### Compact issues
@@ -285,7 +285,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 - Headings name runs by display name and show one combined count without routine IDs or route metadata.
 - Routine facts are `info` issues, such as a stop the call requested or an isolated writer's workspace outcome (`ready to apply`, applied, or discarded, including automatically).
 - Workspace rows show whether the parent tested its preparation or nothing was tested. Left-out worker files are a warning.
-- `agent_profiles` shows one line per profile and custom agent: the model a launch would take, or `disabled` or `unavailable`, its write intent, and its source when not built-in. Eligibility, defaults, and each candidate are expanded details; discovery never claims launch readiness.
+- `agent_profiles` shows one line per profile and custom agent: the model a launch would take, or `disabled` or `unavailable`, its write intent, and its source when not built-in. Eligibility, defaults, and each candidate are expanded details; discovery never claims launch readiness. A route with no eligible candidate warns with each skipped candidate's reason, then names `/subagents doctor` to check sign-in and `/subagents profiles` to change the route.
 - Report-only omissions use the optional `reportsOnlyOmitted: true` flag; other omissions keep warnings and full-status guidance.
 - Compact summaries never derive grant paths or cleanup from bounded cards.
 
@@ -294,7 +294,7 @@ Shared rules for registration, replay, compact issues, and expansion are in [too
 Renderers draw only from decoded details, never from model-facing text, so agent procedures, tool-call syntax, and reply hints stay in what the model reads. Each producer adds bounded, sanitized display fields where it emits the result or message, redacted as its content is.
 
 - Words first: a report, failure, question, message, or latest assistant message shows collapsed with its line breaks, bounded to about ten wrapped rows by `ui/agent-text.ts`, and whole on expansion. `agent_await`, completion notices, and `agent_read` share its agent blocks.
-- One question, one form: a pending question is an attention issue, `name asks: …`, on `agent_await` (an awaited run or another asking the caller) and `agent_read`, whose block then shows only the run's state, and the rest of a question too long for the quote when expanded. `agent_read` shows the question, not the latest assistant message, while a run waits on it.
+- One question, one form: a pending question is an attention issue, `name asks: …`, whose quote ends with `…` when the question goes on past it (the receipt's affordance then reads `question` when every run shown is asking), on `agent_await` (an awaited run or another asking the caller) and `agent_read`, whose block then shows only the run's state, and the rest of a question too long for the quote when expanded. `agent_read` shows the question, not the latest assistant message, while a run waits on it.
 - Names, not IDs: rows name agents by display name. IDs, routes, profiles, usage, timing, files, workspace IDs, and selection notes appear only in an expanded, dim Details section.
 - Status only when it departs from the expected: a plain `agent_send` delivery adds nothing; a queued, held, parked, answered, or resumed one adds a short muted phrase.
 - A decoded receipt never draws its raw text; failures show through their issues. Only an entry without a decodable receipt or display copy falls back to a generic heading collapsed and its raw text expanded.

@@ -402,6 +402,8 @@ describe("custom agent discovery", () => {
       "agent:unrouted:unavailable",
       "agents:invalid",
     ]);
+    // Every warning names a command the user can run to recover.
+    for (const issue of issues) expect(issue.detail).toMatch(/\/subagents (?:doctor|profiles)/u);
     expect(issueStyleProblems(issues)).toEqual([]);
     expect(details.invalidAgents).toEqual([{ scope: "global", name: "broken" }]);
     expect(result?.structuredContent).toMatchObject({

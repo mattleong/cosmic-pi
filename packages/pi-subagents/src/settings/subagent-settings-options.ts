@@ -23,7 +23,7 @@ export const DELEGATION_LABEL = "Delegation";
 export const INHERIT = "inherit";
 
 export const DELEGATION_DESCRIPTION =
-  "How much the main agent delegates to subagents. normal leaves its prompt unchanged, encouraged prefers subagents, and orchestration delegates nearly all substantive work.";
+  "How much the main agent delegates to subagents: normal leaves its prompt unchanged, encouraged prefers subagents, and orchestration delegates nearly all substantive work.";
 
 interface NestingFieldInfo {
   readonly label: string;
@@ -103,8 +103,8 @@ export const SUBAGENT_SETTINGS_COMMAND = {
       prefix,
       SUBAGENT_SETTING_DESCRIPTORS,
       [
-        { value: "status", label: "status", description: "Show effective values" },
-        { value: "help", label: "help", description: "Show setting ids and usage" },
+        { value: "status", label: "status", description: "Show current values" },
+        { value: "help", label: "help", description: "Show setting ids" },
       ],
       Arr.map(SCOPES, (scope) => ({
         value: scope.name,

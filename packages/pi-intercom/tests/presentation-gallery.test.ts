@@ -16,8 +16,8 @@ import {
   withPresentationSettings,
   writeGallerySection,
 } from "pi-code-previews/testing";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
-import { listReport, overview } from "../src/command.ts";
+import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
+import { INTERCOM_COMMAND, listReport, registerIntercomCommand } from "../src/command.ts";
 import { frameMessage, INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
 import { renderIntercomMessage } from "../src/message.ts";
 import {
@@ -126,6 +126,28 @@ const sameRepository: SessionListContract = {
 };
 
 /** Notices Pi draws one column in; wrapped here at a phone's and a desktop's notice width. */
+/** What `/intercom <args>` posts, from the registered command. */
+const commandNotice = (args: string): Promise<string> => {
+  const host = recordingExtensionHost();
+  registerIntercomCommand(host.pi, {
+    isActive: () => true,
+    list: () => Promise.resolve(listing),
+    receiving: () => true,
+    setReceiving: () => undefined,
+  });
+  let notice = "(nothing shown)";
+  const ctx = extensionContextFixture({
+    ui: {
+      notify: (message) => {
+        notice = message;
+      },
+    },
+  });
+  return Promise.resolve(host.commands.get(INTERCOM_COMMAND)?.handler(args, ctx)).then(
+    () => notice,
+  );
+};
+
 const noticeFrames = (title: string, notice: string): string[] =>
   Arr.flatMap([55, 178], (width) => [
     `── ${title} · ${width + 2} cols`,
@@ -444,12 +466,13 @@ describe.skipIf(!directory)("presentation gallery", () => {
         }
       }
       lines.push(
-        ...noticeFrames("/intercom help", overview),
+        ...noticeFrames("/intercom help", yield* Effect.promise(() => commandNotice("help"))),
         ...noticeFrames(
           "/intercom list · sessions sharing a repository",
           listReport(sameRepository),
         ),
         ...noticeFrames("/intercom list · every state", listReport(listing)),
+        ...noticeFrames("/intercom list · a long name and directory", listReport(longDirectory)),
         ...noticeFrames("/intercom list · none", listReport({ ...listing, sessions: [] })),
       );
       yield* writeGallerySection(directory, "pi-intercom", lines);

@@ -50,7 +50,8 @@ describe("read results", () => {
       expect(collapsed).not.toContain("sed -n");
       expect(collapsed).not.toMatch(/^\s*40\s*│/mu);
       const expanded = render("read", style, args, value, true);
-      expect(expanded).toContain(instruction);
+      // Pi's notice is shown once, not as both the issue's detail and agent notes.
+      expect(Str.split(expanded, instruction), style).toHaveLength(2);
       expect(expanded).not.toMatch(/^\s*40\s*│/mu);
     }
   });
@@ -127,5 +128,28 @@ describe("grep calls", () => {
     expect(render("grep", "preview", { ...args, limit: "50" }, value, false)).not.toBe(
       render("grep", "preview", args, value, false),
     );
+  });
+});
+
+describe("listing limits", () => {
+  const args = { pattern: "TODO", path: "/project/src", limit: 2 };
+  const value = textResult(
+    "a.ts:3: // TODO fix\nb.ts:9: // TODO remove\n\n[2 matches limit reached. Use limit=4 for more, or refine pattern]",
+    { matchLimitReached: 2 },
+  );
+
+  test("a collapsed preview grep states the limit it reached and offers the agent notes", () => {
+    const collapsed = render("grep", "preview", args, value, false);
+    expect(collapsed).toMatch(/limit reached: 2/iu);
+    expect(collapsed).toContain("▸ ");
+    expect(collapsed).not.toContain("Use limit=4");
+    expect(render("grep", "preview", args, value, true)).toContain("Use limit=4");
+  });
+
+  test("an expanded compact grep states its limit once, in the heading's counter", () => {
+    const expanded = render("grep", "compact", args, value, true);
+    expect(expanded).toContain("limit reached: 2");
+    expect(expanded).not.toMatch(/^\s*Limit\s+2$/mu);
+    expect(expanded).toContain("Use limit=4");
   });
 });

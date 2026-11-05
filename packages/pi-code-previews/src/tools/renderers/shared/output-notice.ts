@@ -1,7 +1,11 @@
+import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { outputLimitProjection } from "../../builtin-issues";
+import { isAffordanceRow } from "../../../preview/affordance-row";
 import { expandedSection } from "../../../preview/expanded-section";
 import { ownField, ownObject, type HostObject } from "../../../shared/untrusted-value";
 import { escapeControlChars } from "../../../shared/terminal-text";
@@ -49,4 +53,29 @@ export function withAgentNotes(body: Component, theme: Theme, notes: string | un
   container.addChild(body);
   container.addChild(agentNotesSection(theme, notes));
   return container;
+}
+
+/**
+ * A collapsed listing's rows, then, when its limit was reached, the limit as a compact heading's
+ * counter states it and, unless the rows already offer expansion, the agent notes expansion adds.
+ */
+export function withCollapsedLimit(
+  text: string,
+  theme: Theme,
+  tool: "grep" | "find" | "ls",
+  details: HostObject | undefined,
+  notice: string | undefined,
+): string {
+  const [limit] = outputLimitProjection(tool, details).counters;
+  if (limit === undefined) return text;
+  const offered = Arr.some(Str.split(text, "\n"), isAffordanceRow);
+  const stated = `${Str.toUpperCase(Str.slice(0, 1)(limit))}${Str.slice(1)(limit)}`;
+  return Arr.join(
+    [
+      text,
+      theme.fg("muted", stated),
+      ...(notice && !offered ? [renderExpansionAffordance("agent notes", false, theme)] : []),
+    ],
+    "\n",
+  );
 }

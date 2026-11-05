@@ -91,8 +91,9 @@ describe("lazy /tasks command implementations", () => {
   it.effect("keeps help and completions ready without loading settings", () =>
     Effect.gen(function* () {
       const h = harness();
+      // `help` is a built-in subcommand: it shows the overview without a warning.
       yield* Effect.promise(() => h.run("help"));
-      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      expect(h.notify).toHaveBeenCalledWith(expect.stringContaining("/tasks settings"), "info");
       const choices = yield* Effect.promise(() =>
         Promise.resolve(h.command.getArgumentCompletions?.("settings project maxRunning ")),
       );

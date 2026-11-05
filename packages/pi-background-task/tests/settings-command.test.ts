@@ -328,6 +328,65 @@ describe("/tasks settings", () => {
       }),
   );
 
+  it.effect(
+    "a global save that settles after the project group opens updates its rows and open choices",
+    () =>
+      Effect.gen(function* () {
+        const h = pickerHarness(true);
+        yield* macrotask;
+        expect(h.isOpen()).toBe(true);
+        const lines = () => Str.split(h.screen(), "\n");
+        const line = (label: string) =>
+          Fn.pipe(
+            Arr.findFirst(lines(), (entry) =>
+              Fn.pipe(Str.trim(Str.replace(/^›/u, "")(entry)), Str.startsWith(label)),
+            ),
+            Option.getOrElse(() => ""),
+          );
+        const cursor = () =>
+          Fn.pipe(
+            Arr.findFirst(lines(), (entry) => Fn.pipe(Str.trim(entry), Str.startsWith("›"))),
+            Option.getOrElse(() => ""),
+          );
+        const limits = Option.getOrThrow(
+          Arr.findFirst(BACKGROUND_TASK_SETTINGS, (setting) => setting.id === "maxRunning"),
+        ).values;
+        const steps = limits.indexOf("16") + 1;
+        const written = deferredPromise();
+        const landed = deferredPromise();
+        h.write.mockImplementationOnce(() => {
+          written.resolve();
+          return landed.promise;
+        });
+        // Global's running limit to 16, still being written when Project opens.
+        h.input("\r");
+        h.input("j");
+        h.input("\r");
+        for (const _ of Arr.range(1, steps)) h.input("j");
+        h.input("\r");
+        yield* Effect.promise(() => written.promise);
+        h.input("\u001b");
+        h.input("j");
+        h.input("\r");
+        h.input("j");
+        expect(line("Running at once")).toContain("inherit (8)");
+        // Project's choice list is open on its inherit choice when Global's write lands.
+        h.input("\r");
+        expect(cursor()).toContain("inherit (8)");
+        landed.resolve();
+        yield* macrotask;
+        expect(line("(•)")).toContain("inherit (16)");
+        expect(cursor()).toContain("inherit (16)");
+        h.input("\u001b");
+        expect(line("Running at once")).toContain("inherit (16)");
+        expect(cursor()).toContain("Running at once");
+        h.input("\u001b");
+        expect(line("Project")).toContain("16 running");
+        h.close();
+        yield* Effect.promise(() => h.opened);
+      }),
+  );
+
   it.effect("a scope's summary resolves the values it inherits", () =>
     Effect.gen(function* () {
       const h = pickerHarness(true, (location) =>

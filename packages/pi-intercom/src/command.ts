@@ -1,16 +1,17 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { clipText, countLabel } from "pi-cosmic-core/display";
+import { endElide } from "pi-code-previews";
+import { countLabel } from "pi-cosmic-core/display";
 import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
-import { extensionCommandOverview, registerExtensionCommand } from "pi-cosmic-core/host-command";
+import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import {
-  directoryName,
   distinctSessionLabels,
   SESSION_STATE_GLYPHS,
   SESSION_STATE_LABELS,
+  shortDisplayDirectory,
 } from "./identity.ts";
 import type { ListedSession, SessionListContract } from "./tools/contract.ts";
 
@@ -28,26 +29,30 @@ export interface IntercomCommandHost {
 
 // Notifications wrap at the terminal edge without a hanging indent, so each line stays short
 // enough for a narrow pane: an indented status glyph, label, and state, as session_list shows
-// them, and a two-line hint.
-const listedLine = (session: ListedSession, label: string): string => {
-  const directory = directoryName(session.cwd);
+// them, a named session's `~` directory on its own line beneath, its middle elided when long, and
+// a two-line hint.
+const listedLines = (session: ListedSession, label: string): ReadonlyArray<string> => {
+  const directory = shortDisplayDirectory(session.cwd);
   const named = session.name !== undefined && Str.isNonEmpty(Str.trim(session.name));
-  return Arr.join(
-    [
-      `  ${SESSION_STATE_GLYPHS[session.state]} ${label}`,
-      SESSION_STATE_LABELS[session.state],
-      ...(named && directory !== "" ? [`in ${directory}`] : []),
-      ...(session.duplicate ? ["duplicate id"] : []),
-    ],
-    " · ",
-  );
+  return [
+    Arr.join(
+      [
+        `  ${SESSION_STATE_GLYPHS[session.state]} ${label}`,
+        SESSION_STATE_LABELS[session.state],
+        ...(session.duplicate ? ["duplicate id"] : []),
+      ],
+      " · ",
+    ),
+    ...(named && directory !== "" ? [`    ${directory}`] : []),
+  ];
 };
 
-const EXAMPLE_LABEL_CHARS = 20;
+// Keeps the example on one 55-column notice line; a longer label ends at a word boundary.
+const EXAMPLE_LABEL_CHARS = 18;
 
 const howToMessage = (example: string | undefined): ReadonlyArray<string> => [
   "To message one, ask your agent, for example:",
-  `  "Ask the ${example === undefined ? "web" : clipText(example, EXAMPLE_LABEL_CHARS)} session to rerun its tests"`,
+  `  "Ask the ${example === undefined ? "web" : endElide(example, EXAMPLE_LABEL_CHARS)} session to run its tests"`,
 ];
 
 const reachable = (session: ListedSession): boolean =>
@@ -61,7 +66,9 @@ export const listReport = (result: SessionListContract): string => {
   return Arr.join(
     [
       countLabel(total, "other live session"),
-      ...Arr.map(result.sessions, (session, index) => listedLine(session, labels[index] ?? "")),
+      ...Arr.flatMap(result.sessions, (session, index) =>
+        listedLines(session, labels[index] ?? ""),
+      ),
       ...(result.omitted > 0 ? [`  and ${result.omitted} more`] : []),
       ...howToMessage(Option.isSome(example) ? labels[example.value] : labels[0]),
     ],
@@ -80,21 +87,7 @@ const RECEIVE_CHOICES = ["on", "off"] as const;
 const notify = (ctx: ExtensionCommandContext, message: string, level: "info" | "warning") =>
   notifyAtHostBoundary(ctx, message, level);
 
-const LIST_HELP = { name: "list", description: "List other live sessions" } as const;
-const RECEIVE_HELP = {
-  name: "receive",
-  arguments: "[on|off]",
-  description: "Allow or block messages",
-} as const;
 const HOW_TO_MESSAGE = howToMessage(undefined);
-
-/** The shared command overview, plus how to message a session. */
-export const overview = extensionCommandOverview(
-  INTERCOM_COMMAND,
-  DESCRIPTION,
-  [LIST_HELP, RECEIVE_HELP],
-  HOW_TO_MESSAGE,
-);
 
 export function registerIntercomCommand(pi: ExtensionAPI, host: IntercomCommandHost): void {
   registerExtensionCommand(pi, {
@@ -103,7 +96,8 @@ export function registerIntercomCommand(pi: ExtensionAPI, host: IntercomCommandH
     overviewNotes: HOW_TO_MESSAGE,
     subcommands: [
       {
-        ...LIST_HELP,
+        name: "list",
+        description: "List live sessions",
         handler: (_args, ctx) => {
           if (!host.isActive()) return notify(ctx, UNAVAILABLE, "warning");
           return host.list(ctx.signal).then(
@@ -113,7 +107,9 @@ export function registerIntercomCommand(pi: ExtensionAPI, host: IntercomCommandH
         },
       },
       {
-        ...RECEIVE_HELP,
+        name: "receive",
+        arguments: "[on|off]",
+        description: "Messages on or off",
         complete: (prefix) =>
           Arr.flatMap(RECEIVE_CHOICES, (choice) =>
             Fn.pipe(choice, Str.startsWith(Str.trim(prefix)))

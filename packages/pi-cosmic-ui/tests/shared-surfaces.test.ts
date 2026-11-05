@@ -169,7 +169,7 @@ describe("shared settings surface", () => {
     expect(text()).toContain("Advanced group");
 
     press("\r", DOWN, "\r");
-    expect(groupChanges).toHaveBeenCalledExactlyOnceWith("mode", "fast");
+    expect(groupChanges).toHaveBeenCalledExactlyOnceWith("mode", "fast", expect.any(Function));
     expect(text()).toContain("Advanced group");
   });
 });
@@ -276,6 +276,13 @@ describe("manager table", () => {
   });
 });
 
+// A pair splits into its keys and its verb: `↑↓/j/k Move` names `↑↓/j/k` for Move.
+const hintPairs = (hint: string) =>
+  Arr.map(Str.split(hint, " · "), (pair) => {
+    const [keys, ...verb] = Str.split(pair, " ");
+    return { keys, verb: Arr.join(verb, " ") };
+  });
+
 describe("key hints", () => {
   it("keeps every pair, including the exit, when a bar wraps at a narrow width", () => {
     const hint = joinKeyHints(["↑↓ Move", "Enter Inspect", "x Stop", "Esc Close", "? More"]);
@@ -291,10 +298,36 @@ describe("key hints", () => {
       exit: "top" as const,
       exitAliases: ["q"],
     };
-    const collapsed = Str.split(keyHintBar(bar, false), " · ");
-    const expanded = keyHintBar(bar, true);
-    for (const pair of Arr.take(collapsed, 2)) expect(expanded).toContain(pair);
-    expect(expanded).toContain("Esc/q");
+    const collapsed = hintPairs(keyHintBar(bar, false));
+    const expanded = hintPairs(keyHintBar(bar, true));
+    // Every default pair keeps its keys under the same verb, and aliases join it as one pair;
+    // only the help toggle changes its verb.
+    for (const pair of Arr.filter(collapsed, (entry) => entry.keys !== "?"))
+      expect(
+        Arr.some(
+          expanded,
+          (shown) => shown.verb === pair.verb && Str.includes(pair.keys)(shown.keys),
+        ),
+      ).toBe(true);
+    const verbs = Arr.map(expanded, (pair) => pair.verb);
+    expect(Arr.dedupe(verbs)).toEqual(verbs);
+    expect(
+      Arr.some(expanded, (pair) => pair.verb === "Move" && Str.includes("j/k")(pair.keys)),
+    ).toBe(true);
+    expect(
+      Arr.some(expanded, (pair) => pair.verb === "Close" && Str.includes("q")(pair.keys)),
+    ).toBe(true);
+  });
+
+  it("merges a more pair that names the exit's verb into the exit", () => {
+    const expanded = keyHintBar(
+      { hints: ["↑↓ Move"], more: ["q Close", "h Back"], exit: "top", exitAliases: ["C-c"] },
+      true,
+    );
+    const closes = Arr.filter(Str.split(expanded, " · "), (pair) => Str.endsWith(" Close")(pair));
+    expect(closes).toHaveLength(1);
+    expect(closes[0]).toContain("C-c");
+    expect(closes[0]).toContain("q");
   });
 
   it("keeps the exit in a framed border and every other pair above it at any width", () => {

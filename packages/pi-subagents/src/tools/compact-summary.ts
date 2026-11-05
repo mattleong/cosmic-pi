@@ -32,6 +32,7 @@ import {
   type SummaryArguments,
 } from "./compact-heading.ts";
 import {
+  asksPartOfQuestion,
   compactAttentionIssues,
   compactRunIssues,
   hasChangesToReview,
@@ -290,13 +291,22 @@ function runIssues(
   actionFailureIssues(details.action, details.actionFailures ?? [], details.cards, summary, issues);
 }
 
-/** A skipped candidate per line with its reason, as a route issue's detail. */
-const skippedReasons = (candidates: ReadonlyArray<SubagentProfileCandidateCard>): string =>
+const ROUTE_RECOVERY =
+  "Run /subagents doctor to check sign-in, or /subagents profiles to change the route.";
+
+/**
+ * An unavailable route's detail: each skipped candidate on its line with its reason, then the
+ * commands that diagnose and change the route.
+ */
+const unavailableRouteDetail = (candidates: ReadonlyArray<SubagentProfileCandidateCard>): string =>
   Arr.join(
-    Arr.map(
-      Arr.filter(candidates, (candidate) => candidate.status === "skipped"),
-      (candidate) => `${formatRunRoute(candidate)}: ${candidate.reason}`,
-    ),
+    [
+      ...Arr.map(
+        Arr.filter(candidates, (candidate) => candidate.status === "skipped"),
+        (candidate) => `${formatRunRoute(candidate)}: ${candidate.reason}`,
+      ),
+      ROUTE_RECOVERY,
+    ],
     "\n",
   );
 
@@ -316,28 +326,25 @@ function summarizeModels(
 
     if (invalid || (profile.candidates.length > 0 && options === 0)) {
       unavailable++;
-      const detail = invalid
-        ? "Its configuration is invalid, so it fails closed. /subagents doctor lists the invalid fields."
-        : skippedReasons(profile.candidates);
       issues.push({
         severity: "warning",
         code: `profile:${profile.id}:unavailable`,
         message: `${profile.id} profile has ${invalid ? "invalid settings" : "no eligible options"}`,
-        ...(detail && { detail }),
+        detail: invalid
+          ? "Its configuration is invalid, so it fails closed. /subagents doctor lists the invalid fields."
+          : unavailableRouteDetail(profile.candidates),
       });
     } else if (profile.candidates.length === 0) disabled++;
   }
   const agents = details.agents ?? [];
   for (const agent of agents)
-    if (Arr.every(agent.candidates, (candidate) => candidate.status !== "eligible")) {
-      const detail = skippedReasons(agent.candidates);
+    if (Arr.every(agent.candidates, (candidate) => candidate.status !== "eligible"))
       issues.push({
         severity: "warning",
         code: `agent:${agent.name}:unavailable`,
         message: `${agent.name} agent has no eligible options`,
-        ...(detail && { detail }),
+        detail: unavailableRouteDetail(agent.candidates),
       });
-    }
   const invalidAgents = details.invalidAgents ?? [];
   if (invalidAgents.length > 0)
     issues.push({
@@ -347,15 +354,15 @@ function summarizeModels(
       detail: `${countLabel(invalidAgents.length, "invalid agent entry", "invalid agent entries")} ${invalidAgents.length === 1 ? "fails" : "fail"} closed; /subagents doctor lists the invalid fields.`,
     });
   const [only] = details.profiles;
-  // One requested profile reads as the model its launch would take.
-  const lead =
-    only && details.profiles.length === 1
-      ? profileRow(only, details).route
-      : countLabel(details.profiles.length, "profile");
+  const single = only !== undefined && details.profiles.length === 1;
+  // One requested profile reads as the model its launch would take, or why none would run.
+  const lead = single
+    ? profileRow(only, details).route
+    : countLabel(details.profiles.length, "profile");
   const counters = [
     lead,
-    ...(disabled ? [`${disabled} disabled`] : []),
-    ...(unavailable ? [`${unavailable} unavailable`] : []),
+    ...(disabled && !single ? [`${disabled} disabled`] : []),
+    ...(unavailable && !single ? [`${unavailable} unavailable`] : []),
     ...(agents.length > 0 ? [countLabel(agents.length, "custom agent")] : []),
   ];
   // A narrow row keeps at least the profile count or the single route.
@@ -480,6 +487,10 @@ function summarizeDetails(
     }),
   );
   issues.push(...compactAttentionIssues(asking));
+  // When every run shown asks a question its row only begins, expanding reveals the questions.
+  const askers = [...cards, ...asking];
+  if (askers.length > 0 && Arr.every(askers, asksPartOfQuestion))
+    summary.expandLabel = askers.length === 1 ? "question" : "questions";
   labelChangesToReview(summary, cards);
   const severity = compactIssueSeverity(issues);
   if (severity === "error") summary.outcome = "error";

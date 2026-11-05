@@ -316,7 +316,7 @@ export function betterOpenAIWithDependencies(
 
   command.add({
     name: "usage",
-    description: "Show subscription usage",
+    description: "Subscription usage",
     handler: (_args, ctx) => {
       updateContext(ctx);
       const signal = safeHostSignal(ctx);
@@ -328,7 +328,7 @@ export function betterOpenAIWithDependencies(
   });
   command.add({
     name: "fast",
-    description: "Toggle OpenAI fast mode",
+    description: "Toggle fast mode",
     handler: (args, ctx) => {
       updateContext(ctx);
       if (Str.trim(args)) {

@@ -27,6 +27,7 @@ import {
   managerSettingsTheme,
   settingsSurfaceHeader,
   type SettingsSurfaceItem,
+  settingsSaveEvents,
   withSettingsGroupChildren,
 } from "../manager/settings-surface.ts";
 import {
@@ -438,7 +439,14 @@ export function settingsSubcommand<Config>(
               if (latest.get(row) === token) notify(ctx, unavailable, "warning");
             });
           };
-          const withGroups = withSettingsGroupChildren(items, managerSettingsTheme(theme), change);
+          // Open groups derive their rows again whenever any save, top-level or nested, settles.
+          const saves = settingsSaveEvents();
+          const withGroups = withSettingsGroupChildren(
+            items,
+            managerSettingsTheme(theme),
+            change,
+            saves,
+          );
           return {
             header: `${title} settings`,
             items: withGroups,
@@ -448,7 +456,10 @@ export function settingsSubcommand<Config>(
               finish(undefined);
             },
             onChange: (row, value, list) =>
-              void change(row, value, (shown) => list.updateValue(row, shown)),
+              void change(row, value, (shown) => {
+                list.updateValue(row, shown);
+                saves.settled();
+              }).finally(saves.settled),
           };
         },
         isCurrent,
@@ -493,7 +504,7 @@ export function settingsSubcommand<Config>(
     const overview = extensionCommandOverview(command, options.description, [
       { name: "", description: "Open the settings list" },
       { name: `${scopeToken}<id> <value>`, description: "Change one setting" },
-      { name: "status", description: "Show effective values" },
+      { name: "status", description: "Show current values" },
       { name: "help", description: "Show this help" },
     ]);
     const lines = [
@@ -598,8 +609,8 @@ export function settingsSubcommand<Config>(
         prefix,
         descriptors,
         [
-          { value: "status", label: "status", description: "Show effective values" },
-          { value: "help", label: "help", description: "Show setting ids and usage" },
+          { value: "status", label: "status", description: "Show current values" },
+          { value: "help", label: "help", description: "Show setting ids" },
         ],
         Arr.map(scopes, (scope) => ({
           value: scope.name,

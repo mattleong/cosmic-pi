@@ -16,6 +16,8 @@ interface Item {
 interface Atom {
   readonly items: Item[];
   spaced: boolean;
+  /** Whether the atom is part of a `·` fact after the first separator. */
+  fact?: boolean;
 }
 
 // Styling sequences, `ESC [ … m`, which take no width.
@@ -86,15 +88,30 @@ function atoms(text: string): Atom[] {
     facts ||= separator;
     if (previous && atom.spaced && (open || (facts && !separator)))
       previous.items.push({ text: " ", width: 1 }, ...atom.items);
-    else joined.push({ items: [...atom.items], spaced: atom.spaced });
+    else joined.push({ items: [...atom.items], spaced: atom.spaced, fact: facts });
     open = separator;
   }
   return joined;
 }
 
 /**
+ * A fact's width from its first atom through the path parts that follow it without a space, so a
+ * fact that fits on a row moves to the next one whole rather than breaking after a `/`.
+ */
+const factWidth = (all: readonly Atom[], start: number): number => {
+  let width = 0;
+  for (const [index, atom] of all.entries()) {
+    if (index < start) continue;
+    if (index > start && atom.spaced) break;
+    width += atomWidth(atom);
+  }
+  return width;
+};
+
+/**
  * A styled preview heading wrapped to `width`: between words, or after a `/` in a long path, with
- * continuation rows hanging two columns in. A word wider than a row breaks mid-word.
+ * continuation rows hanging two columns in. A `·` fact that fits on a row stays whole; a word wider
+ * than a row breaks mid-word.
  */
 export function wrapPreviewHeading(text: string, width: number): string[] {
   if (width <= 0) return [];
@@ -117,10 +134,13 @@ export function wrapPreviewHeading(text: string, width: number): string[] {
     row.push(item);
     used += item.width;
   };
-  for (const atom of atoms(text)) {
+  const all = atoms(text);
+  for (const [index, atom] of all.entries()) {
     const gap = atom.spaced && used > 0 ? 1 : 0;
     const size = atomWidth(atom);
-    if (used > 0 && used + gap + size > available()) newRow();
+    const whole = atom.fact === true && atom.spaced ? factWidth(all, index) : size;
+    const moves = whole > size && whole <= width - hang.length && used + gap + whole > available();
+    if (used > 0 && (moves || used + gap + size > available())) newRow();
     else if (gap) place({ text: " ", width: 1 });
     for (const item of atom.items) place(item);
   }

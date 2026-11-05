@@ -262,3 +262,11 @@ test("a wrapped preview heading keeps every character, hangs, and never ends a r
     });
   }
 });
+
+test("a wrapped heading keeps a fact with a path whole when it fits on a row", () => {
+  const heading = "✓ agent_profiles reviewer · openai-codex/gpt-5.6-sol:high";
+  for (const width of [40, 50]) {
+    const rows = Arr.map(wrapPreviewHeading(heading, width), (row) => Str.trim(stripAnsi(row)));
+    expect(rows).toContain("· openai-codex/gpt-5.6-sol:high");
+  }
+});

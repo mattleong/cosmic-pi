@@ -202,6 +202,9 @@ it.each([
   ["\x1b[31mred\x1b[39m", 2, "r…", "re"],
   ["\x1b[31m\x1b[39m", 0, "", ""],
   ["text", -1, "", ""],
+  ["Approve the plan", 9, "Approve…", "Approve t"],
+  ["read-only · 12s", 12, "read-only…", "read-only · "],
+  ["scout → gpt-6", 8, "scout…", "scout → "],
 ] as const)("clips %j to %d columns", (text, width, marked, unmarked) => {
   expect(stripTerminalSequences(clipToWidth(text, width))).toBe(marked);
   expect(stripTerminalSequences(clipToWidth(text, width, ""))).toBe(unmarked);

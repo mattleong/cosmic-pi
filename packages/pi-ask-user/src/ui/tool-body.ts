@@ -5,15 +5,16 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
-import { expandedArguments, expandedSection, previewIssuesSlot } from "pi-code-previews";
+import {
+  endElide,
+  expandedArguments,
+  expandedDetails,
+  expandedSection,
+  previewIssuesSlot,
+} from "pi-code-previews";
 import { failureMessage, restatesText } from "pi-cosmic-core/message-text";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import {
-  clipToWidth,
-  INLINE_SEPARATOR,
-  SUITE_STATUS_GLYPHS,
-  wrapFacts,
-} from "pi-cosmic-ui/manager";
+import { clipToWidth, INLINE_SEPARATOR, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderExpansionAffordance,
@@ -107,7 +108,14 @@ const widthRows = (rows: (width: number) => string[]): Component => {
   };
 };
 
-// Each written line wraps on its own and hangs under the text after the label.
+/**
+ * How far a wrapped or later line hangs beneath its first row: two columns past a nested row, such
+ * as a choice or an answer's note, so a continuation never reads as one.
+ */
+const CONTINUATION_HANG = 4;
+const CONTINUATION_PREFIX = Fn.pipe(" ", Str.repeat(CONTINUATION_HANG));
+
+// Each written line wraps on its own; every row after the first hangs past the nested rows.
 function appendAnswerLines(
   lines: string[],
   lead: string,
@@ -117,8 +125,9 @@ function appendAnswerLines(
   width: number,
 ): void {
   const [first, ...rest] = Str.split(text, /\r?\n/u);
-  appendWrapped(lines, indent, `${lead}${style(first)}`, width, 2);
-  for (const line of rest) appendWrapped(lines, `${indent}  `, style(line), width);
+  appendWrapped(lines, indent, `${lead}${style(first)}`, width, CONTINUATION_HANG);
+  for (const line of rest)
+    appendWrapped(lines, `${indent}${CONTINUATION_PREFIX}`, style(line), width);
 }
 
 interface FirstLine {
@@ -171,15 +180,21 @@ export function answersBody(
     render: (width) => {
       if (last?.width === width) return last.rows;
       let cut = hidesMore;
-      const fit = (line: string): string => {
-        if (visibleWidth(line) > width) cut = true;
-        return clipToWidth(line, width);
+      // A long answer or note is cut at a word boundary, so every word left on the row is whole.
+      const fit = (lead: string, text: string, style: (value: string) => string): string => {
+        const room = width - visibleWidth(lead);
+        if (visibleWidth(text) <= room) return `${lead}${style(text)}`;
+        cut = true;
+        return clipToWidth(`${lead}${style(endElide(text, room))}`, width);
       };
       const rows = Arr.flatMap(firstLines, ({ label, answer, note }) => {
-        const answerLine = fit(`${theme.fg("muted", `${label}:`)} ${answer.text}`);
+        const answerLine = fit(`${theme.fg("muted", `${label}:`)} `, answer.text, Fn.identity);
         return note === undefined
           ? [answerLine]
-          : [answerLine, fit(`  ${theme.fg("dim", `Note: ${note.text}`)}`)];
+          : [
+              answerLine,
+              fit(`  ${theme.fg("dim", "Note: ")}`, note.text, (text) => theme.fg("dim", text)),
+            ];
       });
       if (cut) rows.push(clipToWidth(renderExpansionAffordance("answers", false, theme), width));
       last = { width, rows };
@@ -202,17 +217,8 @@ const rawResultSection = (theme: Theme, text: string, isError: boolean): Compone
 const restatesIssue = (raw: string, isError: boolean): boolean =>
   isError && restatesText(raw, failureMessage(raw, ""));
 
-// A fact list wraps between whole facts, so no line ends with a separator.
 const detailsSection = (theme: Theme, facts: readonly string[]): Component =>
-  expandedSection(
-    theme,
-    "Details",
-    widthRows((width) => {
-      return Arr.flatMap(facts, (fact) =>
-        Arr.map(wrapFacts(stripTerminalControls(fact), width), (line) => theme.fg("dim", line)),
-      );
-    }),
-  );
+  expandedDetails(theme, Arr.map(facts, stripTerminalControls));
 
 const MODE_NOTES = {
   single: undefined,
@@ -229,15 +235,16 @@ function requestRows(request: RequestView, theme: Theme, width: number): string[
     append(
       "",
       `${theme.fg("muted", `${titleLabel(question.title)}:`)} ${theme.fg("text", stripTerminalControls(question.prompt))}`,
-      2,
+      CONTINUATION_HANG,
     );
-    // The mode note is a fact of its own: it follows the prompt whole, or hangs beneath it, so no
-    // line ends with its separator.
+    // The mode note is a fact of its own: it follows the prompt whole, or leads a continuation row
+    // with its separator, so no line ends with one.
     if (note) {
       const last = lines.length - 1;
       const joined = `${lines[last] ?? ""}${theme.fg("dim", `${INLINE_SEPARATOR}${note}`)}`;
       if (visibleWidth(joined) <= width) lines[last] = joined;
-      else append("  ", theme.fg("dim", note));
+      else
+        append(CONTINUATION_PREFIX, theme.fg("dim", `${Str.trimStart(INLINE_SEPARATOR)}${note}`));
     }
     Arr.forEach(question.choices ?? [], (choice, index) => {
       const description = choice.description
@@ -258,13 +265,13 @@ function requestRows(request: RequestView, theme: Theme, width: number): string[
     append(
       "",
       theme.fg("muted", `Meanwhile: ${stripTerminalControls(request.independentWork)}`),
-      2,
+      CONTINUATION_HANG,
     );
   if (request.blockedWork)
     append(
       "",
       theme.fg("muted", `Blocked until answered: ${stripTerminalControls(request.blockedWork)}`),
-      2,
+      CONTINUATION_HANG,
     );
   return lines;
 }

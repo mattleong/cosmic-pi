@@ -1,5 +1,6 @@
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { deferredPromise } from "pi-cosmic-core/testing";
+import { splitKeyLabel } from "pi-cosmic-ui/manager/key-labels";
 import { submitted } from "./support/questionnaire.ts";
 import {
   DOWN,
@@ -14,6 +15,7 @@ import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 import { it as effectIt } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
@@ -160,7 +162,18 @@ describe("AskUserDialog", () => {
     dialog.handleInput("?");
     const expanded = Str.split(Str.trim(hintLine()), " · ");
     expect(expanded.length).toBeGreaterThan(collapsed.length);
-    for (const hint of collapsed.slice(0, -1)) expect(expanded).toContain(hint);
+    // Expanded help may merge an alias into a default pair (`↑↓/j/k Move`), but keeps its keys.
+    const pairs = Arr.map(expanded, (pair) => {
+      const [keys, ...verb] = Str.split(pair, " ");
+      return { keys: splitKeyLabel(keys), verb: Arr.join(verb, " ") };
+    });
+    for (const hint of collapsed.slice(0, -1)) {
+      const [keys, ...verb] = Str.split(hint, " ");
+      const merged = Arr.findFirst(pairs, (pair) => pair.verb === Arr.join(verb, " "));
+      expect(Option.getOrUndefined(merged)?.keys).toEqual(
+        expect.arrayContaining([...splitKeyLabel(keys)]),
+      );
+    }
   });
 
   effectIt.effect(

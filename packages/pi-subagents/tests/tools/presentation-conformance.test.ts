@@ -1,7 +1,7 @@
 import { beforeEach, expect, it } from "vitest";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { argumentFailureIssue, withCodePreviewShell } from "pi-code-previews";
+import { argumentFailureIssue, receivedArguments, withCodePreviewShell } from "pi-code-previews";
 import {
   animationSchedulerProbe,
   applyPresentationSettings,
@@ -133,8 +133,14 @@ it.each(["compact", "preview"] as const)(
       );
       expect(collapsed, tool.name).toContain(issue?.message);
       expect(collapsed, tool.name).not.toContain(Str.split(rejection, "\n")[0]);
-      for (const line of Arr.filter(Str.split(rejection, "\n"), Boolean))
+      // As for a rejected builtin, expansion keeps the issue's detail and the echoed arguments
+      // without repeating Pi's own wording of them.
+      for (const line of [
+        ...Str.split(issue?.detail ?? "", "\n"),
+        ...Str.split(receivedArguments(rejection) ?? "", "\n"),
+      ])
         expect(expanded, tool.name).toContain(line);
+      expect(expanded, tool.name).not.toContain(Str.split(rejection, "\n")[0]);
     }
   },
 );

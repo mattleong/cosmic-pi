@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { currentModelKey, fastDiagnosticLines, type FastSnapshot } from "../fast/controller.ts";
 import { usageDiagnosticLines } from "../usage/debug.ts";
 import type { OpenAIProjection } from "../usage/projection.ts";
@@ -23,11 +24,11 @@ const section = (title: string, lines: ReadonlyArray<string>): string[] =>
  */
 export const diagnosticLines = (facts: DiagnosticFacts): ReadonlyArray<string> => [
   `Current model: ${currentModelKey(facts.ctx)}`,
-  `Config: ${facts.configPath}`,
+  `Config: ${formatDisplayPath(facts.configPath, facts.ctx.cwd)}`,
   ...section("Fast mode", fastDiagnosticLines(facts.ctx, facts.fast)),
   ...section("Usage", [
     `Footer: ${facts.footerUsageVisible ? "auto" : "off"} (/cosmic-ui settings)`,
-    ...usageDiagnosticLines(facts.usage),
+    ...usageDiagnosticLines(facts.usage, facts.ctx.cwd),
   ]),
   ...section(
     "Compaction",

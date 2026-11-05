@@ -36,13 +36,13 @@ export const SETTING_ITEM_DEFINITIONS = {
   toolCallBackground: {
     label: "Tool call background",
     description:
-      "on fills each tool row with Pi's status color, border draws only a colored frame around it, and off shows the row with neither. Changes take effect after /reload.",
+      "on fills each tool row with Pi's status color, border draws only a colored frame around it, and off shows the row with neither. Changes apply after /reload.",
     values: TOOL_CALL_BACKGROUND_MODES,
   },
   toolCallCollapsedStyle: {
     label: "Collapsed tool calls",
     description:
-      "Keep previews or use one-row compact summaries. Compact hides ordinary previews until expanded but keeps important notices visible. Changes take effect after /reload.",
+      "Keep previews or use one-row compact summaries. Compact hides ordinary previews until expanded but keeps important notices visible. Changes apply after /reload.",
     values: TOOL_CALL_COLLAPSED_STYLES,
   },
   toolCallTiming: {
@@ -51,16 +51,16 @@ export const SETTING_ITEM_DEFINITIONS = {
       "Show elapsed duration inline in compact summaries, in the result footer, or in the top-right border when border mode is enabled.",
     values: ON_OFF_VALUES,
   },
-  readCollapsedLines: {
-    label: "Read preview lines",
-    description: "Maximum read result lines shown before collapsing.",
-    values: ["10", "20", "40", "80"],
-  },
   readContentPreview: {
     label: "Read content",
     description:
       "Show file contents in read results. Turn off to hide collapsed output while still allowing expanded output.",
     values: ON_OFF_VALUES,
+  },
+  readCollapsedLines: {
+    label: "Read preview lines",
+    description: "Maximum read result lines shown before collapsing.",
+    values: ["10", "20", "40", "80"],
   },
   writeContentPreview: {
     label: "Write content",
@@ -85,16 +85,16 @@ export const SETTING_ITEM_DEFINITIONS = {
       "Maximum edit diff lines shown before collapsing. `all` matches pi's built-in edit diff behavior.",
     values: ["all", "60", "100", "160", "240"],
   },
-  grepCollapsedLines: {
-    label: "Grep preview lines",
-    description: "Maximum grep result lines shown before collapsing.",
-    values: ["10", "15", "25", "40", "80"],
-  },
   grepResultPreview: {
     label: "Grep results",
     description:
       "Show grep matches in tool results. Turn off to hide collapsed output while still allowing expanded output.",
     values: ON_OFF_VALUES,
+  },
+  grepCollapsedLines: {
+    label: "Grep preview lines",
+    description: "Maximum grep result lines shown before collapsing.",
+    values: ["10", "15", "25", "40", "80"],
   },
   findResultPreview: {
     label: "Find results",

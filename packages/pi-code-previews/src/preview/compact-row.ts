@@ -2,7 +2,9 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   managerActivityColor,
   managerActivityGlyph,
@@ -18,7 +20,8 @@ import {
   type CompactStatus,
   type CompactSummary,
 } from "../tools/compact-summary";
-import { layoutCompactHeader } from "./compact-header";
+import { elideSubject, layoutCompactHeader } from "./compact-header";
+import { wrapPreviewHeading } from "./heading-wrap";
 import { TIMING_VISIBLE_MS } from "./tool-timing";
 
 export function compactSingleLine(value: string): string {
@@ -39,7 +42,7 @@ export type CompactRowInput = {
   expanded?: boolean;
   /**
    * The width of the collapsed row this expanded heading replaces. The heading keeps the counter
-   * alternative that row keeps there, though its frame leaves it fewer columns.
+   * alternative that row shows there, though its frame leaves it fewer columns.
    */
   collapsedWidth?: number | undefined;
 };
@@ -133,43 +136,43 @@ export interface CompactRowLayout {
   readonly counter?: string | undefined;
 }
 
+const COMPACT_SEPARATOR = (theme: Theme) => theme.fg("dim", " · ");
+
+const mutedParts = (theme: Theme, values: readonly string[] | undefined): string[] =>
+  values
+    ? Arr.map(Arr.filter(Arr.map(values, compactSingleLine), Str.isNonEmpty), (text) =>
+        theme.fg("muted", text),
+      )
+    : [];
+
+/** The row's parts beside its subject: counter alternatives, widest first, then metadata. */
+function compactRowParts(input: CompactRowInput, theme: Theme) {
+  const { summary } = input;
+  const duration = compactRowDuration(input);
+  const timing = duration ? theme.fg("dim", duration) : undefined;
+  return {
+    counters: input.issueLabel ? [input.issueLabel] : mutedParts(theme, summary.counters),
+    optional: [...mutedParts(theme, summary.metadata), summary.showTiming ? undefined : timing],
+    timing: summary.showTiming ? timing : undefined,
+  };
+}
+
 export function layoutCompactRow(
   input: CompactRowInput,
   theme: Theme,
   width: number,
 ): CompactRowLayout {
   if (width <= 0) return { row: "", issueShown: false, subjectComplete: false };
-  const { summary } = input;
-  const duration = compactRowDuration(input);
-  const timing = duration ? theme.fg("dim", duration) : undefined;
-  const muted = (values: readonly string[] | undefined) =>
-    values
-      ? Arr.map(Arr.filter(Arr.map(values, compactSingleLine), Str.isNonEmpty), (text) =>
-          theme.fg("muted", text),
-        )
-      : [];
-  const candidates = input.issueLabel ? [input.issueLabel] : muted(summary.counters);
-  const collapsedCounter =
-    input.collapsedWidth === undefined
-      ? undefined
-      : layoutCompactRow(
-          { ...input, expanded: false, collapsedWidth: undefined },
-          theme,
-          input.collapsedWidth,
-        ).counter;
-  const kept = Option.getOrUndefined(
-    Arr.findFirstIndex(candidates, (candidate) => candidate === collapsedCounter),
-  );
+  const { counters, optional, timing } = compactRowParts(input, theme);
   const { row, counter, subjectComplete } = layoutCompactHeader(
     compactRowPrefix(input, theme),
     compactRowSubject(input),
-    kept === undefined ? candidates : Arr.drop(candidates, kept),
-    [...muted(summary.metadata), summary.showTiming ? undefined : timing],
+    counters,
+    optional,
     width,
-    theme.fg("dim", " · "),
-    summary.showTiming ? timing : undefined,
-    summary.pathSubject ? "path" : "prose",
-    kept !== undefined,
+    COMPACT_SEPARATOR(theme),
+    timing,
+    input.summary.pathSubject ? "path" : "prose",
   );
   return {
     row,
@@ -178,6 +181,72 @@ export function layoutCompactRow(
     counter,
   };
 }
+
+/** An expanded compact heading's rows, whether they show the whole subject, and its counter. */
+export interface ExpandedCompactHeading {
+  readonly rows: string[];
+  readonly subjectComplete: boolean;
+  readonly counter?: string | undefined;
+}
+
+/**
+ * An expanded compact heading: the whole subject, then the counter alternative its collapsed row
+ * shows at `collapsedWidth` (the widest without one), else the first metadata, then the timing the
+ * collapsed row shows. A heading wider than the row wraps as a preview heading does, so the subject
+ * is never cut mid-word and a counter that doesn't fit moves to a hanging continuation row; only a
+ * subject too long for three rows is shortened, at a word boundary or in a path's middle.
+ */
+export function layoutExpandedCompactHeading(
+  input: CompactRowInput,
+  theme: Theme,
+  width: number,
+): ExpandedCompactHeading {
+  if (width <= 0) return { rows: [], subjectComplete: false };
+  const { counters, optional, timing } = compactRowParts(input, theme);
+  const counter =
+    input.collapsedWidth === undefined
+      ? counters[0]
+      : layoutCompactRow(
+          { ...input, expanded: false, collapsedWidth: undefined },
+          theme,
+          input.collapsedWidth,
+        ).counter;
+  const extra = counters.length
+    ? undefined
+    : Option.getOrUndefined(
+        Arr.findFirst(optional, (value) => value !== undefined && Str.isNonEmpty(Str.trim(value))),
+      );
+  const subject = compactSingleLine(input.summary.subject);
+  const prefix = compactRowPrefix(input, theme);
+  const parts = Arr.filter(
+    Arr.filter(
+      [counter, extra, !counters.length || counter !== undefined ? timing : undefined],
+      Predicate.isNotUndefined,
+    ),
+    Str.isNonEmpty,
+  );
+  const wrap = (shown: string) =>
+    wrapPreviewHeading(
+      Arr.join([`${prefix}${shown ? ` ${shown}` : ""}`, ...parts], COMPACT_SEPARATOR(theme)),
+      width,
+    );
+  const whole = wrap(subject);
+  if (whole.length <= EXPANDED_HEADING_ROWS) return { rows: whole, subjectComplete: true, counter };
+  // A subject longer than the rows allow is shortened as the collapsed row shortens it; the
+  // body then shows it whole.
+  const kind = input.summary.pathSubject ? "path" : "prose";
+  let fits = 1;
+  let over = visibleWidth(subject);
+  while (over - fits > 1) {
+    const room = Math.floor((fits + over) / 2);
+    if (wrap(elideSubject(subject, room, kind)).length <= EXPANDED_HEADING_ROWS) fits = room;
+    else over = room;
+  }
+  return { rows: wrap(elideSubject(subject, fits, kind)), subjectComplete: false, counter };
+}
+
+// An expanded compact heading wraps onto at most this many rows before its subject is shortened.
+const EXPANDED_HEADING_ROWS = 3;
 
 export function compactPlainText(text: string): string {
   return Fn.pipe(

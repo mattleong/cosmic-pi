@@ -17,6 +17,7 @@ import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";
 import { displayName } from "../ui/notice-details.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { agentFailureIssues } from "./compact-action-failures.ts";
+import { quotesPartOfQuestion } from "./compact-run-issues.ts";
 import { rejectedFailure } from "./failure-details.ts";
 import { sendStatus } from "./render-agents.ts";
 import { AgentToolDetailsSchema, type AgentToolDetails } from "./details-schema.ts";
@@ -150,8 +151,16 @@ const summarizeRead = (
   const truncated = Arr.filter(details.agents, (agent) => agent.truncated).length;
   // Each run's status card raises its own attention; reading it still succeeded.
   const statusIssues = Arr.flatMap(details.agents, (agent) => agent.issues ?? []);
+  // When every agent read asks a question its row only begins, expanding reveals the questions.
+  const askingInPart = Arr.every(
+    details.agents,
+    (agent) =>
+      agent.source === "question" && agent.text !== undefined && quotesPartOfQuestion(agent.text),
+  );
   return settled(
     {
+      ...(details.agents.length > 0 &&
+        askingInPart && { expandLabel: single ? "question" : "questions" }),
       subject: single ? displayName(only.name) : "",
       counters: single ? [stateLabel(only.state)] : [countLabel(details.agents.length, "agent")],
       metadata: [

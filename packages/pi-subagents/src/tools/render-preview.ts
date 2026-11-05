@@ -1,9 +1,11 @@
 import * as Arr from "effect/Array";
+import * as Rec from "effect/Record";
+import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import { expandedSection, isRejectedEmptyCall } from "pi-code-previews";
+import { expandedSection, isRejectedEmptyCall, receivedArguments } from "pi-code-previews";
 import {
   renderExpansionAffordance,
   renderToolHeader,
@@ -28,8 +30,22 @@ export const rejectionAwareCall =
       ? new Text(renderToolHeader({ title: label }, theme), 0, 0)
       : renderCall(args, theme, context);
 
-export const errorSection = (theme: Theme, text: string): Component =>
-  expandedSection(theme, "Error", new Text(theme.fg("toolOutput", text), 0, 0));
+/**
+ * A failure's expanded body. Pi's own argument rejection is stated by its issue, so, as for a
+ * rejected builtin, only the arguments it echoed remain, and only when the call shows none of its
+ * own (malformed JSON arrives as `{}`).
+ */
+const isArgumentRecord = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+
+export const errorSection = (theme: Theme, text: string, args?: unknown): Component => {
+  const callHasArguments = isArgumentRecord(args) && Rec.keys(args).length > 0;
+  const received = receivedArguments(text);
+  if (received === undefined)
+    return expandedSection(theme, "Error", new Text(theme.fg("toolOutput", text), 0, 0));
+  return received && !callHasArguments
+    ? expandedSection(theme, "Received arguments", new Text(theme.fg("error", received), 0, 0))
+    : new Container();
+};
 
 export const previewCall = (
   theme: Theme,
@@ -48,11 +64,17 @@ export const previewCall = (
 export const textResultBody = (
   theme: Theme,
   text: string,
-  state: { readonly expanded: boolean; readonly isError: boolean },
+  state: {
+    readonly expanded: boolean;
+    readonly isError: boolean;
+    /** The call's arguments, which a failure's body then needn't repeat. */
+    readonly args?: unknown;
+  },
   collapsedLines: number,
 ): Component => {
   if (!text) return new Container();
-  if (state.isError) return state.expanded ? errorSection(theme, text) : new Container();
+  if (state.isError)
+    return state.expanded ? errorSection(theme, text, state.args) : new Container();
   const lines = Str.split(text, "\n");
   if (state.expanded || lines.length <= collapsedLines + 1) {
     const body = new Text(theme.fg("toolOutput", text), 0, 0);

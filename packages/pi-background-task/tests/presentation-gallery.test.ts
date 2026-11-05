@@ -15,7 +15,7 @@ import {
   type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
-import { extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
+import { deferredPromise, extensionContextFixture, macrotask } from "pi-cosmic-core/testing";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import {
   KeybindingsManager as TuiKeybindingsManager,
@@ -774,15 +774,18 @@ const settingsLines = (
     readonly explore?: boolean;
     /** Saves Global's running limit as 16, then restores its inheritance, in one invocation. */
     readonly live?: boolean;
+    /** Saves Global's running limit as 16, and the write lands while Project's choices are open. */
+    readonly pending?: boolean;
   } = {},
 ): Effect.Effect<string[]> =>
   Effect.gen(function* () {
     setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS));
+    const landed = deferredPromise();
     const command = taskSettingsSubcommand({
       config: () => ({ ...DEFAULT_BACKGROUND_TASK_CONFIG, logBufferBytesPerTask: 1024 ** 2 }),
       captureAuthority: () => () => true,
       read,
-      write: () => Promise.resolve(),
+      write: () => (options.pending ? landed.promise : Promise.resolve()),
     });
     const surface = fakeCustomSurfaceHost();
     const ctx = extensionContextFixture({
@@ -806,6 +809,20 @@ const settingsLines = (
     const press = (...keys: string[]) => {
       for (const key of keys) surface.editor?.handleInput?.(key);
     };
+    if (options.pending) {
+      press("\r", "j", "\r", "j", "j", "j", "\r");
+      yield* macrotask;
+      press("\u001b", "j", "\r", "j", "\r");
+      lines.push(...frames("Project's running choices while Global's save is in flight"));
+      landed.resolve();
+      yield* macrotask;
+      lines.push(...frames("Project's running choices once Global's save lands"));
+      press("\u001b");
+      lines.push(...frames("the Project group once Global's save lands"));
+      press("\u001b", "\u001b");
+      yield* Effect.promise(() => opened);
+      return lines;
+    }
     if (options.live) {
       // Global, its running limit, then 16: the list leads with `inherit (8)`, then 4, 8, 16.
       press("\r", "j", "\r", "j", "j", "j", "\r");
@@ -841,6 +858,32 @@ const settingsLines = (
     lines.push(...frames("the Project group opened"));
     for (const key of ["\u001b", "\u001b"]) surface.editor?.handleInput?.(key);
     yield* Effect.promise(() => opened);
+    return lines;
+  });
+
+/** `/tasks settings help` and `status` as Pi's notices show them, before any setting is saved. */
+const settingsNoticeLines = (): Effect.Effect<string[]> =>
+  Effect.gen(function* () {
+    const notices: string[] = [];
+    const command = taskSettingsSubcommand({
+      config: () => DEFAULT_BACKGROUND_TASK_CONFIG,
+      captureAuthority: () => () => true,
+      read: () => Promise.resolve({}),
+      write: () => Promise.resolve(),
+    });
+    const ctx = extensionContextFixture({
+      cwd: "/project",
+      mode: "tui",
+      hasUI: true,
+      isProjectTrusted: () => true,
+      ui: { notify: (message: string) => void notices.push(message) },
+    });
+    const lines: string[] = [];
+    for (const args of ["help", "status"]) {
+      notices.length = 0;
+      yield* Effect.promise(() => Promise.resolve(command.handler(args, ctx)));
+      lines.push(`── /tasks settings ${args} · notice`, ...notices, "");
+    }
     return lines;
   });
 
@@ -933,6 +976,11 @@ describe.skipIf(!directory)("presentation gallery", () => {
           prefix: "one invocation · ",
           live: true,
         })),
+        ...(yield* settingsLines(() => Promise.resolve({}), {
+          prefix: "save in flight · ",
+          pending: true,
+        })),
+        ...(yield* settingsNoticeLines()),
         ...(yield* settingsLines(
           (location) => Promise.resolve(location.scope === "global" ? { enabled: false } : {}),
           { prefix: "tasks off globally · " },

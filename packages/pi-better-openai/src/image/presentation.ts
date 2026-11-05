@@ -12,11 +12,13 @@ import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import {
   compactPlainText,
+  endElide,
   expandedBody,
   expandedDetails,
   expandedFields,
   expandedText,
   getTextContent,
+  headingShowedSubject,
   middleElide,
   previewIssuesSlot,
   type ExpandedField,
@@ -32,7 +34,7 @@ import {
   toolRunningLine,
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
-import { imageFailureIssue, imageRecord } from "./compact-summary.ts";
+import { imageFailureIssue, imagePromptSubject, imageRecord } from "./compact-summary.ts";
 import { imageResultText } from "./result-text.ts";
 import type { CodexImageDetails, ToolParams } from "./types.ts";
 
@@ -83,7 +85,8 @@ export const renderImageHeading = (prompt: string, theme: Theme, width: number):
     renderToolHeader(
       {
         title: IMAGE_TITLE,
-        subtitle: clipToWidth(sanitizeTerminalLine(prompt), promptRoom(width)),
+        // Shortened at a word boundary, as a collapsed compact row shortens its subject.
+        subtitle: endElide(sanitizeTerminalLine(prompt), promptRoom(width)),
       },
       theme,
     ),
@@ -107,6 +110,11 @@ const OPTION_LABELS: ReadonlyMap<string, string> = new Map([
 export interface ImageRequestOptions {
   readonly prompt: boolean;
   readonly action: boolean;
+  /**
+   * The row's renderer state when a compact heading names the prompt; the Prompt section then
+   * draws only while that heading shortened it.
+   */
+  readonly headingState?: WeakKey | undefined;
 }
 
 const optionFields = (args: Partial<ToolParams>, shown: ImageRequestOptions): ExpandedField[] =>
@@ -133,10 +141,20 @@ export function renderImageRequest(
 ): Component {
   return expandedBody(
     !shown.prompt && Predicate.isString(args.prompt)
-      ? expandedText(theme, "Prompt", [compactPlainText(args.prompt)])
+      ? promptSection(theme, args.prompt, shown.headingState)
       : undefined,
     expandedFields(theme, optionFields(args, shown)),
   );
+}
+
+function promptSection(theme: Theme, prompt: string, headingState: WeakKey | undefined): Component {
+  const section = expandedText(theme, "Prompt", [compactPlainText(prompt)]);
+  // The heading's subject is the prompt on one line; only a prompt it shows exactly can be left out.
+  if (headingState === undefined || imagePromptSubject(prompt) !== prompt) return section;
+  return {
+    render: (width) => (headingShowedSubject(headingState) ? [] : section.render(width)),
+    invalidate: () => section.invalidate(),
+  };
 }
 
 export function renderImageCall(

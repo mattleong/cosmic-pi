@@ -93,6 +93,20 @@ const settingsListPosition = (list: Component): SettingsListPosition | undefined
     }),
   );
 
+const SettingRowId = Schema.Struct({ id: Schema.String });
+const isSettingRowWithId = Schema.is(SettingRowId);
+
+/** Where a list's cursor is: its row index and that row's id, so a refresh can keep it there. */
+export const settingsListFocus = (
+  list: Component,
+): { readonly index: number; readonly id: string | undefined } | undefined =>
+  Option.getOrUndefined(
+    Option.map(decodeSettingsListSelection(list), ({ selectedIndex, filteredItems }) => {
+      const row = filteredItems[selectedIndex];
+      return { index: selectedIndex, id: isSettingRowWithId(row) ? row.id : undefined };
+    }),
+  );
+
 /** The level whose Esc this hint describes: `top` closes the surface, `nested` goes back. */
 export interface SettingsHintOptions {
   readonly level: "top" | "nested";

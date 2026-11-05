@@ -14,9 +14,10 @@ import { planCompactPresentation } from "../tools/compact-presentation";
 import { compactStatus, type CompactSummary } from "../tools/compact-summary";
 import { BorderedToolCall, statusBorderColor } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
-import { renderCompactRow } from "./compact-row";
+import { layoutExpandedCompactHeading, renderCompactRow } from "./compact-row";
 import { renderCompactAffordance } from "./compact-quote";
 import { showsAffordance } from "./expand-affordance";
+import { recordHeadingSubject } from "./heading-coverage";
 import { previewHeadingRow } from "./preview-heading";
 import { statusBackground } from "./self-background";
 
@@ -30,8 +31,11 @@ export interface CodePreviewMessage {
   readonly summary: CompactSummary;
   /** The collapsed body, which the caller bounds. Omitted, a compact row stands alone. */
   readonly collapsed?: (() => Component | undefined) | undefined;
-  /** The complete expanded body; defaults to the collapsed body. */
-  readonly expanded?: (() => Component | undefined) | undefined;
+  /**
+   * The complete expanded body; defaults to the collapsed body. `headingState` is the key
+   * `headingShowedSubject` reads, so the body can leave out a subject the heading showed whole.
+   */
+  readonly expanded?: ((headingState: WeakKey) => Component | undefined) | undefined;
   /**
    * What expansion reveals, such as `details` or `conversation`: in both styles the collapsed
    * message then ends with `▸ label · C-o Expand`, unless its body already ends in an affordance.
@@ -117,6 +121,8 @@ class MessageShell implements Component {
   private readonly options: MessageRenderOptions;
   private readonly theme: Theme;
   private readonly fallback: () => string;
+  // Whether the expanded heading showed the whole subject when it last drew, for the body.
+  private readonly headingState = {};
 
   constructor(
     message: CodePreviewMessage,
@@ -163,22 +169,29 @@ class MessageShell implements Component {
     });
     const status = compactStatus("settled", summary);
     const compact = policy.toolCallCollapsedStyle === "compact";
+    const headingRows = (width: number): string[] => {
+      if (!compact) {
+        recordHeadingSubject(this.headingState, false);
+        return [previewHeadingRow(message.label ?? message.name, summary, expanded, theme, width)];
+      }
+      if (!expanded)
+        return [renderCompactRow({ name: message.name, phase: "settled", summary }, theme, width)];
+      const { rows, subjectComplete } = layoutExpandedCompactHeading(
+        {
+          name: message.name,
+          phase: "settled",
+          summary,
+          expanded,
+          collapsedWidth: this.renderWidth,
+        },
+        theme,
+        width,
+      );
+      recordHeadingSubject(this.headingState, subjectComplete);
+      return rows;
+    };
     const heading = composeToolComponent((width) => [
-      ...(compact
-        ? [
-            renderCompactRow(
-              {
-                name: message.name,
-                phase: "settled",
-                summary,
-                expanded,
-                collapsedWidth: expanded ? this.renderWidth : undefined,
-              },
-              theme,
-              width,
-            ),
-          ]
-        : [previewHeadingRow(message.label ?? message.name, summary, expanded, theme, width)]),
+      ...headingRows(width),
       ...renderCompactIssues(
         summary.issues,
         theme,
@@ -187,7 +200,11 @@ class MessageShell implements Component {
         compact || expanded ? ROW_INDENT : "",
       ),
     ]);
-    const body = (expanded ? (message.expanded ?? message.collapsed) : message.collapsed)?.();
+    const body = expanded
+      ? message.expanded
+        ? message.expanded(this.headingState)
+        : message.collapsed?.()
+      : message.collapsed?.();
     const shown = new Container();
     // A collapsed compact message is a bare compact row, as a collapsed compact tool row is.
     if (compact && !expanded) {

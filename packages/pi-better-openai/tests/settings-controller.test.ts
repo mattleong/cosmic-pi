@@ -133,6 +133,30 @@ describe("Better OpenAI settings controller", () => {
     }),
   );
 
+  it.effect("saves OpenAI compaction from its top-level row and restores it when that fails", () =>
+    Effect.gen(function* () {
+      const write = deferredPromise();
+      const updateSetting = vi.fn(() => write.promise);
+      const h = settingsHarness({ updateSetting });
+      const { closed } = yield* h.open;
+      const component = h.selectedComponent();
+      component.handleInput?.(input.down);
+      component.handleInput?.(input.enter);
+      expect(renderedRow(component, "OpenAI compaction")).toContain("on");
+      // The save runs once the change is admitted, so it starts after the row shows the new value.
+      yield* waitUntil(() => updateSetting.mock.calls.length > 0);
+
+      write.reject(new Error("disk full"));
+      yield* waitUntil(
+        () => !Fn.pipe(renderedRow(component, "OpenAI compaction") ?? "", Str.includes(" on")),
+      );
+      expect(renderedRow(component, "OpenAI compaction")).toContain("off");
+      expect(h.notify).toHaveBeenCalledWith(expect.any(String), "warning");
+      component.handleInput?.(input.escape);
+      yield* Effect.promise(() => closed);
+    }),
+  );
+
   it.effect("renders redacted config as terminal-safe JSON", () =>
     Effect.gen(function* () {
       const syntheticToken = Arr.join(["sk", "private-token-123456"], "-");

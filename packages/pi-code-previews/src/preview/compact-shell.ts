@@ -26,8 +26,9 @@ import {
   statusBorderColor,
 } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
-import { layoutCompactRow } from "./compact-row";
-import { recordHeadingSubject } from "./heading-coverage";
+import { layoutExpandedCompactHeading } from "./compact-row";
+import { recordHeadingCounter, recordHeadingSubject } from "./heading-coverage";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import { renderCompactToolCall } from "./compact-tool-call";
 import { compactExpandLabel } from "./expand-affordance";
 import { planCompactPresentation } from "../tools/compact-presentation";
@@ -272,7 +273,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
     // The expanded heading keeps the duration where the collapsed row shows it.
     const timingEnabled = codePreviewSettings.toolCallTiming;
     return composeToolComponent((width) => {
-      const { row, subjectComplete } = layoutCompactRow(
+      const { rows, subjectComplete, counter } = layoutExpandedCompactHeading(
         {
           name: this.options.name,
           expanded: true,
@@ -288,7 +289,11 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
         width,
       );
       recordHeadingSubject(context.state, subjectComplete);
-      return [row];
+      recordHeadingCounter(
+        context.state,
+        counter === undefined ? undefined : stripTerminalControls(counter),
+      );
+      return rows;
     });
   }
 

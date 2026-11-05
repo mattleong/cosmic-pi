@@ -23,10 +23,11 @@ import { SubagentConfigStore } from "../src/config/store.ts";
 import { type DelegationMode, subagentConfigDecoder } from "../src/config/schema.ts";
 import { DELEGATION_PROMPT_SECTION, NORMAL_START_GUIDELINE } from "../src/delegation/prompt.ts";
 import { beforeAgentStartEvent, sessionContextFixture } from "./fixtures/pi-host.ts";
-import { effectTest, settle, step } from "./support/effect-test.ts";
+import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import * as Str from "effect/String";
 
 const STATUS_KEY = "pi-subagents.session";
 
@@ -51,7 +52,11 @@ const agentDirectoryWithProfileSet = function* (name: string, delegation?: Deleg
   return directory;
 };
 
-const setup = function* (cosmicUi?: CosmicUiHostState, delegation?: DelegationMode) {
+const setup = function* (
+  cosmicUi?: CosmicUiHostState,
+  delegation?: DelegationMode,
+  projectTrusted = false,
+) {
   const agentDirectory = yield* agentDirectoryWithProfileSet("review", delegation);
   const events = createEventBus();
   const upserts: string[] = [];
@@ -81,7 +86,9 @@ const setup = function* (cosmicUi?: CosmicUiHostState, delegation?: DelegationMo
     {
       mode: "tui",
       hasUI: true,
-      isProjectTrusted: () => false,
+      // A trusted project reads its settings from the temporary directory, never the checkout.
+      ...(projectTrusted && { cwd: agentDirectory }),
+      isProjectTrusted: () => projectTrusted,
       ui: {
         setStatus,
         notify,
@@ -221,6 +228,54 @@ describe("delegation mode", () => {
       // Back out of the Global group, then close the settings.
       fixture.surface.editor?.handleInput?.("\u001b");
       fixture.surface.editor?.handleInput?.("\u001b");
+      yield* Fiber.join(picker);
+      yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
+    },
+  );
+
+  effectTest(
+    "puts back the open project group's inherited delegation when a global save fails",
+    function* () {
+      const gate = yield* pauseNextDelegationSave();
+      const fixture = yield* setup(undefined, undefined, true);
+      yield* settle(() => fixture.host.emit("session_start", fixture.ctx));
+      const input = (...keys: ReadonlyArray<string>) => {
+        for (const key of keys) fixture.surface.editor?.handleInput?.(key);
+      };
+      const lines = () => fixture.surface.editor?.render(120) ?? [];
+      const find = (matches: (entry: string) => boolean) =>
+        Option.getOrElse(Arr.findFirst(lines(), matches), () => "");
+      // The Delegation row, not the group description that also starts with the word.
+      const delegationRow = () => find((entry) => /^\s*›?\s*Delegation\s{2}/u.test(entry));
+      const marked = () => find((entry) => Str.includes("(•)")(entry));
+      const cursor = () => find((entry) => /^\s*›/u.test(entry));
+      const picker = yield* openGlobalDelegation(fixture);
+      // Its list leads with `inherit (normal)`, then normal, encouraged, and orchestration.
+      input("\r", "j", "j", "j", "\r");
+      yield* step(gate.wait);
+      // Back to the scopes, then Project, whose delegation inherits Global's chosen mode.
+      input("\u001b", "j", "\r");
+      expect(delegationRow()).toContain("inherit (orchestration)");
+      input("\r");
+      expect(cursor()).toContain("inherit (orchestration)");
+      // Another writer changes the document, so Global's save fails and is put back.
+      yield* step(() =>
+        nodeFsPromises.writeFile(
+          nodePath.join(fixture.agentDirectory, "pi-subagents.json"),
+          JSON.stringify({ version: 6, writerWorkspaceMode: "shared-checkout" }),
+        ),
+      );
+      gate.release();
+      for (const _ of Arr.range(1, 200)) {
+        if (Arr.some(fixture.notify.mock.calls, ([, level]) => level === "error")) break;
+        yield* step(eventLoopTurn);
+      }
+      expect(Arr.some(fixture.notify.mock.calls, ([, level]) => level === "error")).toBe(true);
+      expect(marked()).toContain("inherit (normal)");
+      expect(cursor()).toContain("inherit (normal)");
+      input("\u001b");
+      expect(delegationRow()).toContain("inherit (normal)");
+      input("\u001b", "\u001b");
       yield* Fiber.join(picker);
       yield* settle(() => fixture.host.emit("session_shutdown", fixture.ctx));
     },

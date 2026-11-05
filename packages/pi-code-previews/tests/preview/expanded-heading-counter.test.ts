@@ -39,15 +39,21 @@ const tool = () =>
     },
   );
 
+// The heading row and the continuation rows it wraps onto, as one line of words.
 const heading = (width: number, expanded: boolean) => {
   const harness = createToolPresentationHarness(tool());
   harness.call({ path: "a.ts" }, { expanded });
   harness.result(textResult("done"), { expanded });
-  return Option.getOrThrow(
-    Arr.findFirst(Arr.map(harness.render(width), stripAnsi), (row) =>
-      Fn.pipe(row, Str.includes(" await ")),
-    ),
+  const rows = Arr.map(harness.render(width), (row) =>
+    Fn.pipe(stripAnsi(row), Str.replace(/^\s*│|│\s*$/gu, ""), Str.trim),
   );
+  const start = Option.getOrThrow(
+    Arr.findFirstIndex(rows, (row) => Fn.pipe(row, Str.includes(" await "))),
+  );
+  const continued = Arr.takeWhile(Arr.drop(rows, start + 1), (row) =>
+    Fn.pipe(row, Str.startsWith("· ")),
+  );
+  return Arr.join([rows[start] ?? "", ...continued], " ");
 };
 const counterShown = (row: string) =>
   Fn.pipe(row, Str.includes(`· ${LONG}`))
@@ -57,11 +63,13 @@ const counterShown = (row: string) =>
       : undefined;
 
 for (const background of ["border", "on", "off"] as const)
-  test(`an expanded ${background} heading keeps the counter its collapsed row keeps`, () => {
+  test(`an expanded ${background} heading keeps its whole subject and the counter its collapsed row keeps`, () => {
     applyPresentationSettings({ toolCallBackground: background });
     for (const width of Arr.range(36, 48)) {
       const collapsed = counterShown(heading(width, false));
-      expect(counterShown(heading(width, true)), `${width} columns`).toBe(collapsed);
+      const expanded = heading(width, true);
+      expect(counterShown(expanded), `${width} columns`).toBe(collapsed);
+      expect(expanded, `${width} columns`).toContain(" await questionnaire");
     }
     // Some widths keep only the short words, which a frame alone would drop.
     expect(counterShown(heading(40, false))).toBe(SHORT);

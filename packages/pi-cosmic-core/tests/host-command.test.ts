@@ -32,7 +32,7 @@ const harness = (options: Partial<Parameters<typeof registerExtensionCommand>[1]
     }),
     { name: "demo", description: "Demo extension", ...options },
   );
-  const notify = vi.fn();
+  const notify = vi.fn<(message: string, level?: string) => void>();
   const ctx = extensionContextFixture({ hasUI: true, ui: { notify } });
   const run = (args: string) =>
     Effect.promise(() => Promise.resolve(registered?.handler(args, ctx)));
@@ -60,6 +60,41 @@ describe("registered extension command", () => {
     }),
   );
 
+  it.effect("shows the overview for help, listing what the bare command does first", () =>
+    Effect.gen(function* () {
+      const bare = vi.fn();
+      const h = harness({
+        bare: { handler: bare, description: "Open the demo" },
+        subcommands: [subcommand("usage")],
+      });
+      yield* h.run("help");
+      expect(bare).not.toHaveBeenCalled();
+      const [text = "", level] = h.notify.mock.lastCall ?? [];
+      expect(level).toBe("info");
+      expect(text).not.toContain("Unknown");
+      const body = lines(text).slice(1);
+      expect(body[0]).toContain("/demo ");
+      expect(body[0]).toContain("Open the demo");
+      expect(body[1]).toContain("usage description");
+      // Unknown words still warn, and the overview they show lists the bare action too.
+      yield* h.run("nope");
+      expect(h.notify).toHaveBeenLastCalledWith(
+        expect.stringContaining("Open the demo"),
+        "warning",
+      );
+    }),
+  );
+
+  it.effect("lets a command replace the built-in help", () =>
+    Effect.gen(function* () {
+      const help = subcommand("help");
+      const h = harness({ subcommands: [help] });
+      yield* h.run("help topics");
+      expect(help.handler).toHaveBeenCalledWith("topics", h.ctx);
+      expect(h.notify).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("adds subcommands later and replaces one by name in place", () =>
     Effect.gen(function* () {
       const first = subcommand("image");
@@ -73,7 +108,7 @@ describe("registered extension command", () => {
           Arr.map(choices, (choice) => choice.value),
         ),
       );
-      expect(names).toEqual(["usage", "image", "settings"]);
+      expect(names).toEqual(["usage", "image", "settings", "help"]);
       yield* h.run("image an otter");
       expect(first.handler).not.toHaveBeenCalled();
       expect(replacement.handler).toHaveBeenCalledWith("an otter", h.ctx);

@@ -75,9 +75,9 @@ function codePreviewSettingsCommand(
     owner,
     root: "code-previews",
     isCurrent: operationIsCurrent,
-    description: "Change how tool calls look",
+    description: "Preview settings",
     title: "Code Previews",
-    scopes: [{ name: "global", description: "Save global Code Previews settings" }],
+    scopes: [{ name: "global", description: "Every project" }],
     descriptors: Arr.map(SCRIPTED_SETTINGS, (setting) => ({
       ...setting,
       currentValue: (settings: CodePreviewSettings) => formatSettingValue(settings, setting.id),
@@ -85,7 +85,7 @@ function codePreviewSettingsCommand(
     examples: ["toolCallCollapsedStyle compact", "readCollapsedLines 40"],
     notes: (ctx) => [
       `Settings are saved in ${formatDisplayPath(getSettingsPath(), ctx.cwd)}.`,
-      "Tool call appearance and preview tools take effect after /reload.",
+      "Changes to tool call appearance and preview tools apply after /reload.",
       "Native MCP calls use this appearance; manage servers through /mcp.",
     ],
     config,

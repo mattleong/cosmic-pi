@@ -135,7 +135,7 @@ export function createSettingsCategoryItems(
       id: "tools",
       label: ENABLED_TOOLS_LABEL,
       description:
-        "Toggle tool previews individually. Changes take effect after /reload. Tools already owned by another extension are skipped automatically.",
+        "Toggle tool previews individually. Changes apply after /reload. Tools already owned by another extension are skipped automatically.",
       currentValue: enabledToolsSummary(
         new Set(current.tools),
         getCodePreviewToolStatuses(),

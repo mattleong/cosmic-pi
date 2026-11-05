@@ -181,7 +181,7 @@ export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["
       });
       const text = escapeControlChars(getTextContent(result.content));
       if (summary?.outcome === "cancelled") return new Container();
-      if (summary && context.isError) return errorSection(theme, text);
+      if (summary && context.isError) return errorSection(theme, text, context?.args);
       const reply = replyWords(result);
       if (reply !== undefined) return expandedAuthoredText(theme, "Reply", reply);
       return summary ? new Container() : expandedText(theme, undefined, Str.split(text, "\n"));
@@ -243,7 +243,7 @@ export const contactParentRenderers = {
     return textResultBody(
       theme,
       text,
-      { expanded: options.expanded, isError: context.isError },
+      { expanded: options.expanded, isError: context.isError, args: context.args },
       COLLAPSED_REPLY_LINES,
     );
   },

@@ -108,6 +108,7 @@ export function registerSubagentManagerCommand(
     name: "subagents",
     description: "Subagent activity",
     bare: {
+      description: "Open subagent activity",
       handler: (_args, ctx) =>
         invoke(ctx, (invocation, isCurrent) => {
           if (invocation.mode !== "tui") {

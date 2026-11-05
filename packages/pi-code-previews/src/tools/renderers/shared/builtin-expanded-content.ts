@@ -39,7 +39,11 @@ import { summarizeDiff } from "../../../diff/summary";
 import { formatDiffPreview } from "./diff-preview";
 import { expandedSection } from "../../../preview/expanded-section";
 import { expandedFields, type ExpandedField } from "../../../preview/expanded-body";
-import { headingIsOwnCall, headingShowedSubject } from "../../../preview/heading-coverage";
+import {
+  headingCounter,
+  headingIsOwnCall,
+  headingShowedSubject,
+} from "../../../preview/heading-coverage";
 import { normalizeShellCommandWhitespace } from "../../shell-command";
 import { argumentsStreaming, pathPreviewLanguage, renderContentPreview } from "./preview-text";
 import { readResultBody } from "./read-result";
@@ -152,9 +156,10 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
 
 function splitAgentNotice(tool: BuiltinCompactTool, result: AgentToolResult<unknown>) {
   const output = getTextContent(result.content);
+  // An oversized first line's notice is its issue's detail, so it isn't repeated as notes.
   if (tool === "read") {
     const notice = oversizedReadNotice(hostObject(result.details), output);
-    return { output: notice === undefined ? output : "", notice };
+    return { output: notice === undefined ? output : "", notice: undefined };
   }
   if (tool === "edit" || tool === "write") return { output, notice: undefined };
   const split = (tool === "bash" ? splitShellNotice : splitListingNotice)(Str.split(output, "\n"));
@@ -323,11 +328,13 @@ interface OptionField extends ExpandedField {
   readonly target: boolean;
   /** An option the tool's own preview heading states exactly, such as grep's glob and limit. */
   readonly previewHeading: boolean;
+  /** The heading counter that states this option, such as `limit reached: 2` for a limit. */
+  readonly counter?: string | undefined;
 }
 
 /**
  * Labeled argument fields, without the target once the heading has shown the whole subject, and
- * without options the tool's own preview heading states.
+ * without options the tool's own preview heading or the compact heading's counter states.
  */
 function optionFields(
   theme: Theme,
@@ -335,21 +342,31 @@ function optionFields(
   state: RendererState,
 ): Component {
   let drawn:
-    | { readonly targets: boolean; readonly own: boolean; readonly body: Component }
+    | {
+        readonly targets: boolean;
+        readonly own: boolean;
+        readonly counter: string | undefined;
+        readonly body: Component;
+      }
     | undefined;
   return {
     render(width) {
       const targets = !headingShowedSubject(state);
       const own = headingIsOwnCall(state);
-      if (drawn?.targets !== targets || drawn.own !== own)
+      const counter = own ? undefined : headingCounter(state);
+      if (drawn?.targets !== targets || drawn.own !== own || drawn.counter !== counter)
         drawn = {
           targets,
           own,
+          counter,
           body: expandedFields(
             theme,
             Arr.filter(
               fields,
-              (field) => (targets || !field.target) && !(own && field.previewHeading),
+              (field) =>
+                (targets || !field.target) &&
+                !(own && field.previewHeading) &&
+                (field.counter === undefined || field.counter !== counter),
             ),
           ),
         };
@@ -394,19 +411,32 @@ function builtinOptionFields(
         lines: [text],
         target: isTarget,
         previewHeading: previewHeadingStates(tool, key, hostObject(args)),
+        counter: limitCounter(tool, key, Predicate.isNumber(value) ? value : undefined),
       },
     ];
   });
 }
 
-/** Whether the tool's own preview heading states an option, as grep's glob and limit. */
+/** The counter a listing's compact heading shows when the limit this option set was reached. */
+function limitCounter(
+  tool: BuiltinCompactTool,
+  key: string,
+  value: number | undefined,
+): string | undefined {
+  if (key !== "limit" || value === undefined) return undefined;
+  return tool === "grep" || tool === "find" || tool === "ls"
+    ? `limit reached: ${value}`
+    : undefined;
+}
+
+/** Whether the tool's own preview heading states an option, as grep's glob and a listing's limit. */
 function previewHeadingStates(
   tool: BuiltinCompactTool,
   key: string,
   args: HostObject | undefined,
 ): boolean {
-  if (tool !== "grep") return false;
-  if (key === "glob") return stringArg(args, "glob") !== "";
+  if (tool !== "grep" && tool !== "find" && tool !== "ls") return false;
+  if (key === "glob") return tool === "grep" && stringArg(args, "glob") !== "";
   return key === "limit" && Boolean(numericArg(args, "limit"));
 }
 

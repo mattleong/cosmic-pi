@@ -55,14 +55,16 @@ const READ_TRUNCATED: CompactIssue = {
   message: "Only part of the file was returned",
 };
 
+/** The issue for a first line too large to return; its detail is Pi's notice, shown only there. */
 function oversizedFirstLineIssues(output: string): CompactIssue[] | undefined {
-  return output
+  const notice = /^\[([^\r\n]*)\]$/u.exec(output)?.[1] ?? output;
+  return notice
     ? [
         {
           severity: "warning",
           code: "oversized-first-line",
           message: "The first line is too large to display",
-          detail: escapeControlChars(output),
+          detail: escapeControlChars(notice),
         },
       ]
     : undefined;

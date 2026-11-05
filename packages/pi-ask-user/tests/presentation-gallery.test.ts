@@ -173,6 +173,17 @@ const cartPlan: AskUserOutcome = {
     { key: "notes", kind: "text", text: "Keep prices in integer cents." },
   ],
 };
+const longWritten: AskUserOutcome = {
+  outcome: "submitted",
+  answers: [
+    {
+      key: "summary",
+      kind: "text",
+      text: "Startup is faster because the parser loads lazily, and bundles are smaller.\nThe settings page also remembers the last tab you opened.",
+      note: "Mention the 30% startup gain and credit the contributors who measured it.",
+    },
+  ],
+};
 const chosenWithCustom: AskUserOutcome = { outcome: "submitted", answers: [chosen, custom] };
 const cancelled: AskUserOutcome = { outcome: "cancelled", answers: [] };
 
@@ -417,6 +428,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
           { questions: [environment, checks, library, summary] },
           everyKind,
         ),
+        asked("a long written answer over two lines", { questions: [summary] }, longWritten),
         asked("several short answers", { questions: [store, features, notes] }, cartPlan).pipe(
           Effect.map((scenario) => ({ ...scenario, wide: true })),
         ),

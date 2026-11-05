@@ -9,7 +9,6 @@ import { normalizePreviewLanguageAlias } from "../../syntax/language";
 import { getPathArg, getReadLineRange } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
-import { agentNotesSection } from "./shared/output-notice";
 import { captureCodePreviewSessionCapability } from "../../application/capability";
 import { cachedDeferredPreview } from "./shared/cache";
 import { previewCacheKey } from "./shared/preview-cache-key";
@@ -63,8 +62,8 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
       if (!expanded && !codePreviewSettings.readContentPreview)
         return renderHiddenPreviewExpandHint(renderContext.state, theme, "content");
 
-      if (body.kind === "oversized")
-        return expanded && body.notice ? agentNotesSection(theme, body.notice) : new Container();
+      // The oversized-line issue's detail states Pi's notice, so the body adds nothing.
+      if (body.kind === "oversized") return new Container();
 
       const { content, firstLine } = body;
       const path = getPathArg(input);

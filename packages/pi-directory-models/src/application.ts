@@ -6,6 +6,7 @@ import {
 import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
 import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
 import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { captureExplicitPreferenceArgument } from "./boundary/host-cli.ts";
 import {
   captureSelectedModel,
@@ -13,10 +14,11 @@ import {
   directoryModelHost,
 } from "./boundary/host-model.ts";
 import { captureDirectorySession } from "./boundary/host-session.ts";
+import { STORE_DIRECTORY } from "./config/store.ts";
 import { directoryModelsLayer } from "./layer.ts";
 import {
   DirectoryModelPreferenceService,
-  WRITE_WARNING,
+  storeWriteWarning,
   type DirectoryModelSessionInput,
 } from "./preference/service.ts";
 
@@ -83,7 +85,8 @@ export function registerDirectoryModelsApplication(
     return slot
       .run(DirectoryModelPreferenceService.use((service) => service.remember))
       .catch(() => {
-        if (isCurrent()) warn(ctx, WRITE_WARNING);
+        if (isCurrent())
+          warn(ctx, storeWriteWarning(nodePath.join(getAgentDir(), STORE_DIRECTORY), ctx.cwd));
       });
   };
 

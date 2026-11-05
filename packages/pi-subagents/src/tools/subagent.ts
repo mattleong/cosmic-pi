@@ -387,6 +387,7 @@ export function registerSubagentTools(
           : renderSubagentResult(result, options.isPartial, options.expanded, theme, {
               panelOwnsLiveHierarchy: panelOwnsHierarchy(result, options.isPartial, context),
               isError: context.isError,
+              args: context.args,
             });
       },
     });
@@ -424,6 +425,7 @@ export function registerSubagentTools(
           const content = renderSubagentExpandedContent(result, options.isPartial, theme, {
             panelOwnsLiveHierarchy,
             isError: context.isError,
+            args: context.args,
           });
           if (!isTypedReceipt(result)) return content;
           // A decoded receipt's issues carry each failure; its text is the agent's own copy.

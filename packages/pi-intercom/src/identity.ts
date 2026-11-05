@@ -2,6 +2,8 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { clipText } from "pi-cosmic-core/display";
+import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
+import { abbreviateHomePath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import type { ListedSession, SessionView } from "./tools/contract.ts";
@@ -36,10 +38,38 @@ export const SESSION_STATE_GLYPHS = {
 type SessionIdentity = Pick<SessionView, "sessionId" | "name" | "cwd">;
 
 /** The last component of a working directory, such as `web` for `/Users/me/web`. */
-export const directoryName = (cwd: string): string => {
+const directoryName = (cwd: string): string => {
   const clean = sanitizeTerminalLine(cwd);
   if (clean === "") return "";
   return Arr.lastNonEmpty(Fn.pipe(clean, Str.replaceAll(/\/+$/gu, ""), Str.split("/"))) || "/";
+};
+
+/** A working directory as people read it, with the home directory shortened to `~`: `~/web`. */
+export const displayDirectory = (cwd: string): string =>
+  abbreviateHomePath(sanitizeTerminalLine(cwd), nodeDisplayHomeDirectory());
+
+/** Longest directory a short line shows before its middle components elide. */
+const MAX_DIRECTORY_CHARS = 40;
+
+/**
+ * A directory for a short line: {@link displayDirectory}'s form, with middle components elided
+ * when it is long, `~/…/platform/web-frontend`, so it keeps its root and the components that name it.
+ */
+export const shortDisplayDirectory = (cwd: string): string => {
+  const directory = displayDirectory(cwd);
+  if (directory.length <= MAX_DIRECTORY_CHARS) return directory;
+  const [root, ...rest] = Str.split(directory, "/");
+  const components = Arr.filter(rest, Str.isNonEmpty);
+  let kept = Arr.empty<string>();
+  for (const component of Arr.reverse(components)) {
+    const candidate = [component, ...kept];
+    if (kept.length > 0 && `${root}/…/${Arr.join(candidate, "/")}`.length > MAX_DIRECTORY_CHARS)
+      break;
+    kept = candidate;
+  }
+  return kept.length === components.length
+    ? directory
+    : `${root}/…/${clipText(Arr.join(kept, "/"), MAX_DIRECTORY_CHARS)}`;
 };
 
 const idCharacters = (sessionId: string): string =>

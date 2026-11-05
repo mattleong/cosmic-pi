@@ -3,9 +3,8 @@ import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { authoredTextLines, expandedDetails } from "pi-code-previews";
-import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
-import { abbreviateHomePath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
+import { displayDirectory } from "./identity.ts";
 
 /** Words a session wrote, without terminal escape sequences that would restyle the view. */
 export const sessionText = (text: string): string => stripTerminalControls(text);
@@ -42,10 +41,6 @@ export const PREVIEW_BODY_INDENT = 2;
 /** A muted status line, such as how a recipient will read a message. */
 export const statusLine = (text: string, theme: Pick<Theme, "fg">): Component =>
   new Text(theme.fg("muted", sanitizeTerminalLine(text)), 0, 0);
-
-/** A working directory as people read it, with the home directory shortened to `~`. */
-export const displayDirectory = (cwd: string): string =>
-  abbreviateHomePath(sanitizeTerminalLine(cwd), nodeDisplayHomeDirectory());
 
 /** The expanded `Details` section: a session's full id and its directory. */
 export const sessionDetails = (

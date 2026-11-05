@@ -37,7 +37,7 @@ export function createToolPreviewSettingsSubmenu(
   const summary = () => enabledToolsSummary(selected, statuses, required);
   return createSettingsGroupSubmenu({
     title: ENABLED_TOOLS_LABEL,
-    description: "Changes take effect after /reload.",
+    description: "Changes apply after /reload.",
     items: () => createToolToggleItems(selected, statuses, required),
     onChange: (id, value) => {
       const tool = parseToolToggleId(id);

@@ -75,7 +75,7 @@ export function registerSettingsController(
     settingsSubcommand({
       owner,
       root: "openai",
-      description: "Configure Better OpenAI",
+      description: "OpenAI settings",
       title: "Better OpenAI",
       isCurrent,
       descriptors,

@@ -65,10 +65,6 @@ export function selectPreviewTextLines(text: string, limit: number) {
   return { entries, shown: head + tail, hidden, total };
 }
 
-export function hiddenLinesMarker(theme: Theme, hidden: number): string {
-  return theme.fg("muted", `      … ${countLabel(hidden, "line")} hidden`);
-}
-
 export function trimSingleTrailingNewline(text: string): string {
   if (Fn.pipe(text, Str.endsWith("\r\n"))) return Fn.pipe(text, Str.slice(0, -2));
   if (Fn.pipe(text, Str.endsWith("\n"))) return Fn.pipe(text, Str.slice(0, -1));
@@ -83,14 +79,31 @@ export function metadata(theme: Theme, parts: Array<string | undefined>): string
   return present.length ? theme.fg("dim", ` · ${Arr.join(present, " · ")}`) : "";
 }
 
-/** The affordance beneath a clipped preview, naming what it hides: `▸ 12 more lines`. */
+/**
+ * The one stand-in for rows a clipped preview hides, drawn where they are hidden: between a head
+ * and tail, or after a head. It names what it hides and offers expansion: `▸ 12 more lines`.
+ */
+export function hiddenRowsStandIn(
+  theme: Theme,
+  hidden: number,
+  singular: string,
+  plural = `${singular}s`,
+): string {
+  return renderExpansionAffordance(
+    countLabel(hidden, `more ${singular}`, `more ${plural}`),
+    false,
+    theme,
+  );
+}
+
+/** {@link hiddenRowsStandIn} beneath a preview clipped after its head. */
 export function showingFooter(
   theme: Theme,
   hidden: number,
   singular: string,
   plural = `${singular}s`,
 ): string {
-  return `\n${renderExpansionAffordance(countLabel(hidden, `more ${singular}`, `more ${plural}`), false, theme)}`;
+  return `\n${hiddenRowsStandIn(theme, hidden, singular, plural)}`;
 }
 
 export function previewFooter(theme: Theme, text: string): string {

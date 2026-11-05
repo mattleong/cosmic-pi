@@ -66,9 +66,10 @@ export const presentImageMessage =
       summary: compact ? collapsedSummary : previewSummary,
       ...(imageMessageRevealsMore(view) && { expandLabel: EXPAND_LABEL }),
       ...(!compact && { collapsed: body }),
-      expanded: () => {
+      expanded: (headingState) => {
         const shown = new Container();
-        if (prompt) shown.addChild(renderImageRequest({ prompt }, theme, IMAGE_REQUEST));
+        if (prompt)
+          shown.addChild(renderImageRequest({ prompt }, theme, { ...IMAGE_REQUEST, headingState }));
         shown.addChild(body());
         return shown;
       },

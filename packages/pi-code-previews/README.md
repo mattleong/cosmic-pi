@@ -68,7 +68,7 @@ For example, in a trusted project's `.pi/settings.json`:
 }
 ```
 
-`toolCallCollapsedStyle` is `preview` by default; `compact` gives one-row calls. Changes to the frame, collapsed style, and preview tool list take effect after `/reload`.
+`toolCallCollapsedStyle` is `preview` by default; `compact` gives one-row calls. Changes to the frame, collapsed style, and preview tool list apply after `/reload`.
 
 ## How it works
 

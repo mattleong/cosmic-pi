@@ -12,7 +12,7 @@ import { shouldSkipHighlight } from "../../syntax/render";
 import { numericArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
-import { splitListingNotice, withAgentNotes } from "./shared/output-notice";
+import { splitListingNotice, withAgentNotes, withCollapsedLimit } from "./shared/output-notice";
 import { cachedDeferredPreview } from "./shared/cache";
 import { previewCacheKey } from "./shared/preview-cache-key";
 import { renderSelectedOutputLines } from "./shared/preview-text";
@@ -74,6 +74,8 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
               active && !skipHighlight,
             ),
         );
+        if (!expanded)
+          text = withCollapsedLimit(text, theme, "grep", hostObject(result.details), notice);
         if (skipHighlight)
           text += previewFooter(theme, "Syntax highlighting skipped for large grep output");
         return new Text(text, 0, 0);

@@ -28,7 +28,6 @@ import {
   type ToolHeader,
 } from "pi-cosmic-ui/tool";
 import {
-  displayDirectory,
   PREVIEW_BODY_INDENT,
   sessionDetails,
   sessionText,
@@ -48,6 +47,7 @@ import {
   type SessionView,
 } from "./contract.ts";
 import {
+  displayDirectory,
   distinctSessionLabels,
   knownAddresseeSubject,
   SESSION_STATE_GLYPHS,

@@ -40,7 +40,7 @@ const toolState = (status: CodePreviewToolStatus | undefined): string =>
         Match.exhaustive,
       );
 
-/** One row per tool, noting configuration that takes effect only after a reload. */
+/** One row per tool, noting configuration that applies only after a reload. */
 function toolRows(): string[] {
   const statuses = getCodePreviewToolStatuses();
   const enabled = getEnabledCodePreviewTools();

@@ -147,7 +147,7 @@ export function maskIdentifier(value: string | undefined): string | undefined {
   if (!trimmed) return undefined;
   return trimmed.length <= 8
     ? "found"
-    : `${Fn.pipe(trimmed, Str.slice(0, 4))}...${Fn.pipe(trimmed, Str.slice(-4))}`;
+    : `${Fn.pipe(trimmed, Str.slice(0, 4))}…${Fn.pipe(trimmed, Str.slice(-4))}`;
 }
 
 export function sanitizeDiagnosticError(

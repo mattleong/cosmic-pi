@@ -128,6 +128,9 @@ export const managerActivityLabel = (kind: ManagerActivityKind): string =>
 
 const STYLE_RESET = "\u001b[0m";
 
+// A separator left stranded before a cut goes with it: `read-only…`, not `read-only ·…`.
+const STRANDED_SEPARATORS = [" ·", " →"] as const;
+
 // A cut at a word boundary leaves no space before the ellipsis: `Approve…`, not `Approve …`.
 const closeUpMarker = (clipped: string, marker: string): string => {
   const at = lastIndexOfFrom(clipped, marker, clipped.length);
@@ -142,6 +145,11 @@ const closeUpMarker = (clipped: string, marker: string): string => {
     } else if (Fn.pipe(head, Str.endsWith(" "))) {
       head = Fn.pipe(head, Str.slice(0, -1));
       trimmed = true;
+    } else if (
+      Arr.some(STRANDED_SEPARATORS, (separator) => Fn.pipe(head, Str.endsWith(separator)))
+    ) {
+      head = Fn.pipe(head, Str.slice(0, -2));
+      trimmed = true;
     } else break;
   }
   if (!trimmed || head.length === 0) return clipped;
@@ -152,14 +160,24 @@ const FACT_ARROW = " → ";
 
 // Splits one word too wide for a row after its `/` separators, then after `-`, `_`, or `.`, then
 // anywhere, so a long path breaks between directories and names. The first row takes what fits
-// in `firstWidth` and may be empty.
+// in `firstWidth` and may be empty. A name too wide for any row starts a row after its `/`, so a
+// path breaks after its directory before it breaks inside the name.
 const breakWideWord = (word: string, firstWidth: number, restWidth: number): string[] => {
   const tokens = Arr.flatMap(Str.split(word, /(?<=\/)/u), (segment) =>
-    visibleWidth(segment) <= restWidth ? [segment] : Str.split(segment, /(?<=[-_.])/u),
+    visibleWidth(segment) <= restWidth
+      ? [{ token: segment, startsWideName: false }]
+      : Arr.map(Str.split(segment, /(?<=[-_.])/u), (token, index) => ({
+          token,
+          startsWideName: index === 0,
+        })),
   );
   const rows: string[] = [];
   let current = "";
-  for (const token of tokens) {
+  for (const { token, startsWideName } of tokens) {
+    if (startsWideName && Fn.pipe(current, Str.endsWith("/"))) {
+      rows.push(current);
+      current = "";
+    }
     if (visibleWidth(`${current}${token}`) <= (rows.length === 0 ? firstWidth : restWidth)) {
       current = `${current}${token}`;
       continue;

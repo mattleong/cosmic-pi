@@ -32,4 +32,11 @@ describe("wrapFacts", () => {
     }
     expect(Arr.some(lines, (line) => Str.startsWith("  → ")(line))).toBe(true);
   });
+
+  it("breaks a path after its directory before it breaks inside a name too wide for a row", () => {
+    const name = "openai-image-2026-09-27T10-41-07-123Z-a-much-longer-name.png";
+    const lines = wrapFacts(`Saved to .pi/generated-images/${name}`, 40);
+    expect(lines[0]).toBe("Saved to .pi/generated-images/");
+    expect(Arr.join(Arr.map(lines, Str.trim), "")).toBe(`Saved to .pi/generated-images/${name}`);
+  });
 });

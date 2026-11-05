@@ -336,6 +336,29 @@ describe("waiting and held runs", () => {
     expect(severities(beside?.issues)).toEqual(["attention"]);
   });
 
+  it("marks a question its row only begins, and names it as what expansion reveals", () => {
+    const long = view({
+      id: "agent-4",
+      state: "waiting_for_parent",
+      question: {
+        requestId: "q-4",
+        message:
+          "The 0007 migration renames sessions.token.\n\nShould I add a compatibility view first?",
+      },
+    });
+    const cut = awaitOf(long);
+    const quote = Option.getOrUndefined(
+      Arr.findFirst(cut?.issues ?? [], (issue) => issue.severity === "attention"),
+    );
+    expect(quote?.message).toMatch(/…$/u);
+    expect(cut?.expandLabel).toBe("question");
+    const whole = awaitOf(asking);
+    expect(
+      Arr.some(whole?.issues ?? [], (issue) => Fn.pipe(issue.message, Str.endsWith("…"))),
+    ).toBe(false);
+    expect(whole?.expandLabel).not.toBe("question");
+  });
+
   it("shows a paused run as a held state without a problem", () => {
     const awaited = awaitOf(paused);
     expect(awaited?.outcome).toBe("paused");

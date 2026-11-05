@@ -208,6 +208,8 @@ const awaitScope = (details: SubagentAwaitDetails) => {
 interface SubagentResultRenderOptions {
   readonly panelOwnsLiveHierarchy?: boolean | undefined;
   readonly isError?: boolean | undefined;
+  /** The call's arguments, which a failure's body then needn't repeat. */
+  readonly args?: unknown;
 }
 
 const renderPartialStartAwait = (
@@ -288,13 +290,13 @@ const renderTextFallback = (
   isPartial: boolean,
   expanded: boolean,
   theme: Theme,
-  isError = false,
+  { isError = false, args }: SubagentResultRenderOptions = {},
 ): Component => {
   const text = boundToolOutput(
     sanitizeTerminalText(isError ? rejectedFailureText(result) : getTextContent(result.content)),
   );
   if (!text && isPartial) return new Text(toolRunningLine(theme), 0, 0);
-  return textResultBody(theme, text, { expanded, isError }, COLLAPSED_TEXT_LINES);
+  return textResultBody(theme, text, { expanded, isError, args }, COLLAPSED_TEXT_LINES);
 };
 
 const decodeWorkspaceDisplay = decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, {
@@ -463,5 +465,5 @@ export const renderSubagentResult = (
       ? undefined
       : renderWorkspacePreview(result, expanded, theme);
   if (workspace) return workspace;
-  return renderTextFallback(result, isPartial, expanded, theme, options.isError);
+  return renderTextFallback(result, isPartial, expanded, theme, options);
 };

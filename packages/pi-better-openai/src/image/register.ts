@@ -102,7 +102,7 @@ export function registerOpenAIImage(
   command.add({
     name: "image",
     arguments: "<prompt>",
-    description: "Generate an image with OpenAI",
+    description: "Generate an image",
     handler: (args, ctx) => {
       if (!isCurrent()) return Promise.resolve();
       const prompt = Str.trim(args);
@@ -186,8 +186,12 @@ export function registerOpenAIImage(
     shell(tool, {
       compactSummary: imageCompactSummary,
       expandedContent: {
-        renderCall: (args, theme) =>
-          renderImageRequest(args, theme, { prompt: false, action: true }),
+        renderCall: (args, theme, context) =>
+          renderImageRequest(args, theme, {
+            prompt: false,
+            action: true,
+            headingState: context.state,
+          }),
         renderResult: renderImageContent,
       },
       scheduleAnimation,

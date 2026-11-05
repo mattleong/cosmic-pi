@@ -34,16 +34,19 @@ function shouldHideBashResult(args: HostObject | undefined): boolean {
 // Streaming output a collapsed running row shows: its latest lines, as a terminal would.
 const STREAMING_TAIL_LINES = 5;
 
-/** A running call's latest output beneath its running line, naming the earlier lines it hides. */
+/**
+ * A running call's latest output beneath its running line. The earlier lines it hides are named
+ * where they would be, between the running line and the tail.
+ */
 function streamingTail(lines: readonly string[], theme: Theme): Component {
   const tail = lines.slice(-STREAMING_TAIL_LINES);
   const earlier = lines.length - tail.length;
   const rows = [
     toolRunningLine(theme),
-    ...Arr.map(tail, (line) => theme.fg("muted", escapeControlChars(line))),
     ...(earlier > 0
       ? [renderExpansionAffordance(countLabel(earlier, "earlier line"), false, theme)]
       : []),
+    ...Arr.map(tail, (line) => theme.fg("muted", escapeControlChars(line))),
   ];
   return new Text(Arr.join(rows, "\n"), 0, 0);
 }

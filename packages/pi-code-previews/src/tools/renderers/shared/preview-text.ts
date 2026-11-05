@@ -5,11 +5,10 @@ import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import {
-  hiddenLinesMarker,
+  hiddenRowsStandIn,
   previewFooter,
   selectPreviewLines,
   selectPreviewTextLines,
-  showingFooter,
   type PreviewLineEntry,
 } from "../../../preview/format";
 import { resolvePreviewLanguage } from "../../../syntax/language";
@@ -92,11 +91,12 @@ export function renderContentPreview(options: {
         return { text: `${theme.fg("dim", `${lineNumber} │ `)}${line}`, continuation: blankGutter };
       });
     },
-    (hidden): WrappedCodeRow => ({ text: hiddenLinesMarker(theme, hidden), continuation: "" }),
+    (hidden): WrappedCodeRow => ({
+      text: hiddenRowsStandIn(theme, hidden, "line"),
+      continuation: "",
+    }),
   );
-  let footer = "";
-  if (rendered.hidden > 0) footer += showingFooter(theme, preview.total - rendered.shown, "line");
-  if (skipHighlight) footer += previewFooter(theme, options.skipHighlightLabel);
+  const footer = skipHighlight ? previewFooter(theme, options.skipHighlightLabel) : "";
   if (rendered.lines.length === 0)
     return new Text(theme.fg("muted", options.emptyLabel) + footer, 0, 0);
   const footerRows = Arr.map(
@@ -116,20 +116,23 @@ export function renderSelectedOutputLines(
   const preview = renderChunkedPreviewEntries(
     selectPreviewLines(rawLines, limit),
     (chunk) => renderChunk(Arr.map(chunk, (entry) => entry.line)),
-    (hidden) => hiddenLinesMarker(theme, hidden),
+    (hidden) => hiddenRowsStandIn(theme, hidden, noun.singular, noun.plural),
   );
-  const text = Arr.join(preview.lines, "\n");
-  if (preview.hidden === 0) return text;
-  return text + showingFooter(theme, rawLines.length - preview.shown, noun.singular, noun.plural);
+  return Arr.join(preview.lines, "\n");
 }
 
+/**
+ * Rendered preview rows with one stand-in where rows are hidden: between the head and tail, or
+ * after a head shown alone.
+ */
 function renderChunkedPreviewEntries<T, Row>(
   preview: { entries: Array<PreviewLineEntry<T>>; shown: number; hidden: number },
   renderChunk: (chunk: Array<{ line: T; index: number }>) => Row[],
-  hiddenMarker: (hidden: number) => Row,
+  standIn: (hidden: number) => Row,
 ) {
   const lines: Row[] = [];
   let chunk: Array<{ line: T; index: number }> = [];
+  let placed = false;
 
   function flushChunk(): void {
     if (chunk.length === 0) return;
@@ -140,11 +143,13 @@ function renderChunkedPreviewEntries<T, Row>(
   for (const entry of preview.entries) {
     if (entry.kind === "hidden") {
       flushChunk();
-      lines.push(hiddenMarker(entry.hidden));
+      lines.push(standIn(entry.hidden));
+      placed = true;
     } else {
       chunk.push({ line: entry.line, index: entry.index });
     }
   }
   flushChunk();
+  if (!placed && preview.hidden > 0) lines.push(standIn(preview.hidden));
   return { lines, shown: preview.shown, hidden: preview.hidden };
 }

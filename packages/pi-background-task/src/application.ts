@@ -56,9 +56,9 @@ interface BackgroundTaskSessionActivation extends BackgroundTaskSessionInput {
   readonly publishesReplay: boolean;
 }
 
-const UNAVAILABLE = "Background Tasks aren't available in this session";
+const UNAVAILABLE = "Background tasks aren't available in this session";
 const IDLE_CHECK_INTERVAL = "50 millis";
-const REPLACED = "Background Tasks session was replaced";
+const REPLACED = "The background tasks session was replaced";
 const CANCELLED = "Opening background tasks was cancelled";
 
 export interface BackgroundTaskApplicationBoundaries {
@@ -194,7 +194,11 @@ export function registerBackgroundTaskApplication(
       bridge.clear();
     },
     onStartFailure: ({ ctx }) => {
-      notifyAtHostBoundary(ctx, "Background Tasks couldn't start", "warning");
+      notifyAtHostBoundary(
+        ctx,
+        "Background tasks couldn't start; run /reload to try again",
+        "warning",
+      );
     },
   });
 
@@ -206,7 +210,7 @@ export function registerBackgroundTaskApplication(
         : Promise.reject(
             PiSessionRuntimeError.make({
               operation: "run",
-              message: "Background Tasks isn't running in this session",
+              message: "Background tasks aren't running in this session",
             }),
           );
   const run = runWhen(() => slot.isActive());

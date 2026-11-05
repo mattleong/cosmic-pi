@@ -13,6 +13,21 @@ export const recordHeadingSubject = (state: WeakKey, complete: boolean): void =>
 export const headingShowedSubject = (state: WeakKey): boolean => subjectShown.get(state) === true;
 
 /**
+ * The counter a row's expanded compact heading showed when it last drew, as plain text, so a body can
+ * leave out an option the counter already states, such as grep's limit beside `limit reached: 2`.
+ * Keyed by the row's renderer state.
+ */
+const counterShown = new WeakMap<WeakKey, string>();
+
+export const recordHeadingCounter = (state: WeakKey, counter: string | undefined): void => {
+  if (counter === undefined) counterShown.delete(state);
+  else counterShown.set(state, counter);
+};
+
+/** Undefined until a heading has drawn a counter, so a body never drops input on a guess. */
+export const headingCounter = (state: WeakKey): string | undefined => counterShown.get(state);
+
+/**
  * Whether a row's expanded heading is the tool's own collapsed preview call, which may show input
  * beyond the subject, such as grep's glob and limit. Keyed by the row's renderer state.
  */

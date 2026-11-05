@@ -58,9 +58,15 @@ const THINKING_LEVEL_WARNING =
   "The thinking level saved for this directory is invalid, so Pi kept its current level\nPick one with /thinking to replace it";
 const IDENTIFY_WARNING =
   "Couldn't resolve this directory's path, so its model isn't remembered in this session\nCheck that the directory still exists, then start a session with /new to try again";
-export const WRITE_WARNING = "Couldn't save the model for this directory";
-const writeWarning = (identified: DirectoryIdentity) =>
-  `${WRITE_WARNING}\nCheck that ${shownPath(identified)} can be written`;
+const writeWarningAt = (shown: string) =>
+  `Couldn't save the model for this directory\nCheck that ${shown} can be written`;
+const writeWarning = (identified: DirectoryIdentity) => writeWarningAt(shownPath(identified));
+/**
+ * A save that failed before its file was known names the folder that holds every preference file,
+ * so it gives the same next step.
+ */
+export const storeWriteWarning = (storeDirectory: string, cwd: string) =>
+  writeWarningAt(`${formatDisplayPath(storeDirectory, cwd)}/`);
 
 /** The muted notice after a restore changed the session: what is in use, and why. */
 const restoredNotice = (preference: DirectoryModelPreference) =>
