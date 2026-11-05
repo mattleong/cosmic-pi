@@ -187,7 +187,7 @@ describe("write and edit diff limitations", () => {
     const live = summary("write", args, result("applied", { codePreviewBeforeWrite: undefined }));
     expect(live?.outcome).toBe("success");
     expect(live?.issues).toEqual([]);
-    expect(live?.counters).toEqual(["new file"]);
+    expect(live?.counters ?? []).toEqual([]);
     for (const details of [
       undefined,
       {},

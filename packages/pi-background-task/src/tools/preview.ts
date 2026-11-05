@@ -237,7 +237,7 @@ function wrapStyledFacts(
 
 /**
  * A stand-in for rows a collapsed preview hides, where they would be, naming what expansion reveals:
- * `▸ 18 more lines · C-o Expand`.
+ * `▸ 18 more lines`.
  */
 const hiddenRows = (label: string, theme: PreviewTheme): Row => ({
   text: renderExpansionAffordance(label, false, theme),

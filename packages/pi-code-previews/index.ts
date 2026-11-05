@@ -44,6 +44,10 @@ export {
 } from "./src/tools/process-failure";
 export { renderCompactIssues, repeatsIssueMessage } from "./src/preview/compact-issues";
 export { previewIssuesSlot } from "./src/preview/preview-issues";
+export {
+  hiddenPreviewExpandHintForShell,
+  renderHiddenPreviewExpandHint,
+} from "./src/preview/bordered-tool-call";
 export { createBoundedCompactIssuesSchema } from "./src/tools/compact-issues-schema";
 export { planCompactPresentation } from "./src/tools/compact-presentation";
 

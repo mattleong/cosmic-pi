@@ -1,8 +1,6 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, type Component } from "@earendil-works/pi-tui";
-import * as Arr from "effect/Array";
+import type { Component } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
-import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import {
   managerActivityColor,
@@ -12,7 +10,6 @@ import {
   type ManagerActivityKind,
   type ManagerNoticeKind,
 } from "../manager/chrome.ts";
-import { formatKeyIds, keyHint } from "../manager/key-labels.ts";
 
 export const composeToolComponent = (render: (width: number) => string[]): Component => ({
   render,
@@ -54,26 +51,13 @@ export const toolStatusLine = (
 export const toolRunningLine = (theme: Pick<Theme, "fg">, frame = 0): string =>
   toolStatusLine(theme, "running", "Running…", frame);
 
-const isExpandKey = Schema.is(Schema.String.check(Schema.isMaxLength(32)));
-
-const DEFAULT_EXPAND_KEY = "ctrl+o";
-
-/** `C-o Expand`, naming the configured `app.tools.expand` key the way every hint bar does. */
-export const toolExpandHint = (): string => {
-  const keys = invokeHostCallback((): ReadonlyArray<string> => {
-    const configured: unknown = getKeybindings().getKeys("app.tools.expand");
-    return Arr.isArray(configured) ? Arr.filter(configured.slice(0, 4), isExpandKey) : [];
-  }, []);
-  const first = keys[0];
-  return keyHint(sanitizeTerminalLine(formatKeyIds([first ?? DEFAULT_EXPAND_KEY])), "Expand");
-};
-
+/**
+ * `▸ label`, naming what expanding a collapsed row reveals, or `▾ label` once expanded. Rows never
+ * name the key: Pi's own header teaches `ctrl+o`.
+ */
 export const renderExpansionAffordance = (
   label: string,
   expanded: boolean,
   theme: Pick<Theme, "fg">,
-): string => {
-  const hint = toolExpandHint();
-  const suffix = expanded || !hint ? "" : ` · ${sanitizeTerminalLine(hint)}`;
-  return `${theme.fg("accent", expanded ? "▾" : "▸")} ${theme.fg("muted", `${sanitizeTerminalLine(label)}${suffix}`)}`;
-};
+): string =>
+  `${theme.fg("accent", expanded ? "▾" : "▸")} ${theme.fg("muted", sanitizeTerminalLine(label))}`;

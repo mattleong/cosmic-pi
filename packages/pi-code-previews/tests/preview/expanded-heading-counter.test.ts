@@ -72,5 +72,7 @@ for (const background of ["border", "on", "off"] as const)
       expect(expanded, `${width} columns`).toContain(" await questionnaire");
     }
     // Some widths keep only the short words, which a frame alone would drop.
-    expect(counterShown(heading(40, false))).toBe(SHORT);
+    expect(
+      Arr.some(Arr.range(36, 48), (width) => counterShown(heading(width, false)) === SHORT),
+    ).toBe(true);
   });

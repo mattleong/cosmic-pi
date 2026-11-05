@@ -1185,6 +1185,12 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "bash",
+    title: "bash long command beside its expansion tag",
+    args: { command: "cd /Users/someone/dev/cosmic-pi && pnpm --filter pi-code-previews test" },
+    result: text("Test Files  94 passed (94)\nTests  502 passed (502)"),
+  },
+  {
+    tool: "bash",
     title: "bash long command wraps beneath its heading",
     args: {
       command:

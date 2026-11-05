@@ -33,7 +33,7 @@ import {
   recordOwnCallHeading,
 } from "./heading-coverage";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { renderCompactToolCall } from "./compact-tool-call";
+import { compactRowTag, renderCompactToolCall } from "./compact-tool-call";
 import { compactExpandLabel } from "./expand-affordance";
 import { planCompactPresentation } from "../tools/compact-presentation";
 import { compactPhase, compactPresentationInput } from "./preview-issues";
@@ -235,7 +235,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
     );
     const callSection = new Container();
     if (content && summary) {
-      callSection.addChild(this.expandedHeading(plan.phase, summary));
+      callSection.addChild(this.expandedHeading(plan, summary));
       callSection.addChild(issues);
     }
     if (callBody) callSection.addChild(callBody);
@@ -272,22 +272,34 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
       : build();
   }
 
-  private expandedHeading(phase: CompactPhase, summary: CompactSummary): Component {
+  private expandedHeading(plan: CompactPlan, summary: CompactSummary): Component {
     const { context, theme, timing } = this;
+    const { phase, collapsedSummary } = plan;
     // The expanded heading keeps the duration where the collapsed row shows it.
     const timingEnabled = codePreviewSettings.toolCallTiming;
+    const collapsedLabel = compactExpandLabel(
+      collapsedSummary,
+      phase,
+      this.currentResult(),
+      hostObject(context.args),
+    );
     return composeToolComponent((width) => {
+      const collapsedWidth = this.renderWidth;
       const { rows, subjectComplete, counter } = layoutExpandedCompactHeading(
         {
           name: this.options.name,
           expanded: true,
           phase,
           summary,
+          collapsedExpandLabel:
+            collapsedWidth === undefined
+              ? undefined
+              : compactRowTag(collapsedSummary, collapsedLabel, theme, collapsedWidth),
           duration: timing?.duration,
           elapsedMs: timing?.elapsedMs,
           timingEnabled,
           animationFrame: getCodePreviewAnimationFrame(context),
-          collapsedWidth: this.renderWidth,
+          collapsedWidth,
         },
         theme,
         width,

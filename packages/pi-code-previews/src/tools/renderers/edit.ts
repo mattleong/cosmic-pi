@@ -63,7 +63,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
       if (!renderContext.argsComplete || operations.length === 0) return preview;
 
       if (!expanded && !codePreviewSettings.editDiffPreview) {
-        preview.addChild(renderHiddenPreviewExpandHint(state, theme, "proposed edit"));
+        preview.addChild(renderHiddenPreviewExpandHint({ state }, theme, "proposed edit"));
         return preview;
       }
 
@@ -139,7 +139,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
         const callHint = renderContext.argsComplete && getEditPreviewOperations(input).length > 0;
         return callHint
           ? new Container()
-          : renderHiddenPreviewExpandHint(renderContext.state, theme, "diff");
+          : renderHiddenPreviewExpandHint(renderContext, theme, "diff");
       }
       // Expanded rows keep the proposal unless the applied diff shows every requested line.
       setResultDiffShown(

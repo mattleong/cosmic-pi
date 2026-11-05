@@ -82,15 +82,15 @@ export interface CompactSummary {
   /** Words someone wrote, such as a sent message: a collapsed compact row shows them beneath it. */
   quote?: string;
   /**
-   * What expansion reveals, named by the collapsed row's `▸ label · C-o Expand` in both collapsed
-   * styles unless the row already shows an affordance. Without it the shell infers `output`,
+   * What expansion reveals, named by the tag on the collapsed row's heading, `▸ label` or a bare
+   * `▸`, in both collapsed styles unless the row already shows an affordance. Without it the shell infers `output`,
    * `error`, or `details` from what the collapsed row leaves out; `false` omits the affordance
    * because expansion only repeats what the collapsed row shows.
    */
   expandLabel?: string | false;
   /**
    * Expansion reveals only the subject, such as a prompt a compact heading may cut: a collapsed
-   * compact row whose heading shows the whole subject draws no `expandLabel` affordance.
+   * compact row whose heading shows the whole subject draws no `expandLabel` tag.
    */
   expandsSubjectOnly?: true;
   issues?: readonly CompactIssue[];

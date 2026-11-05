@@ -20,7 +20,6 @@ export type EditProposedDiff =
   | { readonly kind: "skipped"; readonly guard: "size" | "complexity" };
 
 export interface RendererState {
-  writeNewFile?: boolean;
   editArgsPath?: string;
   editArgsExactSource?: string;
   editSummaryText?: string | undefined;

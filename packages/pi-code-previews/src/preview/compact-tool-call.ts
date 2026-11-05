@@ -1,13 +1,30 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { layoutCompactRow, type CompactRowInput } from "./compact-row";
+import { layoutTaggedCompactRow, type CompactRowInput } from "./compact-row";
 import { renderCompactChildren } from "./compact-children";
 import { renderCompactIssues } from "./compact-issues";
-import { compactQuoteClipped, renderCompactAffordance, renderCompactQuote } from "./compact-quote";
+import { compactQuoteClipped, renderCompactQuote } from "./compact-quote";
 
 /**
- * A collapsed compact call: its row, issues, quote, and children, then `▸ label · C-o Expand` when
- * expansion reveals more (`expandLabel`), unless a clipped quote already ends in its own or the
- * affordance reveals only a subject the row shows whole (`expandsSubjectOnly`).
+ * The tag a collapsed compact call's row draws: `expandLabel`, unless a clipped quote already ends
+ * in its own affordance.
+ */
+export function compactRowTag(
+  summary: CompactRowInput["summary"],
+  expandLabel: string | undefined,
+  theme: Theme,
+  width: number,
+  quoted = renderCompactQuote(summary.quote, theme, width),
+): string | undefined {
+  const clipped =
+    quoted.length > 0 && compactQuoteClipped(summary.quote, theme, width, quoted.length);
+  return clipped ? undefined : expandLabel;
+}
+
+/**
+ * A collapsed compact call: its row, issues, quote, and children. When expansion reveals more
+ * (`expandLabel`), the row ends in its tag, `▸ label` or a bare `▸`, unless a clipped quote already
+ * ends in its own affordance or the tag would reveal only a subject the row shows whole
+ * (`expandsSubjectOnly`).
  */
 export function renderCompactToolCall(
   input: CompactRowInput & { readonly expandLabel?: string | undefined },
@@ -15,15 +32,9 @@ export function renderCompactToolCall(
   width: number,
 ): string[] {
   if (width <= 0) return [];
-  const { quote } = input.summary;
-  const quoted = renderCompactQuote(quote, theme, width);
-  const clipped = quoted.length > 0 && compactQuoteClipped(quote, theme, width, quoted.length);
-  const { row, subjectComplete } = layoutCompactRow(input, theme, width);
-  const { compactSubject, expandsSubjectOnly, subject } = input.summary;
-  const subjectShown =
-    expandsSubjectOnly === true &&
-    subjectComplete &&
-    (compactSubject === undefined || compactSubject === subject);
+  const quoted = renderCompactQuote(input.summary.quote, theme, width);
+  const label = compactRowTag(input.summary, input.expandLabel, theme, width, quoted);
+  const { row } = layoutTaggedCompactRow(input, theme, width, label);
   return [
     row,
     ...renderCompactIssues(input.summary.issues, theme, width),
@@ -32,6 +43,5 @@ export function renderCompactToolCall(
       animationFrame: input.animationFrame,
       timingEnabled: input.timingEnabled,
     }),
-    ...(clipped || subjectShown ? [] : renderCompactAffordance(input.expandLabel, theme, width)),
   ];
 }

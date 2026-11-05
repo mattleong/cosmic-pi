@@ -149,15 +149,25 @@ const factWidth = (all: readonly Atom[], start: number): number => {
 /**
  * A styled preview heading wrapped to `width`: between words, or after a `/` in a long path, with
  * continuation rows hanging two columns in. A `·` fact that fits on a row stays whole; a word wider
- * than a row breaks after `-`, `_`, or `.` when every part fits a row, else mid-word.
+ * than a row breaks after `-`, `_`, or `.` when every part fits a row, else mid-word. A heading that
+ * wraps keeps `firstRowReserve` columns clear on its first row unless that would add a row.
  */
-export function wrapPreviewHeading(text: string, width: number): string[] {
+export function wrapPreviewHeading(text: string, width: number, firstRowReserve = 0): string[] {
   if (width <= 0) return [];
   if (visibleWidth(text) <= width) return [text];
+  const reserve = Math.max(0, Math.min(firstRowReserve, width - HANG.length * 4));
+  if (reserve === 0) return wrapRows(text, width, 0);
+  // Room kept on the first row never costs the heading a row.
+  const kept = wrapRows(text, width, reserve);
+  const plain = wrapRows(text, width, 0);
+  return kept.length > plain.length ? plain : kept;
+}
+
+function wrapRows(text: string, width: number, reserve: number): string[] {
   const hang = width > HANG.length * 4 ? HANG : "";
   const rows: Item[][] = [[]];
   let used = 0;
-  const available = () => width - (rows.length > 1 ? hang.length : 0);
+  const available = () => width - (rows.length > 1 ? hang.length : reserve);
   const newRow = () => {
     rows.push([]);
     used = 0;
@@ -202,16 +212,61 @@ export function wrapPreviewHeading(text: string, width: number): string[] {
   });
 }
 
+/** Columns a collapsed row's first heading keeps clear on its first row, for the row's tag. */
+export interface HeadingRoom {
+  reserve: number;
+}
+
+// The room the next preview heading built keeps, while a collapsed preview body is built.
+let pendingRoom: HeadingRoom | undefined;
+
+/**
+ * Builds a collapsed preview body whose first {@link previewHeadingText} keeps `room.reserve`
+ * columns clear on its first row when it wraps, read each time it draws, so the shell's tag fits
+ * beside it without cutting it.
+ */
+export function reservingHeadingRoom<I, A>(room: HeadingRoom, build: (input: I) => A, input: I): A {
+  const previous = pendingRoom;
+  pendingRoom = room;
+  try {
+    return build(input);
+  } finally {
+    pendingRoom = previous;
+  }
+}
+
+/**
+ * The room the collapsed preview body being built keeps for its tag, taken by the first heading
+ * built, which alone carries the row's tag.
+ */
+export function takeHeadingRoom(): HeadingRoom | undefined {
+  const room = pendingRoom;
+  pendingRoom = undefined;
+  return room;
+}
+
 /** A component that draws a preview heading with {@link wrapPreviewHeading}. */
 export function previewHeadingText(text: () => string): Component {
+  const room = takeHeadingRoom();
   let cached:
-    | { readonly text: string; readonly width: number; readonly rows: string[] }
+    | {
+        readonly text: string;
+        readonly width: number;
+        readonly reserve: number;
+        readonly rows: string[];
+      }
     | undefined;
   return {
     render(width) {
       const current = text();
-      if (cached?.text !== current || cached.width !== width)
-        cached = { text: current, width, rows: wrapPreviewHeading(current, width) };
+      const reserve = room?.reserve ?? 0;
+      if (cached?.text !== current || cached.width !== width || cached.reserve !== reserve)
+        cached = {
+          text: current,
+          width,
+          reserve,
+          rows: wrapPreviewHeading(current, width, reserve),
+        };
       return cached.rows;
     },
     invalidate() {

@@ -389,6 +389,19 @@ const startScenarios = Effect.gen(function* () {
     phase: "running",
     result: partial,
   };
+  // A single launch's heading needs no `started` beside its check.
+  const single = yield* scenario(
+    "one launch starts",
+    {
+      tool: "agent_start",
+      args: {
+        agents: [
+          { name: "auth-review", profile: "reviewer", task: "Review the session refresh flow" },
+        ],
+      },
+    },
+    { service: { startSessionOwned: (request) => Effect.succeed(launched(request, "agent-1")) } },
+  );
   const blockedWriter = yield* scenario(
     "scripted writer launch is returned to the main agent",
     {
@@ -484,6 +497,7 @@ const startScenarios = Effect.gen(function* () {
   return [
     settled,
     still,
+    single,
     modelOverride,
     customAgents,
     blockedWriter,
@@ -581,6 +595,40 @@ const awaitScenarios = Effect.gen(function* () {
         ),
     },
   });
+  // A single running await's heading needs no `running` beside its spinner.
+  const singleInput: SubagentToolInput<"agent_await"> = {
+    tool: "agent_await",
+    args: { runIds: ["agent-1"], until: "all_finished" },
+  };
+  const singleUpdates: GalleryResult[] = [];
+  const singleSettled = yield* scenario("one worker reports", singleInput, {
+    service: {
+      withAwaitTerminalObservations: (_ids, _until, onUpdate, use) =>
+        Effect.suspend(() => {
+          onUpdate?.([authReview]);
+          return use([
+            {
+              run: {
+                ...authReview,
+                state: "completed" as const,
+                finalText: "The refresh flow is safe. One nit: session.ts:118 swallows a timeout.",
+                ...timing(4, 0.5),
+              },
+            },
+          ]);
+        }),
+    },
+    onUpdate: (update) => {
+      singleUpdates.push(update);
+    },
+  });
+  const singleLive: ToolScenario = {
+    tool: singleInput.tool,
+    title: "one worker running",
+    args: singleInput.args,
+    phase: "running",
+    result: singleUpdates[0],
+  };
   const cutReport = yield* scenario(
     "a long report is cut and saved to a file",
     { tool: "agent_await", args: { runIds: ["agent-1"], until: "all_finished" } },
@@ -650,6 +698,8 @@ const awaitScenarios = Effect.gen(function* () {
   return [
     live,
     settled,
+    singleLive,
+    singleSettled,
     cancelled,
     userInput,
     siblingQuestion,

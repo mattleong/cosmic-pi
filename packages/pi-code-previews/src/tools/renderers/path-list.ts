@@ -66,7 +66,7 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
       if (prelude) return prelude;
       const previewEnabled = config.previewEnabled();
       if (!expanded && !previewEnabled)
-        return renderHiddenPreviewExpandHint(state, theme, config.footerNoun);
+        return renderHiddenPreviewExpandHint({ state }, theme, config.footerNoun);
       if (!output || output === config.emptyMarker)
         return new Text(theme.fg("muted", config.emptyLabel(output)), 0, 0);
       const { lines: rawLines, notice } = splitListingNotice(Str.split(output, "\n"));

@@ -4,7 +4,7 @@ import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Result from "effect/Result";
-import { renderExpansionAffordance, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
+import { renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";
 import { codePreviewSettings } from "../config/state";
@@ -14,6 +14,10 @@ import { previewHeadingText } from "../preview/heading-wrap";
 import { renderCompactChildren } from "../preview/compact-children";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
+import {
+  hiddenPreviewExpandHintForShell,
+  renderHiddenPreviewExpandHint,
+} from "../preview/bordered-tool-call";
 import { renderNativeCodemodeProgram } from "./native-codemode-source";
 import { escapeControlChars } from "../shared/terminal-text";
 import type { CodePreviewRendererAppearance } from "../application/renderer-contract";
@@ -284,9 +288,18 @@ export function createNativeCodemodeRenderers(
         });
         if (!projected)
           return safeContent(
-            () => new Text(renderExpansionAffordance("details", false, theme), 0, 0),
+            () => renderHiddenPreviewExpandHint({ state }, theme, "details"),
             "▸ details",
           );
+        // The output the calls produced stays hidden collapsed; the row's tag names it.
+        const hiddenOutput =
+          !options.isPartial && result.content.length
+            ? hiddenPreviewExpandHintForShell(
+                context,
+                theme,
+                isError || projected.outcome === "error" ? "error" : "output",
+              )
+            : "";
         let cached: { readonly key: string; readonly rows: string[] } | undefined;
         return safeContent(
           () => ({
@@ -304,18 +317,7 @@ export function createNativeCodemodeRenderers(
               // The program's own state: running children don't say the program still runs.
               if (options.isPartial)
                 rows.push(...new Text(toolRunningLine(theme, animationFrame), 0, 0).render(width));
-              if (!options.isPartial && result.content.length)
-                rows.push(
-                  clipToWidth(
-                    renderExpansionAffordance(
-                      isError || projected.outcome === "error" ? "error" : "output",
-                      false,
-                      theme,
-                    ),
-                    width,
-                    "",
-                  ),
-                );
+              if (hiddenOutput) rows.push(clipToWidth(hiddenOutput, width, ""));
               cached = { key, rows };
               return rows;
             },

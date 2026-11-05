@@ -11,9 +11,8 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { CompactStatus } from "../tools/compact-summary";
-import type { RendererState } from "../tools/renderers/shared/types";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import { renderExpansionAffordance, toolExpandHint } from "pi-cosmic-ui/tool";
+import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 
 type BorderSlot = "call" | "result";
 
@@ -43,6 +42,14 @@ export function borderState(context: { readonly state: unknown }): BorderState {
   return created;
 }
 
+/**
+ * The label a slot's hidden-content hint recorded for the row while it was built, the result's
+ * before the call's. Bordered rows draw it in the bottom corner; preview rows in the heading's tag.
+ */
+export const recordedExpandLabel = (state: BorderState): string | undefined =>
+  state.codePreviewBorderResultExpandLabel ?? state.codePreviewBorderCallExpandLabel;
+
+/** Builds a slot's body so the hints it draws record their labels for the row's frame. */
 export function renderWithBorderSlot<T>(state: BorderState, slot: BorderSlot, render: () => T): T {
   const previousSlot = state.codePreviewBorderCurrentSlot;
   state.codePreviewBorderCurrentSlot = slot;
@@ -142,8 +149,7 @@ export class BorderedToolCall implements Component {
     this.call = call;
     this.result = result;
     this.borderColorKey = color;
-    this.expandLabel =
-      state.codePreviewBorderResultExpandLabel ?? state.codePreviewBorderCallExpandLabel;
+    this.expandLabel = recordedExpandLabel(state);
     this.timingLabel = timingLabel;
     this.cache = undefined;
   }
@@ -190,12 +196,10 @@ export class BorderedToolCall implements Component {
     ];
   }
 
-  /** `▸ label · C-o Expand` in the bottom corner, or only the key hint where the label can't fit. */
+  /** `▸ label` in the bottom corner, or a bare `▸` where the label can't fit. */
   private cornerAffordance(label: string, innerWidth: number): string {
     const full = ` ${renderExpansionAffordance(label, false, this.theme)} `;
-    return visibleWidth(full) + 2 <= innerWidth
-      ? full
-      : ` ${this.theme.fg("muted", toolExpandHint())} `;
+    return visibleWidth(full) + 2 <= innerWidth ? full : ` ${this.theme.fg("accent", "▸")} `;
   }
 
   private frameLine(line: string, innerWidth: number, border: (value: string) => string): string {
@@ -230,12 +234,17 @@ function startsWithDiffBackground(line: string): boolean {
   );
 }
 
+/**
+ * A body's hint that the collapsed row hides its content, such as a read whose content preview is
+ * off; `row` is its render context, or anything carrying the row's state. Inside a shell slot it records `label` for the row's tag or corner and draws nothing;
+ * elsewhere it draws `▸ label`.
+ */
 export function hiddenPreviewExpandHintForShell(
-  state: RendererState,
+  row: { readonly state: unknown },
   theme: Theme,
   label: string,
 ): string {
-  const shellState = borderState({ state });
+  const shellState = borderState(row);
   const slot = shellState.codePreviewBorderCurrentSlot;
   if (slot !== "call" && slot !== "result") return renderExpansionAffordance(label, false, theme);
   if (slot === "call") shellState.codePreviewBorderCallExpandLabel = label;
@@ -244,10 +253,10 @@ export function hiddenPreviewExpandHintForShell(
 }
 
 export function renderHiddenPreviewExpandHint(
-  state: RendererState,
+  row: { readonly state: unknown },
   theme: Theme,
   label: string,
 ): Component {
-  const hint = hiddenPreviewExpandHintForShell(state, theme, label);
+  const hint = hiddenPreviewExpandHintForShell(row, theme, label);
   return hint ? new Text(hint, 0, 0) : new Container();
 }

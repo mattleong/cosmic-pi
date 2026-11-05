@@ -15,13 +15,13 @@ import { countContentLines } from "../../preview/line-counts";
 import { hiddenPreviewExpandHintForShell } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
 import type { CodePreviewSettings } from "../../config/schema";
-import { hostContainer, hostObject, ownField } from "../../shared/untrusted-value";
+import { hostObject, ownField } from "../../shared/untrusted-value";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { normalizePreviewLanguageAlias } from "../../syntax/language";
 import { getPathArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
-import { executeWriteWithPreview, isKnownNewWrite } from "../../write/preview-execution";
+import { executeWriteWithPreview } from "../../write/preview-execution";
 import { cachedDeferredPreview, cachedPreview } from "./shared/cache";
 import { previewCacheKey } from "./shared/preview-cache-key";
 import {
@@ -76,15 +76,13 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
         countLabel(countContentLines(content), "line"),
         lang ? normalizePreviewLanguageAlias(lang) : undefined,
       ];
-      const existingHeader = title + metadata(theme, details);
-      const newHeader = title + metadata(theme, ["new file", ...details]);
+      // A new file needs no fact: an overwrite is told apart by the diff beneath it.
+      const header = title + metadata(theme, details);
       const container = new Container();
-      container.addChild(
-        stateHeading(() => (state.writeNewFile === true ? newHeader : existingHeader)),
-      );
+      container.addChild(stateHeading(() => header));
       container.addChild(previewIssuesSlot(renderContext));
       if (!expanded && !codePreviewSettings.writeContentPreview) {
-        const hint = hiddenPreviewExpandHintForShell(state, theme, "content");
+        const hint = hiddenPreviewExpandHintForShell({ state }, theme, "content");
         if (hint) container.addChild(new Text(hint, 0, 0));
         return container;
       }
@@ -118,10 +116,7 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       const { state, invalidate } = renderContext;
       setResultDiffShown(state, false);
       const firstText = getTextContent(result.content);
-      if (renderContext.isError) {
-        state.writeNewFile = false;
-        return renderPreviewError(theme, expanded, firstText);
-      }
+      if (renderContext.isError) return renderPreviewError(theme, expanded, firstText);
 
       const input = hostObject(renderContext.args);
       const path = getPathArg(input);
@@ -130,7 +125,6 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
         renderContext.toolCallId,
         hostObject(result.details),
       );
-      state.writeNewFile = isKnownNewWrite(before, hostContainer(result.details));
       const nextContent = ownField(input, "content");
       const plan = writeDiffPlan(before, Predicate.isString(nextContent) ? nextContent : undefined);
       if (plan.kind === "skipped")

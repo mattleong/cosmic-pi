@@ -1,6 +1,4 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { clipToWidth } from "pi-cosmic-ui/manager";
-import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { authoredTextLines } from "./authored-text";
 
 const INDENT = 2;
@@ -30,15 +28,4 @@ export function compactQuoteClipped(
 ): boolean {
   const indent = width > INDENT * 2 ? INDENT : 0;
   return authoredTextLines(quote, width, theme, { expanded: true, indent }).length > shown;
-}
-
-/** The collapsed row's `▸ label · C-o Expand`, indented as its issues are. */
-export function renderCompactAffordance(
-  label: string | undefined,
-  theme: Pick<Theme, "fg">,
-  width: number,
-): string[] {
-  if (label === undefined || width <= 0) return [];
-  const indent = width > INDENT * 2 ? "  " : "";
-  return [clipToWidth(`${indent}${renderExpansionAffordance(label, false, theme)}`, width)];
 }

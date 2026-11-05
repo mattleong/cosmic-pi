@@ -14,6 +14,7 @@ import {
   expandedSection,
   expandedText,
   getTextContent,
+  hiddenPreviewExpandHintForShell,
 } from "pi-code-previews";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import {
@@ -210,6 +211,8 @@ interface SubagentResultRenderOptions {
   readonly isError?: boolean | undefined;
   /** The call's arguments, which a failure's body then needn't repeat. */
   readonly args?: unknown;
+  /** The row's render context, through which a hidden receipt body names the row's tag. */
+  readonly row?: { readonly state: unknown } | undefined;
 }
 
 const renderPartialStartAwait = (
@@ -406,6 +409,7 @@ const renderWorkspacePreview = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   expanded: boolean,
   theme: Theme,
+  row: { readonly state: unknown } | undefined,
 ): Component | undefined => {
   const receipt = decodeWorkspaceDisplay(result.details);
   if (!receipt) return undefined;
@@ -421,15 +425,18 @@ const renderWorkspacePreview = (
       indentedBody(theme, renderComponent(lineRows)),
       view ? workspaceExpandedBody(receipt, view, theme) : raw,
     );
-  return renderComponent((width) => {
-    const label = receipt.operation === "review" && view?.body ? "diff page" : "details";
-    return [
-      ...lineRows(width),
-      ...(expandable && !expanded
-        ? [clipToWidth(renderExpansionAffordance(label, false, theme), Math.max(1, width))]
-        : []),
-    ];
-  });
+  const label = receipt.operation === "review" && view?.body ? "diff page" : "details";
+  // Inside the row's shell the hidden body names the heading's tag rather than drawing a row.
+  const hint =
+    !expandable || expanded
+      ? ""
+      : row
+        ? hiddenPreviewExpandHintForShell(row, theme, label)
+        : renderExpansionAffordance(label, false, theme);
+  return renderComponent((width) => [
+    ...lineRows(width),
+    ...(hint ? [clipToWidth(hint, Math.max(1, width))] : []),
+  ]);
 };
 
 /**
@@ -463,7 +470,7 @@ export const renderSubagentResult = (
   const workspace =
     options.isError || options.workspace === false
       ? undefined
-      : renderWorkspacePreview(result, expanded, theme);
+      : renderWorkspacePreview(result, expanded, theme, options.row);
   if (workspace) return workspace;
   return renderTextFallback(result, isPartial, expanded, theme, options);
 };

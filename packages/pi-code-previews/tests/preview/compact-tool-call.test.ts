@@ -3,6 +3,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
 import { plainTheme as theme, stripAnsi } from "../support/render";
+import { expansionOffers } from "../../testing";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -55,7 +56,8 @@ test("quoted words show beneath a collapsed row with their line breaks, bounded 
   assert.equal(Fn.pipe(Arr.join(hostile, ""), Str.includes("\u001b[2J")), false);
 });
 
-const offers = (rows: readonly string[]) => Arr.some(rows, Str.includes("▸ prompt"));
+const offers = (rows: readonly string[]) =>
+  Arr.some(expansionOffers(rows), (label) => label === "prompt" || label === "");
 
 test("an affordance that reveals only the subject shows only where the row cuts the subject", () => {
   const prompt = "A watercolor otter floating on a river at dawn";

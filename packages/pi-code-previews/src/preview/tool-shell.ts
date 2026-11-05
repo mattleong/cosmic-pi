@@ -9,8 +9,7 @@ import {
   type PreviewClosing,
 } from "./preview-issues";
 import { drawsRows, previewExpandLabel, showsAffordance } from "./expand-affordance";
-import { clipToWidth } from "pi-cosmic-ui/manager";
-import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { BARE_TAG_RESERVE, tagFirstRow } from "./heading-tag";
 import type { CompactSummaryProvider } from "../tools/compact-summary";
 import {
   previewExpandedCall,
@@ -22,6 +21,7 @@ import {
   borderState,
   type BorderedToolCall,
   frameBorderShell,
+  recordedExpandLabel,
   renderWithBorderSlot,
   shouldRenderBorderResultSeparately,
 } from "./bordered-tool-call";
@@ -30,6 +30,7 @@ import {
   updateToolCallTiming,
   withLastComponent,
   type ToolTimingCadence,
+  type ToolTimingDecoration,
 } from "./tool-timing";
 import type { ToolCallBackgroundMode, ToolCallCollapsedStyle } from "../config/schema";
 import { codePreviewSettings } from "../config/state";
@@ -74,11 +75,11 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
     cadence,
     showShortTiming: compact.showShortTiming ?? false,
   };
-  const affordance = previewAffordance(frames, summary);
+  const tag = previewHeadingTag(frames, summary);
   const shell: CodePreviewToolShell<TArgs, TDetails, TState> = {
     renderShell: mode === "on" ? "default" : "self",
     renderCall: (context, theme, body, content) => {
-      const closing = mode === "border" ? undefined : affordance.call(context, theme);
+      const closing = mode === "border" ? undefined : tag.call(context, theme);
       const render = (latest: typeof context) => {
         const current = withLastComponent(latest, unwrapPreviewExpanded(latest.lastComponent));
         const original = renderWithPreviewIssues(frames, body, summary, current, theme, closing);
@@ -88,7 +89,10 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
         return previewExpandedCall({ ...input, title, heading: body });
       };
       if (mode !== "border") {
-        const component = render(context);
+        // A collapsed body's hidden-content hint names the heading's tag rather than drawing a row.
+        const component = context.expanded
+          ? render(context)
+          : renderWithBorderSlot(borderState(context), "call", () => render(context));
         updateToolCallTiming(context, { ...timing, animate: animateProgress, formatLabel: false });
         return component;
       }
@@ -100,7 +104,7 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
       state.codePreviewBorderCallComponent = callComponent;
       state.codePreviewBorderLastCallExecutionStarted = context.executionStarted;
       state.codePreviewBorderLastCallPartial = context.isPartial;
-      return affordance.border(frameBorderShell(context, theme, label), context);
+      return tag.border(frameBorderShell(context, theme, label), context);
     },
     renderResult: (context, theme, body, result, content) => {
       frames.record(context, result);
@@ -116,19 +120,21 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
       // Expanded composition draws its own timing line at the body column.
       const footer = context.expanded && content ? undefined : label;
       if (mode !== "border")
-        return renderTimedResultFooter(
-          context,
-          theme,
-          render,
-          footer,
-          affordance.result(context, theme),
+        return renderWithBorderSlot(borderState(context), "result", () =>
+          renderTimedResultFooter(
+            context,
+            theme,
+            (latest) => tag.recordResult(latest, render(latest)),
+            footer,
+            tag.result(context, theme),
+          ),
         );
       const state = borderState(context);
       const resultComponent = renderWithBorderSlot(state, "result", () =>
         render(withLastComponent(context, state.codePreviewBorderResultComponent)),
       );
       state.codePreviewBorderResultComponent = resultComponent;
-      affordance.border(frameBorderShell(context, theme, label), context);
+      tag.border(frameBorderShell(context, theme, label), context);
       return shouldRenderBorderResultSeparately(state, context.isPartial)
         ? resultComponent
         : new Container();
@@ -137,19 +143,21 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
   return selfShell && shell.renderShell === "default" ? withSelfBackground(shell) : shell;
 }
 
-const affordanceRow = (theme: Theme, label: string | undefined, width: number) =>
-  label === undefined ? [] : [clipToWidth(renderExpansionAffordance(label, false, theme), width)];
-
-/** The collapsed call rows each row drew last, which its result slot reads to close the row. */
+/** The collapsed call rows each row drew last, which its result slot reads to place the tag. */
 const collapsedCallRows = new WeakMap<WeakKey, readonly string[]>();
 
+/** The collapsed result body each row built last, which its call slot draws to decide the tag. */
+const collapsedResultBodies = new WeakMap<WeakKey, Component>();
+
 /**
- * The shell's `▸ label · C-o Expand` for a collapsed preview row, from the summary's `expandLabel`
- * or what expansion would reveal, unless a row already drew an affordance. It closes the row: the
- * result slot draws it after the timing, and the call slot draws it while there's no result.
- * Bordered rows label their bottom corner instead.
+ * The shell's expansion tag for a collapsed preview row, `▸ label` or a bare `▸` on the heading's
+ * first row: the label a body's hidden-content hint recorded, else the summary's `expandLabel` or
+ * what expansion would reveal, unless a row already drew an affordance. The call slot decides it
+ * from the rows both slots draw, so a row with a result still shows it on its heading; only a call
+ * that draws nothing leaves the tag to its result's first row. Bordered rows label their bottom
+ * corner instead.
  */
-function previewAffordance<TArgs, TDetails, TState extends object>(
+function previewHeadingTag<TArgs, TDetails, TState extends object>(
   frames: PreviewFrames<TArgs, TDetails, TState>,
   provider: CompactSummaryProvider<TArgs, TDetails, TState>,
 ) {
@@ -158,39 +166,58 @@ function previewAffordance<TArgs, TDetails, TState extends object>(
     above: readonly string[],
     result: readonly string[] | undefined,
   ): string | undefined => {
-    if (context.expanded || showsAffordance(above)) return undefined;
+    if (context.expanded) return undefined;
+    const hinted = recordedExpandLabel(borderState(context));
+    if (hinted !== undefined) return hinted;
+    if (showsAffordance(above)) return undefined;
     const { summary } = previewIssues(frames, provider, context);
     if (!summary) return undefined;
     const shown = result !== undefined && drawsRows(result);
     return previewExpandLabel(summary, frames.currentResult(context), shown);
   };
   // Closures hold the row's state, never a render context, so replaced arguments can be released.
-  const closing = (
-    context: ToolRenderContext<TState, TArgs>,
-    theme: Theme,
-    draw: (
-      current: ToolRenderContext<TState, TArgs>,
-      rows: readonly string[],
-    ) => string | undefined,
-  ): PreviewClosing | undefined => {
-    if (context.expanded) return undefined;
-    const { state } = context;
-    return (rows, width) => {
-      const current = frames.latestFor(state);
-      return current ? affordanceRow(theme, draw(current, rows), width) : [];
-    };
-  };
   return {
-    call: (context: ToolRenderContext<TState, TArgs>, theme: Theme) =>
-      closing(context, theme, (current, rows) => {
-        collapsedCallRows.set(current.state, rows);
-        // With a result, the result slot closes the row.
-        return frames.currentResult(current) ? undefined : label(current, rows, undefined);
-      }),
-    result: (context: ToolRenderContext<TState, TArgs>, theme: Theme) =>
-      closing(context, theme, (current, rows) =>
-        label(current, [...(collapsedCallRows.get(current.state) ?? []), ...rows], rows),
-      ),
+    call: (context: ToolRenderContext<TState, TArgs>, theme: Theme): PreviewClosing | undefined => {
+      if (context.expanded) return undefined;
+      const { state } = context;
+      return (width) => {
+        const current = frames.latestFor(state);
+        const result =
+          current && frames.currentResult(current)
+            ? (collapsedResultBodies.get(state)?.render(width) ?? [])
+            : undefined;
+        // The heading keeps room for the tag the result alone calls for; its own rows can only
+        // withdraw it.
+        const expected = current ? label(current, result ?? [], result) : undefined;
+        return {
+          reserve: expected === undefined ? 0 : BARE_TAG_RESERVE,
+          place: (rows) => {
+            collapsedCallRows.set(state, rows);
+            if (!current || !drawsRows(rows)) return rows;
+            const tag = label(current, [...rows, ...(result ?? [])], result);
+            return tagFirstRow(rows, tag, theme, width);
+          },
+        };
+      };
+    },
+    result: (
+      context: ToolRenderContext<TState, TArgs>,
+      theme: Theme,
+    ): ToolTimingDecoration | undefined => {
+      if (context.expanded) return undefined;
+      const { state } = context;
+      return (rows, body, width) => {
+        const above = collapsedCallRows.get(state) ?? [];
+        const current = frames.latestFor(state);
+        if (!current || drawsRows(above)) return rows;
+        return tagFirstRow(rows, label(current, [...above, ...body], body), theme, width);
+      };
+    },
+    /** Remembers the collapsed result body the call slot draws to decide the tag. */
+    recordResult: (context: ToolRenderContext<TState, TArgs>, body: Component): Component => {
+      if (!context.expanded) collapsedResultBodies.set(context.state, body);
+      return body;
+    },
     border: (shell: BorderedToolCall, context: ToolRenderContext<TState, TArgs>) => {
       const { state } = context;
       shell.setExpandFallback((call, result) => {

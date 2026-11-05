@@ -64,10 +64,10 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
       if (body.kind === "oversized")
         return expanded
           ? new Container()
-          : renderHiddenPreviewExpandHint(renderContext.state, theme, "details");
+          : renderHiddenPreviewExpandHint(renderContext, theme, "details");
 
       if (!expanded && !codePreviewSettings.readContentPreview)
-        return renderHiddenPreviewExpandHint(renderContext.state, theme, "content");
+        return renderHiddenPreviewExpandHint(renderContext, theme, "content");
 
       const { content, firstLine } = body;
       const path = getPathArg(input);

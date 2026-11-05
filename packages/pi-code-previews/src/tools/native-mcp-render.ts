@@ -28,6 +28,7 @@ import { expandedText } from "../preview/expanded-body";
 import { repeatsIssueMessage } from "../preview/compact-issues";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
+import { renderHiddenPreviewExpandHint } from "../preview/bordered-tool-call";
 import { hostContainer, hostObject, type HostContainer } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { withCodePreviewRenderers } from "./cooperative-tools";
@@ -194,9 +195,10 @@ function renderOutputPreview(
   return safeContent(() => preview(theme), preview(unstyled));
 }
 
-function affordance(label: string, theme: Theme): Component {
+/** A collapsed result that hides its whole content, which the row's tag names. */
+function hiddenResult(label: string, theme: Theme, row: { readonly state: unknown }): Component {
   return safeContent(
-    () => new Text(renderExpansionAffordance(label, false, theme), 0, 0),
+    () => renderHiddenPreviewExpandHint(row, theme, label),
     plainRows(`▸ ${label}`, 1),
   );
 }
@@ -291,8 +293,9 @@ export function createNativeMcpRenderers(
     if (options.isPartial) return renderProgress(result, theme, context.state);
     const args = hostContainer(context.args);
     // The heading's issue states a failure; its full text and any recovery stay in expansion.
-    if (context.isError) return affordance("error", theme);
-    if (nativeMcpHasRecoverableClipping(identity, result, args)) return affordance("output", theme);
+    if (context.isError) return hiddenResult("error", theme, context);
+    if (nativeMcpHasRecoverableClipping(identity, result, args))
+      return hiddenResult("output", theme, context);
     return renderOutputPreview(result, theme, context, ownedEnvelopeBody(result, args));
   };
   // Truncation issues explain a recognized, owned envelope, so its preview shows only the output.

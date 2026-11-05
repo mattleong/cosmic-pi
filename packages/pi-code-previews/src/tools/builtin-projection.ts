@@ -208,7 +208,8 @@ function writeParts(
   const before = beforeWrite.kind === "snapshot" ? hostObject(beforeWrite.value) : undefined;
   const beforeContent = ownField(before, "content");
   const issues = Predicate.isString(beforeContent) ? scanSecrets(input, [beforeContent]) : [];
-  if (beforeWrite.kind === "new") return { counters: ["new file"], metadata: [], issues };
+  // A new file needs no fact: an overwrite shows its `+N −M` counts instead.
+  if (beforeWrite.kind === "new") return { counters: [], metadata: [], issues };
   const projection = writeDiffProjection(before, content, input);
   const counters =
     projection.issues.length || projection.metadata.length

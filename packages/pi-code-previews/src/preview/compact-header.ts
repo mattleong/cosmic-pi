@@ -120,7 +120,8 @@ export function cutsCleanly(text: string, cut: string, kind: CompactSubjectKind)
  * Lays out `identity subject · counter`, choosing the first counter alternative that leaves the
  * subject 12 columns; a subject cut beside it keeps whole words. Without counters the first
  * optional fact takes a counter's place when such a cut exists (or keeps a path's file name), so a
- * heading whose subject is cut still shows its outcome, such as `finished in 1m 33s`.
+ * heading whose subject is cut still shows its outcome, such as `finished in 1m 33s`. `fact` is the
+ * counter or outcome fact shown, and `subjectShown` the columns the shown subject takes.
  */
 export function layoutCompactHeader(
   identity: string,
@@ -140,13 +141,16 @@ export function layoutCompactHeader(
       );
   const remaining = width - visibleWidth(identity);
   // A clipped heading always ends in an ellipsis, so it never reads as complete.
+  const subjectWidth = visibleWidth(subject);
   if (remaining <= 0)
     return {
       row: clipToWidth(`${identity}${subject ? ` ${subject}` : ""}`, width),
       counter: undefined,
+      fact: undefined,
       subjectComplete: !subject,
+      subjectShown: 0,
+      subjectWidth,
     };
-  const subjectWidth = visibleWidth(subject);
   const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
   const counterBudget = remaining - subjectMinimum;
   const timingToken = timing && Str.trim(timing) ? `${separator}${timing}` : "";
@@ -180,11 +184,17 @@ export function layoutCompactHeader(
     return {
       row: clipToWidth(`${identity} ${subject}`, width),
       counter: undefined,
+      fact: undefined,
       subjectComplete: false,
+      subjectShown: Math.max(0, remaining - 1),
+      subjectWidth,
     };
   return {
     row: identity + (target ? ` ${target}` : "") + counterText + timingText,
     counter: counters.length ? counter : undefined,
+    fact: counter,
     subjectComplete: target === subject,
+    subjectShown: visibleWidth(target),
+    subjectWidth,
   };
 }

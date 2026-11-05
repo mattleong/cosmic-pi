@@ -50,7 +50,7 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
       });
       if (prelude) return prelude;
       if (!expanded && !codePreviewSettings.grepResultPreview)
-        return renderHiddenPreviewExpandHint(renderContext.state, theme, "output");
+        return renderHiddenPreviewExpandHint(renderContext, theme, "output");
       if (!output || output === "No matches found")
         return new Text(theme.fg("muted", output || "No matches found"), 0, 0);
 

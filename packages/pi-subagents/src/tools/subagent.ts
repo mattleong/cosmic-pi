@@ -388,6 +388,7 @@ export function registerSubagentTools(
               panelOwnsLiveHierarchy: panelOwnsHierarchy(result, options.isPartial, context),
               isError: context.isError,
               args: context.args,
+              row: context,
             });
       },
     });

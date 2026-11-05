@@ -7,7 +7,11 @@ import * as Str from "effect/String";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { stripAnsi } from "pi-cosmic-core";
 import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
-import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
+import {
+  applyPresentationSettings,
+  createToolPresentationHarness,
+  expansionOffers,
+} from "../../testing";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { withCodePreviewMessageShell } from "../../src/preview/message-shell";
 import { authoredTextLines } from "../../src/preview/authored-text";
@@ -20,8 +24,7 @@ beforeEach(() =>
 );
 
 const styles = ["compact", "preview"] as const;
-const affordances = (text: string) =>
-  Arr.filter(Str.split(stripAnsi(text), "\n"), (row) => Str.startsWith("▸ ")(Str.trim(row)));
+const affordances = (text: string) => expansionOffers(Str.split(text, "\n"));
 
 const tool = (
   summary: (phase: string) => CompactSummary,
@@ -197,7 +200,7 @@ test("a failure the collapsed preview body leaves out offers its error, as compa
     const harness = createToolPresentationHarness(tool(failedRead, { result: "empty" }));
     harness.call({ path: "a.ts" });
     harness.result(textResult("ENOENT: no such file"), { isError: true });
-    return Arr.map(affordances(Arr.join(harness.render(), "\n")), Str.trim);
+    return affordances(Arr.join(harness.render(), "\n"));
   });
   expect(labels[0]).toHaveLength(1);
   expect(labels[1]).toEqual(labels[0]);

@@ -12,6 +12,7 @@ export {
   type ToolPresentationHarness,
 } from "./src/testing/tool-presentation";
 export { issueMessageStyleProblems } from "./src/testing/issue-messages";
+export { expansionOffers, expansionTag } from "./src/testing/expansion-offers";
 export { galleryDirectory, writeGallerySection } from "pi-cosmic-core/testing";
 export {
   galleryFrames,

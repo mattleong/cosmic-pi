@@ -6,7 +6,7 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 import { provideBuiltLayer } from "pi-cosmic-core/testing";
-import { applyPresentationSettings, renderContextFixture } from "../../testing";
+import { applyPresentationSettings, expansionTag, renderContextFixture } from "../../testing";
 import { CodePreviewSchedulerService } from "../../src/application/scheduler";
 import {
   clearCodePreviewSessionCapability,
@@ -140,14 +140,19 @@ test("one stable compact call carries pending, executing, streaming and final me
     },
   });
   const shell = h.call();
-  // Each collapsed state is its row plus the affordance naming what expansion reveals.
-  assert.equal(h.rows().length, 2);
+  // Each collapsed state is one row, ending in the tag naming what expansion reveals.
+  const tagged = () => {
+    const rows = h.rows();
+    assert.equal(rows.length, 1);
+    assert.notEqual(expansionTag(rows[0] ?? ""), undefined);
+  };
+  tagged();
   h.update({ executionStarted: true, argsComplete: true });
   h.update({}, result("stream-one"));
-  assert.equal(h.rows().length, 2);
+  tagged();
   assert.equal(h.call(), shell);
   h.update({ isPartial: false }, result("final-count"));
-  assert.equal(h.rows().length, 2);
+  tagged();
   assert.match(Arr.join(h.rows(), ""), /final-count/u);
   assert.doesNotMatch(Arr.join(h.rows(), ""), /stream-one/u);
   assert.equal(bodyWork, 0, "compact summaries must avoid hidden diff/output computation");
@@ -195,8 +200,9 @@ test("missing outcomes, malformed summaries, declines and throwing providers kee
       for (const isError of [false, true]) {
         const h = harness(provider, mode);
         const rows = h.update({ isPartial: false, isError }, result(body));
-        // The row, an error's issue, then the affordance that leads to the original bodies.
-        assert.equal(rows.length, isError ? 3 : 2);
+        // The row, whose tag leads to the original bodies, then an error's issue.
+        assert.equal(rows.length, isError ? 2 : 1);
+        assert.notEqual(expansionTag(rows[0] ?? ""), undefined);
         const collapsed = Arr.join(rows, "\n");
         assert.doesNotMatch(collapsed, /CALL file.ts|MALFORMED|recovery-step-[1-9]/u);
         assert.equal(Fn.pipe(collapsed, Str.includes("recovery-step-0")), isError);

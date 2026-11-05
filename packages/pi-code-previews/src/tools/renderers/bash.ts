@@ -111,8 +111,7 @@ export function bashPreviewRenderers(): PreviewRenderers {
         return streamingTail(lines, theme);
       const prelude = renderResultPrelude({ isPartial, theme });
       if (prelude) return prelude;
-      if (!expanded && hidden)
-        return renderHiddenPreviewExpandHint(renderContext.state, theme, "output");
+      if (!expanded && hidden) return renderHiddenPreviewExpandHint(renderContext, theme, "output");
       const { lines: rawLines, notice } = splitShellNotice(
         renderContext.isError ? withoutShellStatus(lines) : lines,
       );

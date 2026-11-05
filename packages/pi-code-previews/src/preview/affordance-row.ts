@@ -1,13 +1,22 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { toolExpandHint } from "pi-cosmic-ui/tool";
 
-/** Whether a drawn row is an expansion affordance, `▸ label · C-o Expand`, even when clipped. */
+const ESC = "\u001b";
+const STYLING = `${ESC}\\[[0-9;:]*m`;
+// Leading blank columns and styling, then a `▸` styled apart from its label, as
+// `renderExpansionAffordance` draws it. Output text can't match: Pi escapes its control characters.
+const STYLED_AFFORDANCE = new RegExp(`^(?:\\s|${STYLING})*${STYLING}▸${STYLING}`, "u");
+
+/**
+ * Whether a drawn row is an expansion affordance, such as `▸ 7 more lines`, even when clipped: its
+ * text starts with `▸ ` and its `▸` is styled apart from the label. Rows drawn without any styling
+ * can't show that, so there the text alone decides.
+ */
 export function isAffordanceRow(row: string): boolean {
   const text = Str.trim(stripTerminalControls(row));
-  if (!Str.startsWith("▸ ")(text)) return false;
-  return Str.includes(toolExpandHint())(text) || Str.endsWith("…")(text);
+  if (!Str.startsWith("▸ ")(text) || !Str.isNonEmpty(Str.trim(Str.slice(2)(text)))) return false;
+  return !Str.includes(ESC)(row) || STYLED_AFFORDANCE.test(row);
 }
 
 /** Whether drawn rows already offer expansion, so the shell doesn't add a second affordance. */

@@ -7,7 +7,8 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CompactSummary } from "../tools/compact-summary";
 import { cutsCleanly, elideSubject, endElide, FACT_CUT_SLACK } from "./compact-header";
-import { previewHeadingText, wrapPreviewHeading } from "./heading-wrap";
+import type { TaggableHeading } from "./heading-tag";
+import { previewHeadingText, takeHeadingRoom, wrapPreviewHeading } from "./heading-wrap";
 import { drawsExpandedHeading } from "./preview-issues";
 import { compactSingleLine } from "./compact-row";
 
@@ -111,24 +112,40 @@ export function previewHeadingRow(
   theme: Pick<Theme, "fg" | "bold">,
   width: number,
 ): string {
+  return layoutPreviewHeadingRow(title, summary, expanded, theme, width).row;
+}
+
+/** {@link previewHeadingRow} with the fact it keeps and the room its subject takes. */
+export function layoutPreviewHeadingRow(
+  title: string,
+  summary: CompactSummary,
+  expanded: boolean,
+  theme: Pick<Theme, "fg" | "bold">,
+  width: number,
+): TaggableHeading {
   const action = compactSingleLine(summary.action ?? "");
   const subject = compactSingleLine(
     expanded ? summary.subject : (summary.compactSubject ?? summary.subject),
   );
+  const subjectWidth = visibleWidth(subject);
   const counters = singleLineFacts(summary.counters);
   const metadata = singleLineFacts(summary.metadata);
   const room =
     width - visibleWidth(compactSingleLine(title)) - 1 - (action ? visibleWidth(action) + 1 : 0);
-  const draw = (shown: string, shownFacts: readonly string[], count: number) =>
-    clipToWidth(
+  const draw = (shown: string, shownFacts: readonly string[], count: number): TaggableHeading => ({
+    row: clipToWidth(
       renderToolHeader(
         { title, subtitle: headingSubtitle(action, shown, shownFacts, count) },
         theme,
       ),
       width,
-    );
+    ),
+    fact: count > 0 ? shownFacts[0] : undefined,
+    subjectShown: Math.max(0, Math.min(visibleWidth(shown), room)),
+    subjectWidth,
+  });
   const fits = (shownFacts: readonly string[], count: number) =>
-    visibleWidth(subject) + visibleWidth(factTail(shownFacts, count)) <= room;
+    subjectWidth + visibleWidth(factTail(shownFacts, count)) <= room;
   for (const shownFacts of counters.length > 0
     ? Arr.map(counters, (counter) => [counter, ...metadata])
     : [metadata])
@@ -139,8 +156,7 @@ export function previewHeadingRow(
     Arr.findFirst(
       counters.length > 0 ? counters : Arr.take(metadata, 1),
       (value) =>
-        room - visibleWidth(factTail([value], 1)) >=
-        Math.min(SUBJECT_MINIMUM, visibleWidth(subject)),
+        room - visibleWidth(factTail([value], 1)) >= Math.min(SUBJECT_MINIMUM, subjectWidth),
     ),
   );
   const cut = (kept: readonly string[]) =>
@@ -188,11 +204,13 @@ export function previewMessageHeading(
       const { title, name } = shown();
       return renderToolHeader({ title: messageHeadingTitle(title, name) }, theme);
     });
+  // The row's tag takes its room from the name, which is then cut at a word boundary.
+  const tagRoom = takeHeadingRoom();
   return {
     render(width) {
       if (width <= 0) return [];
       const { title, name } = shown();
-      const room = width - visibleWidth(title) - 1;
+      const room = width - visibleWidth(title) - 1 - (tagRoom?.reserve ?? 0);
       const cut = room > 1 ? endElide(name, room) : name;
       return [
         clipToWidth(renderToolHeader({ title: messageHeadingTitle(title, cut) }, theme), width),

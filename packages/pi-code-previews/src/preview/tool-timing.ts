@@ -66,23 +66,33 @@ export type ToolCallTiming = {
   elapsedMs: number;
 };
 
+/**
+ * Changes a collapsed result's drawn rows, given the rows its body drew, such as placing the shell's
+ * expansion tag on the first row.
+ */
+export type ToolTimingDecoration = (
+  rows: readonly string[],
+  body: readonly string[],
+  width: number,
+) => readonly string[];
+
 export function renderTimedResultFooter<TContext extends ToolTimingRenderContext>(
   context: TContext,
   theme: Theme,
   render: (context: TContext) => Component,
   timingLabel: string | undefined,
-  closing?: (rows: readonly string[], width: number) => readonly string[],
+  decorate?: ToolTimingDecoration,
 ): Component {
   const handles = timingState(context)?.handles;
   const resultComponent = render(
     withLastComponent(context, handles?.resultComponent ?? context.lastComponent),
   );
   if (handles) handles.resultComponent = resultComponent;
-  if (!timingLabel && !closing) return resultComponent;
+  if (!timingLabel && !decorate) return resultComponent;
   return new ToolTimingFooter(
     resultComponent,
     timingLabel ? theme.fg("muted", timingLabel) : undefined,
-    closing,
+    decorate,
   );
 }
 
@@ -257,26 +267,24 @@ function clearToolCallTimingInterval(state: TimingState): void {
 }
 
 /**
- * A collapsed result body followed by its timing and then whatever closes the row, such as the
- * shell's expansion affordance. An affordance the body ends with moves below the timing, so an
- * affordance always closes the row.
+ * A collapsed result body followed by its timing. An affordance the body ends with, such as
+ * `▸ 7 more lines`, moves below the timing, so the timing stays with the output it measures and
+ * the affordance still ends the row. A decoration then changes the drawn rows.
  */
 class ToolTimingFooter implements Component {
   private readonly component: Component;
   private readonly footer: string | undefined;
-  private readonly closing:
-    | ((rows: readonly string[], width: number) => readonly string[])
-    | undefined;
+  private readonly decorate: ToolTimingDecoration | undefined;
   private bounds: { width: number; height: number } | undefined;
 
   constructor(
     component: Component,
     footer: string | undefined,
-    closing: ((rows: readonly string[], width: number) => readonly string[]) | undefined,
+    decorate: ToolTimingDecoration | undefined,
   ) {
     this.component = component;
     this.footer = footer;
-    this.closing = closing;
+    this.decorate = decorate;
   }
 
   render(width: number): string[] {
@@ -285,12 +293,12 @@ class ToolTimingFooter implements Component {
     const trailing = this.footer !== undefined && last >= 0 && isAffordanceRow(rows[last] ?? "");
     const body = trailing ? rows.slice(0, last) : rows;
     this.bounds = { width, height: body.length };
-    return [
+    const drawn = [
       ...body,
       ...(this.footer === undefined ? [] : [clipToWidth(this.footer, width, "")]),
       ...(trailing ? rows.slice(last) : []),
-      ...(this.closing?.(rows, width) ?? []),
     ];
+    return this.decorate ? [...this.decorate(drawn, rows, width)] : drawn;
   }
 
   handleMouse(event: TuiMouseEvent) {

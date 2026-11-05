@@ -20,6 +20,7 @@ import {
 } from "../tools/compact-summary";
 import { getTextContent } from "../tools/data/results";
 import { renderCompactIssues } from "./compact-issues";
+import { reservingHeadingRoom, type HeadingRoom } from "./heading-wrap";
 
 interface PreviewResult<TDetails> {
   readonly result: AgentToolResult<TDetails>;
@@ -129,24 +130,39 @@ export function previewIssues<TArgs, TDetails, TState extends object>(
   return value;
 }
 
-/** Rows a collapsed preview row adds after everything it draws, given what it drew. */
-export type PreviewClosing = (rows: readonly string[], width: number) => readonly string[];
+/**
+ * How a collapsed preview call draws its expansion tag at a width: the columns its heading keeps
+ * clear on its first row, decided before it draws, and what then places the tag on its rows.
+ */
+export type PreviewClosing = (width: number) => {
+  readonly reserve: number;
+  readonly place: (rows: readonly string[]) => readonly string[];
+};
 
 class PreviewIssuesFrame extends Container {
   readonly body: Component;
   private readonly closing: PreviewClosing | undefined;
+  private readonly room: HeadingRoom;
 
-  constructor(body: Component, issues: Component, closing: PreviewClosing | undefined) {
+  constructor(
+    body: Component,
+    issues: Component,
+    closing: PreviewClosing | undefined,
+    room: HeadingRoom,
+  ) {
     super();
     this.body = body;
     this.closing = closing;
+    this.room = room;
     this.addChild(body);
     this.addChild(issues);
   }
 
   override render(width: number): string[] {
-    const rows = super.render(width);
-    return this.closing ? [...rows, ...this.closing(rows, width)] : rows;
+    if (!this.closing) return super.render(width);
+    const { reserve, place } = this.closing(width);
+    this.room.reserve = reserve;
+    return [...place(super.render(width))];
   }
 }
 
@@ -297,8 +313,15 @@ export function renderWithPreviewIssues<TArgs, TDetails, TState extends object>(
   const slot: IssueSlot = { lines, placed: false };
   issueSlots.set(context.state, slot);
   try {
-    const body = render({ ...context, lastComponent: unwrapPreviewIssues(context.lastComponent) });
-    return new PreviewIssuesFrame(body, slot.placed ? EMPTY : lines, closing);
+    // A heading that wraps anyway keeps room on its first row for the tag the closing places.
+    const room: HeadingRoom = { reserve: 0 };
+    // Passed rather than closed over: a closure here would share this scope, so the long-lived
+    // issue rows would retain the context and its replaced arguments.
+    const body = reservingHeadingRoom(room, render, {
+      ...context,
+      lastComponent: unwrapPreviewIssues(context.lastComponent),
+    });
+    return new PreviewIssuesFrame(body, slot.placed ? EMPTY : lines, closing, room);
   } finally {
     issueSlots.delete(context.state);
   }

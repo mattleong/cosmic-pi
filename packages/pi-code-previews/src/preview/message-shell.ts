@@ -5,8 +5,7 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import { clipToWidth } from "pi-cosmic-ui/manager";
-import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { composeToolComponent } from "pi-cosmic-ui/tool";
 import type { ToolCallCollapsedStyle } from "../config/schema";
 import { sharedPresentation, type SharedPresentation } from "../config/state";
 import { escapeControlChars } from "../shared/terminal-text";
@@ -14,12 +13,12 @@ import { planCompactPresentation } from "../tools/compact-presentation";
 import { compactStatus, type CompactSummary } from "../tools/compact-summary";
 import { BorderedToolCall, statusBorderColor } from "./bordered-tool-call";
 import { renderCompactIssues } from "./compact-issues";
-import { layoutExpandedCompactHeading, renderCompactRow } from "./compact-row";
-import { renderCompactAffordance } from "./compact-quote";
+import { layoutExpandedCompactHeading, layoutTaggedCompactRow } from "./compact-row";
 import { showsAffordance } from "./expand-affordance";
 import { drawWithBodyLabel } from "./expanded-section";
 import { headingWrapped, recordHeadingSubject } from "./heading-coverage";
-import { previewHeadingRow, wrappedPreviewHeading } from "./preview-heading";
+import { layoutTaggedHeading } from "./heading-tag";
+import { layoutPreviewHeadingRow, wrappedPreviewHeading } from "./preview-heading";
 import { statusBackground } from "./self-background";
 
 /** A custom message presented like a settled tool row: its heading, then what someone wrote. */
@@ -39,7 +38,8 @@ export interface CodePreviewMessage {
   readonly expanded?: ((headingState: WeakKey) => Component | undefined) | undefined;
   /**
    * What expansion reveals, such as `details` or `conversation`: in both styles the collapsed
-   * message then ends with `▸ label · C-o Expand`, unless its body already ends in an affordance.
+   * message's heading then ends in its tag, `▸ label` or a bare `▸`, unless its body already ends in
+   * an affordance.
    * Defaults to the summary's `expandLabel`.
    */
   readonly expandLabel?: string | undefined;
@@ -176,9 +176,15 @@ class MessageShell implements Component {
     });
     const status = compactStatus("settled", summary);
     const compact = policy.toolCallCollapsedStyle === "compact";
-    const headingRows = (width: number): string[] => {
+    // A collapsed heading is one row, laid out beside the tag `tag` names.
+    const headingRows = (width: number, tag: string | undefined): string[] => {
       const title = message.label ?? message.name;
-      if (!compact && !expanded) return [previewHeadingRow(title, summary, false, theme, width)];
+      if (!compact && !expanded)
+        return [
+          layoutTaggedHeading(tag, theme, width, (room) =>
+            layoutPreviewHeadingRow(title, summary, false, theme, room),
+          ).row,
+        ];
       // An expanded preview heading wraps rather than clips, so the body may leave out its subject.
       if (!compact) {
         const { rows, subjectComplete } = wrappedPreviewHeading(title, summary, theme, width);
@@ -186,7 +192,14 @@ class MessageShell implements Component {
         return rows;
       }
       if (!expanded)
-        return [renderCompactRow({ name: message.name, phase: "settled", summary }, theme, width)];
+        return [
+          layoutTaggedCompactRow(
+            { name: message.name, phase: "settled", summary },
+            theme,
+            width,
+            tag,
+          ).row,
+        ];
       const { rows, subjectComplete } = layoutExpandedCompactHeading(
         {
           name: message.name,
@@ -194,6 +207,7 @@ class MessageShell implements Component {
           summary,
           expanded,
           collapsedWidth: this.renderWidth,
+          collapsedExpandLabel: this.expandLabel(),
         },
         theme,
         width,
@@ -201,16 +215,17 @@ class MessageShell implements Component {
       recordHeadingSubject(this.headingState, subjectComplete, rows);
       return rows;
     };
-    const heading = composeToolComponent((width) => [
-      ...headingRows(width),
-      ...renderCompactIssues(
-        summary.issues,
-        theme,
-        width,
-        expanded,
-        compact || expanded ? ROW_INDENT : "",
-      ),
-    ]);
+    const heading = (tag: string | undefined) =>
+      composeToolComponent((width) => [
+        ...headingRows(width, tag),
+        ...renderCompactIssues(
+          summary.issues,
+          theme,
+          width,
+          expanded,
+          compact || expanded ? ROW_INDENT : "",
+        ),
+      ]);
     const content = expanded
       ? message.expanded
         ? message.expanded(this.headingState)
@@ -228,19 +243,8 @@ class MessageShell implements Component {
         : content;
     const shown = new Container();
     // A collapsed compact message is a bare compact row, as a collapsed compact tool row is.
-    if (compact && !expanded) {
-      shown.addChild(heading);
-      const label = this.expandLabel();
-      const beneath = body && beneathRow(body);
-      shown.addChild(
-        composeToolComponent((width) => {
-          const rows = beneath?.render(width) ?? [];
-          return label === undefined || showsAffordance(rows)
-            ? rows
-            : [...rows, ...renderCompactAffordance(label, theme, width)];
-        }),
-      );
-    } else shown.addChild(this.frame(heading, body, status));
+    if (compact && !expanded) shown.addChild(this.tagged(heading, body && beneathRow(body)));
+    else shown.addChild(this.frame(heading, body, status));
     for (const attachment of message.attachments ?? []) {
       shown.addChild(new Spacer(1));
       shown.addChild(attachment);
@@ -249,17 +253,17 @@ class MessageShell implements Component {
   }
 
   private frame(
-    heading: Component,
+    heading: (tag: string | undefined) => Component,
     body: Component | undefined,
     status: ReturnType<typeof compactStatus>,
   ): Component {
     const { theme, policy } = this;
-    const hint = this.options.expanded ? undefined : this.expandLabel();
     if (policy.toolCallBackground === "border") {
+      const hint = this.options.expanded ? undefined : this.expandLabel();
       const rest = new Container();
       if (body) rest.addChild(body);
       const shell = new BorderedToolCall(theme);
-      shell.setContent(heading, rest, {}, statusBorderColor(status, false), undefined);
+      shell.setContent(heading(undefined), rest, {}, statusBorderColor(status, false), undefined);
       shell.setExpandFallback((_, rows) => (showsAffordance(rows) ? undefined : hint));
       return shell;
     }
@@ -269,16 +273,31 @@ class MessageShell implements Component {
             theme.bg(statusBackground(status, false), text),
           )
         : new Container();
-    shell.addChild(heading);
-    shell.addChild(
-      composeToolComponent((width) => {
-        const rows = body?.render(width) ?? [];
-        return hint === undefined || showsAffordance(rows)
-          ? rows
-          : [...rows, clipToWidth(renderExpansionAffordance(hint, false, theme), width)];
-      }),
-    );
+    shell.addChild(this.tagged(heading, body));
     return shell;
+  }
+
+  /**
+   * The heading, its tag naming what expansion reveals unless the row is expanded or its body
+   * already ends in its own affordance, then the body.
+   */
+  private tagged(
+    heading: (tag: string | undefined) => Component,
+    body: Component | undefined,
+  ): Component {
+    const hint = this.options.expanded ? undefined : this.expandLabel();
+    const untagged = heading(undefined);
+    if (hint === undefined)
+      // The heading draws first: an expanded body reads whether it showed the subject whole.
+      return composeToolComponent((width) => [
+        ...untagged.render(width),
+        ...(body?.render(width) ?? []),
+      ]);
+    const tagged = heading(hint);
+    return composeToolComponent((width) => {
+      const rows = body?.render(width) ?? [];
+      return [...(showsAffordance(rows) ? untagged : tagged).render(width), ...rows];
+    });
   }
 
   /**
