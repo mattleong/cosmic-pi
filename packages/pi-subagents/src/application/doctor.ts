@@ -3,6 +3,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fn from "effect/Function";
+import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
@@ -16,12 +17,14 @@ import { describeWorktreeHook } from "../boundary/worktree-hook.ts";
 import {
   checkoutWorktreeInclude,
   describeWorktreeInclude,
+  WORKTREE_INCLUDE_RULE,
 } from "../boundary/git-worktree-include.ts";
 import { WORKTREE_HOOK_EVENTS } from "../config/schema.ts";
 import {
-  gitInstallation,
+  gitInstallationProbe,
   gitVersionSupported,
   MINIMUM_GIT_VERSION,
+  type GitInstallationProbe,
 } from "../boundary/git-installation.ts";
 import { PROFILE_IDS, type SkippedProfileCandidate } from "../profiles/model.ts";
 import type { ProfileCandidateAttempt, ProfileResolution } from "../profiles/resolve.ts";
@@ -104,7 +107,7 @@ const routeOutcome = (
 ): DoctorCheck => {
   if (plan.kind === "failed") {
     const unknown = unknownModelsDetail(plan.skippedCandidates);
-    return check(label, "failed", unknown === undefined ? plan.message : `${prefix}${unknown}`);
+    return check(label, "failed", `${prefix}${unknown ?? plan.problem}`);
   }
   const [first] = plan.attempts;
   if (!first) return check(label, "failed", "no eligible route");
@@ -213,7 +216,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
         ? check(
             `Agents (${invalid.scope})`,
             "failed",
-            `the ${invalid.scope} agents object is invalid, so every agent it could declare fails closed`,
+            "invalid object, so every agent it could declare fails closed",
           )
         : check(
             `Agent ${invalid.name}`,
@@ -256,7 +259,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
     );
   }
   checks.push(yield* worktreeIncludeCheck(input.ctx.cwd));
-  checks.push(yield* gitCheck(input.ctx.cwd));
+  checks.push(gitProbeCheck(yield* gitInstallationProbe, input.ctx.cwd));
   if (input.activityViewAvailable !== undefined)
     checks.push(
       input.activityViewAvailable
@@ -264,17 +267,11 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
         : check(
             "Activity view",
             "warning",
-            "/subagents requires the Activity view from pi-cosmic-ui; install it",
+            "unavailable; install pi-cosmic-ui so /subagents can open",
           ),
     );
   return checks;
 });
-
-const errorLine = (error: { readonly message: string; readonly detail?: string | undefined }) =>
-  Arr.join(
-    [error.message, ...(error.detail === undefined ? [] : Str.split(error.detail, "\n"))],
-    " ",
-  );
 
 // Creation reads the same file, so a file it would refuse warns here.
 const worktreeIncludeCheck = (cwd: string): Effect.Effect<DoctorCheck, never, SafeFile> =>
@@ -284,27 +281,41 @@ const worktreeIncludeCheck = (cwd: string): Effect.Effect<DoctorCheck, never, Sa
         ? check(".worktreeinclude", "ok", "none; isolated trees get no ignored or credential files")
         : check(".worktreeinclude", "ok", describeWorktreeInclude(patterns)),
     ),
-    Effect.catch((error) => Effect.succeed(check(".worktreeinclude", "warning", errorLine(error)))),
+    Effect.orElseSucceed(() =>
+      check(
+        ".worktreeinclude",
+        "warning",
+        `unreadable, so isolated writers can't start; it must be ${WORKTREE_INCLUDE_RULE}`,
+      ),
+    ),
   );
 
-// Isolated (worktree) writers need Git; shared-checkout writers don't, so problems are warnings.
-const gitCheck = (cwd: string): Effect.Effect<DoctorCheck> =>
-  gitInstallation.pipe(
-    Effect.map((installation) =>
-      gitVersionSupported(installation.version)
-        ? check(
-            "Git",
-            "ok",
-            `${installation.version} at ${formatDisplayPath(installation.executable, cwd)}`,
-          )
-        : check(
-            "Git",
-            "warning",
-            `${installation.version} at ${formatDisplayPath(installation.executable, cwd)}; isolated writers need ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later`,
-          ),
+/**
+ * The Git row for what a probe found. Isolated (worktree) writers need Git; shared-checkout writers
+ * don't, so problems are warnings.
+ */
+export const gitProbeCheck = (probe: GitInstallationProbe, cwd: string): DoctorCheck => {
+  const needed = `isolated writers need ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later`;
+  return Match.value(probe).pipe(
+    Match.when({ kind: "missing" }, () =>
+      check("Git", "warning", `not found in /usr/bin or on PATH; ${needed}`),
     ),
-    Effect.catch((error) => Effect.succeed(check("Git", "warning", errorLine(error)))),
+    Match.when({ kind: "unversioned" }, ({ executable }) =>
+      check(
+        "Git",
+        "warning",
+        `${formatDisplayPath(executable, cwd)} didn't report its version; ${needed}`,
+      ),
+    ),
+    Match.when({ kind: "found" }, ({ installation }) => {
+      const at = `${installation.version} at ${formatDisplayPath(installation.executable, cwd)}`;
+      return gitVersionSupported(installation.version)
+        ? check("Git", "ok", at)
+        : check("Git", "warning", `${at}; ${needed}`);
+    }),
+    Match.exhaustive,
   );
+};
 
 // Readiness runs the same preflight a launch does, bounded so a hung check can't stall the report.
 const readinessFailure = (

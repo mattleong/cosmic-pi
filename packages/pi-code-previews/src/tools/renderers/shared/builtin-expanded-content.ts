@@ -44,8 +44,10 @@ import {
   headingCounter,
   headingIsOwnCall,
   headingShowedSubject,
+  headingWrapped,
 } from "../../../preview/heading-coverage";
 import { normalizeShellCommandWhitespace } from "../../shell-command";
+import { wrapPreviewHeading } from "../../../preview/heading-wrap";
 import { argumentsStreaming, pathPreviewLanguage, renderContentPreview } from "./preview-text";
 import { readResultBody } from "./read-result";
 import { cachedDeferredPreview } from "./cache";
@@ -70,13 +72,7 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       if (options.length) container.addChild(optionFields(theme, options, context.state));
       const command = ownField(input, "command");
       if (tool === "bash" && Predicate.isString(command))
-        container.addChild(
-          expandedSection(
-            theme,
-            undefined,
-            commandBody(command, theme, context.state, context.invalidate),
-          ),
-        );
+        container.addChild(commandBody(command, theme, context.state, context.invalidate));
       const highlight = !argumentsStreaming(context);
       const content = ownField(input, "content");
       if (tool === "write" && Predicate.isString(content))
@@ -146,7 +142,13 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
           : undefined;
       const container = new Container();
       container.addChild(
-        expandedSection(theme, label, withPreviewLimit(tool, body, result, theme, context)),
+        resultSection(
+          theme,
+          tool,
+          label,
+          withPreviewLimit(tool, body, result, theme, context),
+          context.state,
+        ),
       );
       if (raw !== undefined)
         container.addChild(
@@ -336,14 +338,6 @@ function unlessCallShownByResult(state: RendererState, content: Component): Comp
   };
 }
 
-function headingShowsExactly(value: string): boolean {
-  return (
-    value.length <= 60 &&
-    value === normalizeShellCommandWhitespace(value) &&
-    value === escapeControlChars(value)
-  );
-}
-
 const hasArguments = (input: HostObject | undefined): boolean =>
   input !== undefined && Rec.keys(input).length > 0;
 
@@ -430,7 +424,6 @@ function builtinOptionFields(
   return Arr.flatMap(Object.entries(args ?? {}), ([key, value]): OptionField[] => {
     if (shown.has(key) || value === undefined || value === false || value === null) return [];
     const isTarget = target.has(key) && Predicate.isString(value);
-    if (isTarget && headingShowsExactly(value)) return [];
     const text =
       value === true
         ? "yes"
@@ -472,6 +465,11 @@ function previewHeadingStates(
   return key === "limit" && Boolean(numericArg(args, "limit"));
 }
 
+/**
+ * A shell call's command beneath a heading that doesn't show it exactly, labeled `Command` so it
+ * reads apart from the `Output` after it. The tool's own preview heading draws the exact command,
+ * every line of it; a compact heading shows it only when it is one line it showed whole.
+ */
 function commandBody(
   command: string,
   theme: Theme,
@@ -482,19 +480,66 @@ function commandBody(
   const headingSubject =
     command.length <= 4096 &&
     escapeControlChars(normalizeShellCommandWhitespace(command)) === command;
-  let highlighted: Text | undefined;
+  let section: Component | undefined;
   return {
     render(width) {
-      if (headingSubject && headingShowedSubject(state)) return [];
-      highlighted ??= new Text(
-        Arr.join(renderHighlightedText(command, "bash", theme, invalidate), "\n"),
-        0,
-        0,
+      const shown = !headingIsOwnCall(state) && !(headingSubject && headingShowedSubject(state));
+      state[COMMAND_SHOWN] = shown;
+      if (!shown) return [];
+      section ??= expandedSection(
+        theme,
+        "Command",
+        commandLines(renderHighlightedText(command, "bash", theme, invalidate)),
       );
-      return highlighted.render(width);
+      return section.render(width);
     },
     invalidate: () => {
-      highlighted = undefined;
+      section = undefined;
+    },
+  };
+}
+
+/**
+ * A command's lines, each wrapped as the preview heading wraps it, so a wrapped line's continuation
+ * hangs two columns and reads apart from the command's next line.
+ */
+function commandLines(lines: readonly string[]): Component {
+  let cached: { readonly width: number; readonly rows: string[] } | undefined;
+  return {
+    render(width) {
+      if (cached?.width !== width)
+        cached = { width, rows: Arr.flatMap(lines, (line) => wrapPreviewHeading(line, width)) };
+      return cached.rows;
+    },
+    invalidate() {
+      cached = undefined;
+    },
+  };
+}
+
+// Set by a shell call's body when it draws the command, so the result beneath is labeled `Output`.
+const COMMAND_SHOWN = "codePreviewCommandShown";
+
+/**
+ * A result body, labeled `Output` beneath a shell command its call body drew in the same pass, or
+ * beneath a heading whose wrapped command rows hang at the body's column.
+ */
+function resultSection(
+  theme: Theme,
+  tool: BuiltinCompactTool,
+  label: string | undefined,
+  body: Component,
+  state: RendererState,
+): Component {
+  if (tool !== "bash" || label !== undefined) return expandedSection(theme, label, body);
+  const plain = expandedSection(theme, undefined, body);
+  const labeled = expandedSection(theme, RESULT_LABELS.bash, body);
+  return {
+    render: (width) =>
+      (state[COMMAND_SHOWN] === true || headingWrapped(state) ? labeled : plain).render(width),
+    invalidate: () => {
+      plain.invalidate();
+      labeled.invalidate();
     },
   };
 }

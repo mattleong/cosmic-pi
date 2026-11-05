@@ -31,6 +31,7 @@ export interface RendererState {
   codePreviewWriteBeforeSnapshot?: HostObject | undefined;
   codePreviewResultDiffShown?: boolean;
   codePreviewCallShownByResult?: boolean;
+  codePreviewCommandShown?: boolean;
   codePreviewTimingStartedAt?: number | undefined;
   codePreviewTimingEndedAt?: number | undefined;
   codePreviewAnimationFrame?: number;

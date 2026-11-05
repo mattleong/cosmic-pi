@@ -13,6 +13,7 @@ import {
   isProjectTrusted,
   notifyAtHostBoundary,
 } from "pi-cosmic-core/host-session";
+import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import { forwardAbortSignal, makePiManagedRuntime } from "pi-cosmic-core/runtime";
 import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
 import { capturedHostSignal } from "./boundary/host-abort-signal.ts";
@@ -191,9 +192,13 @@ export function registerCosmicUiApplication(
     },
     slot.run,
   );
-  pi.registerCommand("activity", {
+  registerExtensionCommand(pi, {
+    name: "activity",
     description: "Browse session activity and actions",
-    handler: (_args, ctx) => runFrom(activityHost.open(ctx).pipe(Effect.ignore), ctx),
+    bare: {
+      description: "Open Activity",
+      handler: (_args, ctx) => runFrom(activityHost.open(ctx).pipe(Effect.ignore), ctx),
+    },
   });
 
   const runFrom = <A, E>(effect: Effect.Effect<A, E, CosmicUiService>, ctx: ExtensionContext) =>

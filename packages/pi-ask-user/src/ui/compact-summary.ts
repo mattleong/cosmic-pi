@@ -39,14 +39,15 @@ import type {
   AskUserRequest,
 } from "../questionnaire/schema.ts";
 
-// Control calls name only a request id, so their questions' titles come from the result.
+/**
+ * Control calls name only a request id, so their questions' titles come from the result. Until
+ * then, and for a status list, the action alone names the row, as the preview heading
+ * `Questionnaire await` does, leaving the row's room to its state.
+ */
 function identity(args: QuestionnaireArgs, storedTitles?: string): CompactSummary {
   const control = decodeAsyncControl(args);
   if (control)
-    return {
-      action: control.action,
-      subject: isStatusList(args) ? "all" : (storedTitles ?? "questionnaire"),
-    };
+    return { action: control.action, subject: isStatusList(args) ? "" : (storedTitles ?? "") };
   return { subject: callTitles(args) ?? "questionnaire" };
 }
 

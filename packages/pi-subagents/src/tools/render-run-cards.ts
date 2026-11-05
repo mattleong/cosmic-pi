@@ -22,14 +22,15 @@ const REPORT_STATUS_NOTES = {
   available: "Its report isn't part of this result",
 } as const;
 
-/** A finished report's notes: where the rest of a cut report is, and a writer's proposal. */
+/**
+ * A finished report's notes: that a cut report has no saved copy, and a writer's proposal. A saved
+ * copy's issue already says how much of the report its file holds.
+ */
 const reportNotes = (card: SubagentRunCard): ReadonlyArray<string> =>
   Arr.filter(
     [
-      card.finalTextTruncated
-        ? card.reportArchive
-          ? "The rest of this report is in its saved file"
-          : "Only the start of this report was kept"
+      card.finalTextTruncated && card.reportArchive === undefined
+        ? "Only the start of this report was kept"
         : undefined,
       card.state === "completed" && !card.finalText && !card.finalTextTruncated
         ? card.reportStatus === undefined

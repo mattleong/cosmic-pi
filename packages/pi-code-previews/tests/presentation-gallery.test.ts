@@ -30,6 +30,7 @@ import {
   writeGallerySection,
   withPresentationSettings,
   type GalleryScenario,
+  type GalleryView,
 } from "../testing";
 import { defaultCodePreviewSettings } from "../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
@@ -361,19 +362,46 @@ const longSubjectMessage = (subject: string, path: boolean) =>
     expandLabel: "details",
   }));
 
+/** A 449-character command, longer than any heading row, ending in a flag a cut would lose. */
+const EXTREME_COMMAND = `node scripts/verify.ts ${Arr.join(
+  Arr.map(Arr.range(0, 19), (index) => `--include=package-${index}`),
+  " ",
+)} --security-check`;
+
+/** A long heredoc script, which a compact heading flattens and cuts. */
+const HEREDOC_COMMAND = Arr.join(
+  [
+    "cat > release-notes.md <<'EOF'",
+    "# Release 2.4.0",
+    "",
+    ...Arr.map(
+      Arr.range(1, 12),
+      (index) => `- Change ${index}: tightened the review loop for package ${index}`,
+    ),
+    "EOF",
+    "echo Wrote release-notes.md",
+  ],
+  "\n",
+);
+
+/** Collapsed and expanded at a phone's width and a very wide terminal. */
+const EXTREME_VIEWS: readonly GalleryView[] = [
+  { expanded: false, width: 57 },
+  { expanded: false, width: 180 },
+  { expanded: true, width: 57 },
+  { expanded: true, width: 180 },
+];
+
 /** A finished task's notice: its long command is the subject and its outcome the only fact. */
-const outcomeMessage = withCodePreviewMessageShell((message, _options, theme) => ({
-  name: "background_task",
-  label: "Background task",
-  summary: {
-    subject: LONG_COMMAND,
-    metadata: ["finished in 1m 33s"],
-    outcome: "success",
-  },
-  collapsed: () => new Text(messageText(message.content), 0, 0),
-  expanded: () => expandedText(theme, "Output", [messageText(message.content)]),
-  expandLabel: "output",
-}));
+const outcomeMessage = (subject: string, outcome: string) =>
+  withCodePreviewMessageShell((message, _options, theme) => ({
+    name: "background_task",
+    label: "Background task",
+    summary: { subject, metadata: [outcome], outcome: "success" },
+    collapsed: () => new Text(messageText(message.content), 0, 0),
+    expanded: () => expandedText(theme, "Output", [messageText(message.content)]),
+    expandLabel: "output",
+  }));
 
 /** A message whose counters are alternatives, widest first, as a run's report counts them. */
 const countedMessage = withCodePreviewMessageShell((message, _options, theme) => ({
@@ -409,6 +437,8 @@ const scenarios: ReadonlyArray<
     readonly args: object;
     readonly timing?: true;
     readonly narrow?: true;
+    /** Views other than the gallery's, such as a very wide one for an extreme input. */
+    readonly views?: readonly GalleryView[];
     /** Also rendered with framed tool rows to show where the duration sits. */
     readonly border?: true;
   }
@@ -1111,6 +1141,20 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "bash",
+    title: "bash 449-character command keeps its tail",
+    args: { command: EXTREME_COMMAND },
+    result: text("ok"),
+    views: EXTREME_VIEWS,
+  },
+  {
+    tool: "bash",
+    title: "bash heredoc shows once, labeled apart from its output",
+    args: { command: HEREDOC_COMMAND },
+    result: text("Wrote release-notes.md"),
+    views: EXTREME_VIEWS,
+  },
+  {
+    tool: "bash",
     title: "bash success ending in a newline draws no blank row",
     args: { command: "git --no-pager diff --stat && node --version" },
     result: text(" src/cart.ts | 4 ++++\n 1 file changed, 4 insertions(+)\nv22.22.1\n\n"),
@@ -1453,6 +1497,19 @@ const scenarios: ReadonlyArray<
     title: "long subject beside its outcome fact",
     args: { subject: LONG_COMMAND, metadata: "finished in 1m 33s" },
     result: text("Test Files  2 passed (2)"),
+  },
+  {
+    tool: "status_demo",
+    title: "449-character subject beside its outcome fact",
+    args: { subject: EXTREME_COMMAND, metadata: "finished in 399ms" },
+    result: text("ok"),
+    views: EXTREME_VIEWS,
+  },
+  {
+    tool: "status_demo",
+    title: "heading arrow wraps with the name it points at",
+    args: { subject: "Message → billing-and-invoicing-migration-review-follow-up" },
+    result: text("Sent"),
   },
   {
     tool: "status_demo",
@@ -1904,14 +1961,15 @@ describe.skipIf(!directory)("presentation gallery", () => {
                     ...scenario,
                     title: `${label} · ${scenario.title}`,
                   },
-                  scenario.narrow
-                    ? [
-                        { expanded: false, width: 16 },
-                        { expanded: false, width: 57 },
-                        { expanded: true, width: 40 },
-                        { expanded: true, width: 57 },
-                      ]
-                    : undefined,
+                  scenario.views ??
+                    (scenario.narrow
+                      ? [
+                          { expanded: false, width: 16 },
+                          { expanded: false, width: 57 },
+                          { expanded: true, width: 40 },
+                          { expanded: true, width: 57 },
+                        ]
+                      : undefined),
                 ),
               ),
             );
@@ -1961,7 +2019,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
                   },
                 },
               ),
-              ...galleryMessageFrames(outcomeMessage, {
+              ...galleryMessageFrames(outcomeMessage(LONG_COMMAND, "finished in 1m 33s"), {
                 title: `${style} · message heading keeps its outcome beside a cut subject`,
                 message: {
                   role: "custom",
@@ -1970,6 +2028,17 @@ describe.skipIf(!directory)("presentation gallery", () => {
                   display: true,
                   timestamp: 0,
                 },
+              }),
+              ...galleryMessageFrames(outcomeMessage(EXTREME_COMMAND, "finished in 399ms"), {
+                title: `${style} · message heading keeps its outcome beside a 449-character subject`,
+                message: {
+                  role: "custom",
+                  customType: "background_task",
+                  content: "ok",
+                  display: true,
+                  timestamp: 0,
+                },
+                views: EXTREME_VIEWS,
               }),
               ...galleryMessageFrames(countedMessage, {
                 title: `${style} · message heading keeps the widest counter that fits`,

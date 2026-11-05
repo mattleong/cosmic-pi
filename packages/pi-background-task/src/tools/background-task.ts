@@ -216,6 +216,7 @@ export function registerBackgroundTaskTool(
       body.addChild(previewIssuesSlot(context));
       body.addChild(running);
       body.addChild(command);
+      // This body's own heading reports nothing to the shell, so the command always appears.
       if (expanded) body.addChild(renderBackgroundTaskRequest(args, theme, !isPartial));
       return body;
     },
@@ -234,11 +235,14 @@ export function registerBackgroundTaskTool(
       compactSummary: backgroundTaskCompactSummary,
       expandedContent: {
         renderCall: (args, theme, context) =>
-          renderBackgroundTaskRequest(args, theme, !context.isPartial),
+          renderBackgroundTaskRequest(args, theme, !context.isPartial, context.state),
         renderResult(result, _options, theme, context) {
           const input = previewInput(result, context.args, true, context.isError);
           if (Option.isSome(input.details) || Option.isSome(input.failure))
-            return renderBackgroundTaskPreview({ ...input, headingShowsState: true }, theme);
+            return renderBackgroundTaskPreview(
+              { ...input, headingShowsState: true, headingState: context.state },
+              theme,
+            );
           // Without decodable details, the raw result is the only evidence left to show.
           const text = Fn.pipe(input.text, Str.replace(/\n+$/u, ""));
           return expandedSection(

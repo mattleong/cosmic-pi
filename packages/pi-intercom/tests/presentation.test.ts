@@ -15,6 +15,7 @@ import {
   type SessionToolDetails,
   type SessionToolName,
 } from "../src/tools/contract.ts";
+import { stripTerminalControls } from "pi-cosmic-core/security";
 import { registerSessionTools } from "../src/tools/register.ts";
 import { listText, readText, refusalText, sendText } from "../src/tools/text.ts";
 
@@ -175,6 +176,45 @@ describe("session tool rows", () => {
     });
     expect(collapsed?.text).toContain("Use pnpm test now.");
     expect(collapsed?.text).toContain("Then lint.");
+  });
+
+  const longName = "checkout redesign review for the acme platform team and billing";
+
+  it.each(["compact", "preview"] as const)(
+    "shows a long session name whole in an expanded %s heading",
+    (style) => {
+      const sentTo = { ...delivered, session: { ...web, name: longName } };
+      const harness = createToolPresentationHarness(toolFor(SESSION_TOOL.send, style), {
+        width: 57,
+      });
+      const [, expanded] = harness.cycle(
+        { to: web.sessionId, message },
+        result(sendText(sentTo), sentTo),
+        { states: [false, true] },
+      );
+      // The heading wraps the whole name; nothing else needs to repeat it.
+      const text = stripTerminalControls(expanded?.text ?? "");
+      expect(Str.replace(/\s+/gu, " ")(text)).toContain(longName);
+    },
+  );
+
+  it("ends a narrow listed session's name at a whole word, keeping its state", () => {
+    const longListing = {
+      ...contractEnvelope,
+      tool: SESSION_TOOL.list,
+      sessions: [{ ...web, name: longName, state: "busy", duplicate: false }],
+      omitted: 0,
+    } as const;
+    const harness = createToolPresentationHarness(toolFor(SESSION_TOOL.list, "preview"), {
+      width: 57,
+    });
+    const [collapsed] = harness.cycle({}, result(listText(longListing), longListing), {
+      states: [false],
+    });
+    const row = Arr.findFirst(Str.split(collapsed?.text ?? "", "\n"), Str.includes("busy"));
+    const label = /^\S+ (.+)… · busy/u.exec(Str.trim(Option.getOrElse(row, () => "")))?.[1] ?? "";
+    expect(label).not.toBe("");
+    expect(Str.startsWith(`${label} `)(longName)).toBe(true);
   });
 
   it("falls back to the result text when its details don't decode", () => {

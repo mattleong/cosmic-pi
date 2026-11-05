@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
+import { InvalidSettingError } from "pi-cosmic-core/settings-completion";
 import { deferredPromise, extensionContextFixture, yieldUntil } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
@@ -297,6 +298,34 @@ describe("provider settings command shell", () => {
       yield* h.invoke("mode on");
       expect(h.notify).toHaveBeenCalledTimes(1);
       expect(h.notify).toHaveBeenCalledWith(expect.any(String), "info");
+    }),
+  );
+
+  it.effect("an invalid value warns with the setting's name whoever rejected it", () =>
+    Effect.gen(function* () {
+      const h = harness({ config: () => ({ mode: "off" }) });
+      const rule = `mode must be on or off, not ${Str.repeat(449)("x")}`;
+      h.apply
+        .mockResolvedValueOnce(Result.fail({ message: "mode must be on or off" }))
+        .mockResolvedValueOnce(
+          Result.fail(InvalidSettingError.make({ id: "mode", message: "mode must be on or off" })),
+        )
+        .mockResolvedValueOnce(Result.fail({ message: rule }))
+        .mockResolvedValueOnce(Result.fail({ message: "Couldn't save demo settings: disk full" }));
+      // The shell's own check, then three owner rejections, then a save that couldn't be written.
+      for (const args of ["mode maybe", "mode on", "mode on", "mode on", "mode on"])
+        yield* h.invoke(args);
+      const [shell, owner, tagged, long, failed] = h.notify.mock.calls;
+      for (const rejection of [shell, owner, tagged, long]) {
+        expect(rejection?.[1]).toBe("warning");
+        expect(String(rejection?.[0])).toMatch(/^Mode \(mode\) must be /u);
+      }
+      expect(owner).toEqual(tagged);
+      const longLines = Arr.map(Str.split(String(long?.[0]), "\n"), (line, index) =>
+        index === 0 ? `Warning: ${line}` : line,
+      );
+      for (const line of longLines) expect(line.length).toBeLessThanOrEqual(55);
+      expect(failed).toEqual(["Couldn't save demo settings: disk full", "error"]);
     }),
   );
 

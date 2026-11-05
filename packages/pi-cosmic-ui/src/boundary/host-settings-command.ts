@@ -107,6 +107,12 @@ export interface SettingsCommandOptions<Config> {
   readonly status?: ((ctx: ExtensionContext) => string | Promise<string>) | undefined;
   readonly onInvoke?: (ctx: ExtensionContext) => void;
   readonly signal?: "required" | "optional";
+  /**
+   * Saves one setting. A rejected value fails with an `InvalidSettingError` or a message that
+   * leads with the id and states the rule, such as `maxRunning must be a whole number`; the shell
+   * warns `Label (id) <rule>`. Any other failure, such as a save that couldn't be written, is an
+   * error shown as written.
+   */
   readonly apply: (
     ctx: ExtensionContext,
     id: string,
@@ -167,17 +173,24 @@ const NOTICE_PREFIX_COLUMNS = { info: 0, warning: "Warning: ".length, error: "Er
 
 /**
  * Wraps each line of notice text within 55 columns, less the `Warning: ` or `Error: ` Pi puts
- * before the first line, hanging continuations under the line's indent.
+ * before the first row, hanging continuations under the line's indent.
  */
 export const wrapNoticeText = (text: string, level: NoticeLevel = "info"): string =>
   Arr.join(
     Arr.flatMap(Str.split(text, "\n"), (line, index) => {
-      const width = NOTICE_COLUMNS - (index === 0 ? NOTICE_PREFIX_COLUMNS[level] : 0);
-      if (line.length <= width) return [Str.trimEnd(line)];
+      const prefix = index === 0 ? NOTICE_PREFIX_COLUMNS[level] : 0;
+      if (line.length <= NOTICE_COLUMNS - prefix) return [Str.trimEnd(line)];
       const indent = /^ */u.exec(line)?.[0] ?? "";
+      // A stand-in for Pi's level prefix holds its columns on the first row only, so continuation
+      // rows keep the full width.
+      const rows = wrapFacts(
+        `${Str.repeat(prefix)("x")}${Str.trim(line)}`,
+        NOTICE_COLUMNS - indent.length,
+        NOTICE_HANGING,
+      );
       return Arr.map(
-        wrapFacts(Str.trim(line), width - indent.length, NOTICE_HANGING),
-        (row) => `${indent}${row}`,
+        rows,
+        (row, rowIndex) => `${indent}${rowIndex === 0 ? Fn.pipe(row, Str.slice(prefix)) : row}`,
       );
     }),
     "\n",
@@ -292,6 +305,20 @@ export function settingsSubcommand<Config>(
   const scopeNames = Arr.map(scopes, (scope) => scope.name);
   const unavailable = `${title} settings aren't available right now`;
   const { isCurrent } = options;
+  const label = (id: string) =>
+    Option.getOrUndefined(Arr.findFirst(descriptors, (entry) => entry.id === id))?.label;
+  // `Label (id) <rule>`: how an invalid value reads, whether the shell or the owner rejected it.
+  const invalidValue = (id: string, rule: string) => {
+    const named = label(id);
+    return named === undefined ? `${id} ${rule}` : `${named} (${id}) ${rule}`;
+  };
+  // The warning for an owner's rejected value, or undefined for a failure to save.
+  const rejectedValue = (id: string, failure: { readonly message: string }) => {
+    const lead = `${id} `;
+    if (Fn.pipe(failure.message, Str.startsWith(lead)))
+      return invalidValue(id, Str.trimStart(Fn.pipe(failure.message, Str.slice(lead.length))));
+    return Predicate.isTagged(failure, "InvalidSettingError") ? failure.message : undefined;
+  };
   // Every notice, including a consumer's status or failure text, fits a 57-column phone.
   const notify = (ctx: ExtensionContext, message: string, level: NoticeLevel) => {
     if (isCurrent()) notifyAtHostBoundary(ctx, wrapNoticeText(message, level), level);
@@ -354,8 +381,14 @@ export function settingsSubcommand<Config>(
         .then(
           (settlement) => {
             if (Result.isFailure(settlement)) {
-              if (display(persisted() ?? before) && settlement.failure.stale !== true)
-                notify(ctx, settlement.failure.message, "error");
+              if (display(persisted() ?? before) && settlement.failure.stale !== true) {
+                const rejected = rejectedValue(id, settlement.failure);
+                notify(
+                  ctx,
+                  rejected ?? settlement.failure.message,
+                  rejected === undefined ? "error" : "warning",
+                );
+              }
               return undefined;
             }
             const current = persisted() ?? value;
@@ -489,8 +522,6 @@ export function settingsSubcommand<Config>(
   };
 
   const scopeToken = scopes.length > 0 ? `[${Arr.join(scopeNames, "|")}] ` : "";
-  const label = (id: string) =>
-    Option.getOrUndefined(Arr.findFirst(descriptors, (entry) => entry.id === id))?.label;
   const currentValues = (ctx: ExtensionContext) => {
     const cfg = readConfig(ctx);
     return Arr.map(descriptors, (descriptor) => ({
@@ -579,7 +610,7 @@ export function settingsSubcommand<Config>(
             Match.value(invalid).pipe(
               Match.discriminatorsExhaustive("reason")({
                 "invalid-value": ({ id, allowedValues }) =>
-                  `${label(id) ?? id} (${id}) must be one of: ${Arr.join(allowedValues, ", ")}`,
+                  invalidValue(id, `must be one of: ${Arr.join(allowedValues, ", ")}`),
                 "missing-value": ({ id }) => {
                   if (id && !Arr.some(descriptors, (entry) => entry.id === id)) return unknown(id);
                   return correctForm(

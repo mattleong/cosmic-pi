@@ -56,6 +56,9 @@ const parseWorktreeInclude = (text: string): ReadonlyArray<string> =>
     return line === "" || Fn.pipe(line, Str.startsWith("#")) ? [] : [line];
   });
 
+/** What a usable `.worktreeinclude` is, as a clause after its name. */
+export const WORKTREE_INCLUDE_RULE = `a regular file of at most ${MAX_WORKTREE_INCLUDE_BYTES / 1024} KiB with at most ${MAX_WORKTREE_INCLUDE_PATTERNS} patterns of at most ${MAX_WORKTREE_INCLUDE_PATTERN_CHARS} characters, without control characters`;
+
 /**
  * The patterns of `root`'s `.worktreeinclude`, or none when it has no such file. A file that
  * isn't a regular file, is too large, or holds too many, too long, or control-character
@@ -67,7 +70,7 @@ export const readWorktreeInclude = Effect.fn("GitWorktreeInclude.readWorktreeInc
   const file = path.join(root, WORKTREE_INCLUDE_FILE);
   const stat = yield* workspaceIOIfPresent("create", () => fs.lstat(file));
   if (!stat) return [];
-  const limits = `.worktreeinclude is a regular file of at most ${MAX_WORKTREE_INCLUDE_BYTES / 1024} KiB with at most ${MAX_WORKTREE_INCLUDE_PATTERNS} patterns of at most ${MAX_WORKTREE_INCLUDE_PATTERN_CHARS} characters, without control characters`;
+  const limits = `.worktreeinclude is ${WORKTREE_INCLUDE_RULE}`;
   const safe = yield* SafeFile;
   const read = yield* safe
     .readContainedRegularFile(file, root, MAX_WORKTREE_INCLUDE_BYTES)

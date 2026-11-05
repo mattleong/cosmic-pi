@@ -3,11 +3,12 @@ import type {
   Theme,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
-import { Container, type Component } from "@earendil-works/pi-tui";
+import { Container, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import {
+  endElide,
   expandedAuthoredText,
   expandedBody,
   expandedDetails,
@@ -143,6 +144,16 @@ const STATE_GLYPH_COLORS = {
 
 type ListDetails = Extract<SessionToolDetails, { readonly tool: "session_list" }>;
 
+const listedFacts = (session: ListedSession, theme: Theme, expanded: boolean) => [
+  theme.fg(STATE_COLORS[session.state], SESSION_STATE_LABELS[session.state]),
+  ...(session.duplicate ? [theme.fg("warning", "duplicate id")] : []),
+  ...(expanded ? [theme.fg("muted", displayDirectory(session.cwd))] : []),
+];
+
+const FACT_SEPARATOR = " · ";
+/** A label cut to make room for its state keeps whole words, however much room that gives up. */
+const WHOLE_WORDS = 1;
+
 /**
  * A listed session: its status glyph, label, and state, then its `~` directory when expanded.
  * Columns after the glyph hang beneath the label when the row wraps.
@@ -150,14 +161,26 @@ type ListDetails = Extract<SessionToolDetails, { readonly tool: "session_list" }
 const listedRow = (session: ListedSession, label: string, theme: Theme, expanded: boolean) => {
   const glyph = theme.fg(STATE_GLYPH_COLORS[session.state], SESSION_STATE_GLYPHS[session.state]);
   return `${glyph} ${Arr.join(
-    [
-      theme.fg("toolOutput", label),
-      theme.fg(STATE_COLORS[session.state], SESSION_STATE_LABELS[session.state]),
-      ...(session.duplicate ? [theme.fg("warning", "duplicate id")] : []),
-      ...(expanded ? [theme.fg("muted", displayDirectory(session.cwd))] : []),
-    ],
-    theme.fg("dim", " · "),
+    [theme.fg("toolOutput", label), ...listedFacts(session, theme, expanded)],
+    theme.fg("dim", FACT_SEPARATOR),
   )}`;
+};
+
+/** A collapsed listed session on one row: a label too long for it ends at a word boundary first. */
+const collapsedListedRow = (
+  session: ListedSession,
+  label: string,
+  theme: Theme,
+  width: number,
+): string => {
+  const facts = listedFacts(session, theme, false);
+  const reserved =
+    visibleWidth(`${SESSION_STATE_GLYPHS[session.state]} `) +
+    Arr.reduce(facts, 0, (total, fact) => total + FACT_SEPARATOR.length + visibleWidth(fact));
+  // Too narrow for the state, the row is cut at the edge instead.
+  const room = width - reserved;
+  const shown = room > 1 ? endElide(label, room, WHOLE_WORDS) : label;
+  return clipToWidth(listedRow(session, shown, theme, false), width);
 };
 
 const NO_SESSIONS = Str.capitalize(NO_OTHER_SESSIONS);
@@ -200,10 +223,7 @@ const listBody = (details: ListDetails, theme: Theme): Component => {
   return composeToolComponent((width) => {
     if (!Number.isFinite(width) || width < 1) return [];
     const rows = Arr.map(shown, (session, index) =>
-      clipToWidth(
-        listedRow(session, labels[index] ?? sessionSubject(session), theme, false),
-        width,
-      ),
+      collapsedListedRow(session, labels[index] ?? sessionSubject(session), theme, width),
     );
     if (hidden > 0)
       rows.push(

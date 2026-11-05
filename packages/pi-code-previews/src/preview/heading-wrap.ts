@@ -54,9 +54,13 @@ const visibleText = (atom: Atom) =>
 
 const atomWidth = (atom: Atom) => Arr.reduce(atom.items, 0, (sum, item) => sum + item.width);
 
+// A direction arrow travels with what it points at, so no row ends with one.
+const ARROWS: ReadonlySet<string> = new Set(["→", "←"]);
+
 /**
  * Splits a heading into atoms: words between spaces, and path parts after each `/` inside a word.
- * Each fact after a ` · ` separator is one atom led by the separator, so no row ends with one.
+ * Each fact after a ` · ` separator is one atom led by the separator, and a lone `→` or `←` leads
+ * the word after it, so no row ends with either.
  */
 function atoms(text: string): Atom[] {
   const result: Atom[] = [];
@@ -84,12 +88,13 @@ function atoms(text: string): Atom[] {
   let open = false;
   for (const atom of result) {
     const previous = joined.at(-1);
-    const separator = visibleText(atom) === "·";
+    const shown = visibleText(atom);
+    const separator = shown === "·";
     facts ||= separator;
     if (previous && atom.spaced && (open || (facts && !separator)))
       previous.items.push({ text: " ", width: 1 }, ...atom.items);
     else joined.push({ items: [...atom.items], spaced: atom.spaced, fact: facts });
-    open = separator;
+    open = separator || ARROWS.has(shown);
   }
   return joined;
 }

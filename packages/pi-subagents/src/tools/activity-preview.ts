@@ -19,6 +19,7 @@ import {
   SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import { savedFileFact } from "../ui/notice-facts.ts";
+import { displayName } from "../ui/notice-details.ts";
 import { projectRunRoutePresentation } from "../ui/run-presentation.ts";
 import { runStateLabel } from "../ui/run-state.ts";
 import { decodeAgentToolDetails } from "./compact-agent-summary.ts";
@@ -71,7 +72,7 @@ const resultText = (content: AgentToolResult["content"]): string =>
         );
 
 const line = (text: string): string => clipText(sanitizeTerminalLine(text), MAX_LINE_CHARS);
-const name = (text: string): string => clipText(sanitizeTerminalLine(text), 60);
+const name = displayName;
 
 // A rejection's first line, without its bracketed code, as the user reads it.
 const failureLine = (text: string): string =>

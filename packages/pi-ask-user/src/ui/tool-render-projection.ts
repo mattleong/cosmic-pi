@@ -296,18 +296,16 @@ export function questionnaireState(row: StateRow): QuestionnaireState | undefine
   return undefined;
 }
 
-// Long and short words for each state, for one questionnaire or several.
+// One name for each state, for one questionnaire or several: a narrow row shortens the subject,
+// never the state.
 const STATE_WORDS = {
-  waiting: (count) =>
-    count === 1 ? ["needs your input", "needs input"] : ["need your input", "need input"],
-  hidden: () => ["hidden", "hidden"],
-  queued: () => ["queued", "queued"],
-  answered: () => ["answered", "answered"],
-  cancelled: () => ["cancelled", "cancelled"],
-  failed: () => ["failed", "failed"],
-} as const satisfies Readonly<
-  Record<QuestionnaireState, (count: number) => readonly [string, string]>
->;
+  waiting: (count) => (count === 1 ? "needs your input" : "need your input"),
+  hidden: () => "hidden",
+  queued: () => "queued",
+  answered: () => "answered",
+  cancelled: () => "cancelled",
+  failed: () => "failed",
+} as const satisfies Readonly<Record<QuestionnaireState, (count: number) => string>>;
 const STATE_ORDER: readonly QuestionnaireState[] = [
   "failed",
   "waiting",
@@ -317,10 +315,12 @@ const STATE_ORDER: readonly QuestionnaireState[] = [
   "cancelled",
 ];
 
-export const stateWords = (state: QuestionnaireState): readonly string[] => [
-  ...new Set(STATE_WORDS[state](1)),
-];
+export const stateWords = (state: QuestionnaireState): readonly string[] => [STATE_WORDS[state](1)];
 
+/**
+ * Alternatives, widest first: every state's count, then the most pressing state among them all
+ * (`1 of 3 needs your input`), so a narrow row keeps that state's words before only a total.
+ */
 export function stateCounts(states: readonly QuestionnaireState[]): readonly string[] {
   if (states.length === 0) return ["no questionnaires", "none"];
   const counted = Arr.filterMap(STATE_ORDER, (state) => {
@@ -329,9 +329,11 @@ export function stateCounts(states: readonly QuestionnaireState[]): readonly str
       ? Result.failVoid
       : Result.succeed([count, STATE_WORDS[state](count)] as const);
   });
-  const wording = (short: 0 | 1) =>
-    joinInline(Arr.map(counted, ([count, words]) => `${count} ${words[short]}`));
-  return [...new Set([wording(0), wording(1), countLabel(states.length, "questionnaire")])];
+  const wording = joinInline(Arr.map(counted, ([count, word]) => `${count} ${word}`));
+  const [first, ...others] = counted;
+  const pressing =
+    first && others.length > 0 ? [`${first[0]} of ${states.length} ${first[1]}`] : [];
+  return [...new Set([wording, ...pressing, countLabel(states.length, "questionnaire")])];
 }
 
 const DELIVERY_WORDS = {
@@ -354,7 +356,7 @@ export function requestFacts(rows: readonly ReplayedSnapshot[], list: boolean): 
   return Arr.map(rows, (row) => {
     const state = questionnaireState(row);
     return factLine([
-      list && state !== undefined ? `${row.requestId}: ${STATE_WORDS[state](1)[0]}` : row.requestId,
+      list && state !== undefined ? `${row.requestId}: ${STATE_WORDS[state](1)}` : row.requestId,
       `delivery ID ${row.deliveryId}`,
       DELIVERY_WORDS[row.delivery],
     ]);

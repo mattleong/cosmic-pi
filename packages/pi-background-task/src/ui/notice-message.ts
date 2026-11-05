@@ -10,6 +10,7 @@ import {
   expandedDetails,
   expandedFields,
   expandedText,
+  headingShowedSubject,
   withCodePreviewMessageShell,
   type CodePreviewMessagePresenter,
   type CompactSummary,
@@ -57,6 +58,7 @@ const expandedNotice = (
   details: TaskNoticeDetails | undefined,
   stored: string,
   theme: Theme,
+  headingState: WeakKey,
 ): Component => {
   if (details?.tail === undefined)
     return expandedText(theme, undefined, stored ? Str.split(stored, "\n") : []);
@@ -64,15 +66,28 @@ const expandedNotice = (
   const output = stripTerminalControls(tail);
   // The agent's notice redacts the command too.
   const command = sanitizeTerminalLine(sanitizeDiagnosticContent(task.command));
-  return expandedBody(
-    expandedFields(theme, [
-      // A heading that names the task by this exact command already shows it.
-      ...(command === taskDisplayName(task) ? [] : [{ label: "Command", lines: [command] }]),
-      ...(output ? [] : [{ label: "Output", lines: ["none"] }]),
-    ]),
-    expandedText(theme, "Output", output ? Arr.map(Str.split(output, "\n"), taskOutputLine) : []),
-    expandedDetails(theme, [Arr.join([task.id, displayDirectory(task.cwd)], " · ")]),
-  );
+  const commandIsSubject = command === taskDisplayName(task);
+  const body = (subjectShown: boolean): Component =>
+    expandedBody(
+      expandedFields(theme, [
+        // Only a heading that drew this exact command whole already shows it.
+        ...(subjectShown && commandIsSubject ? [] : [{ label: "Command", lines: [command] }]),
+        ...(output ? [] : [{ label: "Output", lines: ["none"] }]),
+      ]),
+      expandedText(theme, "Output", output ? Arr.map(Str.split(output, "\n"), taskOutputLine) : []),
+      expandedDetails(theme, [Arr.join([task.id, displayDirectory(task.cwd)], " · ")]),
+    );
+  // Chosen as it draws, after the heading reports whether it showed the subject whole.
+  let built: { readonly subjectShown: boolean; readonly component: Component } | undefined;
+  return {
+    render: (width) => {
+      const subjectShown = headingShowedSubject(headingState);
+      if (built?.subjectShown !== subjectShown)
+        built = { subjectShown, component: body(subjectShown) };
+      return built.component.render(width);
+    },
+    invalidate: () => built?.component.invalidate(),
+  };
 };
 
 const expansionLabel = (details: TaskNoticeDetails | undefined): string => {
@@ -93,8 +108,13 @@ export const presentTaskNotice: CodePreviewMessagePresenter = (message, _options
     label: "Background task",
     summary: details ? taskNoticeSummary(details.task) : UNKNOWN_NOTICE,
     expandLabel: expansionLabel(details),
-    expanded: () =>
-      expandedNotice(details, stripTerminalControls(contentText(envelope?.content)), theme),
+    expanded: (headingState) =>
+      expandedNotice(
+        details,
+        stripTerminalControls(contentText(envelope?.content)),
+        theme,
+        headingState,
+      ),
   };
 };
 

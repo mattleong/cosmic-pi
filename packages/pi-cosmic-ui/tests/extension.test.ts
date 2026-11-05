@@ -9,6 +9,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import type * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { vi } from "vitest";
@@ -243,6 +244,26 @@ const startWithPendingProbes = (h: ReturnType<typeof harness>) =>
 const byName: Order.Order<string> = (left, right) => Fn.pipe(left, Str.localeCompare(right));
 
 describe("Cosmic UI extension", () => {
+  it.effect("/activity answers help and warns for an unknown subcommand", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      const command = Option.getOrThrow(
+        Arr.findFirst(h.registerCommand.mock.calls, ([name]) => name === "activity"),
+      )[1];
+      const run = (args: string) =>
+        Effect.promise(() => Promise.resolve(command.handler(args, h.ctx)));
+      yield* emit(h, "session_start");
+      // Bare `/activity` opens Activity rather than describing the command.
+      yield* run("");
+      expect(h.notify).not.toHaveBeenCalledWith(expect.stringContaining("/activity"), "info");
+      yield* run("help");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("/activity"), "info");
+      yield* run("foo");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("foo"), "warning");
+      yield* emit(h, "session_shutdown");
+    }),
+  );
+
   it.effect.each(["print", "json", "rpc"] as const)(
     "publishes preference readiness without consuming history or taking producer UI in %s",
     (mode) =>

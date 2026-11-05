@@ -79,10 +79,27 @@ const userError = (run: SubagentCompletionNotification): string | undefined =>
 const userWarning = (run: SubagentCompletionNotification): string | undefined =>
   run.userWarning ?? run.warning;
 
-const completionNotes = (run: SubagentCompletionNotification): ReadonlyArray<string> => {
+/**
+ * Where the rest of a report shown only in part is: its saved file, or part of it there. Without a
+ * file, either only the notice's copy was cut or only the start of the report was kept.
+ */
+const reportCutNote = (run: SubagentCompletionNotification): string => {
+  const archive = run.reportArchive;
+  if (archive?.complete === true) return "The rest of this report is in its saved file";
+  if (archive !== undefined) return "Its saved file holds more, but not all, of this report";
+  return run.finalTextTruncation === undefined
+    ? "Shown up to its display limit"
+    : "Only the start of this report was kept";
+};
+
+const completionNotes = (
+  run: SubagentCompletionNotification,
+  reportCut: boolean,
+): ReadonlyArray<string> => {
   const warning = Str.trim(redacted(userWarning(run), MAX_NOTICE_FACT_CHARS) ?? "");
   return Arr.filter(
     [
+      reportCut ? reportCutNote(run) : undefined,
       warning && Str.trim(userWarning(run) ?? "") !== Str.trim(userError(run) ?? "")
         ? `Warning: ${warning}`
         : undefined,
@@ -108,17 +125,16 @@ export const completionNoticeRuns = (
       redacted(run.outcome === "failed" ? userError(run) : run.finalText, budget),
       budget,
     );
-    const notes = completionNotes(run);
+    // A failure's words are its issue's detail, and its file is a fact; only a report gets a note.
+    const reportCut =
+      run.outcome === "completed" && (words?.cut === true || run.finalTextTruncation !== undefined);
+    const notes = completionNotes(run, reportCut);
     const facts = completionFacts(run);
     return {
       id: run.id,
       name: noticeName(run.name),
       outcome: run.outcome,
       ...(words && { text: words.text }),
-      ...((words?.cut === true ||
-        (run.outcome === "completed" && run.finalTextTruncation !== undefined)) && {
-        textCut: true,
-      }),
       ...(notes.length > 0 && {
         notes: Arr.map(notes.slice(0, MAX_NOTICE_FACTS), noticeFact),
       }),

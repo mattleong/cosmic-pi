@@ -5,6 +5,7 @@ import {
   addresseeSubject,
   distinctSessionLabels,
   knownAddresseeSubject,
+  overlongSessionName,
   sessionNameCache,
   sessionSubject,
 } from "../src/identity.ts";
@@ -18,6 +19,24 @@ describe("session identity", () => {
     expect(unnamed).toBe("cosmic-pi");
     const nowhere = sessionSubject({ sessionId: "01a19957-15d8-7047-8e3f-7bccf1353038", cwd: "" });
     expect(nowhere).not.toContain("01a19957");
+  });
+
+  it("passes a name whole, cutting only past a safety cap at a word, where expansion shows it", () => {
+    const long = {
+      sessionId: "id-1",
+      name: Arr.join(
+        Arr.makeBy(12, () => "checkout review"),
+        " ",
+      ),
+      cwd: "",
+    };
+    const name = "checkout redesign review for the acme platform team and billing";
+    expect(sessionSubject({ ...long, name })).toBe(name);
+    expect(overlongSessionName({ name })).toBeUndefined();
+    const cut = sessionSubject(long);
+    expect(Str.endsWith("…")(cut)).toBe(true);
+    expect(Str.startsWith(`${Str.slice(0, -1)(cut)} `)(long.name)).toBe(true);
+    expect(overlongSessionName(long)).toBe(long.name);
   });
 
   it("adds the shortest distinguishing id only where listed sessions share a label", () => {

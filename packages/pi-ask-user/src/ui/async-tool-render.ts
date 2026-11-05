@@ -178,8 +178,8 @@ function collapsedRows(
         ? queuedState(alternatives, theme)
         : mutedState(alternatives, theme);
   if (list) {
-    // Hidden questionnaires have their own issue, which says how to resume them.
-    const counted = Arr.filter(states, (entry) => entry !== "hidden");
+    // Hidden and failed questionnaires have their own issues: how to resume them, and the failure.
+    const counted = Arr.filter(states, (entry) => entry !== "hidden" && entry !== "failed");
     return counted.length === 0 ? emptyBody() : pendingState(stateCounts(counted), counted);
   }
   const [state] = states;

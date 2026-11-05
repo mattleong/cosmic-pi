@@ -10,6 +10,7 @@ import {
   expandedDetails,
   expandedFields,
   expandedSection,
+  headingShowedSubject,
 } from "pi-code-previews";
 import { countLabel, formatDuration } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -147,8 +148,10 @@ function taskPreviewRow(
         ]),
     ...(stateShown ? [[{ text: state.label, style: stateStyle }]] : []),
     ...(status ? [[{ text: status, style: stateStyle }]] : []),
-    // An unnamed task's display name is its command.
-    ...(task.name && Str.trim(task.name)
+    // An unnamed task's display name is its command. Expanded beneath a heading that names it, the
+    // command appears too, since nothing proves that heading drew it whole; a start's request
+    // above already shows it.
+    ...((task.name && Str.trim(task.name)) || (inHeading && expanded && !started)
       ? [
           [
             {
@@ -414,11 +417,14 @@ interface Section {
   readonly facts?: ReadonlyArray<LabeledRow>;
 }
 
-/** What a compact heading doesn't say about one task: its command when named, and its runtime. */
-function taskFacts(task: BackgroundTaskSnapshot): Section[] {
-  const named = task.name !== undefined && Str.trim(task.name) !== "";
+/**
+ * What a compact heading doesn't say about one task: its command, unless the heading drew that
+ * exact command whole as an unnamed task's subject, and its runtime.
+ */
+function taskFacts(task: BackgroundTaskSnapshot, subjectShown: boolean): Section[] {
+  const commandShown = subjectShown && taskDisplayName(task) === task.command;
   const facts: LabeledRow[] = [
-    ...(named ? [{ label: "Command", lines: commandLines(task.command) }] : []),
+    ...(commandShown ? [] : [{ label: "Command", lines: commandLines(task.command) }]),
     // A timeout's issue already says how long it ran.
     ...(task.endedAt === undefined || task.state === "timed_out"
       ? []
@@ -437,12 +443,13 @@ function expandedSections(
   args: Partial<BackgroundTaskToolInput>,
   theme: PreviewTheme,
   headingShowsState: boolean,
+  subjectShown: boolean,
 ): Section[] {
   const taskLine = (task: BackgroundTaskSnapshot, started = false): Section[] =>
     headingShowsState
       ? started
         ? []
-        : taskFacts(task)
+        : taskFacts(task, subjectShown)
       : [
           {
             rows: [taskPreviewRow(task, theme, { inHeading: true, expanded: true, started })],
@@ -455,7 +462,7 @@ function expandedSections(
       return taskLine(details.snapshot);
     case "stop":
       return headingShowsState
-        ? taskFacts(details.snapshot)
+        ? taskFacts(details.snapshot, subjectShown)
         : [{ rows: collapsedRows(details, text, args, theme) }];
     case "clear":
       return headingShowsState ? [] : [{ rows: collapsedRows(details, text, args, theme) }];
@@ -529,9 +536,15 @@ export interface BackgroundTaskPreviewInput {
   readonly isError: boolean;
   /** A compact heading, which already states the task and its state. */
   readonly headingShowsState?: boolean;
+  /** The renderer state the shell's heading reports to: whether it drew its subject whole. */
+  readonly headingState?: WeakKey;
 }
 
-function previewSections(input: BackgroundTaskPreviewInput, theme: PreviewTheme): Section[] {
+function previewSections(
+  input: BackgroundTaskPreviewInput,
+  theme: PreviewTheme,
+  subjectShown: boolean,
+): Section[] {
   const { text, args, expanded } = input;
   // The shell shows a failure's issue; its facts are details.
   if (Option.isSome(input.failure)) return [];
@@ -543,7 +556,7 @@ function previewSections(input: BackgroundTaskPreviewInput, theme: PreviewTheme)
   const details = input.details.value;
   if (!expanded) return [{ rows: collapsedRows(details, text, args, theme) }];
   return Arr.map(
-    expandedSections(details, text, args, theme, input.headingShowsState === true),
+    expandedSections(details, text, args, theme, input.headingShowsState === true, subjectShown),
     (section) => ({ ...section, rows: Arr.map(section.rows, (row) => ({ ...row, wrap: true })) }),
   );
 }
@@ -604,11 +617,15 @@ function rowsComponent(rows: ReadonlyArray<Row>, theme: PreviewTheme): Component
   };
 }
 
-function buildPreview(input: BackgroundTaskPreviewInput, theme: Theme): Component {
+function buildPreview(
+  input: BackgroundTaskPreviewInput,
+  theme: Theme,
+  subjectShown: boolean,
+): Component {
   const container = new Container();
   // Expanded, unlabeled rows indent with the labeled sections around them.
   const indentUnlabeled = input.expanded;
-  for (const section of previewSections(input, theme)) {
+  for (const section of previewSections(input, theme, subjectShown)) {
     if (section.facts !== undefined) {
       container.addChild(expandedFields(theme, section.facts));
       continue;
@@ -630,12 +647,16 @@ export function renderBackgroundTaskPreview(
   input: BackgroundTaskPreviewInput,
   theme: Theme,
 ): Component {
-  // Built on first draw and again after invalidation, so theme changes restyle every row.
-  let built: Component | undefined;
+  // Built on first draw and again after invalidation, so theme changes restyle every row, and
+  // again when the heading drawn just before it changes whether it showed its subject whole.
+  let built: { readonly subjectShown: boolean; readonly component: Component } | undefined;
   return {
     render(width) {
-      built ??= buildPreview(input, theme);
-      return built.render(width);
+      const subjectShown =
+        input.headingState !== undefined && headingShowedSubject(input.headingState);
+      if (built?.subjectShown !== subjectShown)
+        built = { subjectShown, component: buildPreview(input, theme, subjectShown) };
+      return built.component.render(width);
     },
     invalidate() {
       built = undefined;

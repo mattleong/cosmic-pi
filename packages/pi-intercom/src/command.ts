@@ -47,6 +47,9 @@ const listedLines = (session: ListedSession, label: string): ReadonlyArray<strin
   ];
 };
 
+// A notice can't know its width, so a long session name ends at a word boundary in its list.
+const NOTICE_LABEL_CHARS = 40;
+
 // Keeps the example on one 55-column notice line; a longer label ends at a word boundary.
 const EXAMPLE_LABEL_CHARS = 18;
 
@@ -61,7 +64,7 @@ const reachable = (session: ListedSession): boolean =>
 export const listReport = (result: SessionListContract): string => {
   const total = result.sessions.length + result.omitted;
   if (total === 0) return "No other live Pi sessions";
-  const labels = distinctSessionLabels(result.sessions);
+  const labels = distinctSessionLabels(result.sessions, NOTICE_LABEL_CHARS);
   const example = Arr.findFirstIndex(result.sessions, reachable);
   return Arr.join(
     [

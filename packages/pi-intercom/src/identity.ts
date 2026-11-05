@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
+import { endElide } from "pi-code-previews";
 import { clipText } from "pi-cosmic-core/display";
 import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 import { abbreviateHomePath } from "pi-cosmic-core/platform/paths";
@@ -8,8 +9,11 @@ import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import type { ListedSession, SessionView } from "./tools/contract.ts";
 
-/** Longest session name or directory a heading or list row shows before clipping with `…`. */
-const MAX_SUBJECT_CHARS = 40;
+/**
+ * A safety cap on a session name or directory as a subject, far past what a row shows: subjects
+ * pass whole, and each row cuts its own at a word boundary or wraps it.
+ */
+const MAX_SUBJECT_CHARS = 120;
 /** Characters of a session id a short id starts with; colliding labels lengthen it. */
 const SHORT_ID_CHARS = 4;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
@@ -84,19 +88,22 @@ export const shortSessionId = (sessionId: string, length = SHORT_ID_CHARS): stri
 /** How a heading names a session: its name, else its directory, else a short id. */
 export const sessionSubject = (session: SessionIdentity): string => {
   const name = sanitizeTerminalLine(session.name ?? "");
-  if (name !== "") return clipText(name, MAX_SUBJECT_CHARS);
+  if (name !== "") return endElide(name, MAX_SUBJECT_CHARS);
   const directory = directoryName(session.cwd);
   return directory === ""
     ? shortSessionId(session.sessionId)
-    : clipText(directory, MAX_SUBJECT_CHARS);
+    : endElide(directory, MAX_SUBJECT_CHARS);
 };
 
-/** A session's whole name when {@link sessionSubject} clipped it, so expansion can show it. */
-export const clippedSessionName = (session: {
+/**
+ * A session's whole name when it is longer than {@link sessionSubject}'s safety cap, so expansion
+ * still shows it; any shorter name reaches the heading whole.
+ */
+export const overlongSessionName = (session: {
   readonly name?: string | undefined;
 }): string | undefined => {
   const name = sanitizeTerminalLine(session.name ?? "");
-  return name.length > MAX_SUBJECT_CHARS ? name : undefined;
+  return endElide(name, MAX_SUBJECT_CHARS) === name ? undefined : name;
 };
 
 /** How a heading names an addressee before a session answers: full ids shorten to `#9038`. */
@@ -104,7 +111,7 @@ export const addresseeSubject = (to: string | undefined): string => {
   const target = sanitizeTerminalLine(to ?? "");
   return SESSION_ID_PATTERN.test(target)
     ? `session ${shortSessionId(target)}`
-    : clipText(target, MAX_SUBJECT_CHARS);
+    : endElide(target, MAX_SUBJECT_CHARS);
 };
 
 /** The most sessions {@link SessionNames} remembers; the oldest is forgotten first. */
@@ -154,15 +161,20 @@ const uniqueSuffixLength = (ids: ReadonlyArray<string>): number => {
 };
 
 /**
- * Labels for sessions listed together: each one's {@link sessionSubject}, with a short id appended
- * only where two subjects match, long enough to tell those sessions apart.
+ * Labels for sessions listed together: each one's {@link sessionSubject}, cut at a word boundary
+ * to `subjectWidth` when given, with a short id appended only where two subjects match, long
+ * enough to tell those sessions apart.
  */
 export const distinctSessionLabels = (
   sessions: ReadonlyArray<SessionIdentity>,
+  subjectWidth?: number,
 ): ReadonlyArray<string> => {
   const entries = Arr.map(sessions, (session) => ({
     id: session.sessionId,
-    subject: sessionSubject(session),
+    subject:
+      subjectWidth === undefined
+        ? sessionSubject(session)
+        : endElide(sessionSubject(session), subjectWidth),
   }));
   const groups = Arr.groupBy(entries, (entry) => Str.toLowerCase(entry.subject));
   return Arr.map(entries, ({ id, subject }) => {

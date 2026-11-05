@@ -193,6 +193,27 @@ describe("builtin expansion states each fact once", () => {
     );
   });
 
+  test("a multi-line bash command shows once, labeled apart from its output", () => {
+    const command = "cd packages/pi-code-previews\npnpm typecheck && pnpm test";
+    const lines = Str.split(command, "\n");
+    for (const style of ["preview", "compact"] as const) {
+      applyPresentationSettings({ toolCallCollapsedStyle: style });
+      const harness = builtin("bash");
+      harness.call({ command }, { expanded: true });
+      harness.result(textResult("Tests 1204 passed"), { expanded: true });
+      const rows = Arr.map(harness.render(100), (row) => Str.trim(stripAnsi(row)));
+      // The preview heading draws the exact command; a compact heading flattens it onto one
+      // line, so the body shows it as written, labeled apart from its output.
+      for (const line of lines)
+        if (style === "preview")
+          expect(Arr.filter(rows, (row) => Str.includes(line)(row)).length).toBe(1);
+        else expect(Arr.contains(rows, line)).toBe(true);
+      expect(Arr.contains(rows, "Command")).toBe(style === "compact");
+      // The output is labeled apart from the command's rows above it in either style.
+      expect(Arr.contains(rows, "Output")).toBe(true);
+    }
+  });
+
   test("a bash failure's status is stated once while its output stays complete", () => {
     const text = expandedText(
       builtin("bash"),

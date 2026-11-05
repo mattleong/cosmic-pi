@@ -10,10 +10,10 @@ import { cutsCleanly, elideSubject, FACT_CUT_SLACK } from "./compact-header";
 import { wrapPreviewHeading } from "./heading-wrap";
 import { compactSingleLine } from "./compact-row";
 
-// renderToolHeader clips a longer subtitle.
-const SUBTITLE_LIMIT = 160;
-
-/** A drawn heading and whether it shows the whole subject, which a body may then leave out. */
+/**
+ * A drawn heading and whether it shows the whole subject, which a body may then leave out. The
+ * heading is never cut, so it shows the whole subject wherever its rows wrap rather than clip.
+ */
 export interface PreviewHeadingLayout {
   readonly text: string;
   readonly subjectComplete: boolean;
@@ -44,7 +44,7 @@ export function layoutPreviewHeading(
   const subtitle = Arr.join(Arr.filter([lead, ...headingFacts(summary)], Str.isNonEmpty), " · ");
   return {
     text: renderToolHeader({ title, subtitle }, theme),
-    subjectComplete: visibleWidth(subtitle) <= SUBTITLE_LIMIT,
+    subjectComplete: true,
   };
 }
 
@@ -84,7 +84,7 @@ export function wrappedPreviewHeading(
   );
   return {
     rows: wrapPreviewHeading(renderToolHeader({ title, subtitle }, theme), width),
-    subjectComplete: visibleWidth(subtitle) <= SUBTITLE_LIMIT,
+    subjectComplete: true,
   };
 }
 

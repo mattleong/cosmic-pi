@@ -10,6 +10,7 @@ import {
   expandedArguments,
   expandedDetails,
   expandedFields,
+  headingShowedSubject,
   type ExpandedField,
 } from "pi-code-previews";
 import { formatDuration } from "pi-cosmic-core/display";
@@ -112,15 +113,18 @@ const secondsText = (seconds: number): string => {
 const row = (label: string, ...lines: string[]): LabeledRow => ({ label, lines });
 
 /**
- * Whether a start's heading, which names it by its name or else its command, shows the command
- * exactly: one it had to clip, flatten onto one line, or clean of control characters appears
- * again in full.
+ * Whether a start's heading subject, its name or else its command, is the command exactly: one the
+ * subject had to clip, flatten onto one line, or clean of control characters differs.
  */
-const headingShowsCommand = (name: string | undefined, command: string): boolean =>
+const commandIsSubject = (name: string | undefined, command: string): boolean =>
   command.length <= BACKGROUND_TASK_FIELD_BOUNDS.maxCommandDisplayChars &&
   sanitizeTerminalLine(name === undefined ? command : Str.trim(name)) === command;
 
-function startRows(args: RequestArguments): LabeledRow[] {
+/**
+ * A start's Name and Command rows. The Command row is left out only when the heading drew the
+ * command whole; equal text alone doesn't prove the heading wasn't cut.
+ */
+function startRows(args: RequestArguments, subjectShown: boolean): LabeledRow[] {
   const name = textValue(args.name);
   const command = textValue(args.command);
   return [
@@ -128,7 +132,7 @@ function startRows(args: RequestArguments): LabeledRow[] {
     ...(name !== undefined && sanitizeTerminalLine(Str.trim(name)) !== visibleText(Str.trim(name))
       ? [row("Name", visibleText(name))]
       : []),
-    ...(command === undefined || headingShowsCommand(name, command)
+    ...(command === undefined || (subjectShown && commandIsSubject(name, command))
       ? []
       : [row("Command", ...commandLines(command))]),
   ];
@@ -154,8 +158,8 @@ export interface BackgroundTaskRequestView {
   readonly complete: boolean;
 }
 
-function requestRows(args: RequestArguments): ReadonlyArray<LabeledRow> {
-  const rows: LabeledRow[] = args.action === "start" ? startRows(args) : [];
+function requestRows(args: RequestArguments, subjectShown: boolean): ReadonlyArray<LabeledRow> {
+  const rows: LabeledRow[] = args.action === "start" ? startRows(args, subjectShown) : [];
   const cwd = textValue(args.cwd);
   // An absolute working directory reads home-relative; a relative one reads as the agent wrote it.
   if (cwd !== undefined) rows.push(row("Directory", visibleText(formatDisplayPath(cwd, ""))));
@@ -210,15 +214,19 @@ function fieldShown(args: RequestArguments, field: RequestField): boolean {
 
 /**
  * The request's arguments as labeled human-readable rows. Fields the heading already states are
- * left out; the view is incomplete when an argument couldn't be shown this way.
+ * left out, and a start's command only when `subjectShown` reports the heading drew it whole; the
+ * view is incomplete when an argument couldn't be shown this way.
  */
-export function backgroundTaskRequestRows(args: unknown): BackgroundTaskRequestView {
+export function backgroundTaskRequestRows(
+  args: unknown,
+  subjectShown = false,
+): BackgroundTaskRequestView {
   const exact = decodeExactRequest(args);
   const known = Option.isSome(exact) ? exact : decodeKnownRequest(args);
   if (Option.isNone(known)) return { rows: [], complete: false };
   const decoded = known.value;
   return {
-    rows: requestRows(decoded),
+    rows: requestRows(decoded, subjectShown),
     complete:
       Option.isSome(exact) &&
       Arr.every(
@@ -250,23 +258,34 @@ export function requestTaskId(args: unknown): string | undefined {
 
 /**
  * The expanded call: the request in words, plus the raw arguments when words can't show it all.
- * The task ID belongs to Details: the result's once it arrives, the request's until then.
+ * The task ID belongs to Details: the result's once it arrives, the request's until then. The rows
+ * are chosen as they draw, after the heading keyed by `headingState` reports what it showed.
  */
 export function renderBackgroundTaskRequest(
   args: Partial<BackgroundTaskToolInput>,
   theme: Theme,
   settled: boolean,
+  headingState?: WeakKey,
 ): Component {
-  const { rows, complete } = backgroundTaskRequestRows(args);
-  const children: Component[] = [];
-  if (rows.length > 0) children.push(expandedFields(theme, rows));
-  if (!complete) children.push(expandedArguments(theme, args));
-  const id = settled ? undefined : requestTaskId(args);
-  if (id !== undefined) children.push(expandedDetails(theme, [id]));
+  let built: { readonly subjectShown: boolean; readonly children: Component[] } | undefined;
+  const build = (subjectShown: boolean): Component[] => {
+    const { rows, complete } = backgroundTaskRequestRows(args, subjectShown);
+    const children: Component[] = [];
+    if (rows.length > 0) children.push(expandedFields(theme, rows));
+    if (!complete) children.push(expandedArguments(theme, args));
+    const id = settled ? undefined : requestTaskId(args);
+    if (id !== undefined) children.push(expandedDetails(theme, [id]));
+    return children;
+  };
   return {
-    render: (width) => Arr.flatMap(children, (child) => child.render(width)),
+    render: (width) => {
+      const subjectShown = headingState !== undefined && headingShowedSubject(headingState);
+      if (built?.subjectShown !== subjectShown)
+        built = { subjectShown, children: build(subjectShown) };
+      return Arr.flatMap(built.children, (child) => child.render(width));
+    },
     invalidate: () => {
-      for (const child of children) child.invalidate();
+      for (const child of built?.children ?? []) child.invalidate();
     },
   };
 }

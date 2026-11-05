@@ -10,6 +10,8 @@ import { renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CodePreviewRendererAppearance } from "../../application/renderer-contract";
 import { expandedArguments, expandedSection } from "../../preview/expanded-section";
 import { previewHeadingText } from "../../preview/heading-wrap";
+import { headingIsOwnCall, headingShowedSubject } from "../../preview/heading-coverage";
+import { compactSingleLine } from "../../preview/compact-row";
 import { escapeControlChars, replaceSgrSequences } from "../../shared/terminal-text";
 import { withCodePreviewRenderers } from "../../tools/cooperative-tools";
 import { getFallbackResultText } from "../../tools/data/results";
@@ -30,7 +32,13 @@ import {
 } from "./identity";
 import type { ThirdPartyAdapter } from "../registry";
 import { webAccessSummary } from "./summary";
-import { hostContainer, hostValue } from "../../shared/untrusted-value";
+import {
+  hostContainer,
+  hostObject,
+  hostValue,
+  ownField,
+  type HostObject,
+} from "../../shared/untrusted-value";
 
 export const webAccessAdapter = {
   names: WEB_ACCESS_TOOLS,
@@ -67,6 +75,35 @@ function unlessShownBy(
   };
 }
 
+/**
+ * The call's arguments, unless they are one text argument the heading showed whole and exactly as
+ * its subject, such as a source check's claim: the adapter's own heading above them, which wraps
+ * rather than clips, or a shell heading that reports showing the whole subject. A heading the
+ * provider draws itself proves nothing.
+ */
+function unlessHeadingShowsOnlyArgument(
+  state: RendererState,
+  input: HostObject | undefined,
+  subject: string,
+  providerHeading: boolean,
+  section: Component,
+): Component {
+  const only = invokeHostCallback((): string | undefined => {
+    const keys = input ? Rec.keys(input) : [];
+    const value = keys.length === 1 ? ownField(input, keys[0] ?? "") : undefined;
+    return Predicate.isString(value) ? value : undefined;
+  }, undefined);
+  const exact = only !== undefined && only === subject && compactSingleLine(only) === only;
+  return {
+    render(width) {
+      const shown =
+        exact && (!providerHeading || (headingShowedSubject(state) && !headingIsOwnCall(state)));
+      return shown ? [] : section.render(width);
+    },
+    invalidate: () => section.invalidate(),
+  };
+}
+
 // Built outside the render call, so the heading holds only its text, never the call's arguments.
 const fixedHeading = (text: string): Component => previewHeadingText(() => text);
 
@@ -86,6 +123,7 @@ export function createWebAccessRenderers(
     build: (lastComponent: Component | undefined) => Component | undefined,
     extra: (original: Component | undefined) => Component,
     fallback: Component,
+    present: (original: Component) => Component = Fn.identity,
   ): Component {
     const { state } = context;
     const failed = failures.get(state);
@@ -102,7 +140,7 @@ export function createWebAccessRenderers(
     try {
       original = build(context.lastComponent && originals.get(context.lastComponent));
       const container = new Container();
-      if (original) container.addChild(original);
+      if (original) container.addChild(present(original));
       container.addChild(extra(original));
       body = container;
     } catch {
@@ -157,10 +195,17 @@ export function createWebAccessRenderers(
         body.addChild(heading);
         if (!(Predicate.isObject(args) && Rec.isEmptyRecord(args)))
           body.addChild(
-            unlessShownBy(
-              original,
-              invokeHostCallback(() => JSON.stringify(args) ?? "", ""),
-              expandedArguments(theme, hostValue(args)),
+            unlessHeadingShowsOnlyArgument(
+              context.state,
+              hostObject(args),
+              subject,
+              // A provider's own call heading may show anything, so only its drawn text counts.
+              downstream?.renderCall !== undefined,
+              unlessShownBy(
+                original,
+                invokeHostCallback(() => JSON.stringify(args) ?? "", ""),
+                expandedArguments(theme, hostValue(args)),
+              ),
             ),
           );
         return body;
@@ -193,6 +238,8 @@ export function createWebAccessRenderers(
             ? new Container()
             : fallback,
       fallback,
+      // Expanded, the provider's result is a body section, indented as the others are.
+      (original) => (options.expanded ? expandedSection(theme, undefined, original) : original),
     );
   };
   return withCodePreviewRenderers(

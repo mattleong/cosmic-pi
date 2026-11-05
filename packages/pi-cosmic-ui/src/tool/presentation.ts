@@ -11,7 +11,6 @@ import {
   managerNoticeGlyph,
   type ManagerActivityKind,
   type ManagerNoticeKind,
-  clipToWidth,
 } from "../manager/chrome.ts";
 import { formatKeyIds, keyHint } from "../manager/key-labels.ts";
 
@@ -25,11 +24,15 @@ export interface ToolHeader {
   readonly subtitle?: string | undefined;
 }
 
+/**
+ * A tool's heading on one logical line, never cut: the caller lays it out for the row, wrapping an
+ * expanded heading and shortening a collapsed subject before its facts, so the heading it measures
+ * is the heading it draws. Producers bound their own subjects.
+ */
 export const renderToolHeader = (header: ToolHeader, theme: Pick<Theme, "bold" | "fg">): string => {
   const title = theme.fg("toolTitle", theme.bold(sanitizeTerminalLine(header.title)));
   if (!header.subtitle) return title;
-  const clipped = clipToWidth(sanitizeTerminalLine(header.subtitle), 160, "… [truncated]");
-  return `${title} ${theme.fg("dim", clipped)}`;
+  return `${title} ${theme.fg("dim", sanitizeTerminalLine(header.subtitle))}`;
 };
 
 type ToolStatusKind = ManagerActivityKind | ManagerNoticeKind;

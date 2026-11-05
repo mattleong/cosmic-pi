@@ -1,4 +1,5 @@
-import { initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createEventBus, initTheme, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
   applyPresentationSettings,
   captureRegistrations,
@@ -12,12 +13,13 @@ import {
   type GalleryMessageScenario,
   type GalleryScenario,
 } from "pi-code-previews/testing";
-import { extensionContextFixture } from "pi-cosmic-core/testing";
+import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { askUserWithDependencies } from "../src/application.ts";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
 import { formatAsyncSnapshot } from "../src/questionnaire/format.ts";
@@ -40,6 +42,29 @@ import { stripTerminalControls } from "pi-cosmic-core/security";
 import type { AskUserDialog } from "../src/ui/dialog.ts";
 
 const text = (value: string) => [{ type: "text" as const, text: value }];
+
+/** What `/ask-user <args>` shows with no hidden questionnaire to resume. */
+const commandNotice = (args: string): Promise<string> => {
+  const host = recordingExtensionHost({}, { events: createEventBus() });
+  askUserWithDependencies(host.pi, () => Promise.resolve());
+  let notice = "(nothing shown)";
+  const ctx = extensionContextFixture({
+    ui: {
+      notify: (message) => {
+        notice = message;
+      },
+    },
+  });
+  return Promise.resolve(host.commands.get("ask-user")?.handler(args, ctx)).then(() => notice);
+};
+
+// Notices wrap at the terminal edge one column in, as Pi draws them.
+const noticeFrames = (title: string, notice: string): string[] =>
+  Arr.flatMap([55, 178], (width) => [
+    `── ${title} · ${width + 2} cols`,
+    ...Arr.flatMap(Str.split(notice, "\n"), (line) => wrapTextWithAnsi(line, width)),
+    "",
+  ]);
 
 const environment: AskUserQuestion = {
   key: "environment",
@@ -516,6 +541,10 @@ describe.skipIf(!directory)("presentation gallery", () => {
           { action: "await", requestId: "ask-2" },
           { content: [], details: { questionnaire: "queued" } },
         ),
+        live("ask_user_async_control", "cancelling a questionnaire", {
+          action: "cancel",
+          requestId: "ask-2",
+        }),
         controlled("answers awaited", { action: "await", requestId: "ask-1" }, [
           answered("waiter"),
         ]),
@@ -540,6 +569,14 @@ describe.skipIf(!directory)("presentation gallery", () => {
           snapshot("ask-2", { ...settled, status: "cancelled", delivery: "sent" }),
           snapshot("ask-3", { status: "pending", presentation: "open", delivery: "pending" }),
         ]),
+        controlled("every questionnaire state in one list", { action: "status" }, [
+          snapshot("ask-1", { ...settled, status: "failed", delivery: "none" }),
+          snapshot("ask-2", { status: "pending", presentation: "open", delivery: "pending" }),
+          snapshot("ask-3", { status: "pending", presentation: "hidden", delivery: "pending" }),
+          snapshot("ask-4", { status: "pending", presentation: "queued", delivery: "pending" }),
+          snapshot("ask-5", { ...settled, status: "submitted", delivery: "sent" }),
+          snapshot("ask-6", { ...settled, status: "cancelled", delivery: "sent" }),
+        ]).pipe(Effect.map((scenario) => ({ ...scenario, wide: true }))),
         controlled("answers saved but not delivered", { action: "status", requestId: "ask-1" }, [
           answered("failed"),
         ]),
@@ -604,6 +641,13 @@ describe.skipIf(!directory)("presentation gallery", () => {
         }
       }
       lines.push(...dialogFrames());
+      for (const args of ["", "help", "settings"])
+        lines.push(
+          ...noticeFrames(
+            Str.trimEnd(`/ask-user ${args}`),
+            yield* Effect.promise(() => commandNotice(args)),
+          ),
+        );
       yield* writeGallerySection(directory, "pi-ask-user", lines);
     }),
   );

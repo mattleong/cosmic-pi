@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { authoredTextLines, expandedDetails } from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
-import { clippedSessionName, displayDirectory } from "./identity.ts";
+import { displayDirectory, overlongSessionName } from "./identity.ts";
 
 /** Words a session wrote, without terminal escape sequences that would restyle the view. */
 export const sessionText = (text: string): string => stripTerminalControls(text);
@@ -43,8 +43,8 @@ export const statusLine = (text: string, theme: Pick<Theme, "fg">): Component =>
   new Text(theme.fg("muted", sanitizeTerminalLine(text)), 0, 0);
 
 /**
- * The expanded `Details` section: a session's full id, its whole name when the heading clipped it,
- * and its directory.
+ * The expanded `Details` section: a session's full id, its directory, and its name only when it is
+ * too long for any heading to carry whole.
  */
 export const sessionDetails = (
   theme: Pick<Theme, "fg">,
@@ -54,7 +54,7 @@ export const sessionDetails = (
     readonly cwd?: string | undefined;
   },
 ): Component => {
-  const name = clippedSessionName(session);
+  const name = overlongSessionName(session);
   return expandedDetails(theme, [
     Arr.join(
       Arr.filter(

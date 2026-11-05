@@ -21,11 +21,11 @@ export const settingDisplayValue = (
   value: BackgroundTaskConfig[BackgroundTaskSettingId],
 ) => formatSettingValue(setting.kind, value);
 
-/** A value as settings show it; an empty shell reads `default`, Pi's own shell. */
+/** A value as settings show it; an empty shell names the shell that applies, Pi's own. */
 export const effectiveDisplayValue = (
   setting: Pick<BackgroundTaskSetting, "kind">,
   value: BackgroundTaskConfig[BackgroundTaskSettingId],
-) => settingDisplayValue(setting, value) || "default";
+) => settingDisplayValue(setting, value) || "Pi's shell";
 
 /** The value this session started with. */
 export const sessionValue = (

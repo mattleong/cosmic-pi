@@ -316,7 +316,7 @@ function reportEvidenceIssues(card: SubagentRunCard, label: string, add: AddIssu
       "warning",
       "report-cut",
       `${label}: report too long to save in full`,
-      savedDetail("its file holds only the start of the report"),
+      savedDetail("its saved file holds more, but not all, of the report"),
     );
   const clipped =
     (reportCut && archive === undefined) ||

@@ -116,7 +116,7 @@ describe("/tasks settings", () => {
       ]);
       yield* h.run("maxRunning 999");
       expect(h.write).toHaveBeenCalledTimes(3);
-      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("maxRunning"), "error");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.stringContaining("maxRunning"), "warning");
 
       const untrusted = harness({ trusted: false });
       yield* untrusted.run("project maxRunning 4");
@@ -138,7 +138,7 @@ describe("/tasks settings", () => {
       expect(h.write.mock.calls).toEqual([
         [{ cwd: "/project", scope: "global" }, "maxWaitSeconds", cap],
       ]);
-      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "error");
+      expect(h.notify).toHaveBeenLastCalledWith(expect.any(String), "warning");
     }),
   );
 
@@ -151,12 +151,12 @@ describe("/tasks settings", () => {
       expect(Arr.map(h.write.mock.calls, ([, , value]) => value)).toEqual([
         262_144, 262_144, 262_144, 1_048_576, 1_572_864, 4_194_304, 8_388_608,
       ]);
-      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "error")).toEqual([]);
+      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "warning")).toEqual([]);
 
       for (const value of ["1.5", "0.1k", "10x", "8MiB", "-1k", "k"])
         yield* h.run(`logBufferBytesPerTask ${value}`);
       expect(h.write).toHaveBeenCalledTimes(7);
-      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "error")).toHaveLength(6);
+      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "warning")).toHaveLength(6);
     }),
   );
 
@@ -175,13 +175,13 @@ describe("/tasks settings", () => {
         ["maxWaitSeconds", 90],
         ["maxWaitSeconds", 3_600],
       ]);
-      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "error")).toEqual([]);
+      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "warning")).toEqual([]);
 
       for (const value of ["1.5s", "500ms", "2x", "-1s", "1d"])
         yield* h.run(`maxWaitSeconds ${value}`);
       yield* h.run("stopGraceMs 31s");
       expect(h.write).toHaveBeenCalledTimes(8);
-      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "error")).toHaveLength(6);
+      expect(Arr.filter(h.notify.mock.calls, ([, level]) => level === "warning")).toHaveLength(6);
     }),
   );
 

@@ -7,7 +7,8 @@ import { homeDisplayPath } from "../ui/display-path.ts";
 /**
  * Why the Node binary running Pi can no longer start Pi children or helpers. On macOS, Homebrew
  * resolves it to a versioned Cellar path that `brew upgrade` deletes while Pi keeps running. The
- * check reads the real path; the problem names it as the user reads it.
+ * check reads the real path; the problem names it as the user reads it, in a clause that follows
+ * the doctor's `Node:` label.
  */
 export const nodeExecutableProblem = (
   executable = process.execPath,
@@ -17,14 +18,16 @@ export const nodeExecutableProblem = (
       () => undefined,
       (cause: unknown) =>
         nodeErrorCode(cause) === "ENOENT"
-          ? `Node at ${homeDisplayPath(executable)} was removed since Pi started; restart Pi.`
-          : `Node at ${homeDisplayPath(executable)} is no longer executable; restart Pi.`,
+          ? `${homeDisplayPath(executable)} was removed since Pi started; restart Pi`
+          : `${homeDisplayPath(executable)} is no longer executable; restart Pi`,
     ),
   );
 
 export const requireNodeExecutable = (executable = process.execPath) =>
   nodeExecutableProblem(executable).pipe(
     Effect.flatMap((problem) =>
-      problem ? Effect.fail(invalidRequest("node_executable_missing", problem)) : Effect.void,
+      problem
+        ? Effect.fail(invalidRequest("node_executable_missing", `Node ${problem}.`))
+        : Effect.void,
     ),
   );

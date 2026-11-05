@@ -9,6 +9,9 @@ import { stripTerminalControls } from "pi-cosmic-core/security";
  */
 const subjectShown = new WeakMap<WeakKey, boolean>();
 
+/** How many rows a row's expanded heading drew when it last drew. Keyed by the row's renderer state. */
+const rowsShown = new WeakMap<WeakKey, number>();
+
 const endsClipped = (row: string): boolean =>
   Str.endsWith("…")(Str.trimEnd(stripTerminalControls(row)));
 
@@ -22,7 +25,14 @@ export const recordHeadingSubject = (
   rows: readonly string[],
 ): void => {
   subjectShown.set(state, complete && !Arr.some(rows, endsClipped));
+  rowsShown.set(state, rows.length);
 };
+
+/**
+ * Whether a row's expanded heading wrapped onto continuation rows, which hang where an unlabeled body
+ * would sit, so a body beneath it labels itself. False until a heading has drawn.
+ */
+export const headingWrapped = (state: WeakKey): boolean => (rowsShown.get(state) ?? 0) > 1;
 
 /** False until a heading has drawn, so a body never drops input on a guess. */
 export const headingShowedSubject = (state: WeakKey): boolean => subjectShown.get(state) === true;

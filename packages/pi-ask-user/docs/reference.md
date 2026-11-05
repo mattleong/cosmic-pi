@@ -151,7 +151,7 @@ While editing a text answer, letters such as `b` and `q` and digits are literal 
 
 With several questions, choosing or saving an answer moves to the next question, and answers require explicit submission on Review; the primary review action jumps to the next unanswered item first. A single question has no tabs or Review: choosing a single-choice answer, saving a custom or text answer, or activating Submit beneath a multi-select question submits it.
 
-The overlay shows question/answer progress, live text limits, the selected count for multi-select questions, and a hint bar naming what `Enter` does on the focused row. `?` extends the hint bar with aliases and secondary keys, including `b` to hide. A hidden questionnaire returns through `/ask-user` or Activity → Resume; its Activity row reads `/ask-user to resume`, and without Activity the footer status says the same.
+The overlay shows question/answer progress, live text limits, the selected count for multi-select questions, and a hint bar naming what `Enter` does on the focused row. `?` extends the hint bar with aliases and secondary keys, including `b` to hide. A hidden questionnaire returns through `/ask-user` or Activity → Resume; its Activity row reads `/ask-user to resume`, and without Activity the footer status says the same. `/ask-user help` lists the command, and any other argument warns and shows that overview.
 
 ## RPC behavior
 

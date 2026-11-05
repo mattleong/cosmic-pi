@@ -153,6 +153,18 @@ const unnamed = task({
   endedAt: 42_001,
   exitCode: 127,
 });
+// Longer than any heading shows on one row: expansion must keep its last flag.
+const verifyCommand = `node scripts/verify.ts ${Arr.join(
+  Arr.makeBy(20, (index) => `--include=package-${index}`),
+  " ",
+)} --security-check`;
+const longUnnamed = task({
+  id: "task-0000000018",
+  command: verifyCommand,
+  state: "exited",
+  endedAt: 42_001,
+  exitCode: 0,
+});
 const errorNamed = task({
   id: "task-0000000014",
   name: "BuildError",
@@ -175,6 +187,7 @@ const byId = new Map(
       finished,
       noisy,
       unnamed,
+      longUnnamed,
     ],
     (entry) => [entry.id, entry],
   ),
@@ -259,6 +272,11 @@ const scenarios: ReadonlyArray<Scenario> = [
     service: { start: started("task-0000000011", 48612) },
   },
   {
+    title: "started an unnamed task with a 449-character command",
+    input: { action: "start", command: verifyCommand },
+    service: { start: started("task-0000000018", 48655) },
+  },
+  {
     // A working directory reads home-relative, as `~/web`.
     title: "started a task in a folder under home",
     input: { action: "start", command: "pnpm dev", name: "web", cwd: `${homedir()}/web` },
@@ -278,6 +296,10 @@ const scenarios: ReadonlyArray<Scenario> = [
     },
   },
   { title: "running task", input: { action: "status", id: "task-0000000003" } },
+  {
+    title: "unnamed task with a 449-character command",
+    input: { action: "status", id: "task-0000000018" },
+  },
   { title: "finished task", input: { action: "status", id: "task-0000000008" } },
   { title: "failed task with a cause", input: { action: "status", id: "task-0000000001" } },
   { title: "task killed without output", input: { action: "status", id: "task-0000000002" } },
@@ -689,6 +711,7 @@ const noticeScenarios: ReadonlyArray<GalleryMessageScenario> = [
     }),
     [out("Test Files  2 passed (2)")],
   ),
+  notice("unnamed task with a 449-character command", longUnnamed, [out("verified")]),
   notice("task in a folder under home", { ...finished, cwd: `${homedir()}/web` }, [
     out("Found 0 errors in 212 files."),
   ]),

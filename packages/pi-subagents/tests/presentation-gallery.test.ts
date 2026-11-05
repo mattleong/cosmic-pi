@@ -114,6 +114,8 @@ import type { ProjectedPiModel } from "../src/settings/profile-model-catalog.ts"
 import {
   INVALID_ROUTE,
   profileSettingsInspection,
+  resolveTestConfig,
+  type ConfigDocumentValue,
   subagentCommandActionsFixture,
 } from "./fixtures/profile-settings-inspection.ts";
 import { sessionContextFixture } from "./fixtures/pi-host.ts";
@@ -121,7 +123,9 @@ import { eventLoopTurn, settle, step } from "./support/effect-test.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 import { nodeDisplayHomeDirectory } from "pi-cosmic-core/platform/node-builtins";
 import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
-import type { DoctorCheck } from "../src/application/doctor.ts";
+import { gitProbeCheck, type DoctorCheck } from "../src/application/doctor.ts";
+import { WORKTREE_INCLUDE_RULE } from "../src/boundary/git-worktree-include.ts";
+import { resolveProfilePlan, type ProfileResolutionEnvironment } from "../src/profiles/resolve.ts";
 import { nodeExecutableProblem } from "../src/boundary/node-executable.ts";
 import { showDoctorReport } from "../src/settings/doctor-report.ts";
 import { registerSubagentApplication } from "../src/application/register.ts";
@@ -771,6 +775,9 @@ const sent = (
 ) => ({
   agentSend: () => Effect.succeed({ messageId: "message-1", to, name, disposition, ...delivery }),
 });
+/** A run name at its 80-character limit, which headings receive whole. */
+const LONGEST_RUN_NAME =
+  "billing-and-invoicing-migration-review-follow-up-for-the-legacy-ledger-export-v2";
 const peerNote = "The refresh test fixtures moved to tests/auth/fixtures; update your imports.";
 
 const agentScenarios = Effect.all([
@@ -811,6 +818,11 @@ const agentScenarios = Effect.all([
     "guidance to a peer with a long name",
     { tool: "agent_send", args: { to: "agent-9", message: peerNote } },
     sent("agent-9", "billing-and-invoicing-migration-review-follow-up", "guided"),
+  ),
+  agentScenario(
+    "guidance to a peer with an 80-character name",
+    { tool: "agent_send", args: { to: "agent-9", message: peerNote } },
+    sent("agent-9", LONGEST_RUN_NAME, "guided"),
   ),
   agentScenario(
     "message wakes the idle main agent",
@@ -1028,6 +1040,11 @@ const agentMessageScenarios: ReadonlyArray<GalleryMessageScenario> = [
     ),
   ),
   agentMessage("saved before display copies", schemaCheck, peerNote, "without display copy"),
+  agentMessage(
+    "from a peer with an 80-character name",
+    { ...schemaCheck, name: LONGEST_RUN_NAME },
+    peerNote,
+  ),
 ];
 
 const lifecycleScenarios = Effect.all([
@@ -1764,6 +1781,58 @@ const messageScenarios: ReadonlyArray<GalleryMessageScenario> = [
           complete: true,
         },
       }),
+    ],
+  }),
+  ...notified("a cut report saved whole to a file", {
+    type: "completed",
+    runs: [
+      completion(docsSweep, {
+        finalTextTruncation: {
+          retainedChars: 28_200,
+          originalChars: 152_310,
+          originalLines: 3_172,
+        },
+        reportArchive: {
+          path: privateStatePath("subagents/reports/session-1/agent-2-1-4f1c.md"),
+          chars: 152_310,
+          lines: 3_172,
+          complete: true,
+        },
+      }),
+    ],
+  }),
+  ...notified("a report too long to save in full, from an 80-character name", {
+    type: "completed",
+    runs: [
+      completion(
+        { ...docsSweep, name: LONGEST_RUN_NAME },
+        {
+          finalTextTruncation: {
+            retainedChars: 28_200,
+            originalChars: 1_402_880,
+            originalLines: 29_310,
+          },
+          reportArchive: {
+            path: privateStatePath("subagents/reports/session-1/agent-2-1-9b2e.md"),
+            chars: 1_048_576,
+            lines: 21_904,
+            complete: false,
+          },
+        },
+      ),
+    ],
+  }),
+  ...notified("a cut report whose file couldn't be saved, beside a whole report", {
+    type: "completed",
+    runs: [
+      completion(docsSweep, {
+        finalTextTruncation: {
+          retainedChars: 28_200,
+          originalChars: 152_310,
+          originalLines: 3_172,
+        },
+      }),
+      completion({ ...authReview, finalText: "The refresh flow is safe." }),
     ],
   }),
   ...notified("one worker fails with a next candidate", {
@@ -2722,12 +2791,80 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = [
     detail: "none; isolated trees get no ignored or credential files",
   },
   { label: "Private state", status: "ok", detail: "~/.pi/agent" },
-  {
-    label: "Git",
-    status: "warning",
-    detail: "2.30.1 at /usr/bin/git; isolated writers need 2.38 or later",
-  },
+  gitProbeCheck(
+    { kind: "found", installation: { executable: "/usr/bin/git", version: "2.30.1" } },
+    "/repo",
+  ),
 ];
+
+/** A configuration document whose default set routes these profiles. */
+const profileSet = (profiles: { readonly [profile: string]: ConfigDocumentValue }) => ({
+  version: 6,
+  defaultProfileSet: "doctor",
+  profileSets: { doctor: { profiles } },
+});
+
+/** A profile's resolution failure as the doctor's row shows it. */
+const routeProblem = (
+  profile: string,
+  config: ReturnType<typeof resolveTestConfig>,
+  environment: ProfileResolutionEnvironment,
+): string => {
+  const plan = resolveProfilePlan(profile, config, environment);
+  return plan.kind === "failed" ? plan.problem : "";
+};
+
+/**
+ * Each problem the doctor names, after its label: routes from the resolver's own problem text and
+ * Git from the doctor's row builder.
+ */
+const problemDoctorChecks = (nodeProblem: string): ReadonlyArray<DoctorCheck> => {
+  const config = resolveTestConfig(
+    profileSet({
+      reviewer: "disabled",
+      oracle: declaredCandidate("openai-codex/gpt-6-luna", { context: "fork" }),
+      researcher: declaredCandidate("anthropic/claude-haiku-5-5"),
+    }),
+    profileSet({ worker: null }),
+  );
+  const environment: ProfileResolutionEnvironment = {
+    availablePiModels: [
+      { provider: "openai-codex", id: "gpt-6-luna" },
+      { provider: "anthropic", id: "claude-haiku-5-5", supportedEfforts: ["low"] },
+    ],
+    forkAvailable: false,
+  };
+  return [
+    { label: "Pi", status: "ok", detail: "version 1.5.0" },
+    { label: "Node", status: "failed", detail: nodeProblem },
+    ...Arr.map(["worker", "reviewer", "oracle", "researcher"], (profile) => ({
+      label: `Profile ${profile}`,
+      status: "failed" as const,
+      detail: routeProblem(profile, config, environment),
+    })),
+    {
+      label: `Agent ${LONGEST_RUN_NAME}`,
+      status: "failed",
+      detail: `global · profile reviewer · ${routeProblem("reviewer", config, environment)}`,
+    },
+    {
+      label: "Agents (project)",
+      status: "failed",
+      detail: "invalid object, so every agent it could declare fails closed",
+    },
+    {
+      label: ".worktreeinclude",
+      status: "warning",
+      detail: `unreadable, so isolated writers can't start; it must be ${WORKTREE_INCLUDE_RULE}`,
+    },
+    gitProbeCheck({ kind: "missing" }, "/repo"),
+    {
+      label: "Activity view",
+      status: "warning",
+      detail: "unavailable; install pi-cosmic-ui so /subagents can open",
+    },
+  ];
+};
 
 /**
  * `/subagents doctor` opens a read-only panel whose wrapped details hang beneath each label. The
@@ -2745,6 +2882,7 @@ const doctorLines = Effect.fn("SubagentGallery.doctorLines")(function* () {
         check.label === "Node" ? { ...check, status: "failed", detail: nodeProblem ?? "" } : check,
       ),
     ],
+    ["every row names a problem", problemDoctorChecks(nodeProblem ?? "")],
   ];
   const lines: string[] = [];
   for (const [title, checks] of reports)

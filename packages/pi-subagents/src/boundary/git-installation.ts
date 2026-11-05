@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Match from "effect/Match";
 import { hasControlCharacter } from "pi-cosmic-core/security";
 import { runBoundedProcessNode } from "pi-cosmic-core/platform/process";
 import {
@@ -19,6 +20,12 @@ interface GitInstallation {
   readonly executable: string;
   readonly version: string;
 }
+
+/** The Git a check found, or why it found none it can use. */
+export type GitInstallationProbe =
+  | { readonly kind: "found"; readonly installation: GitInstallation }
+  | { readonly kind: "missing" }
+  | { readonly kind: "unversioned"; readonly executable: string };
 
 const PREFERRED_GIT = "/usr/bin/git";
 
@@ -42,7 +49,7 @@ const executableFile = (candidate: string) =>
 // Prefer the system Git, then the first absolute `git` on the user's PATH (NixOS has no /usr/bin/git).
 const locateGit = Effect.fn("GitInstallation.locateGit")(function* (
   environment: NodeJS.ProcessEnv,
-) {
+): Effect.fn.Return<string | undefined> {
   const searched = [
     PREFERRED_GIT,
     ...Arr.map(
@@ -51,10 +58,7 @@ const locateGit = Effect.fn("GitInstallation.locateGit")(function* (
     ),
   ];
   for (const candidate of new Set(searched)) if (yield* executableFile(candidate)) return candidate;
-  return yield* unavailable(
-    "Git isn't installed, so isolated writer workspaces are unavailable.",
-    `Searched ${PREFERRED_GIT} and every absolute directory on PATH. Install Git ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later, or use the shared-checkout writer workspace.`,
-  );
+  return undefined;
 });
 
 const runGit = (executable: string, args: ReadonlyArray<string>, environment: NodeJS.ProcessEnv) =>
@@ -78,37 +82,63 @@ export const gitVersionSupported = (version: string): boolean => {
   return major > requiredMajor || (major === requiredMajor && minor >= requiredMinor);
 };
 
-const resolveGitInstallation = Effect.fn("GitInstallation.resolveGitInstallation")(function* (
+const probeGitInstallation = Effect.fn("GitInstallation.probeGitInstallation")(function* (
   environment: NodeJS.ProcessEnv,
-): Effect.fn.Return<GitInstallation, WorkspaceError> {
+): Effect.fn.Return<GitInstallationProbe> {
   const executable = yield* locateGit(environment);
+  if (executable === undefined) return { kind: "missing" };
   const output = yield* runGit(executable, ["--version"], environment).pipe(
     Effect.map((result) => (result.code === 0 ? result.stdout : "")),
     Effect.orElseSucceed(() => ""),
   );
   const match = VERSION.exec(output);
-  if (!match)
-    return yield* unavailable(
-      "Git didn't report its version, so isolated writer workspaces are unavailable.",
-      `Executable: ${homeDisplayPath(executable)}`,
-    );
-  return { executable, version: Arr.join(Arr.filter(match.slice(1), Boolean), ".") };
+  if (!match) return { kind: "unversioned", executable };
+  return {
+    kind: "found",
+    installation: { executable, version: Arr.join(Arr.filter(match.slice(1), Boolean), ".") },
+  };
 });
 
 let resolved: GitInstallation | undefined;
 
-/** Resolved once per process; a failed resolution is retried on the next use. */
-export const gitInstallation: Effect.Effect<GitInstallation, WorkspaceError> = Effect.suspend(() =>
+/** Found once per process; a probe that found no usable Git is retried on the next use. */
+export const gitInstallationProbe: Effect.Effect<GitInstallationProbe> = Effect.suspend(() =>
   resolved
-    ? Effect.succeed(resolved)
-    : resolveGitInstallation(process.env).pipe(
-        Effect.tap((installation) =>
+    ? Effect.succeed({ kind: "found", installation: resolved } as const)
+    : probeGitInstallation(process.env).pipe(
+        Effect.tap((probe) =>
           Effect.sync(() => {
-            resolved = installation;
+            if (probe.kind === "found") resolved = probe.installation;
           }),
         ),
       ),
 );
+
+export const gitInstallation: Effect.Effect<GitInstallation, WorkspaceError> =
+  gitInstallationProbe.pipe(
+    Effect.flatMap((probe) =>
+      Match.value(probe).pipe(
+        Match.when({ kind: "found" }, ({ installation }) => Effect.succeed(installation)),
+        Match.when({ kind: "missing" }, () =>
+          Effect.fail(
+            unavailable(
+              "Git isn't installed, so isolated writer workspaces are unavailable.",
+              `Searched ${PREFERRED_GIT} and every absolute directory on PATH. Install Git ${Arr.join(Arr.map(MINIMUM_GIT_VERSION, String), ".")} or later, or use the shared-checkout writer workspace.`,
+            ),
+          ),
+        ),
+        Match.when({ kind: "unversioned" }, ({ executable }) =>
+          Effect.fail(
+            unavailable(
+              "Git didn't report its version, so isolated writer workspaces are unavailable.",
+              `Executable: ${homeDisplayPath(executable)}`,
+            ),
+          ),
+        ),
+        Match.exhaustive,
+      ),
+    ),
+  );
 
 export const supportedGitInstallation = gitInstallation.pipe(
   Effect.filterOrFail(

@@ -25,6 +25,7 @@ import type { ActivityDetail } from "../src/activity/protocol.ts";
 import { activityRow, memberRow } from "./support/activity.ts";
 import { activitySectionId } from "../src/activity/grouped-tree.ts";
 import {
+  activityCommandGalleryLines,
   settingsCommandGalleryLines,
   settingsCompletionGalleryLines,
 } from "./support/gallery-settings-command.ts";
@@ -830,6 +831,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
       lines.push(
         ...(yield* settingsCommandGalleryLines()),
         ...(yield* settingsCompletionGalleryLines()),
+        ...(yield* activityCommandGalleryLines()),
       );
       yield* writeGallerySection(
         directory,

@@ -180,11 +180,12 @@ describe("questionnaire compact outcome projection", () => {
     for (const issue of summary?.issues ?? [])
       expect(issueMessageStyleProblems(issue.message)).toEqual([]);
   });
-  it("names a control call's questions by their stored titles, falling back without them", () => {
+  it("names a control call's questions by their stored titles, else only by its action", () => {
     const args = { action: "await", requestId: "request-1" };
     const titled = row({ titles: [{ key: "library", title: "Library" }] });
     expect(summarize(asyncAskUserCompactSummary, titled, { args })?.subject).toBe("Library");
-    expect(summarize(asyncAskUserCompactSummary, row(), { args })?.subject).toBe("questionnaire");
+    const untitled = summarize(asyncAskUserCompactSummary, row(), { args });
+    expect([untitled?.action, untitled?.subject]).toEqual(["await", ""]);
   });
   it("declines missing, malformed, inconsistent, and error-marked replies", () => {
     for (const details of [undefined, {}, { outcome: "submitted" }, { ...submitted, answers: [] }])

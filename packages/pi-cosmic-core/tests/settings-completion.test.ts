@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import type { JsonObject } from "../src/platform/json-document.ts";
 import {
   BooleanFromJsonSchema,
@@ -24,6 +25,17 @@ describe("decodeSettingUpdate", () => {
         other: "kept",
         usage: { enabled: true, stale: 1 },
       });
+    }),
+  );
+
+  it.effect("rejects a value with a rule that leads with the id and quotes a short value", () =>
+    Effect.gen(function* () {
+      const rejected = yield* Effect.flip(decodeSetting("compact", "maybe"));
+      expect(rejected.message).toMatch(/^compact /u);
+      expect(rejected.message).toContain("maybe");
+      const long = yield* Effect.flip(decodeSetting("compact", Str.repeat(449)("x")));
+      expect(long.message).toMatch(/^compact /u);
+      expect(long.message.length).toBeLessThan(60);
     }),
   );
 });

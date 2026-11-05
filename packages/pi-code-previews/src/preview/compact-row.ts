@@ -20,7 +20,7 @@ import {
   type CompactStatus,
   type CompactSummary,
 } from "../tools/compact-summary";
-import { elideSubject, layoutCompactHeader } from "./compact-header";
+import { elideSubject, FACT_CUT_SLACK, layoutCompactHeader } from "./compact-header";
 import { wrapPreviewHeading } from "./heading-wrap";
 import { TIMING_VISIBLE_MS } from "./tool-timing";
 
@@ -232,17 +232,18 @@ export function layoutExpandedCompactHeading(
     );
   const whole = wrap(subject);
   if (whole.length <= EXPANDED_HEADING_ROWS) return { rows: whole, subjectComplete: true, counter };
-  // A subject longer than the rows allow is shortened as the collapsed row shortens it; the
-  // body then shows it whole.
+  // A subject longer than the rows allow is shortened at a word boundary, or a path in its
+  // middle, never inside a word; the body then shows it whole.
   const kind = input.summary.pathSubject ? "path" : "prose";
+  const cut = (room: number) => elideSubject(subject, room, kind, FACT_CUT_SLACK);
   let fits = 1;
   let over = visibleWidth(subject);
   while (over - fits > 1) {
     const room = Math.floor((fits + over) / 2);
-    if (wrap(elideSubject(subject, room, kind)).length <= EXPANDED_HEADING_ROWS) fits = room;
+    if (wrap(cut(room)).length <= EXPANDED_HEADING_ROWS) fits = room;
     else over = room;
   }
-  return { rows: wrap(elideSubject(subject, fits, kind)), subjectComplete: false, counter };
+  return { rows: wrap(cut(fits)), subjectComplete: false, counter };
 }
 
 // An expanded compact heading wraps onto at most this many rows before its subject is shortened.

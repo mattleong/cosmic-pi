@@ -27,9 +27,7 @@ const NoticeRun = Schema.Struct({
   outcome: Schema.Literals(["completed", "failed"]),
   /** The report, or the failure; a display copy bounded with the notice. */
   text: Schema.optionalKey(Text),
-  /** `text` is only the start of the run's words. */
-  textCut: Schema.optionalKey(Schema.Literal(true)),
-  /** Short human status such as a warning or a worktree proposal. */
+  /** Short human status such as where the rest of a cut report is, a warning, or a proposal. */
   notes: Schema.optionalKey(Facts),
   /** Technical facts for the expanded view: ID, profile, files, routes. */
   facts: Schema.optionalKey(Facts),
@@ -93,8 +91,12 @@ export const NoticeDetailsSchema = Schema.Union([
 ]);
 export type NoticeDetails = typeof NoticeDetailsSchema.Type;
 
-/** A display name, one line and bounded. */
-export const displayName = (name: string): string => clipText(sanitizeTerminalLine(name), 60);
+/**
+ * A display name, one line and bounded only for safety: run names are shorter, so a heading gets
+ * the whole name and cuts it to its width itself.
+ */
+export const displayName = (name: string): string =>
+  clipText(sanitizeTerminalLine(name), MAX_NOTICE_NAME_CHARS);
 
 /** A display name, falling back to "subagent" when nothing printable remains. */
 export const noticeName = (name: string): string => displayName(name) || "subagent";

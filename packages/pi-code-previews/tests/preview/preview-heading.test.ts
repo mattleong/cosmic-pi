@@ -1,6 +1,9 @@
+import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
-import { previewHeadingRow } from "../../src/preview/preview-heading";
+import { previewHeadingRow, wrappedPreviewHeading } from "../../src/preview/preview-heading";
+import { wrapPreviewHeading } from "../../src/preview/heading-wrap";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
 import { plainTheme as theme, stripAnsi } from "../support/render";
 
@@ -55,4 +58,55 @@ test("a subject cut beside a counter ends at a word boundary, in both heading st
     50,
   );
   expect(stripAnsi(compact)).toMatch(/db-migration… · also work here$/u);
+});
+
+// Sol's round-7 case: a 449-character command, wider than any heading row, ending in a flag.
+const extremeNotice = {
+  subject: `node scripts/verify.ts ${Arr.join(
+    Arr.map(Arr.range(0, 19), (index) => `--include=package-${index}`),
+    " ",
+  )} --security-check`,
+  metadata: ["finished in 399ms"],
+};
+
+test("a collapsed heading keeps its whole outcome beside a subject of any length", () => {
+  expect(extremeNotice.subject).toHaveLength(449);
+  for (const width of [57, 180]) {
+    const heading = stripAnsi(
+      previewHeadingRow("Background task", extremeNotice, false, theme, width),
+    );
+    expect(heading).toMatch(/… · finished in 399ms$/u);
+    expect(heading).not.toContain("[truncated]");
+    expect(visibleWidth(heading)).toBeLessThanOrEqual(width);
+  }
+});
+
+test("an expanded heading wraps a subject of any length whole and keeps its outcome", () => {
+  for (const width of [57, 180]) {
+    const { rows, subjectComplete } = wrappedPreviewHeading(
+      "Background task",
+      extremeNotice,
+      theme,
+      width,
+    );
+    const words = Arr.join(
+      Arr.map(rows, (line) => Str.trim(stripAnsi(line))),
+      " ",
+    );
+    expect(words).toBe(`Background task ${extremeNotice.subject} · finished in 399ms`);
+    expect(subjectComplete).toBe(true);
+    for (const line of rows) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+  }
+});
+
+test("a wrapped heading keeps a direction arrow with the name it points at", () => {
+  for (const arrow of ["→", "←"]) {
+    const heading = `Message ${arrow} billing-and-invoicing-migration-review-follow-up`;
+    const rows = Arr.map(wrapPreviewHeading(heading, 56), stripAnsi);
+    expect(rows.length).toBeGreaterThan(1);
+    for (const line of rows) expect(Str.endsWith(arrow)(Str.trimEnd(line))).toBe(false);
+    expect(Str.trim(rows[1] ?? "")).toBe(
+      `${arrow} billing-and-invoicing-migration-review-follow-up`,
+    );
+  }
 });

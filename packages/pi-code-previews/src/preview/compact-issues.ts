@@ -56,6 +56,8 @@ export interface HangingWrap {
   readonly style?: ((row: string) => string) | undefined;
   /** Raw evidence such as JSON, which breaks where each row ends instead of between facts. */
   readonly verbatim?: boolean | undefined;
+  /** Further indent for a line's continuation rows past `rest`, so they read as one line. */
+  readonly hang?: string | undefined;
 }
 
 /**
@@ -69,11 +71,11 @@ export function wrapHanging(
   first: string,
   rest: string,
   minimum: number,
-  { style = Fn.identity, verbatim = false }: HangingWrap = {},
+  { style = Fn.identity, verbatim = false, hang = "" }: HangingWrap = {},
 ): string[] {
   const indent = width - visibleWidth(first) >= minimum ? visibleWidth(first) : 0;
   const room = Math.max(1, width - indent);
-  const rows = verbatim ? wrapTextWithAnsi(text, room) : wrapFacts(text, room, "");
+  const rows = verbatim ? wrapTextWithAnsi(text, room) : wrapFacts(text, room, hang);
   return Arr.map(rows.length > 0 ? rows : [""], (line, index) =>
     clipToWidth(
       `${indent ? (index === 0 ? first : rest) : ""}${line === "" ? "" : style(line)}`,
@@ -99,6 +101,8 @@ export function compactIssueText(
   };
 }
 
+const DETAIL_HANG = "  ";
+
 export function renderCompactIssues(
   issues: readonly CompactIssue[] | undefined,
   theme: Pick<Theme, "fg">,
@@ -122,9 +126,13 @@ export function renderCompactIssues(
     });
     // Detail that only repeats the message adds nothing: the message already shows those words.
     if (!expanded || !issue.detail || repeatsIssueMessage(issue.detail, [issue])) return rows;
+    // A detail line's continuation hangs, so it reads apart from the next detail line.
     return rows.concat(
       Arr.flatMap(Str.split(compactPlainText(issue.detail), "\n"), (line) =>
-        wrapHanging(line, width, pad, pad, 0, { style: (row) => theme.fg("dim", row) }),
+        wrapHanging(line, width, pad, pad, 0, {
+          style: (row) => theme.fg("dim", row),
+          hang: DETAIL_HANG,
+        }),
       ),
     );
   });

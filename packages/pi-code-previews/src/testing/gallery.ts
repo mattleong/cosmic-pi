@@ -78,6 +78,8 @@ type MessageRenderer = Parameters<ExtensionAPI["registerMessageRenderer"]>[1];
 export interface GalleryMessageScenario {
   readonly title: string;
   readonly message: Parameters<MessageRenderer>[0];
+  /** The views to draw, such as a very wide one for an extreme input; the gallery's by default. */
+  readonly views?: readonly GalleryView[] | undefined;
 }
 
 const MESSAGE_BACKGROUNDS: readonly ToolCallBackgroundMode[] = ["border", "on", "off"];
@@ -89,7 +91,7 @@ export function galleryMessageFrames(
 ): string[] {
   return Arr.flatMap(MESSAGE_BACKGROUNDS, (background) =>
     withPresentationSettings({ toolCallBackground: background }, () =>
-      Arr.flatMap(GALLERY_VIEWS, ({ expanded, width }) => {
+      Arr.flatMap(scenario.views ?? GALLERY_VIEWS, ({ expanded, width }) => {
         const component = render(
           scenario.message,
           { ...keybindingHintsFixture, expanded, outputPad: 1 },

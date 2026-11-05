@@ -122,6 +122,9 @@ export const sectionSettingValue =
     return { ...current, [section]: { ...sectionObject, [key]: value } };
   };
 
+// A rejected value is quoted within one notice line beside its setting's name.
+const REJECTED_VALUE_COLUMNS = 24;
+
 export class InvalidSettingError extends Schema.TaggedError<
   InvalidSettingError,
   { readonly brand: unique symbol }
@@ -147,9 +150,15 @@ export const decodeSettingUpdate = <Config>(
       Arr.findFirst(descriptors, (entry) => entry.id === id),
     );
     if (!descriptor)
-      return yield* InvalidSettingError.make({ id, message: `Unknown setting: ${id}.` });
+      return yield* InvalidSettingError.make({ id, message: `Unknown setting: ${id}` });
+    // Leads with the id so the settings shell can name the setting: `Label (id) can't be set to …`.
     const parsedValue = yield* Schema.decodeEffect(descriptor.decoder)(rawValue).pipe(
-      Effect.mapError(() => InvalidSettingError.make({ id, message: `Invalid value for ${id}.` })),
+      Effect.mapError(() =>
+        InvalidSettingError.make({
+          id,
+          message: `${id} can't be set to ${clipText(Str.trim(rawValue), REJECTED_VALUE_COLUMNS)}`,
+        }),
+      ),
     );
     const separator = Fn.pipe(id, Str.indexOf("."));
     if (Option.isNone(separator))

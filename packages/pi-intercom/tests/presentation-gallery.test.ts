@@ -163,11 +163,29 @@ const sent = (disposition: "woken" | "queued" | "held"): SessionSendDetails => (
   disposition,
 });
 
-// A long session name wraps the heading, which hangs under its title.
+// A 63-character session name passes whole: collapsed rows cut it at a word boundary, and an
+// expanded heading wraps it, hanging under its title.
 const longNamed = {
   sessionId: "01a19957-15d8-7047-8e3f-7bccf1353038",
-  name: "checkout redesign review for the acme platform team",
+  name: "checkout redesign review for the acme platform team and billing",
   cwd: `${home}/dev/clients/acme-corporation/platform/web-frontend`,
+};
+const longNamedListing: SessionListContract = {
+  ...contractEnvelope,
+  tool: SESSION_TOOL.list,
+  sessions: [
+    { ...longNamed, state: "busy", duplicate: false },
+    { ...web, state: "idle", duplicate: false },
+  ],
+  omitted: 0,
+};
+const readLongNamed: SessionReadContract = {
+  ...contractEnvelope,
+  tool: SESSION_TOOL.read,
+  session: longNamed,
+  text: "The checkout review is done; two billing questions remain.",
+  truncated: false,
+  state: "idle",
 };
 const sentLongName: SessionSendDetails = {
   ...contractEnvelope,
@@ -295,6 +313,18 @@ const scenarios = [
     tool: SESSION_TOOL.send,
     args: { to: longNamed.sessionId, message },
     result: result(sendText(sentLongName), sentLongName),
+  },
+  {
+    title: "listed session with a 63-character name",
+    tool: SESSION_TOOL.list,
+    args: {},
+    result: result(listText(longNamedListing), longNamedListing),
+  },
+  {
+    title: "read a session with a 63-character name",
+    tool: SESSION_TOOL.read,
+    args: { to: longNamed.sessionId },
+    result: result(readText(readLongNamed), readLongNamed),
   },
   {
     title: "sent a long message",
@@ -440,6 +470,13 @@ describe.skipIf(!directory)("presentation gallery", () => {
               message: inboundMessage(inbound.text),
             }),
             ...galleryMessageFrames(renderIntercomMessage, {
+              title: `${style} · message from a session with a 63-character name`,
+              message: {
+                ...inboundMessage(inbound.text),
+                details: { from: longNamed, messageId: inbound.messageId, text: inbound.text },
+              },
+            }),
+            ...galleryMessageFrames(renderIntercomMessage, {
               title: `${style} · markdown message from another session`,
               message: inboundMessage(markdownReply),
             }),
@@ -493,6 +530,7 @@ describe.skipIf(!directory)("presentation gallery", () => {
         ),
         ...noticeFrames("/intercom list · every state", listReport(listing)),
         ...noticeFrames("/intercom list · a long name and directory", listReport(longDirectory)),
+        ...noticeFrames("/intercom list · a 63-character name", listReport(longNamedListing)),
         ...noticeFrames("/intercom list · none", listReport({ ...listing, sessions: [] })),
       );
       yield* writeGallerySection(directory, "pi-intercom", lines);

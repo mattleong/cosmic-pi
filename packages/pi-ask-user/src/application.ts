@@ -14,6 +14,7 @@ import {
   type CompactAnimationScheduler,
   type CodePreviewSettings,
 } from "pi-code-previews";
+import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
 import {
   captureSessionHost,
@@ -201,11 +202,15 @@ export function askUserWithDependencies(
     },
   });
 
-  pi.registerCommand("ask-user", {
-    description: "Resume a hidden questionnaire",
-    handler: (_args, ctx) => {
-      if (!bridge.resume()) notifyAtHostBoundary(ctx, "No hidden questionnaire to resume", "info");
-      return Promise.resolve();
+  registerExtensionCommand(pi, {
+    name: "ask-user",
+    description: "Questionnaires from your agent",
+    bare: {
+      description: "Resume a hidden questionnaire",
+      handler: (_args, ctx) => {
+        if (!bridge.resume())
+          notifyAtHostBoundary(ctx, "No hidden questionnaire to resume", "info");
+      },
     },
   });
 

@@ -1,5 +1,5 @@
 import * as Arr from "effect/Array";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   animationSchedulerProbe,
   applyPresentationSettings,
@@ -8,7 +8,14 @@ import {
   probeAnimationOwnership,
 } from "pi-code-previews/testing";
 import type { CompactAnimationScheduler } from "pi-code-previews";
+import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
+import { stripTerminalControls } from "pi-cosmic-core/security";
+import type { BackgroundTaskSnapshot } from "../src/task/model.ts";
 import { registerBackgroundTaskTool } from "../src/tools/background-task.ts";
+import type { BackgroundTaskToolDetails } from "../src/tools/command.ts";
+import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
+import { TASK_NOTICE_MESSAGE_TYPE } from "../src/task/notice.ts";
+import { renderTaskNotice } from "../src/ui/notice-message.ts";
 
 const restoreSettings = applyPresentationSettings({});
 afterEach(restoreSettings);
@@ -145,3 +152,59 @@ it.each(["compact", "preview"] as const)(
     expect(collapsed?.text).toContain("dev server");
   },
 );
+
+// Longer than any heading can show on one row: its last flag must survive every expansion.
+const longCommand = `node scripts/verify.ts ${Arr.join(
+  Arr.makeBy(20, (index) => `--include=package-${index}`),
+  " ",
+)} --security-check`;
+
+describe.each(["compact", "preview"] as const)("a long unnamed command in %s style", (style) => {
+  const task: BackgroundTaskSnapshot = { ...snapshot, state: "running", command: longCommand };
+  const expandedTool = (
+    args: Partial<BackgroundTaskToolInput>,
+    details: BackgroundTaskToolDetails,
+    width: number,
+  ) => {
+    const harness = createToolPresentationHarness(registeredTool("off", style), { width });
+    harness.call(args, { expanded: true });
+    harness.result({ content: [{ type: "text", text: "ok" }], details }, { expanded: true });
+    return stripTerminalControls(Arr.join(harness.render(), "\n"));
+  };
+
+  it.each([57, 180])("keeps the whole command in an expanded start at %i columns", (width) => {
+    const text = expandedTool(
+      { action: "start", command: longCommand },
+      { action: "start", snapshot: task },
+      width,
+    );
+    expect(text).toContain("--security-check");
+  });
+
+  it.each([57, 180])("keeps the whole command in an expanded status at %i columns", (width) => {
+    const text = expandedTool(
+      { action: "status", id: task.id },
+      { action: "status", snapshot: { ...task, state: "exited", exitCode: 0, endedAt: 400 } },
+      width,
+    );
+    expect(text).toContain("--security-check");
+  });
+
+  it.each([57, 180])("keeps the whole command in an expanded notice at %i columns", (width) => {
+    applyPresentationSettings({ toolCallBackground: "off", toolCallCollapsedStyle: style });
+    const notice = renderTaskNotice(
+      {
+        role: "custom",
+        timestamp: 0,
+        customType: TASK_NOTICE_MESSAGE_TYPE,
+        display: true,
+        content: "Finished",
+        details: { task: { ...task, state: "exited", exitCode: 0, endedAt: 400 }, tail: "ok" },
+      },
+      { ...keybindingHintsFixture, expanded: true, outputPad: 1 },
+      plainTheme,
+    );
+    const text = stripTerminalControls(Arr.join(notice?.render(width) ?? [], "\n"));
+    expect(text).toContain("--security-check");
+  });
+});

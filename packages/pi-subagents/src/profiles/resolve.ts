@@ -3,6 +3,7 @@ import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
+import * as Str from "effect/String";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
 import {
   clampSubagentEffort,
@@ -70,8 +71,16 @@ interface ProfileResolutionFailure {
   readonly kind: "failed";
   readonly code: "profile_unknown" | "profile_no_eligible_model" | "fork_context_unavailable";
   readonly message: string;
+  /**
+   * The failure without its subject or closing period, for a row already labeled with the profile
+   * or agent, such as `disabled` or `no eligible candidate: Pi model … does not support fast mode`.
+   */
+  readonly problem: string;
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
 }
+
+/** A sentence as a clause: without its closing period. */
+const clause = (sentence: string): string => Str.replace(/\.$/u, "")(Str.trimEnd(sentence));
 
 export type ProfileResolution = ProfileResolutionPlan | ProfileResolutionFailure;
 
@@ -259,6 +268,16 @@ const resolveKnownProfileRoute = (
     message: forkUnavailable
       ? `${subject} requires forked context, but the parent session has no stable persisted leaf.`
       : `${subject} has no eligible candidate.${skippedReasons}`,
+    problem: forkUnavailable
+      ? "forked context unavailable: the parent session has no stable persisted leaf"
+      : `no eligible candidate${
+          skippedCandidates.length > 0
+            ? `: ${Arr.join(
+                Arr.map(skippedCandidates, (candidate) => clause(candidate.reason)),
+                "; ",
+              )}`
+            : ""
+        }`,
     skippedCandidates,
   };
 };
@@ -274,17 +293,33 @@ export function resolveProfilePlan(
       kind: "failed",
       code: "profile_unknown",
       message: `Unknown subagent profile "${profile}". Available profiles: ${Arr.join(Rec.keys(config.profiles), ", ")}.`,
+      problem: `unknown profile ${profile}; available profiles: ${Arr.join(Rec.keys(config.profiles), ", ")}`,
       skippedCandidates: [],
     };
   const route = config.profiles[profile];
   if (route.candidates.length === 0) {
-    const source = config.profileSources[profile];
-    const profileMessage =
-      source === "global-invalid" || source === "project-invalid"
-        ? `Profile ${profile} has an invalid ${source === "project-invalid" ? "project" : "global"} route and fails closed; repair ${homeDisplayPath(source === "project-invalid" ? config.projectConfigPath : config.globalConfigPath)}.`
-        : source === "session"
-          ? `Profile ${profile} is temporarily disabled by a session override; clear it in /subagents profiles to reveal the loaded persistent route.`
-          : `Profile ${profile} is disabled and has no eligible candidate.`;
+    const invalid = (scope: "global" | "project", file: string): readonly [string, string] => [
+      `Profile ${profile} has an invalid ${scope} route and fails closed; repair ${homeDisplayPath(file)}.`,
+      `invalid ${scope} route, so it fails closed; repair ${homeDisplayPath(file)}`,
+    ];
+    const sessionRemedy = "clear it in /subagents profiles to reveal the loaded persistent route";
+    // The launch's sentence, and the same problem for a row already labeled with the profile.
+    const [profileMessage, problem] = Match.value(config.profileSources[profile]).pipe(
+      Match.when("global-invalid", () => invalid("global", config.globalConfigPath)),
+      Match.when("project-invalid", () => invalid("project", config.projectConfigPath)),
+      Match.when(
+        "session",
+        () =>
+          [
+            `Profile ${profile} is temporarily disabled by a session override; ${sessionRemedy}.`,
+            `temporarily disabled by a session override; ${sessionRemedy}`,
+          ] as const,
+      ),
+      Match.orElse(
+        () =>
+          [`Profile ${profile} is disabled and has no eligible candidate.`, "disabled"] as const,
+      ),
+    );
     const message = agent
       ? `Agent ${agent.name} routes to profile ${profile}. ${profileMessage}`
       : profileMessage;
@@ -292,6 +327,7 @@ export function resolveProfilePlan(
       kind: "failed",
       code: "profile_no_eligible_model",
       message,
+      problem,
       skippedCandidates: [],
     };
   }

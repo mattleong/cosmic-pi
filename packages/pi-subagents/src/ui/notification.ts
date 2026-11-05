@@ -23,7 +23,7 @@ import {
 } from "./agent-text.ts";
 import { agentFactLines, savedAgentFactLines } from "./run-facts.ts";
 import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
-import { NoticeDetailsSchema, type NoticeDetails, type NoticeRun } from "./notice-details.ts";
+import { NoticeDetailsSchema, type NoticeDetails } from "./notice-details.ts";
 
 const decodeDetails = Schema.decodeUnknownOption(NoticeDetailsSchema, {
   onExcessProperty: "ignore",
@@ -192,11 +192,6 @@ const expansionLabel = (details: NoticeDetails | undefined): string => {
   );
 };
 
-const runNotes = (run: NoticeRun): ReadonlyArray<string> => [
-  ...(run.textCut ? ["The rest of this report is in its saved file"] : []),
-  ...(run.notes ?? []),
-];
-
 /** Details saved before display copies existed carry only counts for the heading. */
 const hasDisplayCopy = (details: NoticeDetails | undefined): boolean => {
   if (details === undefined) return false;
@@ -236,7 +231,7 @@ const completedBody = (
             ...(only.outcome === "failed"
               ? []
               : agentTextLines(only.text, width, theme, { expanded, indent })),
-            ...Arr.flatMap(runNotes(only), (note) =>
+            ...Arr.flatMap(only.notes ?? [], (note) =>
               indentedLines(theme.fg("muted", sanitizeTerminalLine(note)), width, indent),
             ),
           ]
@@ -248,7 +243,7 @@ const completedBody = (
                 tone: managerActivityColor(kind),
                 name: run.name,
                 ...(run.outcome !== "failed" && { text: run.text }),
-                notes: runNotes(run),
+                notes: run.notes ?? [],
               };
             }),
             width,

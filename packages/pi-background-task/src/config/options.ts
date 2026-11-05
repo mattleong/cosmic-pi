@@ -266,8 +266,7 @@ const SETTING_DESCRIPTORS = {
   shellPath: {
     id: "shellPath",
     label: "Shell",
-    description:
-      "The shell tasks run in, instead of Pi's shell and command prefix; default uses Pi's.",
+    description: "The shell tasks run in; one set here replaces Pi's shell and command prefix.",
     kind: "path",
     values: [],
     commandValues: [],

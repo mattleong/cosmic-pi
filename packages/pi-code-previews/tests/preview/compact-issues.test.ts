@@ -5,6 +5,7 @@ import type { CompactIssue } from "../../src/tools/compact-issues";
 import { plainTheme as theme, stripAnsi } from "../support/render";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 
 const render = (value: readonly CompactIssue[], width = 100, expanded = false) =>
@@ -103,4 +104,26 @@ test("expanded detail breaks a long path after its last directory before inside 
   expect(Arr.every(rows, (row) => visibleWidth(row) <= 57)).toBe(true);
   expect(Arr.some(rows, (row) => Fn.pipe(Str.trim(row), Str.endsWith("session-1/")))).toBe(true);
   expect(Arr.some(rows, Str.includes(file))).toBe(true);
+});
+
+const indent = (row: string) => row.length - Str.trimStart(row).length;
+
+test("a wrapped detail line's continuation hangs past the next detail line's start", () => {
+  const rows = render(
+    [
+      {
+        severity: "info",
+        code: "saved",
+        message: "auth-review: full report saved to a file",
+        detail:
+          "Failure file: ~/.pi/agent/agent-1-1-failure.md · 420 characters, 1 line\nNext line",
+      },
+    ],
+    50,
+    true,
+  );
+  const continuation = Arr.findFirst(rows, (row) => Str.startsWith("420")(Str.trimStart(row)));
+  const next = Arr.findFirst(rows, (row) => Str.trim(row) === "Next line");
+  expect(Option.map(continuation, indent)).toEqual(Option.map(next, (row) => indent(row) + 2));
+  expect(Option.isSome(next)).toBe(true);
 });
