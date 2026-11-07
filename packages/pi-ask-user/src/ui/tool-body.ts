@@ -10,6 +10,7 @@ import {
   expandedArguments,
   expandedDetails,
   expandedSection,
+  hiddenPreviewExpandHintForShell,
   previewHeadingText,
   previewIssuesSlot,
 } from "pi-code-previews";
@@ -18,7 +19,6 @@ import { stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth, INLINE_SEPARATOR, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
-  renderExpansionAffordance,
   renderToolHeader,
   toolRunningLine,
   toolStatusLine,
@@ -137,16 +137,32 @@ interface FirstLine {
   readonly hidesMore: boolean;
 }
 
+const TRAILING_PUNCTUATION = /[\s.,;:]+$/u;
+
 const firstLine = (text: string): FirstLine => {
   const [first, ...rest] = Str.split(text, /\r?\n/u);
   return { text: first, hidesMore: Arr.some(rest, (entry) => Str.isNonEmpty(Str.trim(entry))) };
 };
 
+/** Whether a collapsed answers body hides a later line of some answer or note at every width. */
+export const answersHideMore = (answers: readonly ReplayedAnswer[]): boolean =>
+  Arr.some(
+    answerEntries(answers, new Map()),
+    ({ value, note }) =>
+      firstLine(value).hidesMore || (note !== undefined && firstLine(note).hidesMore),
+  );
+
+/**
+ * A row's answers. Bounded, each answer and note shows its first line, cut at a word boundary with
+ * `…` where it doesn't fit; the row's tag, never a line of the body's own, offers the rest. Inside
+ * a preview row (`row`), answers with later lines hidden name the tag `answers`.
+ */
 export function answersBody(
   answers: readonly ReplayedAnswer[],
   titles: ReadonlyMap<string, string>,
-  theme: Pick<Theme, "fg">,
+  theme: Theme,
   bounded: boolean,
+  row?: { readonly state: unknown },
 ): Component {
   const entries = answerEntries(answers, titles);
   if (!bounded)
@@ -172,39 +188,34 @@ export function answersBody(
     answer: firstLine(value),
     note: note === undefined ? undefined : firstLine(note),
   }));
-  const hidesMore = Arr.some(
-    firstLines,
-    ({ answer, note }) => answer.hidesMore || note?.hidesMore === true,
-  );
-  let last: { readonly width: number; readonly rows: string[] } | undefined;
-  return {
-    render: (width) => {
-      if (last?.width === width) return last.rows;
-      let cut = hidesMore;
-      // A long answer or note is cut at a word boundary, so every word left on the row is whole.
-      const fit = (lead: string, text: string, style: (value: string) => string): string => {
-        const room = width - visibleWidth(lead);
-        if (visibleWidth(text) <= room) return `${lead}${style(text)}`;
-        cut = true;
-        return clipToWidth(`${lead}${style(endElide(text, room))}`, width);
-      };
-      const rows = Arr.flatMap(firstLines, ({ label, answer, note }) => {
-        const answerLine = fit(`${theme.fg("muted", `${label}:`)} `, answer.text, Fn.identity);
-        return note === undefined
-          ? [answerLine]
-          : [
-              answerLine,
-              fit(`  ${theme.fg("dim", "Note: ")}`, note.text, (text) => theme.fg("dim", text)),
-            ];
-      });
-      if (cut) rows.push(clipToWidth(renderExpansionAffordance("answers", false, theme), width));
-      last = { width, rows };
-      return rows;
-    },
-    invalidate: () => {
-      last = undefined;
-    },
-  };
+  // Outside a row's shell the hint draws itself, as the only affordance the body has.
+  const hint =
+    row !== undefined && answersHideMore(answers)
+      ? hiddenPreviewExpandHintForShell(row, theme, "answers")
+      : "";
+  return widthRows((width) => {
+    // A long answer or note is cut at a word boundary, so every word left on the row is whole.
+    // A first line with more after it ends in `…` too, as any quote cut before its end does.
+    const fit = (lead: string, line: FirstLine, style: (value: string) => string): string => {
+      const room = width - visibleWidth(lead);
+      const shown = line.hidesMore
+        ? `${Str.replace(TRAILING_PUNCTUATION, "")(line.text)}…`
+        : line.text;
+      return visibleWidth(shown) <= room
+        ? `${lead}${style(shown)}`
+        : clipToWidth(`${lead}${style(endElide(line.text, room))}`, width);
+    };
+    const rows = Arr.flatMap(firstLines, ({ label, answer, note }) => {
+      const answerLine = fit(`${theme.fg("muted", `${label}:`)} `, answer, Fn.identity);
+      return note === undefined
+        ? [answerLine]
+        : [
+            answerLine,
+            fit(`  ${theme.fg("dim", "Note: ")}`, note, (text) => theme.fg("dim", text)),
+          ];
+    });
+    return hint ? [...rows, clipToWidth(hint, width)] : rows;
+  });
 }
 
 const rawResultSection = (theme: Theme, text: string, isError: boolean): Component =>

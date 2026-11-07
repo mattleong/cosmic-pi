@@ -149,18 +149,15 @@ const factWidth = (all: readonly Atom[], start: number): number => {
 /**
  * A styled preview heading wrapped to `width`: between words, or after a `/` in a long path, with
  * continuation rows hanging two columns in. A `·` fact that fits on a row stays whole; a word wider
- * than a row breaks after `-`, `_`, or `.` when every part fits a row, else mid-word. A heading that
- * wraps keeps `firstRowReserve` columns clear on its first row unless that would add a row.
+ * than a row breaks after `-`, `_`, or `.` when every part fits a row, else mid-word. The first row
+ * keeps `firstRowReserve` columns clear, for the row's tag, even where that takes one more row, so
+ * the tag never cuts the heading.
  */
 export function wrapPreviewHeading(text: string, width: number, firstRowReserve = 0): string[] {
   if (width <= 0) return [];
-  if (visibleWidth(text) <= width) return [text];
   const reserve = Math.max(0, Math.min(firstRowReserve, width - HANG.length * 4));
-  if (reserve === 0) return wrapRows(text, width, 0);
-  // Room kept on the first row never costs the heading a row.
-  const kept = wrapRows(text, width, reserve);
-  const plain = wrapRows(text, width, 0);
-  return kept.length > plain.length ? plain : kept;
+  if (visibleWidth(text) <= width - reserve) return [text];
+  return wrapRows(text, width, reserve);
 }
 
 function wrapRows(text: string, width: number, reserve: number): string[] {

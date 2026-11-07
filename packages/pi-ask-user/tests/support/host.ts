@@ -132,7 +132,10 @@ type TuiHost = ReturnType<typeof makeTuiHost>;
 
 export const foreign: Component = { render: () => ["foreign"], invalidate: () => {} };
 
-export const eventually = (assertion: () => void) => Effect.promise(() => vi.waitFor(assertion));
+// Polls under a deadline long enough for a loaded machine, yet below the default test timeout so a
+// failing assertion still reports itself.
+export const eventually = (assertion: () => void) =>
+  Effect.promise(() => vi.waitFor(assertion, { timeout: 4_000 }));
 
 export const waitMounted = (h: TuiHost) => eventually(() => expect(h.mount).toBeDefined());
 

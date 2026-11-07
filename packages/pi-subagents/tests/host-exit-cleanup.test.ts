@@ -55,29 +55,32 @@ const openShell = (script: string) =>
   });
 
 describe("host exit cleanup", () => {
-  it.live("kills a subagent child's process group when its host exits without shutdown", () =>
-    Effect.gen(function* () {
-      const agentDirectory = yield* temporaryDirectory("pi-subagents-abrupt-exit-");
-      // The host transpiles the launch boundary on a cold start, which takes over 10 seconds on
-      // loaded CI runners.
-      const host = yield* spawnIpcChild(hostScript, [agentDirectory], { timeout: "25 seconds" });
-      yield* host.wait("ready");
-      const announced = Option.getOrUndefined(
-        Arr.findFirst(Arr.filter(host.messages, Predicate.isString), (message) =>
-          Fn.pipe(message, Str.startsWith("group:")),
-        ),
-      );
-      assert(announced !== undefined);
-      const pid = Number(Fn.pipe(announced, Str.slice("group:".length)));
-      expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
-      yield* killGroupAfterward(pid);
-      expect(signalProcessGroup(pid, 0)).toBe("present");
+  it.live(
+    "kills a subagent child's process group when its host exits without shutdown",
+    () =>
+      Effect.gen(function* () {
+        const agentDirectory = yield* temporaryDirectory("pi-subagents-abrupt-exit-");
+        // The host transpiles the launch boundary on a cold start, which takes over 25 seconds on a
+        // loaded machine.
+        const host = yield* spawnIpcChild(hostScript, [agentDirectory], { timeout: "100 seconds" });
+        yield* host.wait("ready");
+        const announced = Option.getOrUndefined(
+          Arr.findFirst(Arr.filter(host.messages, Predicate.isString), (message) =>
+            Fn.pipe(message, Str.startsWith("group:")),
+          ),
+        );
+        assert(announced !== undefined);
+        const pid = Number(Fn.pipe(announced, Str.slice("group:".length)));
+        expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);
+        yield* killGroupAfterward(pid);
+        expect(signalProcessGroup(pid, 0)).toBe("present");
 
-      host.child.send?.("exit");
-      yield* host.exited;
-      expect(host.child.exitCode).toBe(9);
-      expect(yield* groupGone(pid)).toBe(true);
-    }).pipe(Effect.scoped),
+        host.child.send?.("exit");
+        yield* host.exited;
+        expect(host.child.exitCode).toBe(9);
+        expect(yield* groupGone(pid)).toBe(true);
+      }).pipe(Effect.scoped),
+    120_000,
   );
 
   it.live("stops guarding a child's group once it is gone after the child exits", () =>

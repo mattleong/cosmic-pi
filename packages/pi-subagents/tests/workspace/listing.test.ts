@@ -139,34 +139,42 @@ for (const unsafe of [
   );
 }
 
-it.live("leaves healthy workspaces operable but never discards an incomplete artifact", () =>
-  fixture((root, registry) =>
-    Effect.gen(function* () {
-      const source = path.join(root, "source");
-      yield* commitRepository(source, [["main.ts", "baseline\n"]]);
-      yield* Effect.gen(function* () {
-        const service = yield* WorkspaceService;
-        const handle = yield* service.create({ sourceCwd: source, ownerId: "parent" });
-        const incomplete = id(1);
-        const artifact = path.join(registry, incomplete);
-        yield* io(() => fs.mkdir(artifact, { mode: 0o700 }));
-        yield* io(() => fs.writeFile(path.join(artifact, "preserve-me"), "recovery evidence"));
-        expect((yield* service.listAll).unavailable).toHaveLength(1);
-        expect(yield* service.list({ ownerId: "parent" })).toHaveLength(1);
-        yield* io(() => fs.writeFile(path.join(handle.cwd, "main.ts"), "proposal\n"));
-        const target = { ...handle, processCleanupConfirmed: true as const };
-        const revision = yield* service.freeze(target);
-        yield* service.prepare({ ...target, revisionId: revision.revisionId });
-        yield* service.discard(target);
-        expect((yield* service.inspect(target)).status).toBe("discarded");
-        expect(
-          yield* service
-            .discard({ workspaceId: incomplete, ownerId: "parent", processCleanupConfirmed: true })
-            .pipe(Effect.flip),
-        ).toBeInstanceOf(WorkspaceError);
-        expect(yield* io(() => fs.readdir(artifact))).toEqual(["preserve-me"]);
-        expect(yield* readText(source, "main.ts")).toBe("baseline\n");
-      }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: root })));
-    }),
-  ),
+it.live(
+  "leaves healthy workspaces operable but never discards an incomplete artifact",
+  () =>
+    fixture((root, registry) =>
+      Effect.gen(function* () {
+        const source = path.join(root, "source");
+        yield* commitRepository(source, [["main.ts", "baseline\n"]]);
+        yield* Effect.gen(function* () {
+          const service = yield* WorkspaceService;
+          const handle = yield* service.create({ sourceCwd: source, ownerId: "parent" });
+          const incomplete = id(1);
+          const artifact = path.join(registry, incomplete);
+          yield* io(() => fs.mkdir(artifact, { mode: 0o700 }));
+          yield* io(() => fs.writeFile(path.join(artifact, "preserve-me"), "recovery evidence"));
+          expect((yield* service.listAll).unavailable).toHaveLength(1);
+          expect(yield* service.list({ ownerId: "parent" })).toHaveLength(1);
+          yield* io(() => fs.writeFile(path.join(handle.cwd, "main.ts"), "proposal\n"));
+          const target = { ...handle, processCleanupConfirmed: true as const };
+          const revision = yield* service.freeze(target);
+          yield* service.prepare({ ...target, revisionId: revision.revisionId });
+          yield* service.discard(target);
+          expect((yield* service.inspect(target)).status).toBe("discarded");
+          expect(
+            yield* service
+              .discard({
+                workspaceId: incomplete,
+                ownerId: "parent",
+                processCleanupConfirmed: true,
+              })
+              .pipe(Effect.flip),
+          ).toBeInstanceOf(WorkspaceError);
+          expect(yield* io(() => fs.readdir(artifact))).toEqual(["preserve-me"]);
+          expect(yield* readText(source, "main.ts")).toBe("baseline\n");
+        }).pipe(Effect.provide(WorkspaceService.layer({ agentDirectory: root })));
+      }),
+    ),
+  // Creating, freezing, preparing, and discarding a workspace runs many Git processes.
+  60_000,
 );

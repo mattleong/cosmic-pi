@@ -35,6 +35,7 @@ import {
 } from "../testing";
 import { defaultCodePreviewSettings } from "../src/config/defaults";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
+import type { CodePreviewSettings } from "../src/config/schema";
 import { ALL_CODE_PREVIEW_TOOLS } from "../src/tools/names";
 import { withCodePreviewRenderers } from "../src/tools/cooperative-tools";
 import { setCodePreviewToolStatus } from "../src/tools/status";
@@ -489,6 +490,8 @@ const scenarios: ReadonlyArray<
     readonly views?: readonly GalleryView[];
     /** Also rendered with framed tool rows to show where the duration sits. */
     readonly border?: true;
+    /** Presentation settings the scenario is drawn with, such as a preview turned off. */
+    readonly settings?: Partial<CodePreviewSettings>;
   }
 > = [
   {
@@ -1188,6 +1191,20 @@ const scenarios: ReadonlyArray<
     title: "bash long command beside its expansion tag",
     args: { command: "cd /Users/someone/dev/cosmic-pi && pnpm --filter pi-code-previews test" },
     result: text("Test Files  94 passed (94)\nTests  502 passed (502)"),
+  },
+  {
+    tool: "bash",
+    title: "bash hidden output, command as wide as a phone row wraps beside its tag",
+    args: { command: "pnpm --filter pi-code-previews exec vitest run -u" },
+    result: text("Test Files  94 passed (94)"),
+    settings: { bashResultPreview: false },
+  },
+  {
+    tool: "read",
+    title: "read hidden content, heading as wide as a phone row wraps beside its tag",
+    args: { path: "docs/architecture/tool-presentation.md" },
+    result: text("# Tool presentation\n"),
+    settings: { readContentPreview: false },
   },
   {
     tool: "bash",
@@ -2019,23 +2036,25 @@ describe.skipIf(!directory)("presentation gallery", () => {
             ? Arr.filter(scenarios, (candidate) => candidate.border === true)
             : scenarios)
             lines.push(
-              ...withPresentationSettings({ toolCallTiming: scenario.timing ?? false }, () =>
-                galleryFrames(
-                  tools.get(scenario.tool)!,
-                  {
-                    ...scenario,
-                    title: `${label} · ${scenario.title}`,
-                  },
-                  scenario.views ??
-                    (scenario.narrow
-                      ? [
-                          { expanded: false, width: 16 },
-                          { expanded: false, width: 57 },
-                          { expanded: true, width: 40 },
-                          { expanded: true, width: 57 },
-                        ]
-                      : undefined),
-                ),
+              ...withPresentationSettings(
+                { toolCallTiming: scenario.timing ?? false, ...scenario.settings },
+                () =>
+                  galleryFrames(
+                    tools.get(scenario.tool)!,
+                    {
+                      ...scenario,
+                      title: `${label} · ${scenario.title}`,
+                    },
+                    scenario.views ??
+                      (scenario.narrow
+                        ? [
+                            { expanded: false, width: 16 },
+                            { expanded: false, width: 57 },
+                            { expanded: true, width: 40 },
+                            { expanded: true, width: 57 },
+                          ]
+                        : undefined),
+                  ),
               ),
             );
         }

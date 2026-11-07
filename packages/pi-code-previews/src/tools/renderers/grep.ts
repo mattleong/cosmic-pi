@@ -5,14 +5,24 @@ import { Text } from "@earendil-works/pi-tui";
 import { captureCodePreviewSessionCapability } from "../../application/capability";
 import { parseGrepOutputLine, renderGrepOutputLines } from "../../tools/grep-render";
 import { renderDisplayPath } from "../../paths/display";
-import { metadata, previewFooter, trimSingleTrailingNewline } from "../../preview/format";
+import {
+  metadata,
+  previewFooter,
+  selectPreviewLines,
+  trimSingleTrailingNewline,
+} from "../../preview/format";
 import { codePreviewSettings } from "../../config/state";
 import { escapeControlChars } from "../../shared/terminal-text";
 import { shouldSkipHighlight } from "../../syntax/render";
 import { numericArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
-import { splitListingNotice, withAgentNotes, withCollapsedLimit } from "./shared/output-notice";
+import {
+  collapsedNotesHint,
+  splitListingNotice,
+  withAgentNotes,
+  withCollapsedLimit,
+} from "./shared/output-notice";
 import { cachedDeferredPreview } from "./shared/cache";
 import { previewCacheKey } from "./shared/preview-cache-key";
 import { renderSelectedOutputLines } from "./shared/preview-text";
@@ -63,6 +73,14 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
         ? { singular: "line" }
         : { singular: "match", plural: "matches" };
       const { args, invalidate } = renderContext;
+      const notesHint = expanded
+        ? undefined
+        : collapsedNotesHint(renderContext, theme, "grep", {
+            details: hostObject(result.details),
+            args: hostObject(args),
+            notice,
+            offered: selectPreviewLines(rawLines, limit).hidden > 0,
+          });
       const render = (active: boolean) => {
         let text = renderSelectedOutputLines(rawLines, limit, theme, hidden, (chunk) =>
           renderGrepOutputLines(
@@ -80,7 +98,7 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
             "grep",
             hostObject(result.details),
             hostObject(args),
-            notice,
+            notesHint,
           );
         if (skipHighlight)
           text += previewFooter(theme, "Syntax highlighting skipped for large grep output");

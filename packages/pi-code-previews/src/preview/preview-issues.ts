@@ -132,11 +132,15 @@ export function previewIssues<TArgs, TDetails, TState extends object>(
 
 /**
  * How a collapsed preview call draws its expansion tag at a width: the columns its heading keeps
- * clear on its first row, decided before it draws, and what then places the tag on its rows.
+ * clear on its first row, decided before it draws, and what then places the tag on its rows, with
+ * the columns the tag it placed takes there.
  */
 export type PreviewClosing = (width: number) => {
   readonly reserve: number;
-  readonly place: (rows: readonly string[]) => readonly string[];
+  readonly place: (rows: readonly string[]) => {
+    readonly rows: readonly string[];
+    readonly reserve: number;
+  };
 };
 
 class PreviewIssuesFrame extends Container {
@@ -162,7 +166,12 @@ class PreviewIssuesFrame extends Container {
     if (!this.closing) return super.render(width);
     const { reserve, place } = this.closing(width);
     this.room.reserve = reserve;
-    return [...place(super.render(width))];
+    const placed = place(super.render(width));
+    if (placed.reserve === reserve) return [...placed.rows];
+    // The rows withdrew the tag, or called for one their result didn't: they wrap again with the
+    // room it takes, so no columns stay reserved for a tag that isn't drawn.
+    this.room.reserve = placed.reserve;
+    return [...place(super.render(width)).rows];
   }
 }
 

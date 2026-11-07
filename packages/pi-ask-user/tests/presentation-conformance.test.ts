@@ -207,6 +207,33 @@ describe("registered questionnaire presentation", () => {
     },
   );
 
+  it.each([57, 100])(
+    "names a collapsed preview row's hidden answer lines in its heading tag at %i columns",
+    (width) => {
+      const answered = {
+        outcome: "submitted" as const,
+        answers: [
+          { key: "summary", kind: "text" as const, text: "First line\nHIDDEN_SECOND_LINE" },
+        ],
+      };
+      const { tools } = register("preview", "off");
+      const tool = Option.getOrThrow(Arr.findFirst(tools, (entry) => entry.name === "ask_user"));
+      const harness = createToolPresentationHarness(tool, { width });
+      harness.call({ questions: [{ key: "summary", title: "Summary", prompt: "Describe it" }] });
+      harness.result({
+        details: answered,
+        content: [{ type: "text", text: formatAskUserOutcome(answered) }],
+      });
+      const [heading = "", ...body] = harness.render(width);
+      // The heading's tag offers the rest; the body draws no affordance line of its own.
+      expect(heading).toContain("▸");
+      expect(Arr.some(body, (row) => Fn.pipe(row, Str.trim, Str.startsWith("▸")))).toBe(false);
+      const text = Arr.join(body, "\n");
+      expect(text).toContain("First line");
+      expect(text).not.toContain("HIDDEN_SECOND_LINE");
+    },
+  );
+
   it("uses the registering owner's scheduler and releases it when the call settles", () => {
     const scheduler = animationSchedulerProbe();
     applyPresentationSettings({ toolCallTiming: false });

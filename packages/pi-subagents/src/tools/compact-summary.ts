@@ -307,6 +307,12 @@ const unavailableRouteDetail = (candidates: ReadonlyArray<SubagentProfileCandida
     "\n",
   );
 
+// A route's first `provider/`, at its start or inside `inherit (…)`, as a narrow column drops it.
+const ROUTE_PROVIDER = /(^|\()[^\s/()]+\//u;
+
+/** A route without its provider, `gpt-5.6-sol:high`, for a row too narrow for the whole route. */
+const withoutProvider = (route: string): string => Str.replace(ROUTE_PROVIDER, "$1")(route);
+
 function summarizeModels(
   details: Extract<CompactSubagentToolDetails, { action: "models" }>,
   summary: CompactSummary,
@@ -356,14 +362,23 @@ function summarizeModels(
   const lead = single
     ? profileRow(only, details).route
     : countLabel(details.profiles.length, "profile");
+  const problems = unavailable && !single ? [`${unavailable} unavailable`] : [];
   const counters = [
     lead,
     ...(disabled && !single ? [`${disabled} disabled`] : []),
-    ...(unavailable && !single ? [`${unavailable} unavailable`] : []),
+    ...problems,
     ...(agents.length > 0 ? [countLabel(agents.length, "custom agent")] : []),
   ];
-  // A narrow row keeps at least the profile count or the single route.
-  summary.counters = counters.length > 1 ? [Arr.join(counters, " · "), lead] : [lead];
+  // Narrower, a row keeps its unavailable profiles beside the count, then the profile count or the
+  // single route, and last that route's model without its provider.
+  summary.counters = [
+    ...new Set([
+      Arr.join(counters, " · "),
+      Arr.join([lead, ...problems], " · "),
+      lead,
+      withoutProvider(lead),
+    ]),
+  ];
   if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
     summary.outcome = "warning";
   return summary;

@@ -21,7 +21,12 @@ import {
   type CompactStatus,
   type CompactSummary,
 } from "../tools/compact-summary";
-import { elideSubject, FACT_CUT_SLACK, layoutCompactHeader } from "./compact-header";
+import {
+  elideSubject,
+  FACT_CUT_SLACK,
+  layoutCompactHeader,
+  SUBJECT_MINIMUM,
+} from "./compact-header";
 import { wrapPreviewHeading } from "./heading-wrap";
 import { layoutTaggedHeading, type TaggableHeading } from "./heading-tag";
 import { TIMING_VISIBLE_MS } from "./tool-timing";
@@ -213,13 +218,14 @@ const FACT_SEPARATOR = " · ";
 
 /**
  * `values` without the facts that only restate the row's status glyph. A combined counter such as
- * `finished · ready to apply` keeps its other facts; an alternative left with none is dropped.
+ * `finished · ready to apply` keeps its other facts; an alternative left with none is dropped. Facts
+ * that describe the subject's state (`subjectState`) are not the glyph's and all stay.
  */
 function withoutGlyphWords(
   values: readonly string[] | undefined,
   input: CompactRowInput,
 ): readonly string[] | undefined {
-  if (values === undefined) return undefined;
+  if (values === undefined || input.summary.subjectState === true) return values;
   const status = compactRowStatus(input);
   const restates = (fact: string) =>
     restatesStatusGlyph(fact, status, input.summary, input.returnedCheckmark === true);
@@ -261,6 +267,7 @@ export function layoutCompactRow(
   input: CompactRowInput,
   theme: Theme,
   width: number,
+  subjectMinimum = SUBJECT_MINIMUM,
 ): CompactRowLayout {
   if (width <= 0)
     return {
@@ -268,11 +275,10 @@ export function layoutCompactRow(
       issueShown: false,
       subjectComplete: false,
       fact: undefined,
-      subjectShown: 0,
-      subjectWidth: 0,
+      identityComplete: false,
     };
   const { counters, optional, timing } = compactRowParts(input, theme);
-  const { row, counter, fact, subjectComplete, subjectShown, subjectWidth } = layoutCompactHeader(
+  const { row, counter, fact, subjectComplete, identityComplete } = layoutCompactHeader(
     compactRowPrefix(input, theme),
     compactRowSubject(input),
     counters,
@@ -281,6 +287,7 @@ export function layoutCompactRow(
     COMPACT_SEPARATOR(theme),
     timing,
     input.summary.pathSubject ? "path" : "prose",
+    subjectMinimum,
   );
   return {
     row,
@@ -288,8 +295,7 @@ export function layoutCompactRow(
     subjectComplete,
     counter,
     fact,
-    subjectShown,
-    subjectWidth,
+    identityComplete,
   };
 }
 
@@ -309,7 +315,9 @@ export function layoutTaggedCompactRow(
     const untagged = layoutCompactRow(input, theme, width);
     if (untagged.subjectComplete) return untagged;
   }
-  return layoutTaggedHeading(label, theme, width, (room) => layoutCompactRow(input, theme, room));
+  return layoutTaggedHeading(label, theme, width, (room, subjectMinimum) =>
+    layoutCompactRow(input, theme, room, subjectMinimum),
+  );
 }
 
 /** An expanded compact heading's rows, whether they show the whole subject, and its counter. */

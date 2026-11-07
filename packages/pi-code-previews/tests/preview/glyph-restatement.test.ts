@@ -58,6 +58,17 @@ test("a heading keeps counts, other facts, and words a shared or neutral glyph d
   for (const [input, fact] of kept) expect(shows(input, fact)).toEqual([true, true]);
 });
 
+test("a heading keeps facts that describe its subject's state, not the call's outcome", () => {
+  // A read that succeeded reports an agent that finished, or one still running.
+  const read = (counter: string, outcome: CompactSummary["outcome"] = "success") =>
+    row("settled", { outcome, subjectState: true, counters: [counter], metadata: ["report"] });
+  expect(shows(read("finished"), "finished")).toEqual([true, true]);
+  expect(shows(read("stopped", "cancelled"), "stopped")).toEqual([true, true]);
+  expect(shows(row("settled", { outcome: "success", counters: ["finished"] }), "finished")).toEqual(
+    [false, false],
+  );
+});
+
 test("a restating fact gives way to the heading's other facts", () => {
   const input = row("settled", {
     outcome: "success",

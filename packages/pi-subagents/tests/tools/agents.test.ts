@@ -413,6 +413,33 @@ describe("custom agent discovery", () => {
   });
 });
 
+describe("route discovery headings", () => {
+  effectTest("narrows a single route to its model before dropping it", function* () {
+    const profiles = profileServiceFor({
+      profiles: { reviewer: [declaredCandidate("openai-codex/gpt-5.6-sol")] },
+    });
+    const result = yield* invokeOptionalTool(
+      captureSubagentTools(subagentServiceDouble({}), { profiles }).get("agent_profiles"),
+      { profile: "reviewer" },
+    );
+    const counters =
+      createSubagentCompactSummary("agent_profiles")({
+        phase: "settled",
+        args: { profile: "reviewer" },
+        result: { content: [{ type: "text", text: "" }], details: result?.details },
+        context: renderContextFixture({ isError: false }),
+      })?.counters ?? [];
+    expect(counters[0]).toContain("openai-codex/gpt-5.6-sol");
+    // A narrower alternative keeps the model without its provider.
+    expect(
+      Arr.some(
+        counters,
+        (entry) => Str.includes("gpt-5.6-sol")(entry) && !Str.includes("openai-codex")(entry),
+      ),
+    ).toBe(true);
+  });
+});
+
 const discover = (profiles: ReturnType<typeof profileServiceFor>) =>
   invokeOptionalTool(
     captureSubagentTools(subagentServiceDouble({}), { profiles }).get("agent_profiles"),

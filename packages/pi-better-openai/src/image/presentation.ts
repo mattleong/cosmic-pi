@@ -19,8 +19,8 @@ import {
   getTextContent,
   headingShowedSubject,
   middleElide,
+  previewHeadingText,
   previewIssuesSlot,
-  wrapPreviewHeading,
   type ExpandedField,
 } from "pi-code-previews";
 import { formatBytes } from "pi-cosmic-core/display";
@@ -79,13 +79,6 @@ export const imageViewOf = <Details>(result: AgentToolResult<Details>, cwd: stri
     cwd,
   };
 };
-
-/** A preview heading wraps rather than clips, as every preview heading does. */
-export const renderImageHeading = (prompt: string, theme: Theme, width: number): string[] =>
-  wrapPreviewHeading(
-    renderToolHeader({ title: IMAGE_TITLE, subtitle: imageHeadingPrompt(prompt) }, theme),
-    width,
-  );
 
 const OPTION_LABELS: ReadonlyMap<string, string> = new Map([
   ["action", "Action"],
@@ -158,11 +151,15 @@ export function renderImageCall(
   context: { readonly expanded: boolean; readonly state: object; readonly cwd: string },
 ): Component {
   const prompt = Predicate.isString(args.prompt) ? args.prompt : "";
+  // Built with the call so a collapsed row's heading keeps room for the row's tag when it wraps.
+  const heading = previewHeadingText(() =>
+    renderToolHeader({ title: IMAGE_TITLE, subtitle: imageHeadingPrompt(prompt) }, theme),
+  );
   const issues = previewIssuesSlot(context);
   const { expanded, cwd } = context;
   return composeToolComponent((width) => {
     if (width <= 0) return [];
-    const lines = [...renderImageHeading(prompt, theme, width), ...issues.render(width)];
+    const lines = [...heading.render(width), ...issues.render(width)];
     if (expanded)
       lines.push(
         ...renderImageRequest(args, theme, {

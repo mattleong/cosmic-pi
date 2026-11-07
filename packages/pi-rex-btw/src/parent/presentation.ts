@@ -75,8 +75,7 @@ export const parentCompactSummary: CompactSummaryProvider<ParentToolArgs> = ({
       expandLabel: "details",
     };
   return {
-    subject: readLabel(details),
-    metadata: details.compacted ? ["after compaction"] : [],
+    subject: readSummary(details),
     outcome: "success",
     // Collapsed rows show only the heading; expansion shows the whole read, or the parent's id.
     expandLabel: details.items.length > 0 ? "messages" : "details",
@@ -193,11 +192,14 @@ export const conversationBody = (
 const fallbackText = (result: AgentToolResult<unknown>, theme: Theme): Component =>
   expandedText(theme, undefined, trimmedLines(getTextContent(result.content)));
 
-const readSummary = (conversation: ParentConversation): string =>
-  Arr.join(
-    [readLabel(conversation), ...(conversation.compacted ? ["after compaction"] : [])],
-    " · ",
-  );
+/**
+ * What a read covers, as one phrase, `last 2 messages after compaction`, so a narrow row cuts it
+ * between whole words rather than inside its count beside a separate compaction fact.
+ */
+function readSummary(conversation: ParentConversation): string {
+  const read = readLabel(conversation);
+  return conversation.compacted ? `${read} after compaction` : read;
+}
 
 /** What the call heading names once a result says it: the read, as the compact heading does. */
 export interface ParentRenderState {

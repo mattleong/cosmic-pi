@@ -20,6 +20,7 @@ const Fields = {
   action: Schema.optionalKey(Schema.String),
   counters: Schema.optionalKey(Labels),
   metadata: Schema.optionalKey(Labels),
+  subjectState: Schema.optionalKey(Schema.Literal(true)),
   showTiming: Schema.optionalKey(Schema.Literal(true)),
   showShortTiming: Schema.optionalKey(Schema.Literal(true)),
   issues: Schema.optionalKey(Schema.Array(CompactIssueSchema)),

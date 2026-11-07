@@ -108,7 +108,7 @@ export function registerAskUserTool(
       if (context.isError) return emptyBody();
       if (cancelled) return cancelledLine(theme);
       if (details?.outcome === "submitted")
-        return answersBody(details.answers, titlesByKey(context.args), theme, true);
+        return answersBody(details.answers, titlesByKey(context.args), theme, true, context);
       return new Text(fallbackText(result.content), 0, 0);
     },
   });

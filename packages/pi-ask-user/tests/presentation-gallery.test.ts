@@ -233,6 +233,14 @@ const longWritten: AskUserOutcome = {
   ],
 };
 const chosenWithCustom: AskUserOutcome = { outcome: "submitted", answers: [chosen, custom] };
+// A custom answer whose second line a collapsed row hides at every width.
+const customOverTwoLines: AskUserOutcome = {
+  outcome: "submitted",
+  answers: [
+    chosen,
+    { ...custom, text: "Keep the built-in Intl API.\nRevisit Luxon if time zone rules grow." },
+  ],
+};
 const cancelled: AskUserOutcome = { outcome: "cancelled", answers: [] };
 
 const asyncRequest: AskUserAsyncRequest = {
@@ -343,6 +351,7 @@ const message = (
 const messages = [
   message("answers submitted", chosenWithCustom, "ask-1"),
   message("questionnaire cancelled", cancelled, "ask-2"),
+  message("an answer over two lines", customOverTwoLines, "ask-3"),
 ];
 
 const registerAll = (pi: ExtensionAPI) => {
@@ -548,6 +557,14 @@ describe.skipIf(!directory)("presentation gallery", () => {
         controlled("answers awaited", { action: "await", requestId: "ask-1" }, [
           answered("waiter"),
         ]),
+        controlled("answers awaited, one over two lines", { action: "await", requestId: "ask-1" }, [
+          snapshot("ask-1", {
+            ...settled,
+            status: "submitted",
+            delivery: "waiter",
+            outcome: customOverTwoLines,
+          }),
+        ]).pipe(Effect.map((scenario) => ({ ...scenario, wide: true }))),
         controlled("questionnaire cancelled", { action: "cancel", requestId: "ask-2" }, [
           snapshot("ask-2", {
             ...settled,

@@ -339,4 +339,7 @@ it.live(
       assert.equal(nativeDefinitions.length, 1);
       assert.equal(rendererRegistrations.length, 1);
     }).pipe(Effect.provide(nodeFilePlatformLayer)),
+  // Loads a real Pi SDK session and extension stack, whose cold imports alone can take longer than
+  // the default five seconds while other test files run in parallel.
+  60_000,
 );

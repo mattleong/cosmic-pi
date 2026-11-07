@@ -5,6 +5,7 @@ import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { SUBJECT_MINIMUM } from "./compact-header";
 
 /** The narrowest row whose tag names what expansion reveals; narrower rows show a bare `▸`. */
 export const TAG_LABEL_MIN_WIDTH = 80;
@@ -15,8 +16,6 @@ const BARE_TAG_WIDTH = 1;
 export const BARE_TAG_RESERVE = TAG_GAP + BARE_TAG_WIDTH;
 // A row narrower than this has no room for a tag beside any content.
 const MIN_TAGGED_WIDTH = BARE_TAG_RESERVE + 1;
-// The least room a subject keeps before the full tag gives way to a bare `▸`.
-const SUBJECT_MINIMUM = 12;
 
 const labelTag = (label: string, theme: Pick<Theme, "fg">) =>
   renderExpansionAffordance(label, false, theme);
@@ -52,37 +51,52 @@ export function placeHeadingTag(
   return `${shown}${Fn.pipe(" ", Str.repeat(width - contentWidth(shown) - tagWidth))}${tag}`;
 }
 
-/** What a one-row heading layout keeps, which a tag's reserve must not cost it. */
+/** What a one-row heading layout shows, which a tag's reserve must not cost it. */
 export interface TaggableHeading {
   readonly row: string;
   /** The counter or outcome fact the row shows beside its subject, if any. */
   readonly fact: string | undefined;
-  /** The columns the shown subject takes, and the whole subject's. */
-  readonly subjectShown: number;
-  readonly subjectWidth: number;
+  /** Whether the row shows its tool's name, and action, whole. */
+  readonly identityComplete: boolean;
 }
 
-const costs = (full: TaggableHeading, bare: TaggableHeading): boolean =>
-  (bare.fact !== undefined && full.fact === undefined) ||
-  (full.subjectShown < bare.subjectShown &&
-    full.subjectShown < Math.min(SUBJECT_MINIMUM, full.subjectWidth));
+/**
+ * A one-row heading laid out at a width, keeping its subject at least `subjectMinimum` columns
+ * (or whole, if shorter) beside a fact.
+ */
+export type TaggableLayout<Layout extends TaggableHeading> = (
+  width: number,
+  subjectMinimum: number,
+) => Layout;
 
 /**
- * A one-row heading laid out beside its expansion tag, so the tag never overlaps it: the layout
- * gets the room the full `▸ label` leaves from 80 columns, unless that would cost the row its
- * subject's minimum or its counter, and otherwise the room a bare `▸` leaves.
+ * A one-row heading laid out beside its expansion tag, so the tag never overlaps it. The layout
+ * gets the room a bare `▸` leaves; where that would drop the first fact the row shows untagged, the
+ * reserve comes out of the subject's minimum instead. The full `▸ label` from 80 columns is drawn
+ * only when the layout it leaves room for is the same row, so the label never costs content. A row
+ * whose tool name the tag would cut draws no tag.
  */
 export function layoutTaggedHeading<Layout extends TaggableHeading>(
   label: string | undefined,
   theme: Pick<Theme, "fg">,
   width: number,
-  layout: (width: number) => Layout,
+  layout: TaggableLayout<Layout>,
 ): Layout {
-  if (label === undefined || width < MIN_TAGGED_WIDTH) return layout(width);
-  const bare = layout(width - BARE_TAG_RESERVE);
+  const untagged = () => layout(width, SUBJECT_MINIMUM);
+  if (label === undefined || width < MIN_TAGGED_WIDTH) return untagged();
+  const room = width - BARE_TAG_RESERVE;
+  let bare = layout(room, SUBJECT_MINIMUM);
+  if (!bare.identityComplete) return untagged();
+  if (bare.fact === undefined && untagged().fact !== undefined) {
+    const tight = layout(room, Math.max(1, SUBJECT_MINIMUM - BARE_TAG_RESERVE));
+    if (tight.fact !== undefined) bare = tight;
+  }
   const reserve = labelTagReserve(label, width);
-  const full = reserve === undefined || reserve >= width ? undefined : layout(width - reserve);
-  const chosen = full === undefined || costs(full, bare) ? bare : full;
+  const full =
+    reserve === undefined || reserve >= width
+      ? undefined
+      : layout(width - reserve, SUBJECT_MINIMUM);
+  const chosen = full !== undefined && full.row === bare.row ? full : bare;
   return { ...chosen, row: placeHeadingTag(chosen.row, label, theme, width) };
 }
 

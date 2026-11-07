@@ -54,6 +54,9 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+// Each test runs several sessions over real sockets, which take seconds on a loaded machine.
+vi.setConfig({ testTimeout: 30_000 });
+
 const detailsOf = (result: AgentToolResult<unknown>): SessionToolDetails => {
   const decoded = decodeSessionToolDetails(result.details);
   return Option.getOrThrowWith(decoded, () => new Error("The result has no session tool details."));

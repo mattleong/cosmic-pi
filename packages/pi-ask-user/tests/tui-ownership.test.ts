@@ -15,12 +15,19 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import { acquireQuestionnaireQueue } from "../src/questionnaire/queue.ts";
-import { expect, vi } from "vitest";
+import { beforeAll, expect, vi } from "vitest";
 import { createAskUserPromptGate } from "../src/boundary/host-prompt.ts";
 import { askUserHost } from "../src/boundary/host-dialogs.ts";
 import { createAskUserDialogBridge } from "../src/boundary/host-ui.ts";
 import { AskUserHostError, type AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 import type { QuestionnairePresence } from "../src/questionnaire/service.ts";
+
+// Opening a TUI questionnaire lazily imports the dialog graph. Load it once so the first test's
+// mount wait observes the host, not a cold module transform.
+beforeAll(
+  () => Promise.all([import("../src/boundary/host-tui.ts"), import("../src/ui/dialog.ts")]),
+  60_000,
+);
 
 const open = (h: ReturnType<typeof hostFixture>, presence?: QuestionnairePresence) =>
   openPresentation(h, (bridge) => askUserHost(h.ctx, bridge)(request, presence));

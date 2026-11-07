@@ -181,8 +181,8 @@ class MessageShell implements Component {
       const title = message.label ?? message.name;
       if (!compact && !expanded)
         return [
-          layoutTaggedHeading(tag, theme, width, (room) =>
-            layoutPreviewHeadingRow(title, summary, false, theme, room),
+          layoutTaggedHeading(tag, theme, width, (room, subjectMinimum) =>
+            layoutPreviewHeadingRow(title, summary, false, theme, room, subjectMinimum),
           ).row,
         ];
       // An expanded preview heading wraps rather than clips, so the body may leave out its subject.

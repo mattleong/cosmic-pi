@@ -5,7 +5,7 @@ import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import { stripAnsi } from "pi-cosmic-core";
 import { createHighlighter, createJavaScriptRegexEngine } from "shiki";
-import { afterAll, beforeAll, beforeEach, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, test, vi } from "vitest";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import {
   clearCodePreviewSessionCapability,
@@ -24,10 +24,22 @@ const highlighter = await createHighlighter({
   engine: createJavaScriptRegexEngine(),
 });
 
+// Shiki stops tokenizing a line after 500 ms of wall time and colors its rest as one token, which a
+// fully loaded test machine can exceed; these tests compare rows, not that budget.
+const untimedHighlighter: typeof highlighter = {
+  ...highlighter,
+  codeToTokensBase: (code, options) =>
+    highlighter.codeToTokensBase(code, { ...options, tokenizeTimeLimit: 0 }),
+};
+
+// Each test draws real codemode and builtin rows; under a full parallel run their first draws load
+// cold module chains that can take longer than the default five seconds.
+vi.setConfig({ testTimeout: 60_000 });
+
 beforeAll(() => {
   publishSyntaxProjection(owner, {
     theme: "dark-plus",
-    highlighter,
+    highlighter: untimedHighlighter,
     loadedLanguages: ["javascript", "typescript"],
     failedThemes: [],
     failedLanguages: [],

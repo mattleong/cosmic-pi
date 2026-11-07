@@ -15,6 +15,7 @@ import {
 import { isAffordanceRow } from "../../src/preview/affordance-row";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
 import { placeHeadingTag } from "../../src/preview/heading-tag";
+import { previewHeadingText } from "../../src/preview/heading-wrap";
 import {
   BorderedToolCall,
   renderHiddenPreviewExpandHint,
@@ -79,6 +80,61 @@ test("a compact row gives up the tag's label before it would lose its counter", 
   );
   expect(stripAnsi(row)).toContain("12 matching lines");
   expect(expansionTag(row)).toBe("");
+});
+
+test("the label never costs a compact row any of its subject or counter", () => {
+  // Beside a bare ▸ this subject and its widest counter fit at 100 columns; beside the label they don't.
+  const subject = Fn.pipe(
+    "Deployment environment, Rollback plan, Release notes",
+    Str.padEnd(60, "."),
+  );
+  const counters = ["3 answers · Blue/green", "3 answers"];
+  const [row = ""] = compactRow({ subject, outcome: "success", counters }, 100, "questions");
+  expect(contentBeforeTag(row)).toBe(`✓ bash ${subject} · 3 answers · Blue/green`);
+  expect(expansionTag(row)).toBe("");
+  // Where the label leaves the same row, it shows.
+  const [short = ""] = compactRow(
+    { subject: "Rollback plan", outcome: "success", counters },
+    100,
+    "questions",
+  );
+  expect(contentBeforeTag(short)).toBe("✓ bash Rollback plan · 3 answers · Blue/green");
+  expect(expansionTag(short)).toBe("questions");
+});
+
+test("a bare tag shortens the subject further before it would drop the first fact", () => {
+  for (const counters of [["2 answers"], ["2 answers · delivered", "2 answers"]]) {
+    const input = {
+      name: "ask_user_async_control",
+      phase: "settled" as const,
+      summary: {
+        subject: "Environment, Library",
+        action: "await",
+        outcome: "success" as const,
+        counters,
+      },
+    };
+    const untagged = stripAnsi(renderCompactToolCall(input, plainTheme, 57)[0] ?? "");
+    expect(untagged).toContain("· 2 answers");
+    const [row = ""] = renderCompactToolCall({ ...input, expandLabel: "answers" }, plainTheme, 57);
+    expect(expansionTag(row)).toBe("");
+    expect(contentBeforeTag(row)).toMatch(/^✓ ask_user_async_control await Env\S*… · 2 answers$/u);
+  }
+});
+
+test("a row too narrow for its tool name beside a tag draws no tag", () => {
+  const [row = ""] = renderCompactToolCall(
+    {
+      name: "status_demo",
+      phase: "settled",
+      summary: { subject: "Search", outcome: "returned" },
+      expandLabel: "output",
+    },
+    plainTheme,
+    16,
+  );
+  expect(stripAnsi(row)).toMatch(/^• status_demo S…$/u);
+  expect(expansionOffers([row])).toEqual([]);
 });
 
 test("wide glyphs and styling never push a tagged row past its width", () => {
@@ -171,6 +227,85 @@ test("a preview row that hides nothing draws no tag", () => {
   harness.call({ path: "a.ts" });
   harness.result(textResult("all of it"));
   expect(expansionOffers(harness.render(100))).toEqual([]);
+});
+
+// A heading one column narrower than a 57-column row: it fits the row, but not beside a tag.
+const nearWidthHeading = "Demo call reading packages/pi-code-previews/src/a.ts mar";
+
+const headingTool = (
+  result: "hidden" | "empty" | "text",
+  options: { readonly standIn?: true; readonly draws?: { count: number } } = {},
+) =>
+  withCodePreviewShell(
+    {
+      ...createReadToolDefinition("/project"),
+      renderCall: (_args, theme) => {
+        const call = new Container();
+        call.addChild(previewHeadingText(() => nearWidthHeading));
+        if (options.standIn)
+          call.addChild(new Text(renderExpansionAffordance("3 more lines", false, theme), 0, 0));
+        return call;
+      },
+      renderResult: (_result, _options, theme, context) => {
+        if (result === "hidden") return renderHiddenPreviewExpandHint(context, theme, "content");
+        if (result === "empty") return new Container();
+        const { draws } = options;
+        return {
+          render: () => {
+            if (draws) draws.count += 1;
+            return ["all of it"];
+          },
+          invalidate: () => undefined,
+        };
+      },
+    },
+    { compactSummary: () => ({ subject: "a.ts", outcome: "success" }) },
+  );
+
+const drawRow = (tool: ReturnType<typeof headingTool>, width = 57) => {
+  const harness = createToolPresentationHarness(tool);
+  harness.call({ path: "a.ts" });
+  harness.result(textResult("export const a = 1;"));
+  return harness.render(width);
+};
+
+test("a preview heading that fits its row but not beside the tag wraps rather than being cut", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallBackground: "off" });
+  expect(visibleWidth(nearWidthHeading)).toBe(56);
+  const rows = Arr.map(drawRow(headingTool("hidden")), stripAnsi);
+  expect(rows).toHaveLength(2);
+  expect(expansionTag(rows[0] ?? "")).toBe("");
+  expect(Arr.some(rows, (row) => Str.includes("…")(row))).toBe(false);
+  expect(
+    Arr.join(
+      Arr.map(rows, (row) => Str.trim(contentBeforeTag(row))),
+      " ",
+    ),
+  ).toBe(nearWidthHeading);
+});
+
+test("a preview heading keeps no room for a tag the row doesn't draw", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallBackground: "off" });
+  // The result alone calls for a tag; the call's own stand-in then withdraws it.
+  const withdrawn = Arr.map(drawRow(headingTool("empty", { standIn: true })), stripAnsi);
+  expect(expansionOffers(withdrawn)).toEqual(["3 more lines"]);
+  expect(Str.trimEnd(withdrawn[0] ?? "")).toBe(nearWidthHeading);
+  // A result the row shows calls for none.
+  const shown = Arr.map(drawRow(headingTool("text")), stripAnsi);
+  expect(expansionOffers(shown)).toEqual([]);
+  expect(Str.trimEnd(shown[0] ?? "")).toBe(nearWidthHeading);
+});
+
+test("a collapsed preview row draws its result body once per frame", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview", toolCallBackground: "off" });
+  const draws = { count: 0 };
+  const harness = createToolPresentationHarness(headingTool("text", { draws }));
+  harness.call({ path: "a.ts" });
+  harness.result(textResult("export const a = 1;"));
+  for (const frame of [1, 2, 3]) {
+    expect(Arr.map(harness.render(57), stripAnsi)).toContain("all of it");
+    expect(draws.count).toBe(frame);
+  }
 });
 
 test("a stand-in is recognized by its separately styled glyph, not by text alone", () => {

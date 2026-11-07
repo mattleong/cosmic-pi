@@ -55,7 +55,11 @@ const logs = (state = "running", fields: Cursors = {}, omitted?: "earlier" | "la
 const wait = (
   outcome: string,
   waitSnapshot: Snapshot = snapshot,
-  fields: Cursors & { readonly id?: string; readonly matchCursor?: number } = {},
+  fields: Cursors & {
+    readonly id?: string;
+    readonly matchCursor?: number;
+    readonly matchedText?: string;
+  } = {},
   appliedWaitSeconds = 30,
 ) => ({
   action: "wait",
@@ -306,5 +310,63 @@ describe("background task row outcomes", () => {
     expect(capped?.message).toBe(exact?.message);
     expect(capped?.detail).toContain("120");
     expect(exact?.detail).not.toContain("120");
+  });
+});
+
+const widths = (alternatives: ReadonlyArray<string>) =>
+  Arr.map(alternatives, (entry) => entry.length);
+// Strictly narrower each time, widest first.
+const narrowsEachTime = (alternatives: ReadonlyArray<string>) =>
+  Arr.every(Arr.drop(widths(alternatives), 1), (width, index) => {
+    const wider = widths(alternatives)[index];
+    return wider !== undefined && width < wider;
+  });
+
+describe("background task heading facts", () => {
+  const failed = { ...snapshot, state: "failed", exitCode: 1, endedAt: 2 };
+
+  it("keeps the start action on a started task's row, since the check alone reads as finished", () => {
+    expect(project({ action: "start", snapshot }, "start")).toMatchObject({
+      action: "start",
+      outcome: "success",
+    });
+  });
+
+  it("offers list counters widest first, keeping failures until only the total is left", () => {
+    const exited = { ...snapshot, state: "exited", exitCode: 0, endedAt: 2 };
+    const stopping = { ...snapshot, state: "stopping" };
+    const tasks = [snapshot, stopping, exited, exited, failed, failed, failed];
+    const counters = project({ action: "list", tasks }, "list")?.counters ?? [];
+    expect(narrowsEachTime(counters)).toBe(true);
+    expect(counters.length).toBeGreaterThanOrEqual(3);
+    // Every alternative but the bare total still reports the three failures.
+    expect(Arr.every(counters.slice(0, -1), (entry) => Str.includes("3 failed")(entry))).toBe(true);
+    expect(counters.at(-1)).not.toContain("failed");
+    // Narrower, the failures outlast the active work.
+    const failuresOnly = Arr.filter(
+      counters,
+      (entry) =>
+        Str.includes("3 failed")(entry) &&
+        !Str.includes("active")(entry) &&
+        !Str.includes("running")(entry),
+    );
+    expect(failuresOnly).not.toHaveLength(0);
+  });
+
+  it("offers a matched wait narrower alternatives that all still say the output was found", () => {
+    const matched = project(
+      wait("matched", snapshot, { matchCursor: 4, matchedText: "Local:" }),
+      "wait",
+      "settled",
+      false,
+      { until: "output", contains: ["error", "Local:"] },
+    );
+    const counters = matched?.counters ?? [];
+    expect(counters.length).toBeGreaterThanOrEqual(3);
+    expect(narrowsEachTime(counters)).toBe(true);
+    expect(Arr.every(counters, (entry) => Str.includes("found")(entry))).toBe(true);
+    expect(counters[0]).toContain("Local:");
+    // The narrowest no longer spends room on the task's state.
+    expect(counters.at(-1)).not.toContain("running");
   });
 });

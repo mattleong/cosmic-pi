@@ -23,7 +23,7 @@ import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { previewIssuesSlot } from "../../preview/preview-issues";
-import { wrapPreviewHeading } from "../../preview/heading-wrap";
+import { takeHeadingRoom, wrapPreviewHeading } from "../../preview/heading-wrap";
 
 function shouldHideBashResult(args: HostObject | undefined): boolean {
   return shouldHideShellResultByCommand(
@@ -53,21 +53,26 @@ function streamingTail(lines: readonly string[], theme: Theme): Component {
 }
 
 /**
- * The heading and its command, wrapped as preview headings wrap. A multi-line command's later
- * lines hang beneath the heading as its wrapped rows do, so none reads as output.
+ * The heading and its command, wrapped as preview headings wrap, its first row keeping the room
+ * the row's tag takes. A multi-line command's later lines hang beneath the heading as its wrapped
+ * rows do, so none reads as output.
  */
 function commandHeading(lines: readonly string[]): Component {
-  let cached: { readonly width: number; readonly rows: string[] } | undefined;
+  const room = takeHeadingRoom();
+  let cached:
+    | { readonly width: number; readonly reserve: number; readonly rows: string[] }
+    | undefined;
   return {
     render(width) {
-      if (cached?.width === width) return cached.rows;
+      const reserve = room?.reserve ?? 0;
+      if (cached?.width === width && cached.reserve === reserve) return cached.rows;
       const hang = width > COMMAND_HANG.length * 4 ? COMMAND_HANG : "";
       const rows = Arr.flatMap(lines, (line, index) =>
         index === 0
-          ? wrapPreviewHeading(line, width)
+          ? wrapPreviewHeading(line, width, reserve)
           : Arr.map(wrapPreviewHeading(line, width - hang.length), (row) => `${hang}${row}`),
       );
-      cached = { width, rows };
+      cached = { width, reserve, rows };
       return rows;
     },
     invalidate() {

@@ -590,36 +590,41 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
     }),
   );
 
-  it.effect("describes many sessions in order, each with its own outcome", () =>
-    Effect.gen(function* () {
-      const live = yield* socketPath;
-      const silent = yield* socketPath;
-      const missing = yield* socketPath;
-      yield* startServer(live, fakeInbound());
-      yield* startServer(silent, fakeInbound({ describe: Effect.never }));
-      const targets = [
-        { socket: live, token: TOKEN, label: "live" },
-        { socket: silent, token: TOKEN, label: "silent" },
-        { socket: missing, token: TOKEN, label: "missing" },
-        { socket: live, token: OTHER_TOKEN, label: "foreign" },
-      ];
+  it.effect(
+    "describes many sessions in order, each with its own outcome",
+    () =>
+      Effect.gen(function* () {
+        const live = yield* socketPath;
+        const silent = yield* socketPath;
+        const missing = yield* socketPath;
+        yield* startServer(live, fakeInbound());
+        yield* startServer(silent, fakeInbound({ describe: Effect.never }));
+        const targets = [
+          { socket: live, token: TOKEN, label: "live" },
+          { socket: silent, token: TOKEN, label: "silent" },
+          { socket: missing, token: TOKEN, label: "missing" },
+          { socket: live, token: OTHER_TOKEN, label: "foreign" },
+        ];
 
-      const results = yield* describeSessions(targets, "200 millis");
+        // Only the silent session should reach the deadline; the live one must authenticate and
+        // answer within it even on a loaded machine.
+        const results = yield* describeSessions(targets, "2 seconds");
 
-      expect(Arr.map(results, ({ target }) => target.label)).toEqual(
-        Arr.map(targets, ({ label }) => label),
-      );
-      expect(
-        Arr.map(results, ({ result }) =>
-          Result.isSuccess(result) ? result.success.state : result.failure,
-        ),
-      ).toMatchObject([
-        "idle",
-        { reason: "timeout" },
-        { reason: "unreachable" },
-        { reason: "unauthorized" },
-      ]);
-    }),
+        expect(Arr.map(results, ({ target }) => target.label)).toEqual(
+          Arr.map(targets, ({ label }) => label),
+        );
+        expect(
+          Arr.map(results, ({ result }) =>
+            Result.isSuccess(result) ? result.success.state : result.failure,
+          ),
+        ).toMatchObject([
+          "idle",
+          { reason: "timeout" },
+          { reason: "unreachable" },
+          { reason: "unauthorized" },
+        ]);
+      }),
+    30_000,
   );
 
   it.effect("keeps message content, tokens, and paths out of logs and spans", () =>

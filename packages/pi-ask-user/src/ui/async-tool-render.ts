@@ -15,6 +15,7 @@ import { toolRunningLine } from "pi-cosmic-ui/tool";
 import type { PendingPresentation } from "../questionnaire/async-model.ts";
 import {
   answersBody,
+  answersHideMore,
   callBody,
   cancelledLine,
   emptyBody,
@@ -149,7 +150,8 @@ export function renderAsyncResult(
   }
   if (context.isError) return emptyBody();
   if (!classified) return new Text(contentText(result?.content), 0, 0);
-  return collapsedRows(rows, states, list, theme);
+  const state: unknown = context.state;
+  return collapsedRows(rows, states, list, theme, state === undefined ? undefined : { state });
 }
 
 /**
@@ -168,6 +170,7 @@ function collapsedRows(
   states: readonly QuestionnaireState[],
   list: boolean,
   theme: Theme,
+  row?: { readonly state: unknown },
 ): Component {
   if (rows.length === 0) return mutedState(["No questionnaires", "None"], theme);
   // An open questionnaire needs the user now; a queued one only waits its turn.
@@ -189,7 +192,7 @@ function collapsedRows(
   // Its issue says it is hidden and how to resume it.
   if (state === "hidden") return emptyBody();
   const answers = submittedAnswers(rows);
-  if (answers) return answersBody(answers, rowTitles(rows), theme, true);
+  if (answers) return answersBody(answers, rowTitles(rows), theme, true, row);
   return state && isPendingState(state) ? pendingState(stateWords(state)) : emptyBody();
 }
 
@@ -237,8 +240,8 @@ export const presentAsyncMessage: CodePreviewMessagePresenter = (input, options,
       outcome: cancelled ? "cancelled" : "success",
       counters: answers?.length ? [countLabel(answers.length, "answer")] : [],
     },
-    // The request and delivery IDs.
-    expandLabel: "details",
+    // The answers' hidden lines, else the request and delivery IDs.
+    expandLabel: answers && answersHideMore(answers) ? "answers" : "details",
     ...(answers && { collapsed: () => answersBody(answers, titles, theme, true) }),
     ...(cancellation && {
       collapsed: () => cancelledLine(theme),

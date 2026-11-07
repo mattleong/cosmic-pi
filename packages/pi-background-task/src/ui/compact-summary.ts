@@ -270,13 +270,14 @@ function taskReportSummary(value: BackgroundTaskSnapshot): TaskSummary {
 }
 
 /**
- * A start that admitted its task reads as done, so its row never goes stale as "running". Its
- * "started" already states the verb, so the row drops the action; a failed start keeps it.
+ * A start that admitted its task reads as done, so its row never goes stale as "running". The
+ * action names what succeeded, `✓ background_task start docs`, since the check alone would read as
+ * a finished task and the shell drops `started` beside it.
  */
 function startSummary(value: BackgroundTaskSnapshot, action: string): CompactSummary {
   const task = taskSummary(value);
   return value.state === "starting" || value.state === "running"
-    ? { ...task, action: "", metadata: ["started"], outcome: "success" }
+    ? { ...task, action, metadata: ["started"], outcome: "success" }
     : { ...task, action };
 }
 
@@ -407,13 +408,23 @@ function aggregateCounters(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string
   });
   const total = countLabel(tasks.length, "task");
   const { active, failed } = countTaskStates(tasks);
+  const failures = failed ? `${failed} failed` : "";
   const brief = joinInline(
-    Arr.filter(
-      [total, active ? `${active} active` : "", failed ? `${failed} failed` : ""],
-      Boolean,
-    ),
+    Arr.filter([total, active ? `${active} active` : "", failures], Boolean),
   );
-  return [...new Set([joinInline(counts) || total, brief, total])];
+  // Narrower, the failures outlast the active count: a row never loses failure evidence first.
+  const failedOnly = joinInline(Arr.filter([total, failures], Boolean));
+  return narrowing([joinInline(counts) || total, brief, failedOnly, total]);
+}
+
+/** Counter alternatives widest first: each is kept only when narrower than the one before it. */
+function narrowing(alternatives: ReadonlyArray<string>): string[] {
+  const kept: string[] = [];
+  for (const entry of alternatives) {
+    const last = kept.at(-1);
+    if (last === undefined || entry.length < last.length) kept.push(entry);
+  }
+  return kept;
 }
 
 const LISTED_PROBLEMS: ReadonlyArray<CompactOutcome> = ["error", "warning", "uncertain"];
@@ -462,22 +473,30 @@ function aggregateSummary(
   };
 }
 
-/** What a wait found, and the task's state unless an issue already states it. */
-function waitMetadata(
+/**
+ * What a wait found, and the task's state unless an issue already states it. A match is a counter
+ * with narrower alternatives, widest first: which text was found and the task's state, then that
+ * output was found with the state, then only that it was found. Other waits state one fact.
+ */
+function waitFacts(
   wait: DetailsFor<"wait">["wait"],
   state: string | undefined,
   alternatives: number,
-): string[] {
-  // A heading shows one metadata fact, so the state shares it.
-  const withState = (found: string) => [state === undefined ? found : `${found} · ${state}`];
-  if (wait.outcome === "matched")
-    return withState(
+): Pick<CompactSummary, "counters" | "metadata"> {
+  if (wait.outcome === "matched") {
+    const withState = (found: string) => (state === undefined ? found : `${found} · ${state}`);
+    const named =
       alternatives > 1 && wait.matchedText !== undefined
-        ? `found ${quotedWaitText(wait.matchedText)}`
-        : "output found",
-    );
-  if (wait.outcome === "timeout") return [`still ${taskStateLabel(wait.snapshot.state)}`];
-  return state === undefined ? [] : [state];
+        ? [withState(`found ${quotedWaitText(wait.matchedText)}`)]
+        : [];
+    return {
+      counters: [...new Set([...named, withState("output found"), "output found"])],
+      metadata: [],
+    };
+  }
+  if (wait.outcome === "timeout")
+    return { metadata: [`still ${taskStateLabel(wait.snapshot.state)}`] };
+  return { metadata: state === undefined ? [] : [state] };
 }
 
 /** An output wait whose task finished first: the awaited text never appeared. */
@@ -531,7 +550,7 @@ function waitSummary(
   return {
     ...task,
     action,
-    metadata: waitMetadata(wait, task.metadata?.[0], texts.length),
+    ...waitFacts(wait, task.metadata?.[0], texts.length),
     issues,
     outcome: waitOutcome(wait, task.outcome, unmatched),
   };

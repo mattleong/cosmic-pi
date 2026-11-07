@@ -3,9 +3,8 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, type Component } from "@earendil-works/pi-tui";
-import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { outputLimitProjection } from "../../builtin-issues";
-import { isAffordanceRow } from "../../../preview/affordance-row";
+import { hiddenPreviewExpandHintForShell } from "../../../preview/bordered-tool-call";
 import { expandedText } from "../../../preview/expanded-body";
 import { ownField, ownObject, type HostObject } from "../../../shared/untrusted-value";
 import { numericArg } from "../../data/args";
@@ -69,8 +68,29 @@ export function limitReachedLine(
 }
 
 /**
- * A collapsed listing's rows, then, when its limit was reached, its `Limit reached` line and,
- * unless the rows already offer expansion, the agent notes expansion adds.
+ * Records `agent notes` as a collapsed listing's tag when its limit was reached and agent notes
+ * were kept for expansion, unless its rows already offer expansion with their own stand-in. Call it
+ * while the shell builds the result body; outside a shell it returns the `▸ agent notes` line.
+ */
+export function collapsedNotesHint(
+  row: { readonly state: unknown },
+  theme: Theme,
+  tool: "grep" | "find" | "ls",
+  input: {
+    readonly details: HostObject | undefined;
+    readonly args: HostObject | undefined;
+    readonly notice: string | undefined;
+    readonly offered: boolean;
+  },
+): string | undefined {
+  if (!input.notice || input.offered) return undefined;
+  if (limitReachedLine(tool, input.details, input.args) === undefined) return undefined;
+  return hiddenPreviewExpandHintForShell(row, theme, "agent notes") || undefined;
+}
+
+/**
+ * A collapsed listing's rows, then, when its limit was reached, its `Limit reached` line and the
+ * `notesHint` from {@link collapsedNotesHint} where no shell takes it as the row's tag.
  */
 export function withCollapsedLimit(
   text: string,
@@ -78,17 +98,9 @@ export function withCollapsedLimit(
   tool: "grep" | "find" | "ls",
   details: HostObject | undefined,
   args: HostObject | undefined,
-  notice: string | undefined,
+  notesHint: string | undefined,
 ): string {
   const stated = limitReachedLine(tool, details, args);
   if (stated === undefined) return text;
-  const offered = Arr.some(Str.split(text, "\n"), isAffordanceRow);
-  return Arr.join(
-    [
-      text,
-      theme.fg("muted", stated),
-      ...(notice && !offered ? [renderExpansionAffordance("agent notes", false, theme)] : []),
-    ],
-    "\n",
-  );
+  return Arr.join([text, theme.fg("muted", stated), ...(notesHint ? [notesHint] : [])], "\n");
 }

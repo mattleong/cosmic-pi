@@ -3,12 +3,15 @@ import * as Effect from "effect/Effect";
 import { recordingExtensionHost } from "pi-cosmic-core/testing";
 import { afterEach, expect, vi } from "vitest";
 import intercom from "../src/extension.ts";
+// Import the application with the test module so the test measures the entry's loading decision,
+// not a cold transform of the application graph.
+import * as application from "../src/application.ts";
 
 afterEach(() => vi.unstubAllEnvs());
 
 it.effect("skips application loading in a child, but retains root registration and replay", () =>
   Effect.gen(function* () {
-    const load = vi.fn(() => import("../src/application.ts"));
+    const load = vi.fn(() => Promise.resolve(application));
     vi.stubEnv("PI_SUBAGENT_CHILD", "1");
     const child = recordingExtensionHost();
     yield* Effect.promise(() => Promise.resolve(intercom(child.pi, load)));

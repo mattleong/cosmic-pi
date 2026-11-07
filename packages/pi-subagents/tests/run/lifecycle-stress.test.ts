@@ -80,6 +80,8 @@ describe("SubagentService lifecycle stress", () => {
         }
         return undefined;
       }),
+    // A hundred CPU-bound service lifecycles, which slow in proportion to machine load.
+    30_000,
   );
 
   it.effect(

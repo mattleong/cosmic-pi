@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../../paths/display";
-import { metadata, trimSingleTrailingNewline } from "../../preview/format";
+import { metadata, selectPreviewLines, trimSingleTrailingNewline } from "../../preview/format";
 import { renderHiddenPreviewExpandHint } from "../../preview/bordered-tool-call";
 import { codePreviewSettings } from "../../config/state";
 import { escapeControlChars } from "../../shared/terminal-text";
@@ -10,7 +10,12 @@ import { numericArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { createPathListRenderer } from "../path-list-render";
 import { renderCodePreviewToolTitle } from "../presentation";
-import { splitListingNotice, withAgentNotes, withCollapsedLimit } from "./shared/output-notice";
+import {
+  collapsedNotesHint,
+  splitListingNotice,
+  withAgentNotes,
+  withCollapsedLimit,
+} from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
@@ -94,6 +99,14 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
         config.footerItem,
         pathList.renderChunk,
       );
+      const notesHint = expanded
+        ? undefined
+        : collapsedNotesHint({ state }, theme, tool, {
+            details: hostObject(result.details),
+            args: hostObject(args),
+            notice,
+            offered: selectPreviewLines(rawLines, limit).hidden > 0,
+          });
       const shown = expanded
         ? text
         : withCollapsedLimit(
@@ -102,7 +115,7 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
             tool,
             hostObject(result.details),
             hostObject(args),
-            notice,
+            notesHint,
           );
       return withAgentNotes(new Text(shown, 0, 0), theme, notes);
     },

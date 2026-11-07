@@ -116,12 +116,15 @@ export function cutsCleanly(text: string, cut: string, kind: CompactSubjectKind)
   return Str.startsWith(head)(text) && WORD_BREAK.test(Str.slice(head.length)(text));
 }
 
+/** The columns a collapsed heading's subject keeps beside a fact, unless it is shorter. */
+export const SUBJECT_MINIMUM = 12;
+
 /**
  * Lays out `identity subject · counter`, choosing the first counter alternative that leaves the
- * subject 12 columns; a subject cut beside it keeps whole words. Without counters the first
- * optional fact takes a counter's place when such a cut exists (or keeps a path's file name), so a
- * heading whose subject is cut still shows its outcome, such as `finished in 1m 33s`. `fact` is the
- * counter or outcome fact shown, and `subjectShown` the columns the shown subject takes.
+ * subject `subjectMinimum` columns; a subject cut beside it keeps whole words. Without counters the
+ * first optional fact takes a counter's place when such a cut exists (or keeps a path's file name),
+ * so a heading whose subject is cut still shows its outcome, such as `finished in 1m 33s`. `fact` is
+ * the counter or outcome fact shown, and `identityComplete` whether the identity shows whole.
  */
 export function layoutCompactHeader(
   identity: string,
@@ -132,6 +135,7 @@ export function layoutCompactHeader(
   separator = " · ",
   timing?: string,
   subjectKind: CompactSubjectKind = "prose",
+  subjectMinimumColumns = SUBJECT_MINIMUM,
 ) {
   const counters = Arr.filter(candidateCounters, (value) => Str.isNonEmpty(Str.trim(value)));
   const extra = counters.length
@@ -140,18 +144,18 @@ export function layoutCompactHeader(
         Arr.findFirst(optional, (value) => value !== undefined && Str.isNonEmpty(Str.trim(value))),
       );
   const remaining = width - visibleWidth(identity);
-  // A clipped heading always ends in an ellipsis, so it never reads as complete.
-  const subjectWidth = visibleWidth(subject);
+  // A clipped heading always ends in an ellipsis, so it never reads as complete; the identity stays
+  // whole beside a subject cut to its first column and `…`.
+  const identityComplete = remaining >= (subject ? 3 : 0);
   if (remaining <= 0)
     return {
       row: clipToWidth(`${identity}${subject ? ` ${subject}` : ""}`, width),
       counter: undefined,
       fact: undefined,
       subjectComplete: !subject,
-      subjectShown: 0,
-      subjectWidth,
+      identityComplete,
     };
-  const subjectMinimum = subject ? 1 + Math.min(12, subjectWidth) : 0;
+  const subjectMinimum = subject ? 1 + Math.min(subjectMinimumColumns, visibleWidth(subject)) : 0;
   const counterBudget = remaining - subjectMinimum;
   const timingToken = timing && Str.trim(timing) ? `${separator}${timing}` : "";
   const lay = (facts: readonly string[]) => {
@@ -186,15 +190,13 @@ export function layoutCompactHeader(
       counter: undefined,
       fact: undefined,
       subjectComplete: false,
-      subjectShown: Math.max(0, remaining - 1),
-      subjectWidth,
+      identityComplete,
     };
   return {
     row: identity + (target ? ` ${target}` : "") + counterText + timingText,
     counter: counters.length ? counter : undefined,
     fact: counter,
     subjectComplete: target === subject,
-    subjectShown: visibleWidth(target),
-    subjectWidth,
+    identityComplete,
   };
 }

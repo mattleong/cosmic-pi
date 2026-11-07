@@ -16,7 +16,12 @@ import {
   previewExpandedResult,
   unwrapPreviewExpanded,
 } from "./preview-expanded";
-import { Container, type Component } from "@earendil-works/pi-tui";
+import {
+  Container,
+  type Component,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
+} from "@earendil-works/pi-tui";
 import {
   borderState,
   type BorderedToolCall,
@@ -111,7 +116,8 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
       const label = updateToolCallTiming(context, timing)?.label;
       const expandedTiming = mode === "border" ? undefined : label;
       const render = (latest: typeof context) => {
-        const current = withLastComponent(latest, unwrapPreviewExpanded(latest.lastComponent));
+        const prior = unwrapPreviewExpanded(unwrapCollapsedResult(latest.lastComponent));
+        const current = withLastComponent(latest, prior);
         const original = body(current);
         if (!current.expanded || !content) return original;
         const input = { frames, provider: summary, context: current, theme, original, content };
@@ -146,8 +152,52 @@ export function createCodePreviewToolShell<TArgs, TDetails, TState extends objec
 /** The collapsed call rows each row drew last, which its result slot reads to place the tag. */
 const collapsedCallRows = new WeakMap<WeakKey, readonly string[]>();
 
+/**
+ * A collapsed result body, which the call slot draws first to decide the row's tag. The result
+ * slot, drawn next in the same frame, takes those rows rather than drawing the body again; any
+ * later draw draws afresh.
+ */
+class CollapsedResultBody implements Component {
+  readonly body: Component;
+  private drawn: { readonly width: number; readonly rows: string[] } | undefined;
+
+  constructor(body: Component) {
+    this.body = body;
+  }
+
+  /** Draws the body for the call slot and keeps the rows for the result slot's next draw. */
+  peek(width: number): string[] {
+    const rows = this.body.render(width);
+    this.drawn = { width, rows };
+    return rows;
+  }
+
+  render(width: number): string[] {
+    const drawn = this.drawn;
+    this.drawn = undefined;
+    return drawn?.width === width ? drawn.rows : this.body.render(width);
+  }
+
+  handleInput(data: string): void {
+    this.body.handleInput?.(data);
+  }
+
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    return this.body.handleMouse?.(event);
+  }
+
+  invalidate(): void {
+    this.drawn = undefined;
+    this.body.invalidate();
+  }
+}
+
+/** A renderer's own prior result body, which the next render receives as `lastComponent`. */
+const unwrapCollapsedResult = (component: Component | undefined): Component | undefined =>
+  component instanceof CollapsedResultBody ? component.body : component;
+
 /** The collapsed result body each row built last, which its call slot draws to decide the tag. */
-const collapsedResultBodies = new WeakMap<WeakKey, Component>();
+const collapsedResultBodies = new WeakMap<WeakKey, CollapsedResultBody>();
 
 /**
  * The shell's expansion tag for a collapsed preview row, `▸ label` or a bare `▸` on the heading's
@@ -184,18 +234,22 @@ function previewHeadingTag<TArgs, TDetails, TState extends object>(
         const current = frames.latestFor(state);
         const result =
           current && frames.currentResult(current)
-            ? (collapsedResultBodies.get(state)?.render(width) ?? [])
+            ? (collapsedResultBodies.get(state)?.peek(width) ?? [])
             : undefined;
-        // The heading keeps room for the tag the result alone calls for; its own rows can only
-        // withdraw it.
+        // The heading first keeps room for the tag the result alone calls for; rows that then
+        // decide otherwise draw again with the room their tag takes, none when it is withdrawn.
         const expected = current ? label(current, result ?? [], result) : undefined;
+        const reserve = expected === undefined ? 0 : BARE_TAG_RESERVE;
         return {
-          reserve: expected === undefined ? 0 : BARE_TAG_RESERVE,
+          reserve,
           place: (rows) => {
             collapsedCallRows.set(state, rows);
-            if (!current || !drawsRows(rows)) return rows;
+            if (!current || !drawsRows(rows)) return { rows, reserve };
             const tag = label(current, [...rows, ...(result ?? [])], result);
-            return tagFirstRow(rows, tag, theme, width);
+            return {
+              rows: tagFirstRow(rows, tag, theme, width),
+              reserve: tag === undefined ? 0 : BARE_TAG_RESERVE,
+            };
           },
         };
       };
@@ -215,8 +269,10 @@ function previewHeadingTag<TArgs, TDetails, TState extends object>(
     },
     /** Remembers the collapsed result body the call slot draws to decide the tag. */
     recordResult: (context: ToolRenderContext<TState, TArgs>, body: Component): Component => {
-      if (!context.expanded) collapsedResultBodies.set(context.state, body);
-      return body;
+      if (context.expanded) return body;
+      const recorded = new CollapsedResultBody(body);
+      collapsedResultBodies.set(context.state, recorded);
+      return recorded;
     },
     border: (shell: BorderedToolCall, context: ToolRenderContext<TState, TArgs>) => {
       const { state } = context;

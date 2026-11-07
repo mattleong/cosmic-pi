@@ -6,10 +6,17 @@ import { countLabel } from "pi-cosmic-core/display";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { WorkspaceToolDetailsSchema, type WorkspaceToolDetails } from "./details-schema.ts";
 
-function reviewPosition(details: WorkspaceToolDetails): string {
+/** Where a review page sits, widest first; every alternative says whether more is left to read. */
+function reviewPositions(details: WorkspaceToolDetails): string[] {
   const first = (details.offset ?? 0) === 0;
-  if (details.nextOffset === undefined) return first ? "whole review" : "last review page";
-  return `${first ? "first" : "next"} review page, more to read`;
+  if (details.nextOffset === undefined)
+    return first ? ["whole review"] : ["last review page", "last page"];
+  const position = first ? "first" : "next";
+  return [
+    `${position} review page, more to read`,
+    `${position} page, more to read`,
+    "more to read",
+  ];
 }
 
 const TESTING_LABELS = { "parent-tested": "tested", untested: "untested" } as const;
@@ -21,12 +28,37 @@ function applyCounters(details: WorkspaceToolDetails): string[] {
   return [`${countLabel(details.changedPathCount, "file")} applied · ${tested}`, tested];
 }
 
-function reviseLine(details: WorkspaceToolDetails): string {
-  if (!details.rebased) return "revision requested";
+// Narrower, a rebase's conflict count gives way first: its warning beneath the row states it.
+function reviseLines(details: WorkspaceToolDetails): string[] {
+  if (!details.rebased) return ["revision requested"];
   const conflicts = details.conflictCount ?? 0;
+  const rebased = "rebased · revision requested";
   return conflicts === 0
-    ? "rebased · revision requested"
-    : `rebased with ${countLabel(conflicts, "conflict")} · revision requested`;
+    ? [rebased, "revision requested"]
+    : [
+        `rebased with ${countLabel(conflicts, "conflict")} · revision requested`,
+        rebased,
+        "revision requested",
+      ];
+}
+
+/** A receipt's counter alternatives, widest first. */
+function workspaceCounters(details: WorkspaceToolDetails): string[] {
+  switch (details.operation) {
+    case "review":
+      return reviewPositions(details);
+    case "apply":
+      return applyCounters(details);
+    case "revise":
+      return reviseLines(details);
+    case "list":
+    case "prepare":
+    case "discard": {
+      const line = workspaceReceiptLine(details);
+      return line === undefined ? [] : [line];
+    }
+  }
+  return Fn.absurd(details.operation);
 }
 
 export function workspaceReceiptLine(details: WorkspaceToolDetails): string | undefined {
@@ -51,13 +83,13 @@ export function workspaceReceiptLine(details: WorkspaceToolDetails): string | un
       );
     }
     case "review":
-      return reviewPosition(details);
+      return reviewPositions(details)[0];
     case "prepare":
       return "ready to test";
     case "apply":
       return applyCounters(details)[0];
     case "revise":
-      return reviseLine(details);
+      return reviseLines(details)[0];
     case "discard":
       return "discarded";
   }
@@ -279,8 +311,7 @@ export function compactWorkspaceSummary(
   return {
     action: operation === "list" ? "inspect" : operation,
     subject: details.writerName ?? "",
-    counters:
-      details.operation === "apply" ? applyCounters(details) : line === undefined ? [] : [line],
+    counters: workspaceCounters(details),
     metadata: details.operation === "list" && line === undefined ? ["worktree metadata"] : [],
     issues,
     outcome: compactIssueSeverity(issues) ?? "success",

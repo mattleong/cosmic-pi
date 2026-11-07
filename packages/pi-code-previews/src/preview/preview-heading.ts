@@ -6,7 +6,13 @@ import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
 import type { CompactSummary } from "../tools/compact-summary";
-import { cutsCleanly, elideSubject, endElide, FACT_CUT_SLACK } from "./compact-header";
+import {
+  cutsCleanly,
+  elideSubject,
+  endElide,
+  FACT_CUT_SLACK,
+  SUBJECT_MINIMUM,
+} from "./compact-header";
 import type { TaggableHeading } from "./heading-tag";
 import { previewHeadingText, takeHeadingRoom, wrapPreviewHeading } from "./heading-wrap";
 import { drawsExpandedHeading } from "./preview-issues";
@@ -93,9 +99,6 @@ export function wrappedPreviewHeading(
 const singleLineFacts = (values: readonly string[] | undefined): string[] =>
   Arr.filter(Arr.map(values ?? [], compactSingleLine), Str.isNonEmpty);
 
-// The least room a cut subject keeps before a counter gives way to it, as compact headings keep.
-const SUBJECT_MINIMUM = 12;
-
 /**
  * A preview heading on one row, as tool rows draw theirs: the title, then the action, subject, a
  * counter, and metadata dimmed. Counters are alternatives, widest first, as on compact rows: the
@@ -115,13 +118,17 @@ export function previewHeadingRow(
   return layoutPreviewHeadingRow(title, summary, expanded, theme, width).row;
 }
 
-/** {@link previewHeadingRow} with the fact it keeps and the room its subject takes. */
+/**
+ * {@link previewHeadingRow} with the fact it keeps, its subject keeping `subjectMinimum` columns
+ * beside a counter, as compact headings keep.
+ */
 export function layoutPreviewHeadingRow(
   title: string,
   summary: CompactSummary,
   expanded: boolean,
   theme: Pick<Theme, "fg" | "bold">,
   width: number,
+  subjectMinimum = SUBJECT_MINIMUM,
 ): TaggableHeading {
   const action = compactSingleLine(summary.action ?? "");
   const subject = compactSingleLine(
@@ -132,6 +139,8 @@ export function layoutPreviewHeadingRow(
   const metadata = singleLineFacts(summary.metadata);
   const room =
     width - visibleWidth(compactSingleLine(title)) - 1 - (action ? visibleWidth(action) + 1 : 0);
+  // The title and action show whole beside a subject cut to its first column and `…`.
+  const identityComplete = room >= (subject ? 2 : -1);
   const draw = (shown: string, shownFacts: readonly string[], count: number): TaggableHeading => ({
     row: clipToWidth(
       renderToolHeader(
@@ -141,8 +150,7 @@ export function layoutPreviewHeadingRow(
       width,
     ),
     fact: count > 0 ? shownFacts[0] : undefined,
-    subjectShown: Math.max(0, Math.min(visibleWidth(shown), room)),
-    subjectWidth,
+    identityComplete,
   });
   const fits = (shownFacts: readonly string[], count: number) =>
     subjectWidth + visibleWidth(factTail(shownFacts, count)) <= room;
@@ -156,7 +164,7 @@ export function layoutPreviewHeadingRow(
     Arr.findFirst(
       counters.length > 0 ? counters : Arr.take(metadata, 1),
       (value) =>
-        room - visibleWidth(factTail([value], 1)) >= Math.min(SUBJECT_MINIMUM, subjectWidth),
+        room - visibleWidth(factTail([value], 1)) >= Math.min(subjectMinimum, subjectWidth),
     ),
   );
   const cut = (kept: readonly string[]) =>

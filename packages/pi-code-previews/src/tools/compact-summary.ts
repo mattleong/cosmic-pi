@@ -37,6 +37,8 @@ export interface CompactChild {
   pathSubject?: true;
   counters?: readonly string[];
   metadata?: readonly string[];
+  /** See `CompactSummary.subjectState`. */
+  subjectState?: true;
   issues?: readonly CompactIssue[];
   /** Plain facts shown only when expanded, after the call's issues. */
   details?: readonly CompactDetail[];
@@ -59,6 +61,12 @@ export interface CompactSummary {
   action?: string;
   counters?: readonly string[];
   metadata?: readonly string[];
+  /**
+   * The counters and metadata describe the subject's state, not the call's outcome, such as an
+   * agent read while `finished` or `running`: the heading keeps a fact even where it is the word
+   * the status glyph says, since the glyph reports the call.
+   */
+  subjectState?: true;
   showTiming?: true;
   showShortTiming?: true;
   outcome?: CompactOutcome;

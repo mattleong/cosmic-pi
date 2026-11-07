@@ -90,6 +90,8 @@ const summarizeList = (
   const summary = settled(
     {
       subject: details.only ? displayName(details.only.name) : "",
+      // One agent's state describes the agent, which the listing's own `✓` doesn't say.
+      ...(details.only && { subjectState: true as const }),
       counters: details.only
         ? states
         : [
@@ -162,6 +164,8 @@ const summarizeRead = (
       ...(details.agents.length > 0 &&
         askingInPart && { expandLabel: single ? "question" : "questions" }),
       subject: single ? displayName(only.name) : "",
+      // The agent's state, such as `finished`, isn't what the read's own `✓` says.
+      ...(single && { subjectState: true as const }),
       counters: single ? [stateLabel(only.state)] : [countLabel(details.agents.length, "agent")],
       metadata: [
         ...(empty > 0 ? [single ? "no message yet" : `${empty} without a message`] : []),

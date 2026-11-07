@@ -421,6 +421,25 @@ const scenarios: ReadonlyArray<Scenario> = [
     },
   },
   {
+    title: "wait matched one of several alternatives in a long-named task",
+    input: {
+      action: "wait",
+      id: "task-0000000003",
+      until: "output",
+      contains: ["error", "EADDRINUSE", "Local:"],
+    },
+    service: {
+      wait: () =>
+        Effect.succeed(
+          taskWait({ ...running, name: "storybook-docs-server" }, "matched", {
+            matchCursor: 10,
+            matchedText: "Local:",
+            matchedLine: "➜ Local: http://localhost:5173/",
+          }),
+        ),
+    },
+  },
+  {
     title: "wait completed",
     input: { action: "wait", id: "task-0000000008", until: "exit" },
     service: { wait: () => Effect.succeed(taskWait(finished, "completed")) },

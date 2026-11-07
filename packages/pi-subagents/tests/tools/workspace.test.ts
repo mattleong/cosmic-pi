@@ -356,6 +356,25 @@ describe("workspace tool", () => {
       }
       expect(JSON.stringify(first.details)).not.toContain("content");
       expect(JSON.stringify(second.details)).not.toContain("content");
+      // Narrower rows keep saying whether pages remain: every alternative of a page with more
+      // after it says so, widest first, and the last page's never does.
+      const firstCounters =
+        summarize({ action: "review", workspaceId: "workspace" }, first)?.counters ?? [];
+      expect(firstCounters.length).toBeGreaterThan(1);
+      expect(Arr.every(firstCounters, (entry) => Str.includes("more")(entry))).toBe(true);
+      expect(
+        Arr.every(Arr.drop(firstCounters, 1), (entry, index) => {
+          const wider = firstCounters[index];
+          return wider !== undefined && entry.length < wider.length;
+        }),
+      ).toBe(true);
+      const lastCounters =
+        summarize(
+          { action: "review", workspaceId: "workspace", revisionId: "immutable", offset: 16_000 },
+          second,
+        )?.counters ?? [];
+      expect(lastCounters.length).toBeGreaterThan(0);
+      expect(Arr.some(lastCounters, (entry) => Str.includes("more")(entry))).toBe(false);
     },
   );
 
