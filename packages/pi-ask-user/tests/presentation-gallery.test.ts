@@ -323,13 +323,17 @@ const message = (
   title: string,
   outcome: AskUserOutcome,
   requestId: string,
+  questions: ReadonlyArray<Pick<AskUserQuestion, "key" | "title">> = asyncRequest.questions,
 ): GalleryMessageScenario => {
-  const delivered = snapshot(requestId, {
-    ...settled,
-    status: outcome.outcome,
-    delivery: "sending",
-    outcome,
-  });
+  const delivered = {
+    ...snapshot(requestId, {
+      ...settled,
+      status: outcome.outcome,
+      delivery: "sending",
+      outcome,
+    }),
+    titles: Arr.map(questions, (question) => ({ key: question.key, title: question.title })),
+  };
   return {
     title,
     message: {
@@ -352,6 +356,19 @@ const messages = [
   message("answers submitted", chosenWithCustom, "ask-1"),
   message("questionnaire cancelled", cancelled, "ask-2"),
   message("an answer over two lines", customOverTwoLines, "ask-3"),
+  // The heading names the lone question, so its answer leaves the title to it where it shows whole.
+  message("a lone answer", { outcome: "submitted", answers: [chosen] }, "ask-4", [environment]),
+  // A long title shortens to its label; a heading too narrow to show that label whole leaves the
+  // answer its label.
+  {
+    ...message(
+      "a lone answer to a long title",
+      { outcome: "submitted", answers: [chosen] },
+      "ask-5",
+      [{ key: "environment", title: "Which environment should receive this release first" }],
+    ),
+    views: [...GALLERY_VIEWS, { expanded: false, width: 40 }],
+  },
 ];
 
 const registerAll = (pi: ExtensionAPI) => {

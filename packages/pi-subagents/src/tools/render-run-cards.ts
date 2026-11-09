@@ -10,7 +10,13 @@ import { quotesWhole } from "./compact-run-issues.ts";
 import { aggregateUsage } from "../ui/metrics.ts";
 import { savedFileFact, workspaceNote } from "../ui/notice-facts.ts";
 import { agentFactLines, runRouteFact, writerFact } from "../ui/run-facts.ts";
-import { runStateColor, runStateLabel, runStateSnapshotGlyph } from "../ui/run-state.ts";
+import { withoutStatusGlyphWords } from "pi-cosmic-ui/manager";
+import {
+  runRowStateLabel,
+  runSnapshotGlyphMeaning,
+  runStateColor,
+  runStateSnapshotGlyph,
+} from "../ui/run-state.ts";
 import type { SubagentRunCard } from "./details-schema.ts";
 import { runTiming } from "./render-run-rows.ts";
 import { isTextFragment } from "./text-fragments.ts";
@@ -67,7 +73,7 @@ export const cardShowsQuestion = (card: SubagentRunCard): boolean => {
 };
 
 /**
- * A run's block: its state when that isn't a plain finish, then its words or progress. Collapsed,
+ * A run's block: its state where its glyph doesn't say it, then its words or progress. Collapsed,
  * a failure's raw text stays behind the expansion; the row's issue already names its cause. A
  * question is its issue's quote, and the block adds the rest of a long one when expanded.
  */
@@ -81,9 +87,7 @@ const cardBlock = (card: SubagentRunCard, expanded: boolean): AgentTextBlock => 
     glyph: runStateSnapshotGlyph(card.state),
     tone: runStateColor(card.state),
     name: card.name,
-    ...(card.state !== "completed" && {
-      status: runStateLabel(asking ? "waiting_for_parent" : card.state),
-    }),
+    status: runRowStateLabel(asking ? "waiting_for_parent" : card.state),
     ...(words !== undefined && { text: words, verbatim: words === card.error }),
     notes: [
       ...(!isTerminalRunState(card.state) && !asking && words === undefined && card.progress
@@ -143,7 +147,10 @@ const GROUP_VERBS: Readonly<Record<SubagentRunState, string>> = {
   stopped: "Stopped",
 };
 
-/** Runs grouped by state in one line each, such as `⊘ Stopped auth-review, schema-check`. */
+/**
+ * Runs grouped by state in one line each, such as `⊘ auth-review, schema-check`. A group's verb
+ * shows only where its glyph doesn't say it: `✓ Already finished auth-review`, `• Still running`.
+ */
 export const stateGroupLines = (
   cards: ReadonlyArray<SubagentRunCard>,
   width: number,
@@ -154,17 +161,16 @@ export const stateGroupLines = (
   for (const card of cards)
     groups.set(card.state, [...(groups.get(card.state) ?? []), sanitizeTerminalLine(card.name)]);
   // Expanded, a long list of names wraps beneath the first.
-  return Arr.flatMap([...groups], ([state, names]) =>
-    factRowLines(
-      [
-        [runStateSnapshotGlyph(state), runStateColor(state)],
-        [` ${GROUP_VERBS[state]} `],
-        [Arr.join(names, ", "), "toolTitle"],
-      ],
+  return Arr.flatMap([...groups], ([state, names]) => {
+    const glyph = runStateSnapshotGlyph(state);
+    const verb = withoutStatusGlyphWords(GROUP_VERBS[state], runSnapshotGlyphMeaning(state));
+    const lead = verb === undefined ? " " : ` ${verb} `;
+    return factRowLines(
+      [[glyph, runStateColor(state)], [lead], [Arr.join(names, ", "), "toolTitle"]],
       width,
       theme,
       expanded,
-      { hang: visibleWidth(`${runStateSnapshotGlyph(state)} ${GROUP_VERBS[state]} `) },
-    ),
-  );
+      { hang: visibleWidth(`${glyph}${lead}`) },
+    );
+  });
 };

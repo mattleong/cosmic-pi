@@ -106,6 +106,18 @@ describe("background task compact semantics", () => {
     expect(find(result, `task-0000000001:${code}`)?.severity).toBe(severity);
   });
 
+  it("states a failing exit code with its cause, or what the code means", () => {
+    const message = (fields: Partial<Snapshot>) =>
+      find(
+        project({ action: "status", snapshot: { ...snapshot, ...fields } }),
+        `${snapshot.id}:exit-code`,
+      )?.message;
+    const caused = message({ state: "exited", exitCode: 2, failureCause: "missing semicolon" });
+    expect(caused).toMatch(/\b2\b.*missing semicolon/u);
+    expect(caused).not.toMatch(/Exited with code/u);
+    expect(message({ state: "exited", exitCode: 137 })).toMatch(/137.*killed/u);
+  });
+
   it("writes every issue message in the shared style, without task IDs", () => {
     const snapshots = [
       { ...snapshot, state: "failed", error: "Error: spawn ENOENT\n  at spawn" },

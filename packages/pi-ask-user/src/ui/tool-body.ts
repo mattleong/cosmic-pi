@@ -10,6 +10,7 @@ import {
   expandedArguments,
   expandedDetails,
   expandedSection,
+  headingShowedSubject,
   hiddenPreviewExpandHintForShell,
   previewHeadingText,
   previewIssuesSlot,
@@ -95,12 +96,22 @@ const answerEntries = (
     note: answer.note === undefined ? undefined : stripTerminalControls(answer.note),
   }));
 
-/** Rows that depend only on the width, rebuilt when it changes. */
-const widthRows = (rows: (width: number) => string[]): Component => {
-  let last: { readonly width: number; readonly rows: string[] } | undefined;
+/**
+ * Rows that depend only on the width and an optional `variant` read at each draw, rebuilt when
+ * either changes.
+ */
+const widthRows = (
+  rows: (width: number, variant: boolean) => string[],
+  variant: () => boolean = () => false,
+): Component => {
+  let last:
+    | { readonly width: number; readonly variant: boolean; readonly rows: string[] }
+    | undefined;
   return {
     render: (width) => {
-      if (last?.width !== width) last = { width, rows: rows(width) };
+      const current = variant();
+      if (last?.width !== width || last.variant !== current)
+        last = { width, variant: current, rows: rows(width, current) };
       return last.rows;
     },
     invalidate: () => {
@@ -155,7 +166,9 @@ export const answersHideMore = (answers: readonly ReplayedAnswer[]): boolean =>
 /**
  * A row's answers. Bounded, each answer and note shows its first line, cut at a word boundary with
  * `…` where it doesn't fit; the row's tag, never a line of the body's own, offers the rest. Inside
- * a preview row (`row`), answers with later lines hidden name the tag `answers`.
+ * a preview row (`row`), answers with later lines hidden name the tag `answers`. `titledHeading` is
+ * the renderer state of a heading whose subject is `titles`: a lone answer to a lone question then
+ * leaves out its label wherever that heading showed the title whole.
  */
 export function answersBody(
   answers: readonly ReplayedAnswer[],
@@ -163,8 +176,11 @@ export function answersBody(
   theme: Theme,
   bounded: boolean,
   row?: { readonly state: unknown },
+  titledHeading?: WeakKey,
 ): Component {
   const entries = answerEntries(answers, titles);
+  const [only] = answers;
+  const lone = titles.size === 1 && answers.length === 1 && titles.has(only?.key ?? "");
   if (!bounded)
     return widthRows((width) => {
       const lines: string[] = [];
@@ -193,7 +209,10 @@ export function answersBody(
     row !== undefined && answersHideMore(answers)
       ? hiddenPreviewExpandHintForShell(row, theme, "answers")
       : "";
-  return widthRows((width) => {
+  // The heading draws first in the same pass, so whether it showed the title whole is read per draw.
+  const unlabeled = () =>
+    lone && titledHeading !== undefined && headingShowedSubject(titledHeading);
+  return widthRows((width, bare) => {
     // A long answer or note is cut at a word boundary, so every word left on the row is whole.
     // A first line with more after it ends in `…` too, as any quote cut before its end does.
     const fit = (lead: string, line: FirstLine, style: (value: string) => string): string => {
@@ -206,7 +225,7 @@ export function answersBody(
         : clipToWidth(`${lead}${style(endElide(line.text, room))}`, width);
     };
     const rows = Arr.flatMap(firstLines, ({ label, answer, note }) => {
-      const answerLine = fit(`${theme.fg("muted", `${label}:`)} `, answer, Fn.identity);
+      const answerLine = fit(bare ? "" : `${theme.fg("muted", `${label}:`)} `, answer, Fn.identity);
       return note === undefined
         ? [answerLine]
         : [
@@ -215,7 +234,7 @@ export function answersBody(
           ];
     });
     return hint ? [...rows, clipToWidth(hint, width)] : rows;
-  });
+  }, unlabeled);
 }
 
 const rawResultSection = (theme: Theme, text: string, isError: boolean): Component =>
@@ -338,11 +357,12 @@ export function callBody(
   theme: Theme,
   context: Pick<RenderContext, "expanded" | "state" | "isPartial" | "executionStarted">,
 ): Component {
-  const heading = previewHeadingText(() => renderToolHeader(header, theme));
+  const state: unknown = context.state;
+  const row = Predicate.isObject(state) ? state : undefined;
+  // The heading reports whether it showed its titles whole, so an answer beneath may drop its label.
+  const heading = previewHeadingText(() => renderToolHeader(header, theme), row);
   // A started call spins until it reports where its questions stand, as its expanded row does.
   if (!context.expanded) {
-    const state: unknown = context.state;
-    const row = Predicate.isObject(state) ? state : undefined;
     const running = context.executionStarted && context.isPartial;
     return stacked([
       heading,

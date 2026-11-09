@@ -8,6 +8,7 @@ import { clipToWidth } from "pi-cosmic-ui/manager";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { headingShowedSubject } from "../../src/preview/heading-coverage";
+import { previewHeadingText } from "../../src/preview/heading-wrap";
 import { textResult } from "../support/render";
 
 beforeEach(() =>
@@ -71,4 +72,36 @@ test("a compact heading reports the subject whole only where it wraps it uncut",
   expect(expandedText(clippedHeading, 100)).not.toContain(FALLBACK);
   // Too narrow for the expanded heading's rows, the subject is cut and the body keeps it.
   expect(expandedText(clippedHeading, 14)).toContain(FALLBACK);
+});
+
+test("a producer's collapsed preview heading reports the subject it drew whole", () => {
+  const whole = {};
+  const heading = previewHeadingText(() => `Ask user ${SUBJECT}`, whole);
+  expect(headingShowedSubject(whole)).toBe(false);
+  heading.render(120);
+  expect(headingShowedSubject(whole)).toBe(true);
+  // Rows a renderer ended in an ellipsis cut the subject, whatever the heading's text held.
+  const clipped = {};
+  previewHeadingText(() => `Ask user ${clipToWidth(SUBJECT, 20, "…")}`, clipped).render(120);
+  expect(headingShowedSubject(clipped)).toBe(false);
+});
+
+test("a collapsed result body sees what its own preview heading showed on the first draw", () => {
+  applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
+  const harness = createToolPresentationHarness(
+    withCodePreviewShell(
+      {
+        ...createReadToolDefinition("/project"),
+        renderCall: (_args, _theme, context) =>
+          previewHeadingText(() => `Ask user ${SUBJECT}`, context.state),
+        renderResult: (_result, _options, _theme, context) => subjectBody(context.state),
+      },
+      { compactSummary: () => ({ action: "ask", subject: SUBJECT, outcome: "success" }) },
+    ),
+  );
+  harness.call({ path: "a.ts" });
+  harness.result(textResult("done"));
+  const text = stripAnsi(Arr.join(harness.render(120), "\n"));
+  expect(text).toContain("BODY");
+  expect(text).not.toContain(FALLBACK);
 });

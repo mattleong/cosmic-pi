@@ -148,8 +148,9 @@ const failureLine = (
   const only = failures.length === 1 ? failures[0] : undefined;
   if (!failures.length) return undefined;
   const where = " · /activity";
+  // One failure's `✗` says it failed; a count still needs the word.
   const subject = only
-    ? `${clipToWidth(only.title, Math.max(4, width - where.length - 11), "…")} failed`
+    ? clipToWidth(only.title, Math.max(4, width - where.length - 4), "…")
     : `${failures.length} failed`;
   const glyph = managerActivityGlyph("failed");
   const theme = options.theme;

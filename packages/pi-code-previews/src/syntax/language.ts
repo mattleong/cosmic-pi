@@ -72,22 +72,41 @@ const SHEBANG_ALIASES = new Map<string, string>([
   ["php", "php"],
 ]);
 
-export function resolvePreviewLanguage({
+/**
+ * A file's preview language and where it came from: `path` when its name or extension says it, so
+ * a heading that shows the path need not repeat it, or `content` when only a shebang or the text
+ * itself does.
+ */
+export interface DetectedPreviewLanguage {
+  readonly language: string;
+  readonly from: "path" | "content";
+}
+
+interface PreviewLanguageInput {
+  readonly path?: string | undefined;
+  readonly content?: string | undefined;
+}
+
+export function detectPreviewLanguage({
   path,
   content,
-}: {
-  path?: string | undefined;
-  content?: string | undefined;
-}): string | undefined {
+}: PreviewLanguageInput): DetectedPreviewLanguage | undefined {
   // Content heuristics can parse the whole document, so they run only when the path is unknown.
-  return firstSupported([
+  const fromPath = firstSupported([
     () => path && JSX_LANGUAGES.get(Str.toLowerCase(nodePath.extname(path))),
     () => path && getLanguageFromPath(path),
     () => languageFromPath(path),
+  ]);
+  if (fromPath !== undefined) return { language: fromPath, from: "path" };
+  const fromContent = firstSupported([
     () => languageFromShebang(content),
     () => languageFromContent(content),
   ]);
+  return fromContent === undefined ? undefined : { language: fromContent, from: "content" };
 }
+
+export const resolvePreviewLanguage = (input: PreviewLanguageInput): string | undefined =>
+  detectPreviewLanguage(input)?.language;
 
 function languageFromPath(path: string | undefined): string | undefined {
   if (!path) return undefined;

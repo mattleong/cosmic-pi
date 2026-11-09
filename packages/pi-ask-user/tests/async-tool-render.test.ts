@@ -2,6 +2,7 @@ import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import { describe, expect, it } from "vitest";
 import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
+import { applyPresentationSettings } from "pi-code-previews/testing";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import type { AskUserQuestion } from "../src/questionnaire/schema.ts";
 import {
@@ -180,4 +181,45 @@ describe("async questionnaire replay rendering", () => {
       ),
     ).toContain("Route:");
   });
+
+  it.each(["compact", "preview"] as const)(
+    "leaves a lone answer's label to a %s heading that shows its whole title",
+    (style) => {
+      const restore = applyPresentationSettings({
+        toolCallCollapsedStyle: style,
+        toolCallBackground: "off",
+        toolCallTiming: false,
+      });
+      try {
+        const lone = (title: string, width: number) =>
+          Arr.join(
+            renderAsyncMessage(
+              asyncMessage("", {
+                generation: "g",
+                deliveryId: "d",
+                requestId: "r",
+                outcome: {
+                  outcome: "submitted",
+                  answers: [{ key: "env", kind: "text", text: "Staging" }],
+                },
+                titles: [{ key: "env", title }],
+              }),
+              { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
+              theme,
+            ).render(width),
+            "\n",
+          );
+        const shown = lone("Environment", 57);
+        expect(shown).toContain("Staging");
+        expect(shown).not.toContain("Environment:");
+        // A title the heading had to cut keeps its label beside the answer.
+        const long = "Which environment should receive this release first";
+        expect(lone(long, 40)).toMatch(/: Staging/u);
+        // A title longer than a label is shortened as plain text, never as escaped styling.
+        expect(lone(long, 100)).not.toContain("␛");
+      } finally {
+        restore();
+      }
+    },
+  );
 });

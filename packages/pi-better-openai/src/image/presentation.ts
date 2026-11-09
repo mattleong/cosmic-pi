@@ -25,7 +25,6 @@ import {
 } from "pi-code-previews";
 import { formatBytes } from "pi-cosmic-core/display";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
-import { restatesText } from "pi-cosmic-core/message-text";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth, wrapFacts } from "pi-cosmic-ui/manager";
 import {
@@ -35,10 +34,10 @@ import {
   toolStatusLine,
 } from "pi-cosmic-ui/tool";
 import {
-  imageFailureIssue,
   imageHeadingPrompt,
   imageHeadingsShowPrompt,
   imageRecord,
+  restatesImageFailure,
 } from "./compact-summary.ts";
 import { imageResultText } from "./result-text.ts";
 import type { CodexImageDetails, ToolParams } from "./types.ts";
@@ -264,8 +263,7 @@ const technicalDetails = (record: CodexImageDetails, view: ImageView, theme: The
 };
 
 // An error that only restates its issue adds nothing; the issue above already shows it.
-const restatesIssue = (raw: string, error: boolean): boolean =>
-  error && restatesText(raw, imageFailureIssue(raw).message);
+const restatesIssue = (raw: string, error: boolean): boolean => error && restatesImageFailure(raw);
 
 const expandedExtras = (
   record: CodexImageDetails | undefined,

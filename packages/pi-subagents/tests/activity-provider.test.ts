@@ -304,6 +304,52 @@ describe("subagent activity provider", () => {
     expect(JSON.stringify(detail?.technical)).toContain("/private/workspace");
   });
 
+  it("leads recent tool calls with the glyph of how they ended instead of a trailing word", () => {
+    const run = view({
+      id: "run",
+      state: "running",
+      sessionEvents: [
+        {
+          type: "tool",
+          toolCallId: "a",
+          toolName: "bash",
+          target: "sleep 25",
+          state: "completed",
+          startedAt: 1,
+        },
+        {
+          type: "tool",
+          toolCallId: "b",
+          toolName: "bash",
+          target: "pnpm test",
+          state: "failed",
+          startedAt: 2,
+        },
+        {
+          type: "tool",
+          toolCallId: "c",
+          toolName: "read",
+          target: "src/a.ts",
+          state: "running",
+          startedAt: 3,
+        },
+      ],
+    });
+    const detail = subagentActivityDetail({ revision: 1, runs: [run] }, "run");
+    const lines = Arr.flatMap(detail?.sections ?? [], (section) => Str.split(section.body, "\n"));
+    const line = (target: string) =>
+      Option.getOrElse(
+        Arr.findFirst(lines, (entry) => Fn.pipe(entry, Str.includes(target))),
+        () => "",
+      );
+    expect(line("sleep 25")).toMatch(/^✓ /u);
+    expect(line("sleep 25")).not.toMatch(/done$/u);
+    expect(line("pnpm test")).toMatch(/^✗ /u);
+    expect(line("pnpm test")).not.toMatch(/failed$/u);
+    // Details don't redraw, so a call still running keeps its word beside the neutral glyph.
+    expect(line("src/a.ts")).toMatch(/^• .*running$/u);
+  });
+
   it("describes what a running agent is doing and keeps tool output indented as printed", () => {
     const started = startToolSessionEvent([], {
       toolCallId: "t",

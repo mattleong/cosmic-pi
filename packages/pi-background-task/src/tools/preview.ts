@@ -22,7 +22,9 @@ import {
   managerNoticeColor,
   managerNoticeGlyph,
   SUITE_STATUS_GLYPHS,
+  withoutStatusGlyphWords,
   wrapFacts,
+  type StatusGlyphMeaning,
 } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { countTaskStates, failingExitCode, type BackgroundTaskSnapshot } from "../task/model.ts";
@@ -80,32 +82,48 @@ interface TaskLineOptions {
 const startedState = (task: BackgroundTaskSnapshot): boolean =>
   task.state === "starting" || task.state === "running";
 
+interface ListedGlyph {
+  readonly glyph: string;
+  readonly color: Parameters<PreviewTheme["fg"]>[0];
+  /** What the glyph says in words; the neutral `•` says nothing, so words beside it stay. */
+  readonly meaning: StatusGlyphMeaning | undefined;
+}
+
 // A listed row's status glyph, as other suite lists mark them; a running task in a saved
 // result is neutral, since a spinner would freeze.
 const LISTED_GLYPHS = {
-  success: { glyph: SUITE_STATUS_GLYPHS.succeeded, color: "success" },
-  error: { glyph: SUITE_STATUS_GLYPHS.failed, color: "error" },
-  cancelled: { glyph: SUITE_STATUS_GLYPHS.stopped, color: "muted" },
-  uncertain: { glyph: SUITE_STATUS_GLYPHS.uncertain, color: "warning" },
-  returned: { glyph: SUITE_STATUS_GLYPHS.neutral, color: "accent" },
-} as const satisfies Record<
-  TaskOutcome,
-  { readonly glyph: string; readonly color: Parameters<PreviewTheme["fg"]>[0] }
->;
+  success: { glyph: SUITE_STATUS_GLYPHS.succeeded, color: "success", meaning: "done" },
+  error: { glyph: SUITE_STATUS_GLYPHS.failed, color: "error", meaning: "failed" },
+  cancelled: { glyph: SUITE_STATUS_GLYPHS.stopped, color: "muted", meaning: "stopped" },
+  uncertain: { glyph: SUITE_STATUS_GLYPHS.uncertain, color: "warning", meaning: "uncertain" },
+  returned: { glyph: SUITE_STATUS_GLYPHS.neutral, color: "accent", meaning: undefined },
+} as const satisfies Record<TaskOutcome, ListedGlyph>;
 
-const listedGlyph = (task: BackgroundTaskSnapshot) =>
-  task.state === "stopping"
-    ? ({ glyph: SUITE_STATUS_GLYPHS.stopping, color: "warning" } as const)
-    : LISTED_GLYPHS[listedTaskOutcome(task)];
+const STOPPING_GLYPH: ListedGlyph = {
+  glyph: SUITE_STATUS_GLYPHS.stopping,
+  color: "warning",
+  meaning: "stopping",
+};
+
+const listedGlyph = (task: BackgroundTaskSnapshot): ListedGlyph =>
+  task.state === "stopping" ? STOPPING_GLYPH : LISTED_GLYPHS[listedTaskOutcome(task)];
 
 /**
- * A listed row's state in words, unless its glyph already says it (finished or failed) or, for a
- * timeout, an issue beneath the row does.
+ * A listed row's state in words, less what its glyph already says (`stopped` beside `⊘`). A
+ * finished or failed task leaves its state to the glyph and its exit status, whatever the glyph,
+ * and a timeout to the issue beneath the row when there is one.
  */
-const listedStateShown = (task: BackgroundTaskSnapshot, issuesBeneath: boolean): boolean =>
-  task.state !== "exited" &&
-  task.state !== "failed" &&
-  !(task.state === "timed_out" && issuesBeneath);
+const listedStateLabel = (
+  task: BackgroundTaskSnapshot,
+  label: string,
+  glyph: ListedGlyph,
+  issuesBeneath: boolean,
+): string | undefined =>
+  task.state === "exited" ||
+  task.state === "failed" ||
+  (task.state === "timed_out" && issuesBeneath)
+    ? undefined
+    : withoutStatusGlyphWords(label, glyph.meaning);
 
 /** Text drawn in one style; a fact is one or more of them. */
 interface Styled {
@@ -134,9 +152,12 @@ function taskPreviewRow(
       ? { color: managerActivityColor("done"), label: "started" }
       : taskStatePresentation(task.state);
   const status = expanded ? exitStatus(task) : undefined;
-  const stateShown = inHeading || listedStateShown(task, issuesBeneath);
+  const listed = listedGlyph(task);
+  const { glyph, color } = listed;
+  const stateLabel = inHeading
+    ? state.label
+    : listedStateLabel(task, state.label, listed, issuesBeneath);
   const stateStyle = (text: string) => theme.fg(state.color, text);
-  const { glyph, color } = listedGlyph(task);
   const facts: Fact[] = [
     ...(inHeading
       ? []
@@ -146,7 +167,7 @@ function taskPreviewRow(
             { text: taskDisplayName(task), style: (text: string) => theme.fg("toolOutput", text) },
           ],
         ]),
-    ...(stateShown ? [[{ text: state.label, style: stateStyle }]] : []),
+    ...(stateLabel ? [[{ text: stateLabel, style: stateStyle }]] : []),
     ...(status ? [[{ text: status, style: stateStyle }]] : []),
     // An unnamed task's display name is its command. Expanded beneath a heading that names it, the
     // command appears too, since nothing proves that heading drew it whole; a start's request

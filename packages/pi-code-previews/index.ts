@@ -38,6 +38,7 @@ export {
   receivedArguments,
 } from "./src/tools/argument-failure";
 export {
+  exitIssueMessage,
   exitStatusMeaning,
   outputFailureLine,
   OUTPUT_FAILURE_LINE_LIMIT,

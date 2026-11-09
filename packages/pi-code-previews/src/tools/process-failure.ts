@@ -74,3 +74,11 @@ export function exitStatusMeaning(
     (exitCode === null || exitCode === undefined ? undefined : EXIT_MEANINGS.get(exitCode))
   );
 }
+
+/**
+ * A failed exit as its collapsed issue states it, the code and then its cause:
+ * `Exit 1: does-not-exist.txt not found`, or `Exit code 1` alone, which would otherwise read like a
+ * label. The row's `✗` already says the command failed.
+ */
+export const exitIssueMessage = (exitCode: number, cause: string | undefined): string =>
+  cause ? `Exit ${exitCode}: ${cause}` : `Exit code ${exitCode}`;

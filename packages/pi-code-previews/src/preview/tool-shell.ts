@@ -10,6 +10,7 @@ import {
 } from "./preview-issues";
 import { drawsRows, previewExpandLabel, showsAffordance } from "./expand-affordance";
 import { BARE_TAG_RESERVE, tagFirstRow } from "./heading-tag";
+import { headingShowedSubject } from "./heading-coverage";
 import type { CompactSummaryProvider } from "../tools/compact-summary";
 import {
   previewExpandedCall,
@@ -232,18 +233,23 @@ function previewHeadingTag<TArgs, TDetails, TState extends object>(
       const { state } = context;
       return (width) => {
         const current = frames.latestFor(state);
-        const result =
+        const peekResult = () =>
           current && frames.currentResult(current)
             ? (collapsedResultBodies.get(state)?.peek(width) ?? [])
             : undefined;
+        const coverage = headingShowedSubject(state);
+        const peeked = peekResult();
         // The heading first keeps room for the tag the result alone calls for; rows that then
         // decide otherwise draw again with the room their tag takes, none when it is withdrawn.
-        const expected = current ? label(current, result ?? [], result) : undefined;
+        const expected = current ? label(current, peeked ?? [], peeked) : undefined;
         const reserve = expected === undefined ? 0 : BARE_TAG_RESERVE;
         return {
           reserve,
           place: (rows) => {
             collapsedCallRows.set(state, rows);
+            // The result was peeked before the heading drew; a body that leaves out a subject the
+            // heading showed whole draws again once the heading has changed what it reports.
+            const result = headingShowedSubject(state) === coverage ? peeked : peekResult();
             if (!current || !drawsRows(rows)) return { rows, reserve };
             const tag = label(current, [...rows, ...(result ?? [])], result);
             return {

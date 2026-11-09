@@ -3,7 +3,7 @@ import * as Str from "effect/String";
 import { compactIssueSeverity } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import { describe, expect, it } from "vitest";
-import { imageCompactSummaryFor } from "../src/image/compact-summary.ts";
+import { imageCompactSummaryFor, restatesImageFailure } from "../src/image/compact-summary.ts";
 
 const imageCompactSummary = imageCompactSummaryFor("compact");
 import type { CodexImageDetails } from "../src/image/types.ts";
@@ -68,8 +68,26 @@ describe("image generation failures", () => {
     const [issue] = summary?.issues ?? [];
     expect(summary?.outcome).toBe("error");
     expect(issue?.message).toContain("rejected by the safety system");
+    expect(issue?.message).toContain("HTTP 400");
+    // The row's ✗ already says generation failed; the issue states only why.
+    expect(issue?.message).not.toContain("Image generation failed");
     expect(issue?.detail).toBeDefined();
     expect(styleProblems(summary)).toEqual([]);
+  });
+
+  it("states a failed record's missing cause without restating that it failed", () => {
+    const [issue] = imageCompactSummary(input("failed"))?.issues ?? [];
+    expect(issue?.message).not.toContain("Image generation failed");
+    expect(issue?.detail).toBeDefined();
+  });
+
+  it("hides raw failure text that says only its issue's cause, and keeps anything more", () => {
+    expect(restatesImageFailure("Image generation failed: OpenAI gave no reason.")).toBe(true);
+    expect(
+      restatesImageFailure(
+        "Image generation failed: OpenAI gave no reason.\nrequest id req_123 at stage upload",
+      ),
+    ).toBe(false);
   });
 });
 

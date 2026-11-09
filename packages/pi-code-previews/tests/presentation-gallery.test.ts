@@ -1464,6 +1464,12 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "write",
+    title: "write extensionless script whose shebang names its language",
+    args: { path: "/project/bin/deploy", content: "#!/usr/bin/env bash\nset -eu\npnpm build\n" },
+    result: text("Successfully wrote to /project/bin/deploy", writeBefore(undefined)),
+  },
+  {
+    tool: "write",
     title: "write new file with lines wider than the code column",
     args: { path: "/project/src/cart.test.ts", content: cartTestSource },
     result: text("Successfully wrote to /project/src/cart.test.ts", writeBefore(undefined)),

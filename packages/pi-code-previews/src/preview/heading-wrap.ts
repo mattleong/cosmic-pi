@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { recordHeadingSubject } from "./heading-coverage";
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const ESC = "\u001b";
@@ -242,8 +243,13 @@ export function takeHeadingRoom(): HeadingRoom | undefined {
   return room;
 }
 
-/** A component that draws a preview heading with {@link wrapPreviewHeading}. */
-export function previewHeadingText(text: () => string): Component {
+/**
+ * A component that draws a preview heading with {@link wrapPreviewHeading}. Given the row's renderer
+ * `state`, a heading whose text holds the subject whole records each draw for `headingShowedSubject`,
+ * so a body drawn after it in the same pass can leave out a field that only repeats the subject; a
+ * row that ends in `…` records the subject incomplete.
+ */
+export function previewHeadingText(text: () => string, state?: WeakKey): Component {
   const room = takeHeadingRoom();
   let cached:
     | {
@@ -264,6 +270,7 @@ export function previewHeadingText(text: () => string): Component {
           reserve,
           rows: wrapPreviewHeading(current, width, reserve),
         };
+      if (state !== undefined) recordHeadingSubject(state, true, cached.rows);
       return cached.rows;
     },
     invalidate() {

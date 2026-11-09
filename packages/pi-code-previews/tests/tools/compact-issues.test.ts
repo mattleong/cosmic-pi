@@ -70,6 +70,30 @@ test("the style guard flags machine text and accepts human messages", () => {
     });
 });
 
+test("the style guard flags an error that says what failed before its cause", () => {
+  for (const message of [
+    "Image generation failed: OpenAI gave no reason",
+    "The questionnaire failed, so no answer was recorded",
+  ]) {
+    expect({ message, flagged: issueMessageStyleProblems(message).length > 0 }).toEqual({
+      message,
+      flagged: true,
+    });
+    // A warning or info issue isn't under a `✗`, so it may say what failed.
+    expect(issueMessageStyleProblems(message, { severity: "warning" })).toEqual([]);
+  }
+  for (const message of [
+    "OpenAI gave no reason",
+    "Exit 1: does-not-exist.txt not found",
+    "The script failed",
+    "2 failed: auth, billing",
+  ])
+    expect({ message, problems: issueMessageStyleProblems(message) }).toEqual({
+      message,
+      problems: [],
+    });
+});
+
 describe("summary resolution", () => {
   const base: CompactSummary = { subject: "work", outcome: "success" };
 

@@ -123,7 +123,7 @@ export const SUBJECT_MINIMUM = 12;
  * Lays out `identity subject · counter`, choosing the first counter alternative that leaves the
  * subject `subjectMinimum` columns; a subject cut beside it keeps whole words. Without counters the
  * first optional fact takes a counter's place when such a cut exists (or keeps a path's file name),
- * so a heading whose subject is cut still shows its outcome, such as `finished in 1m 33s`. `fact` is
+ * so a heading whose subject is cut still shows its outcome, such as `timed out after 30s`. `fact` is
  * the counter or outcome fact shown, and `identityComplete` whether the identity shows whole.
  */
 export function layoutCompactHeader(

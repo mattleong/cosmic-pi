@@ -29,8 +29,11 @@ export interface CodePreviewMessage {
   readonly label?: string | undefined;
   /** The settled heading: action, subject, counters, metadata, outcome, and issues. */
   readonly summary: CompactSummary;
-  /** The collapsed body, which the caller bounds. Omitted, a compact row stands alone. */
-  readonly collapsed?: (() => Component | undefined) | undefined;
+  /**
+   * The collapsed body, which the caller bounds. Omitted, a compact row stands alone.
+   * `headingState` is the key `headingShowedSubject` reads, as for the expanded body.
+   */
+  readonly collapsed?: ((headingState: WeakKey) => Component | undefined) | undefined;
   /**
    * The complete expanded body; defaults to the collapsed body. `headingState` is the key
    * `headingShowedSubject` reads, so the body can leave out a subject the heading showed whole.
@@ -179,27 +182,33 @@ class MessageShell implements Component {
     // A collapsed heading is one row, laid out beside the tag `tag` names.
     const headingRows = (width: number, tag: string | undefined): string[] => {
       const title = message.label ?? message.name;
-      if (!compact && !expanded)
-        return [
-          layoutTaggedHeading(tag, theme, width, (room, subjectMinimum) =>
+      if (!compact && !expanded) {
+        const { row, subjectComplete } = layoutTaggedHeading(
+          tag,
+          theme,
+          width,
+          (room, subjectMinimum) =>
             layoutPreviewHeadingRow(title, summary, false, theme, room, subjectMinimum),
-          ).row,
-        ];
+        );
+        recordHeadingSubject(this.headingState, subjectComplete, [row]);
+        return [row];
+      }
       // An expanded preview heading wraps rather than clips, so the body may leave out its subject.
       if (!compact) {
         const { rows, subjectComplete } = wrappedPreviewHeading(title, summary, theme, width);
         recordHeadingSubject(this.headingState, subjectComplete, rows);
         return rows;
       }
-      if (!expanded)
-        return [
-          layoutTaggedCompactRow(
-            { name: message.name, phase: "settled", summary },
-            theme,
-            width,
-            tag,
-          ).row,
-        ];
+      if (!expanded) {
+        const { row, subjectComplete } = layoutTaggedCompactRow(
+          { name: message.name, phase: "settled", summary },
+          theme,
+          width,
+          tag,
+        );
+        recordHeadingSubject(this.headingState, subjectComplete, [row]);
+        return [row];
+      }
       const { rows, subjectComplete } = layoutExpandedCompactHeading(
         {
           name: message.name,
@@ -229,8 +238,8 @@ class MessageShell implements Component {
     const content = expanded
       ? message.expanded
         ? message.expanded(this.headingState)
-        : message.collapsed?.()
-      : message.collapsed?.();
+        : message.collapsed?.(this.headingState)
+      : message.collapsed?.(this.headingState);
     // Unlabeled words would share the column of a wrapped heading's rows.
     const bodyLabel = Str.isNonEmpty(Str.trim(message.bodyLabel ?? ""))
       ? message.bodyLabel
@@ -294,9 +303,12 @@ class MessageShell implements Component {
         ...(body?.render(width) ?? []),
       ]);
     const tagged = heading(hint);
+    // The tagged heading draws first, so the body reads what it showed; a body ending in its own
+    // affordance then takes the untagged heading, which shows at least as much.
     return composeToolComponent((width) => {
+      const taggedRows = tagged.render(width);
       const rows = body?.render(width) ?? [];
-      return [...(showsAffordance(rows) ? untagged : tagged).render(width), ...rows];
+      return [...(showsAffordance(rows) ? untagged.render(width) : taggedRows), ...rows];
     });
   }
 

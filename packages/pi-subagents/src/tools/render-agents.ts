@@ -18,8 +18,8 @@ import {
 } from "../ui/agent-text.ts";
 import { agentFactLines, savedAgentFactLines } from "../ui/run-facts.ts";
 import {
+  runRowStateLabel,
   runStateColor,
-  runStateLabel,
   runStateSnapshotGlyph,
   SNAPSHOT_RUNNING_GLYPH,
 } from "../ui/run-state.ts";
@@ -40,7 +40,8 @@ const runState = (state: AgentState) =>
 interface AgentStatePresentation {
   readonly glyph: string;
   readonly tone: ManagerStatusColor;
-  readonly label: string;
+  /** The state in words, where the glyph doesn't already say it. */
+  readonly label?: string | undefined;
 }
 
 /** The glyph, tone, and label of a run's state or the main agent's. */
@@ -50,7 +51,7 @@ export const agentStatePresentation = (state: AgentState): AgentStatePresentatio
     return {
       glyph: runStateSnapshotGlyph(run),
       tone: runStateColor(run),
-      label: runStateLabel(run),
+      label: runRowStateLabel(run),
     };
   if (state === "busy")
     return {
@@ -122,17 +123,16 @@ const listRowLines = (
   const { glyph, tone, label } = agentStatePresentation(entry.state);
   const indent =
     NESTED_ROW_INDENT * (entry.kind === "main" ? 0 : Math.max(0, (entry.depth ?? 1) - 1));
-  // A question or a pause is the run's own state, in its tone; other statuses flag a problem.
-  const statusTone =
-    entry.state === "waiting_for_parent" || entry.state === "paused" ? tone : "warning";
+  // A question is the run's own state, in its tone; other statuses flag a problem.
+  const statusTone = entry.state === "waiting_for_parent" ? tone : "warning";
   return factRowLines(
     [
       [glyph, tone],
       [" "],
       [sanitizeTerminalLine(entry.name), "toolTitle"],
-      entry.status
-        ? [` · ${sanitizeTerminalLine(entry.status)}`, statusTone]
-        : [entry.kind === "main" ? ` · ${label}` : "", "muted"],
+      // The state word beside a glyph that doesn't say it, as agent_read and agent_await show it.
+      [label !== undefined && label !== entry.status ? ` · ${label}` : "", "muted"],
+      [entry.status ? ` · ${sanitizeTerminalLine(entry.status)}` : "", statusTone],
       [entry.task ? ` · ${sanitizeTerminalLine(entry.task)}` : "", "muted"],
     ],
     width,

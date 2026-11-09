@@ -94,13 +94,13 @@ test("a collapsed row whose subject is cut keeps its first metadata where the su
       {
         name: "background_task",
         phase: "settled",
-        summary: { subject, outcome: "success", metadata: ["finished in 1m 33s"] },
+        summary: { subject, outcome: "success", metadata: ["listening on port 5173"] },
       },
       theme,
       width,
     );
     const plain = stripAnsi(row);
-    assert.match(plain, /… · finished in 1m 33s$/u);
+    assert.match(plain, /… · listening on port 5173$/u);
     const shown = /^✓ background_task (.*)…/u.exec(plain)?.[1] ?? "";
     assert.ok(Fn.pipe(subject, Str.startsWith(`${shown} `)));
     assert.ok(visibleWidth(row) <= width);
@@ -110,12 +110,12 @@ test("a collapsed row whose subject is cut keeps its first metadata where the su
     {
       name: "background_task",
       phase: "settled",
-      summary: { subject, outcome: "success", metadata: ["finished in 1m 33s"] },
+      summary: { subject, outcome: "success", metadata: ["listening on port 5173"] },
     },
     theme,
     40,
   );
-  assert.doesNotMatch(stripAnsi(narrow), /finished/u);
+  assert.doesNotMatch(stripAnsi(narrow), /listening/u);
 });
 
 test("metadata gives way to the subject when the subject could only be cut inside a word", () => {

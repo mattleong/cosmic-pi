@@ -2,10 +2,8 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { Container, Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../../paths/display";
-import { metadata } from "../../preview/format";
 import { codePreviewSettings } from "../../config/state";
 import { escapeControlChars } from "../../shared/terminal-text";
-import { normalizePreviewLanguageAlias } from "../../syntax/language";
 import { getPathArg, getReadLineRange } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
@@ -25,11 +23,10 @@ export function readPreviewRenderers(cwd: string): PreviewRenderers {
     renderCall(args, theme) {
       const input = hostObject(args);
       const path = getPathArg(input);
-      const lang = pathPreviewLanguage(path);
       const range = getReadLineRange(input);
+      // The language comes from the path here, which the heading already shows.
       let text = `${renderCodePreviewToolTitle("read", theme)} ${renderDisplayPath(path, cwd, theme)}`;
       if (range) text += theme.fg("warning", range);
-      text += metadata(theme, [lang ? normalizePreviewLanguageAlias(lang) : undefined]);
       return previewHeadingText(() => text);
     },
 

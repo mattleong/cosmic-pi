@@ -11,7 +11,11 @@ import {
   selectPreviewTextLines,
   type PreviewLineEntry,
 } from "../../../preview/format";
-import { resolvePreviewLanguage } from "../../../syntax/language";
+import {
+  normalizePreviewLanguageAlias,
+  resolvePreviewLanguage,
+  type DetectedPreviewLanguage,
+} from "../../../syntax/language";
 import { renderHighlightedText, shouldSkipHighlight } from "../../../syntax/render";
 import { expandPreviewTabs } from "../../../shared/helpers";
 import { escapeLineControlChars } from "../../../shared/terminal-text";
@@ -19,6 +23,15 @@ import { hangingContinuation, WrappedCodeText, type WrappedCodeRow } from "./wra
 
 export const pathPreviewLanguage = (path: string, content?: string): string | undefined =>
   resolvePreviewLanguage({ path, content });
+
+/**
+ * The language a heading names beside its path: only one detected from the content, such as a
+ * shebang in an extensionless script, since the path already says one its name or extension gave.
+ */
+export const headingLanguageFact = (
+  detected: DetectedPreviewLanguage | undefined,
+): string | undefined =>
+  detected?.from === "content" ? normalizePreviewLanguageAlias(detected.language) : undefined;
 
 interface ObservedArguments {
   // Weak, so a row that is not redrawn after streaming does not keep replaced arguments alive.

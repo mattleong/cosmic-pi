@@ -101,102 +101,129 @@ const WORKSPACE_ARGUMENT_LABELS = new Map([
   ["preparationId", "preparation"],
 ]);
 
+/** Run names a result resolved, by ID, and whether its drawn body names every one of them. */
+interface ResolvedRuns {
+  readonly names: ReadonlyMap<string, string>;
+  readonly shown: boolean;
+}
+
+/**
+ * What a row's latest result leaves on the row's shared renderer state for the requested line drawn
+ * beside it. Each result replaces it, so a failure or an undecodable result clears what an earlier
+ * one named.
+ */
+export interface RequestedRowState {
+  piSubagentsResolvedRuns?: ResolvedRuns | undefined;
+  /** The worktree, revision, and preparation IDs, by argument, a shown receipt's Details name. */
+  piSubagentsShownWorkspaceIds?: ReadonlyMap<string, string> | undefined;
+}
+
 /**
  * A worktree call expanded, at the heading's column: a revise's message to the writer as written,
- * then its other arguments on one dim line. The heading already names the action.
+ * then its other arguments on one dim line, less the IDs its result's Details already name. The
+ * heading already names the action.
  */
 export const renderWorkspaceCallArguments = (
   args: typeof CallArgumentsSchema.Type | undefined,
   theme: Theme,
+  row?: RequestedRowState,
 ): Component => {
   const message = args?.message;
   const rest = Arr.filter(
     Rec.toEntries(args ?? {}),
     ([key, value]) => key !== "action" && key !== "message" && value !== false,
   );
-  const facts = Arr.map(rest, ([key, value]) =>
-    value === true
-      ? key
-      : `${WORKSPACE_ARGUMENT_LABELS.get(key) ?? key} ${Predicate.isString(value) ? value : JSON.stringify(value)}`,
-  );
+  const requested = (): string[] => {
+    const shown = row?.piSubagentsShownWorkspaceIds;
+    return Arr.filterMap(rest, ([key, value]) =>
+      Predicate.isString(value) && shown?.get(key) === value
+        ? Result.failVoid
+        : Result.succeed(
+            value === true
+              ? key
+              : `${WORKSPACE_ARGUMENT_LABELS.get(key) ?? key} ${Predicate.isString(value) ? value : JSON.stringify(value)}`,
+          ),
+    );
+  };
   return expandedBody(
     expandedAuthoredText(theme, "Message", Predicate.isString(message) ? message : undefined),
-    facts.length > 0
+    rest.length > 0
       ? indentedBody(
           theme,
-          renderComponent((width) =>
-            wrapTextWithAnsi(
-              theme.fg("dim", sanitizeTerminalLine(`Requested ${Arr.join(facts, " · ")}`)),
-              Math.max(1, width),
-            ),
-          ),
+          renderComponent((width) => {
+            const facts = requested();
+            return facts.length === 0
+              ? []
+              : wrapTextWithAnsi(
+                  theme.fg("dim", sanitizeTerminalLine(`Requested ${Arr.join(facts, " · ")}`)),
+                  Math.max(1, width),
+                );
+          }),
         )
       : undefined,
   );
 };
 
-// Run names an await or lifecycle result resolved, by tool call. Only recent rows redraw their
-// requested line, so the oldest entries go first once the bound is reached.
-const MAX_REMEMBERED_ROWS = 256;
-const runNamesByCall = new Map<string, ReadonlyMap<string, string>>();
-
-/** Records the names a result resolved for its runs, for the requested line drawn beside it. */
+/**
+ * Records on the row the names its result resolved for its runs, for the requested line drawn
+ * beside it. `shown` says the result's body draws every one of them, a settled body with their
+ * rows and Details or a running wait's progress tree, so the requested line needn't name them again.
+ */
 export const rememberRunNames = (
-  toolCallId: string,
+  row: RequestedRowState,
   details: ReturnType<typeof decodeOutcomeDetails>,
+  shown = false,
 ): void => {
-  if (details === undefined || !("cards" in details)) return;
-  runNamesByCall.delete(toolCallId);
-  runNamesByCall.set(
-    toolCallId,
-    new Map(Arr.map(details.cards, (card) => [card.id, sanitizeTerminalLine(card.name)] as const)),
-  );
-  for (const oldest of runNamesByCall.keys()) {
-    if (runNamesByCall.size <= MAX_REMEMBERED_ROWS) break;
-    runNamesByCall.delete(oldest);
-  }
+  row.piSubagentsResolvedRuns =
+    details === undefined || !("cards" in details)
+      ? undefined
+      : {
+          names: new Map(
+            Arr.map(details.cards, (card) => [card.id, sanitizeTerminalLine(card.name)] as const),
+          ),
+          shown,
+        };
 };
 
 /**
- * The runs an await or lifecycle call names: by name once its result resolved them, by ID before
- * that or when a run is unknown. The result's Details keep every ID beside its name.
+ * The runs an await or lifecycle call names that nothing else on its row names yet: by name once
+ * its result resolved them, by ID before that or when a run is unknown. A settled result's rows
+ * and Details, or a running wait's progress tree, name each run it found, so only its unknown IDs
+ * and the wait's terms remain. Read at draw time, after the row's result recorded what it names.
  */
 export const renderRequestedRuns = (
   ids: ReadonlyArray<string>,
   wait: { readonly until: SubagentAwaitUntil; readonly timeoutSeconds?: number },
   tool: string,
   theme: Theme,
-  toolCallId?: string,
+  row?: RequestedRowState,
 ): Component =>
-  renderComponent((width) =>
-    wrapTextWithAnsi(
-      theme.fg(
-        "dim",
-        Arr.join(
-          [
+  renderComponent((width) => {
+    const resolved = row?.piSubagentsResolvedRuns;
+    const unnamed = Arr.filter(ids, (id) => !(resolved?.shown && resolved.names.has(id)));
+    const facts = [
+      ...(unnamed.length > 0
+        ? [
             `Requested ${Arr.join(
-              Arr.map(
-                ids,
-                (id) =>
-                  (toolCallId === undefined
-                    ? undefined
-                    : runNamesByCall.get(toolCallId)?.get(id)) ?? sanitizeTerminalLine(id),
-              ),
+              Arr.map(unnamed, (id) => resolved?.names.get(id) ?? sanitizeTerminalLine(id)),
               ", ",
             )}`,
-            ...(tool === "agent_await" && wait.until === "any_finished"
-              ? ["until the first finishes"]
-              : []),
-            ...(tool === "agent_await" && wait.timeoutSeconds !== undefined
-              ? [`timeout ${wait.timeoutSeconds}s`]
-              : []),
-          ],
-          " · ",
-        ),
-      ),
-      Math.max(1, width),
-    ),
-  );
+          ]
+        : []),
+      ...(tool === "agent_await" && wait.until === "any_finished"
+        ? ["until the first finishes"]
+        : []),
+      ...(tool === "agent_await" && wait.timeoutSeconds !== undefined
+        ? [`timeout ${wait.timeoutSeconds}s`]
+        : []),
+    ];
+    return facts.length === 0
+      ? []
+      : wrapTextWithAnsi(
+          theme.fg("dim", Str.capitalize(Arr.join(facts, " · "))),
+          Math.max(1, width),
+        );
+  });
 
 const awaitScope = (details: SubagentAwaitDetails) => {
   const awaitedRunIds = new Set(details.awaitedRunIds ?? Arr.map(details.cards, (card) => card.id));
@@ -208,6 +235,8 @@ const awaitScope = (details: SubagentAwaitDetails) => {
 
 interface SubagentResultRenderOptions {
   readonly panelOwnsLiveHierarchy?: boolean | undefined;
+  /** The row's compact heading counts the awaited runs, so the body needn't. */
+  readonly headingCounts?: boolean | undefined;
   readonly isError?: boolean | undefined;
   /** The call's arguments, which a failure's body then needn't repeat. */
   readonly args?: unknown;
@@ -231,13 +260,14 @@ const renderPartialStartAwait = (
     theme,
     hierarchy,
     expanded,
+    options.headingCounts,
   );
   return expanded ? indentedBody(theme, progress) : progress;
 };
 
 /**
- * A settled wait: one muted totals line, then each awaited run's words: its report, failure, or
- * question. Expansion keeps them whole and adds every run's technical facts.
+ * A settled wait: one muted totals line when it has any, then each awaited run's words: its report,
+ * failure, or question. Expansion keeps them whole and adds every run's technical facts.
  */
 const OMITTED_NOTE = "Some of this result was too long to keep for display";
 
@@ -245,13 +275,19 @@ const renderAwaitResult = (
   details: SubagentAwaitDetails,
   expanded: boolean,
   theme: Theme,
+  headingCounts = false,
 ): Component => {
   const { hierarchy, targets } = awaitScope(details);
-  const counters = formatAwaitCounters(details.cards, hierarchy, details.awaitUntil, true);
+  const counters = formatAwaitCounters(details.cards, hierarchy, details.awaitUntil, {
+    settled: true,
+    headingCounts,
+  });
   const rows = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
     return [
-      ...factRowLines([[counters, "muted"]], safeWidth, theme, expanded, { wholeFacts: true }),
+      ...(counters
+        ? factRowLines([[counters, "muted"]], safeWidth, theme, expanded, { wholeFacts: true })
+        : []),
       ...cardBlockLines(targets, safeWidth, theme, expanded),
       // Details too large for their reports keep the rest; the agent still received every report.
       ...(details.contentOmitted ? [clipToWidth(theme.fg("dim", OMITTED_NOTE), safeWidth)] : []),
@@ -266,10 +302,11 @@ const renderSettledStartAwait = (
   details: SubagentStartAwaitCardDetails,
   expanded: boolean,
   theme: Theme,
+  headingCounts?: boolean,
 ): Component =>
   details.action === "start"
     ? renderStartReceiptComponent(details, expanded, theme)
-    : renderAwaitResult(details, expanded, theme);
+    : renderAwaitResult(details, expanded, theme, headingCounts);
 
 const renderCompactDetails = (
   compact: CompactSubagentToolDetails,
@@ -377,6 +414,33 @@ const workspaceView = (
   };
 };
 
+/**
+ * Records on the row the worktree, revision, and preparation IDs a shown receipt's Details name, so
+ * the requested line beside it leaves them out. A result that isn't shown, such as a failure, names
+ * none.
+ */
+export const rememberWorkspaceIds = (
+  row: RequestedRowState,
+  result: { readonly content: ToolTextContent; readonly details?: unknown },
+  shown: boolean,
+): void => {
+  const receipt = shown ? decodeWorkspaceDisplay(result.details) : undefined;
+  row.piSubagentsShownWorkspaceIds =
+    receipt && workspaceView(receipt, result.content)
+      ? new Map(
+          Arr.filterMap(
+            [
+              ["workspaceId", receipt.workspaceId],
+              ["revisionId", receipt.revisionId],
+              ["preparationId", receipt.preparationId],
+            ] as const,
+            ([key, id]) =>
+              id === undefined ? Result.failVoid : Result.succeed([key, id] as const),
+          ),
+        )
+      : undefined;
+};
+
 /** A receipt's body and technical facts at the heading's column; a review labels its diff. */
 const workspaceExpandedBody = (
   receipt: WorkspaceToolDetails,
@@ -440,8 +504,8 @@ const renderWorkspacePreview = (
 };
 
 /**
- * A compact row's expanded result at the heading's column. Labeled sections such as a failure's
- * Error or a raw result indent themselves.
+ * A row's expanded result at the heading's column. Labeled sections such as a failure's Error or a
+ * raw result indent themselves.
  */
 export const renderSubagentExpandedContent = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
@@ -464,7 +528,7 @@ export const renderSubagentResult = (
   if (details)
     return isPartial
       ? renderPartialStartAwait(details, expanded, theme, options)
-      : renderSettledStartAwait(details, expanded, theme);
+      : renderSettledStartAwait(details, expanded, theme, options.headingCounts);
   const compact = decodeCompactToolDetails(result.details);
   if (compact) return renderCompactDetails(compact, expanded, theme);
   const workspace =

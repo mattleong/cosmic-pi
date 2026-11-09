@@ -259,6 +259,7 @@ function answersPending(
   ];
 }
 
+/** A failure's issue; under the row's `✗`, one questionnaire's says only what it left undone. */
 function questionnaireFailed(count: number, list: boolean): CompactIssue | undefined {
   if (count === 0) return undefined;
   return {
@@ -266,7 +267,7 @@ function questionnaireFailed(count: number, list: boolean): CompactIssue | undef
     code: "questionnaire-failed",
     message:
       count === 1 && !list
-        ? "The questionnaire failed, so no answer was recorded"
+        ? "No answer was recorded"
         : `${countLabel(count, "questionnaire")} failed without an answer`,
   };
 }

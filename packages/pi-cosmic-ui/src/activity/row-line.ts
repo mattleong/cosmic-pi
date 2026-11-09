@@ -5,11 +5,14 @@ import { formatElapsed } from "pi-cosmic-core/display";
 import {
   managerActivityColor,
   managerActivityGlyph,
+  managerActivityMeaning,
   managerNoticeColor,
   managerNoticeGlyph,
   clipToWidth,
   spinnerFrameAt,
+  withoutStatusGlyphWords,
   type ManagerStatusColor,
+  type StatusGlyphMeaning,
 } from "../manager/chrome.ts";
 import {
   activityAttention,
@@ -31,18 +34,26 @@ const REASON_MINIMUM_WIDTH = 10;
 export interface ActivityMark {
   readonly glyph: string;
   readonly color: ManagerStatusColor;
+  /** What the glyph says in words, which the row then leaves out of its status. */
+  readonly meaning: StatusGlyphMeaning | undefined;
 }
 export const activityMark = (row: ActivityRow, now = 0): ActivityMark => {
   if (row.status === "needs-input")
-    return { glyph: managerNoticeGlyph("attention"), color: managerNoticeColor("attention") };
-  if (row.status === "blocked") return { glyph: managerNoticeGlyph("warning"), color: "warning" };
+    return {
+      glyph: managerNoticeGlyph("attention"),
+      color: managerNoticeColor("attention"),
+      meaning: undefined,
+    };
+  if (row.status === "blocked")
+    return { glyph: managerNoticeGlyph("warning"), color: "warning", meaning: undefined };
   // Queued work and questions waiting their turn share the suite's single queued glyph.
   if (activityQueued(row) || (row.kind === "question" && row.status === "pending"))
-    return { glyph: "○", color: "muted" };
+    return { glyph: "○", color: "muted", meaning: "queued" };
   const kind = row.status === "cancelled" ? "stopped" : row.status;
   return {
     glyph: managerActivityGlyph(kind, spinnerFrameAt(now)),
     color: managerActivityColor(kind),
+    meaning: managerActivityMeaning(kind),
   };
 };
 /** Longer spans come from a skewed clock or a missing start, such as `startedAt: 1`, not real work. */
@@ -77,7 +88,11 @@ export const activityAgentIdentity = (
 
 // Agents name their profile instead; a question's glyph and status already say what it is.
 const activityTypes = { agent: "subagent", command: "task", question: "" } as const;
-const activityType = (row: ActivityRow): string => activityTypes[row.kind];
+// The manager's `Tasks` and `Subagents` headings already name their rows' kind; the widget has none.
+const activityType = (
+  entry: Extract<GroupedActivityRow, { readonly type: "member" }>,
+  interactive: boolean,
+): string => (interactive && entry.kindSection ? "" : activityTypes[entry.row.kind]);
 
 export interface RowPaint {
   readonly now?: number | undefined;
@@ -100,13 +115,19 @@ const resumeHint = (row: ActivityRow): string | undefined =>
     ? Str.trim(row.summary)
     : undefined;
 
-const memberAttention = (row: ActivityRow, widget: boolean): string =>
+// A row states in words only what its glyph doesn't: `needs your input` beside `?` and a blocked
+// reason beside `⚠` stay, while `failed`, `paused`, and `queued` are already their glyphs.
+const memberAttention = (
+  row: ActivityRow,
+  meaning: StatusGlyphMeaning | undefined,
+  widget: boolean,
+): string =>
   (widget ? resumeHint(row) : undefined) ??
   (activityAttention(row) !== undefined ||
   row.status === "failed" ||
   row.status === "paused" ||
   activityQueued(row)
-    ? activityStatus(row)
+    ? (withoutStatusGlyphWords(activityStatus(row), meaning) ?? "")
     : "");
 
 const NO_ATTENTION: ActivityAttentionCounts = { user: 0, parent: 0, blocked: 0, failed: 0 };
@@ -147,11 +168,8 @@ const memberStatus = (
       { text: reason, drop: STATUS_DROP.state, clip: REASON_MINIMUM_WIDTH },
     ];
   const elapsed = activityElapsed(row, now, width < 60);
-  if (isFinished(row)) {
-    // Beside a status, a bare duration would read as an age: say what it measures.
-    const measured = attention && elapsed ? `after ${elapsed}` : elapsed;
-    return [{ text: attention }, { text: measured, drop: STATUS_DROP.elapsed }];
-  }
+  // An ended row's glyph says how it ended, so its bare duration reads as its run time.
+  if (isFinished(row)) return [{ text: elapsed, drop: STATUS_DROP.elapsed }];
   // A row waiting for its parent's reply keeps its elapsed time when cramped; its `?` glyph still
   // says it is waiting.
   const waitWord = activityAttention(row) === "parent" ? { drop: STATUS_DROP.waitWord } : {};
@@ -182,16 +200,16 @@ export function groupedMemberLines(
   const interactive = presentation === "manager";
   const descendants = addAttention(entry.summary.attention, activityAttentionCounts(row), -1);
   const warnings = entry.expanded ? [] : warningParts(descendants);
-  const attention = memberAttention(row, !interactive);
+  const { glyph, color, meaning } = activityMark(row, options.now);
+  const attention = memberAttention(row, meaning, !interactive);
   const ended = memberReason(row, !interactive);
   const reason = ended
     ? clipToWidth(ended, Math.min(REASON_WIDTH, Math.floor(width / 3)), "…")
     : "";
   const status = memberStatus(row, { warnings, attention, reason }, width, options.now);
-  const { glyph, color } = activityMark(row, options.now);
   return renderActivityRowLines(
     {
-      kind: activityType(row),
+      kind: activityType(entry, interactive),
       title: row.title,
       continuations: entry.continuations,
       children: entry.children,
@@ -202,7 +220,7 @@ export function groupedMemberLines(
       statusSeparator: reason || warnings.length ? " · " : " ",
       statusColor: warnings.length
         ? activityAttentionColor(descendants)
-        : !interactive && !attention
+        : !interactive && !attention && !reason
           ? "muted"
           : color,
       ...(entry.history && { history: true }),

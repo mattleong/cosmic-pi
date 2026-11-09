@@ -14,6 +14,7 @@ import { projectionOf, view } from "./fixtures/run-view.ts";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 
 const render = (
   runs: ReadonlyArray<SubagentRunView>,
@@ -163,5 +164,24 @@ describe("persistent subagent activity panel", () => {
     ).toBe(true);
     if (width >= 60)
       expect(Arr.some(lines, (line) => Fn.pipe(line, Str.includes("start-marker")))).toBe(true);
+  });
+  it("leaves a pause to its glyph and keeps the shared glyph's waiting words", () => {
+    const paused = view({ id: "paused", name: "paused-run", state: "paused" });
+    const waiting = view({ id: "waiting", name: "waiting-run", state: "waiting_for_parent" });
+    const lines = render([paused, waiting]);
+    const row = (name: string) =>
+      Arr.findFirst(lines, (line) => Fn.pipe(line, Str.includes(name))).pipe(
+        Option.getOrElse(() => ""),
+      );
+    expect(row("paused-run")).toContain("‖");
+    expect(row("paused-run")).not.toContain("paused ·");
+    expect(row("paused-run")).not.toMatch(/paused\s+\d/u);
+    expect(row("waiting-run")).toContain("waiting for reply");
+    // The header still counts the pause.
+    expect(lines[0]).toContain("1 paused");
+    // With no activity beside it, a narrow row gives up the profile, never part of the model.
+    const narrow = render([view({ ...paused, profile: "reviewer" })], undefined, 57);
+    const narrowRow = Arr.findFirst(narrow, (line) => Fn.pipe(line, Str.includes("paused-run")));
+    expect(Option.getOrElse(narrowRow, () => "")).toContain("openai-codex/gpt-5.6-sol ");
   });
 });

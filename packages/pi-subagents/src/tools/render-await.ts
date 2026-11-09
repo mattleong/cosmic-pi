@@ -61,22 +61,37 @@ const stateCounts = (
     return count > 0 ? [`${count} ${runStateLabel(state)}`] : [];
   });
 
+/** The states whose counts a compact await heading shows beside how many finished. */
+const HEADING_COUNTED_STATES: ReadonlyArray<AwaitProgressRun["state"]> = ["failed", "stopped"];
+
+/**
+ * An await body's totals: the first run to finish, how many finished and in which states, usage,
+ * and descendants. Counts the row already shows are left out: a single awaited run's glyph is its
+ * count, and a compact heading (`headingCounts`) shows how many finished, failed, and stopped. A
+ * preview heading shows no counts, so its body keeps the rest; while a wait runs, its run rows are
+ * a tree that states each run's own state, so a single run's state count stays there too.
+ */
 export const formatAwaitCounters = (
   cards: ReadonlyArray<SubagentRunCard>,
   { awaitedRunIds }: AwaitHierarchy,
   until: SubagentAwaitUntil,
-  settled = false,
+  { settled = false, headingCounts = false }: { settled?: boolean; headingCounts?: boolean } = {},
 ): string => {
   const targets = Arr.filter(cards, (card) => awaitedRunIds.has(card.id));
   const first = settled ? firstFinishedRun(targets, until) : undefined;
   const done = Arr.filter(targets, (run) => run.state === "completed");
   const usage = aggregateUsage(cards);
   const descendantCount = cards.length - targets.length;
+  const single = awaitedRunIds.size === 1 && targets.length === 1;
+  const counted = Arr.filter(
+    [...ACTIVE_STATES, "failed", "stopped"] as const,
+    (state) => !(headingCounts && Arr.contains(HEADING_COUNTED_STATES, state)),
+  );
   return Arr.join(
     [
       ...(first ? [firstFinishedSummary(first)] : []),
-      `${done.length}/${awaitedRunIds.size} finished`,
-      ...stateCounts(targets, [...ACTIVE_STATES, "failed", "stopped"]),
+      ...(single || headingCounts ? [] : [`${done.length}/${awaitedRunIds.size} finished`]),
+      ...(single && (settled || headingCounts) ? [] : stateCounts(targets, counted)),
       ...(usage ? [usage] : []),
       ...(descendantCount > 0 ? [countLabel(descendantCount, "descendant")] : []),
     ],
@@ -204,13 +219,16 @@ export const renderAwaitProgressComponent = (
   theme: Theme,
   hierarchy: AwaitHierarchy,
   expanded = false,
+  headingCounts = false,
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
     const frame = spinnerFrameAt(synchronousNow());
-    const counters = formatAwaitCounters(cards, hierarchy, until);
+    const counters = formatAwaitCounters(cards, hierarchy, until, { headingCounts });
     return [
-      ...factRowLines([[counters, "muted"]], safeWidth, theme, expanded, { wholeFacts: true }),
+      ...(counters
+        ? factRowLines([[counters, "muted"]], safeWidth, theme, expanded, { wholeFacts: true })
+        : []),
       ...(hierarchy.contextOmitted
         ? [clipToWidth(theme.fg("dim", DESCENDANTS_OMITTED), safeWidth)]
         : []),

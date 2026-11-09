@@ -14,7 +14,7 @@ import {
   type CompactSummaryProvider,
   type ToolCallCollapsedStyle,
 } from "pi-code-previews";
-import { failureMessage } from "pi-cosmic-core/message-text";
+import { failureMessage, restatesText } from "pi-cosmic-core/message-text";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import {
   CodexImageDetailsSchema,
@@ -77,7 +77,7 @@ const STATUS_SUMMARIES = new Map<string, StatusSummary>([
         {
           severity: "error",
           code: "image-failed",
-          message: `${GENERATION_FAILED}: OpenAI gave no reason`,
+          message: "OpenAI gave no reason",
           detail: RETRY_HINT,
         },
       ],
@@ -139,6 +139,10 @@ export const imageGenerationCause = (text: string): string | undefined => {
     : failureMessage(cause, "OpenAI gave no reason", CAUSE_LIMIT);
 };
 
+/**
+ * A failure's issue. Under the row's `✗`, a failed request's issue states OpenAI's cause alone,
+ * not `Image generation failed:` before it.
+ */
 export function imageFailureIssue(text: string): CompactIssue {
   if (isSignInFailure(text))
     return {
@@ -156,10 +160,16 @@ export function imageFailureIssue(text: string): CompactIssue {
     : {
         severity: "error",
         code: "image-failed",
-        message: `${GENERATION_FAILED}: ${cause}`,
+        message: cause,
         detail: RETRY_HINT,
       };
 }
+
+/** Whether a failure's raw text says only what its issue does, give or take the lead-in. */
+export const restatesImageFailure = (text: string): boolean => {
+  const { message } = imageFailureIssue(text);
+  return restatesText(text, message) || restatesText(text, `${GENERATION_FAILED}: ${message}`);
+};
 
 const textOnlyFailure = (result: AgentToolResult<unknown> | undefined): string | undefined => {
   if (!result?.content.length || Arr.some(result.content, (part) => part.type !== "text"))

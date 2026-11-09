@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Fn from "effect/Function";
+import * as Predicate from "effect/Predicate";
 import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
@@ -107,8 +108,18 @@ export function registerAskUserTool(
           : expandedContent(result, theme, context);
       if (context.isError) return emptyBody();
       if (cancelled) return cancelledLine(theme);
-      if (details?.outcome === "submitted")
-        return answersBody(details.answers, titlesByKey(context.args), theme, true, context);
+      if (details?.outcome === "submitted") {
+        // The heading names the questions, so a lone answer may leave its title to it.
+        const state: unknown = context.state;
+        return answersBody(
+          details.answers,
+          titlesByKey(context.args),
+          theme,
+          true,
+          context,
+          Predicate.isObject(state) ? state : undefined,
+        );
+      }
       return new Text(fallbackText(result.content), 0, 0);
     },
   });

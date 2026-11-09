@@ -53,12 +53,15 @@ const facts = (lines: ReadonlyArray<string | undefined>): ReadonlyArray<string> 
 const status = (text: string): string =>
   clipText(sanitizeTerminalLine(text), MAX_AGENT_STATUS_CHARS);
 
-/** A short human status for a run, only when it departs from its state's expected course. */
+/**
+ * A short human status for a run, only when it departs from its state's expected course. A pause
+ * has none: its row's `‖` says it.
+ */
 const runStatus = (run: SubagentRunView, now: number): string | undefined => {
   const attention = runAttention(run);
   if (attention?.kind === "question" || attention?.kind === "question-unavailable")
     return "waiting for reply";
-  if (attention?.kind === "paused") return "paused";
+  if (attention?.kind === "paused") return undefined;
   if (run.workspaceId !== undefined && (isTerminalRunState(run.state) || run.workspaceOutcome))
     return workspaceNote(run.workspaceOutcome);
   return runStallFact(run, now);

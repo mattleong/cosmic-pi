@@ -108,6 +108,9 @@ describe("questionnaire compact outcome projection", () => {
       const summary = summarize(asyncAskUserCompactSummary, details, { args });
       expect(summary?.outcome).toBe("error");
       expect(summary?.issues).toEqual([expect.objectContaining({ severity: "error" })]);
+      // The row's ✗ already says it failed; the issue says what that left undone.
+      for (const issue of summary?.issues ?? [])
+        expect(issueMessageStyleProblems(issue.message, { severity: issue.severity })).toEqual([]);
     }
   });
   it("marks questionnaires awaiting answers for attention without overriding failures", () => {

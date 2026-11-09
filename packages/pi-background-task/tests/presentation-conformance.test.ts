@@ -208,3 +208,40 @@ describe.each(["compact", "preview"] as const)("a long unnamed command in %s sty
     expect(text).toContain("--security-check");
   });
 });
+
+it.each(["compact", "preview"] as const)(
+  "leaves a listed task's state to a glyph that says it in %s style",
+  (style) => {
+    const harness = createToolPresentationHarness(registeredTool("off", style));
+    const listed = (state: BackgroundTaskSnapshot["state"], name: string) => ({
+      ...snapshot,
+      id: `task-${name}`,
+      name,
+      command: `pnpm ${name}`,
+      state,
+      ...(state === "running" ? {} : { endedAt: 400 }),
+    });
+    const [expanded] = harness.cycle(
+      { action: "list" },
+      {
+        content: [{ type: "text", text: "3 tasks" }],
+        details: {
+          action: "list",
+          tasks: [
+            listed("stopped", "server"),
+            listed("stopping", "e2e"),
+            listed("running", "watch"),
+          ],
+        },
+      },
+      { states: [true] },
+    );
+    const text = stripTerminalControls(expanded?.text ?? "");
+    expect(text).not.toContain("server · stopped");
+    expect(text).not.toContain("e2e · stopping");
+    expect(text).toContain("server");
+    expect(text).toContain("e2e");
+    // The neutral `•` says nothing, so a running task keeps its word.
+    expect(text).toContain("watch · running");
+  },
+);

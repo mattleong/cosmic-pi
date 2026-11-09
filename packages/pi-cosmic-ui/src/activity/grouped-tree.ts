@@ -30,6 +30,8 @@ export type GroupedActivityRow = PresentationBase &
         readonly type: "member";
         readonly row: ActivityRow;
         readonly context: readonly ActivityRow[];
+        /** The row sits under a visible section heading that names its kind, such as `Tasks`. */
+        readonly kindSection: boolean;
       }
   );
 export const groupedActivitySource = (
@@ -166,6 +168,13 @@ export function groupedActivityTree(
     isFinished(node.row);
   const visible = (node: Node) => !settledQuestion(node) && (!options.hideHistory || !node.history);
   const result: GroupedActivityRow[] = [];
+  const focused = options.focus ? nodes.get(options.focus) : undefined;
+  // `Subagents` and `Tasks` name their rows' kind; `Attention` doesn't, and a focused subtree is
+  // drawn without its section heading.
+  const kindSection = (node: RowNode) =>
+    focused === undefined &&
+    node.row.kind !== "question" &&
+    node.section === ROOT_SECTIONS[node.row.kind];
   const visit = (node: Node, continuations: readonly boolean[], breadcrumbs: readonly string[]) => {
     if (!visible(node)) return;
     const children = Arr.filter(node.children, visible);
@@ -190,7 +199,13 @@ export function groupedActivityTree(
     result.push(
       node.type === "section"
         ? { ...base, type: "section" }
-        : { ...base, type: "member", row: node.row, context: context(node.row) },
+        : {
+            ...base,
+            type: "member",
+            row: node.row,
+            context: context(node.row),
+            kindSection: kindSection(node),
+          },
     );
     if (!expanded) return;
     const ordered = Arr.sort(
@@ -201,7 +216,6 @@ export function groupedActivityTree(
       visit(child, [...continuations, index < ordered.length - 1], base.breadcrumbs),
     );
   };
-  const focused = options.focus ? nodes.get(options.focus) : undefined;
   if (focused) visit(focused, [], []);
   else for (const section of sections) visit(section, [], []);
   return result;

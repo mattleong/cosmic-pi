@@ -119,6 +119,9 @@ export interface ToolPresentationHarness<TArgs = unknown, TDetails = unknown, TS
   readonly context: HarnessContext<TState, TArgs>;
 }
 
+// Each harness and host row is its own tool call, so nothing keyed by call ID crosses between them.
+let harnessRows = 0;
+
 export function createToolPresentationHarness<TArgs, TDetails, TState = EmptyRecord>(
   tool: PresentableRenderers<TArgs, TDetails, TState>,
   options: { theme?: Theme; width?: number; state?: TState; cwd?: string } = {},
@@ -126,7 +129,11 @@ export function createToolPresentationHarness<TArgs, TDetails, TState = EmptyRec
   const theme = options.theme ?? plainTheme;
   const initialState: TState | EmptyRecord = options.state ?? {};
   let fields: Omit<ToolRenderContext<TState | EmptyRecord, TArgs>, "args"> = {
-    ...renderContextFixture({ cwd: options.cwd ?? "/project", invalidate: () => invalidate() }),
+    ...renderContextFixture({
+      toolCallId: `presentation-test-${++harnessRows}`,
+      cwd: options.cwd ?? "/project",
+      invalidate: () => invalidate(),
+    }),
     state: initialState,
   };
   let args: TArgs | undefined;
@@ -225,7 +232,7 @@ export function hostToolRow(
 ): ToolExecutionComponent {
   const row = new ToolExecutionComponent(
     name,
-    options.id ?? "replay",
+    options.id ?? `replay-${++harnessRows}`,
     args,
     { showImages: false },
     renderers,

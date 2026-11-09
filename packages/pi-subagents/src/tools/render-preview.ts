@@ -26,7 +26,9 @@ interface PreviewRenderContext {
   readonly isError: boolean;
 }
 
-type RenderCall<Params extends TSchema> = NonNullable<ToolDefinition<Params>["renderCall"]>;
+type RenderCall<Params extends TSchema, State> = NonNullable<
+  ToolDefinition<Params, unknown, State>["renderCall"]
+>;
 
 /** A tool heading that wraps rather than clips, its continuation rows hanging beneath it. */
 export const previewHeading = (header: ToolHeader, theme: Theme): Component =>
@@ -34,7 +36,10 @@ export const previewHeading = (header: ToolHeader, theme: Theme): Component =>
 
 /** A call Pi rejected for malformed JSON arrives as `{}`, so its heading names only the tool. */
 export const rejectionAwareCall =
-  <Params extends TSchema>(label: string, renderCall: RenderCall<Params>): RenderCall<Params> =>
+  <Params extends TSchema, State>(
+    label: string,
+    renderCall: RenderCall<Params, State>,
+  ): RenderCall<Params, State> =>
   (args, theme, context) =>
     isRejectedEmptyCall(context)
       ? previewHeading({ title: label }, theme)

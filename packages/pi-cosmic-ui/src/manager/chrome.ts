@@ -131,6 +131,61 @@ const MANAGER_ACTIVITY_LABELS = {
 export const managerActivityLabel = (kind: ManagerActivityKind): string =>
   MANAGER_ACTIVITY_LABELS[kind];
 
+/**
+ * The words each status glyph already says, which a fact beside it on the same row would only
+ * repeat: a spinner or starting glyph says `running`, `✓` says `done`, and so on. `?`, `⚠`, `•`,
+ * and the `→`/`←` message glyphs have none, since what they mean depends on the row.
+ */
+export const STATUS_GLYPH_WORDS = {
+  running: ["running", "starting", "started", "in progress"],
+  done: ["done", "finished", "succeeded", "success", "completed", "started"],
+  failed: ["failed", "error"],
+  stopped: ["stopped", "cancelled", "canceled"],
+  stopping: ["stopping"],
+  queued: ["queued"],
+  paused: ["paused"],
+  uncertain: ["outcome unknown", "uncertain", "unconfirmed"],
+} as const;
+
+/** Which entry of {@link STATUS_GLYPH_WORDS} a row's status glyph says. */
+export type StatusGlyphMeaning = keyof typeof STATUS_GLYPH_WORDS;
+
+/** What an Activity glyph says in words; `?` says nothing a word beside it repeats. */
+export const managerActivityMeaning = (kind: ManagerActivityKind): StatusGlyphMeaning | undefined =>
+  Match.value(kind).pipe(
+    Match.whenOr("pending", "running", () => "running" as const),
+    Match.when("waiting", () => undefined),
+    Match.orElse((state) => state),
+  );
+
+const saysGlyphWord = (meaning: StatusGlyphMeaning, text: string): boolean => {
+  const words: ReadonlyArray<string> = STATUS_GLYPH_WORDS[meaning];
+  return Arr.contains(words, Str.toLowerCase(Str.trim(text)));
+};
+
+// A run time such as `850ms`, `2.1s`, or `1m 33s`, as `formatElapsed` writes it.
+const GLYPH_WORD_DURATION =
+  /^(.+?) (?:in|after) (\d+(?:\.\d+)?(?:ms|s|m|h|d)(?: \d+(?:ms|s|m|h))*)$/u;
+
+/**
+ * `fact` without the words a row's status glyph already says: `undefined` when the fact is only
+ * that word (`finished` beside `✓`), and the duration alone when it measures the glyph's state
+ * (`failed after 28s` beside `✗` reads `28s`). Any other fact, such as `timed out` or
+ * `1 of 2 finished`, is returned unchanged.
+ */
+export function withoutStatusGlyphWords(
+  fact: string,
+  meaning: StatusGlyphMeaning | undefined,
+): string | undefined {
+  if (meaning === undefined) return fact;
+  if (saysGlyphWord(meaning, fact)) return undefined;
+  const measured = GLYPH_WORD_DURATION.exec(Str.trim(fact));
+  const [, word, duration] = measured ?? [];
+  return word !== undefined && duration !== undefined && saysGlyphWord(meaning, word)
+    ? duration
+    : fact;
+}
+
 const STYLE_RESET = "\u001b[0m";
 
 // A separator left stranded before a cut goes with it: `read-only…`, not `read-only ·…`.

@@ -11,8 +11,9 @@ import { stripTerminalControls } from "pi-cosmic-core/security";
 // Titles only label tabs, review rows, and headings; the schema admits longer ones than fit there.
 const MAX_TITLE_LABEL_WIDTH = 24;
 
+// Plain text, since a heading subject escapes the styling a clipped label would carry.
 export const titleLabel = (title: string): string =>
-  clipToWidth(stripTerminalControls(title), MAX_TITLE_LABEL_WIDTH);
+  stripTerminalControls(clipToWidth(stripTerminalControls(title), MAX_TITLE_LABEL_WIDTH));
 
 /**
  * Wraps `value` after `prefix`. Continuation lines hang `hang` columns further in, under the text

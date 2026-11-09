@@ -84,3 +84,29 @@ test("a restating fact gives way to the heading's other facts", () => {
   expect(shows(combined, "finished")).toEqual([false, false]);
   expect(shows(combined, "ready to apply")).toEqual([true, true]);
 });
+
+test("a heading reduces a phrase that measures its glyph's state to the duration", () => {
+  const measured: ReadonlyArray<readonly [CompactRowInput, string, string]> = [
+    [
+      row("settled", { outcome: "success", metadata: ["finished in 1m 33s"] }),
+      "finished",
+      "1m 33s",
+    ],
+    [row("settled", { outcome: "error", metadata: ["failed after 28s"] }), "failed", "28s"],
+    [row("settled", { outcome: "cancelled", metadata: ["stopped after 2.1s"] }), "stopped", "2.1s"],
+  ];
+  for (const [input, word, duration] of measured) {
+    expect(shows(input, word)).toEqual([false, false]);
+    expect(shows(input, duration)).toEqual([true, true]);
+  }
+  // A phrase another glyph shows, one about the subject, or one that isn't a duration stays whole.
+  const kept: ReadonlyArray<readonly [CompactRowInput, string]> = [
+    [row("settled", { outcome: "error", metadata: ["stopped after 1m"] }), "stopped after 1m"],
+    [
+      row("settled", { outcome: "success", subjectState: true, metadata: ["finished in 9s"] }),
+      "finished in 9s",
+    ],
+    [row("settled", { outcome: "error", metadata: ["failed in staging"] }), "failed in staging"],
+  ];
+  for (const [input, fact] of kept) expect(shows(input, fact)).toEqual([true, true]);
+});

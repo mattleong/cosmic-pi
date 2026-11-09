@@ -365,7 +365,7 @@ const flaky = activityRow("flaky", "failed", undefined, {
   kind: "command",
   startedAt: 20_000,
   endedAt: 26_000,
-  summary: "Exited with code 2: missing semicolon",
+  summary: "Exit 2: missing semicolon",
   actions: [
     {
       id: "clear",
@@ -399,7 +399,7 @@ const taskDetails = {
   },
   flaky: {
     sections: [
-      { body: "Exited with code 2: missing semicolon" },
+      { body: "Exit 2: missing semicolon" },
       { title: "Output", body: "compiling\nerror: missing semicolon" },
       {
         title: "Command",

@@ -118,6 +118,11 @@ export function previewHeadingRow(
   return layoutPreviewHeadingRow(title, summary, expanded, theme, width).row;
 }
 
+/** A one-row preview heading, and whether it shows its whole subject. */
+export interface PreviewHeadingRowLayout extends TaggableHeading {
+  readonly subjectComplete: boolean;
+}
+
 /**
  * {@link previewHeadingRow} with the fact it keeps, its subject keeping `subjectMinimum` columns
  * beside a counter, as compact headings keep.
@@ -129,7 +134,7 @@ export function layoutPreviewHeadingRow(
   theme: Pick<Theme, "fg" | "bold">,
   width: number,
   subjectMinimum = SUBJECT_MINIMUM,
-): TaggableHeading {
+): PreviewHeadingRowLayout {
   const action = compactSingleLine(summary.action ?? "");
   const subject = compactSingleLine(
     expanded ? summary.subject : (summary.compactSubject ?? summary.subject),
@@ -141,7 +146,14 @@ export function layoutPreviewHeadingRow(
     width - visibleWidth(compactSingleLine(title)) - 1 - (action ? visibleWidth(action) + 1 : 0);
   // The title and action show whole beside a subject cut to its first column and `…`.
   const identityComplete = room >= (subject ? 2 : -1);
-  const draw = (shown: string, shownFacts: readonly string[], count: number): TaggableHeading => ({
+  // A collapsed row's short subject is never the whole one.
+  const whole =
+    expanded || summary.compactSubject === undefined || summary.compactSubject === summary.subject;
+  const draw = (
+    shown: string,
+    shownFacts: readonly string[],
+    count: number,
+  ): PreviewHeadingRowLayout => ({
     row: clipToWidth(
       renderToolHeader(
         { title, subtitle: headingSubtitle(action, shown, shownFacts, count) },
@@ -151,6 +163,7 @@ export function layoutPreviewHeadingRow(
     ),
     fact: count > 0 ? shownFacts[0] : undefined,
     identityComplete,
+    subjectComplete: whole && identityComplete && shown === subject,
   });
   const fits = (shownFacts: readonly string[], count: number) =>
     subjectWidth + visibleWidth(factTail(shownFacts, count)) <= room;

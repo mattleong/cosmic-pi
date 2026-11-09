@@ -1,4 +1,4 @@
-import { exitStatusMeaning } from "pi-code-previews";
+import { exitIssueMessage, exitStatusMeaning } from "pi-code-previews";
 import type {
   CompactIssue,
   CompactOutcome,
@@ -177,12 +177,11 @@ function failureIssues(value: BackgroundTaskSnapshot): CompactIssue[] {
   const cause = failureCause(value);
   const exitCode = failingExitCode(value);
   if (exitCode !== undefined) {
-    const exitCause = cause ?? exitStatusMeaning(exitCode);
     issues.push(
       issue(
         "error",
         `${value.id}:exit-code`,
-        `Exited with code ${exitCode}${exitCause ? `: ${exitCause}` : ""}`,
+        exitIssueMessage(exitCode, cause ?? exitStatusMeaning(exitCode)),
       ),
     );
   }
@@ -306,7 +305,8 @@ export const listedTaskOutcome = (value: BackgroundTaskSnapshot): TaskOutcome =>
 /**
  * A finished task's notice: its outcome and issues as a status row has them, and its run time,
  * unless its timeout issue already states it. The run time joins the state as one fact,
- * `finished in 1m 33s`, because a compact heading shows only its first fact.
+ * `finished in 1m 33s`, because a compact heading shows only its first fact. A compact heading
+ * whose glyph already says the state shows the duration alone; a preview heading keeps the phrase.
  */
 export function taskNoticeSummary(value: BackgroundTaskSnapshot): TaskSummary {
   const task = taskReportSummary(value);

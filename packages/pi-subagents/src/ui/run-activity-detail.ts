@@ -7,6 +7,7 @@ import type {
   ActivityDetailSection,
 } from "pi-cosmic-ui/activity";
 import { countLabel, formatCost, formatTokens } from "pi-cosmic-core/display";
+import { SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import type { SubagentRunView, SubagentSessionEvent } from "../run/model.ts";
 import { userRunText } from "../run/warnings.ts";
@@ -57,24 +58,36 @@ const problems = (run: SubagentRunView): ActivityDetailSection[] => {
 
 type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
 
+// A finished call leads with the glyph that says how it ended. Details don't redraw, so a call
+// still running is marked neutral and keeps its word, as snapshot rows do.
+const TOOL_EVENT_GLYPHS = {
+  completed: SUITE_STATUS_GLYPHS.succeeded,
+  failed: SUITE_STATUS_GLYPHS.failed,
+  running: SUITE_STATUS_GLYPHS.neutral,
+} as const satisfies Record<ToolEvent["state"], string>;
+
 /**
- * A tool call as one line: an owned agent tool's phrased result, or another tool's state and its
- * output as printed. Agent tools' model-facing envelopes never reach this view.
+ * A tool call as one line: its state's glyph, then an owned agent tool's phrased result, or
+ * another tool's target and its output as printed. Agent tools' model-facing envelopes never reach
+ * this view.
  */
 const toolLine = (event: ToolEvent, nameOf: RunNameLookup): string => {
   const { activity } = event;
   const outcome = activity
-    ? [event.state === "failed" ? "failed" : undefined, activity.summary]
-    : event.state === "running" && event.toolName === SUBAGENT_TOOL_NAME.await
-      ? [waitingOn(event, nameOf)]
-      : [event.state === "completed" ? "done" : event.state];
+    ? [activity.summary]
+    : event.state === "running"
+      ? [event.toolName === SUBAGENT_TOOL_NAME.await ? waitingOn(event, nameOf) : "running"]
+      : [];
   const output =
     activity || event.outputPreview === undefined || isOwnedAgentTool(event.toolName)
       ? []
       : Arr.map(Str.split(event.outputPreview, "\n"), (line) => `  ${line}`);
   return Arr.join(
     [
-      Arr.join(Arr.filter([event.toolName, event.target, ...outcome], isTextFragment), " · "),
+      `${TOOL_EVENT_GLYPHS[event.state]} ${Arr.join(
+        Arr.filter([event.toolName, event.target, ...outcome], isTextFragment),
+        " · ",
+      )}`,
       ...output,
     ],
     "\n",

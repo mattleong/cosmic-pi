@@ -166,25 +166,25 @@ const NESTED_NAMESPACE = {
 const COLLAPSED_RESULT_LINES = 8;
 
 /**
- * Requested agents by the names the result resolved, or as typed before it arrives and for agents
- * it didn't find. The result's Details keep every ID beside its name.
+ * Requested agents that nothing else on the row names: as typed before the result arrives, and
+ * afterwards only those it didn't find. A shown result names each agent it found in its rows and
+ * keeps its ID beside its name in Details.
  */
 const requestedLine = (
   call: AgentCallEvidence,
-  names: ReadonlyMap<string, string> | undefined,
-): string | undefined =>
-  call.agentIds === undefined || call.agentIds.length === 0
+  named: ReadonlySet<string> | undefined,
+): string | undefined => {
+  const unnamed = Arr.filter(call.agentIds ?? [], (id) => !named?.has(Str.trim(id)));
+  return unnamed.length === 0
     ? undefined
-    : `Requested ${Fn.pipe(
-        call.agentIds,
-        Arr.map((id) => names?.get(Str.trim(id)) ?? sanitizeTerminalLine(id)),
-        Arr.join(", "),
-      )}`;
+    : `Requested ${Fn.pipe(unnamed, Arr.map(sanitizeTerminalLine), Arr.join(", "))}`;
+};
 
 /** A tool row's shared renderer state, where a result leaves the names it resolved. */
 interface SendRowState extends Record<string, unknown> {
   piSubagentsRecipient?: string | undefined;
-  piSubagentsAgentNames?: ReadonlyMap<string, string> | undefined;
+  /** The IDs of the agents a shown result named. */
+  piSubagentsNamedAgents?: ReadonlySet<string> | undefined;
 }
 
 interface SendRenderContext {
@@ -194,6 +194,8 @@ interface SendRenderContext {
 const rememberRecipient = (
   context: SendRenderContext,
   details: AgentToolDetails | undefined,
+  // A failure's body shows its error, not the agents its details name.
+  shown = true,
 ): void => {
   if (details?.action === AGENT_TOOL_NAME.send)
     context.state.piSubagentsRecipient =
@@ -204,10 +206,9 @@ const rememberRecipient = (
       : details?.action === AGENT_TOOL_NAME.list
         ? (details.entries ?? [])
         : [];
-  if (named.length > 0)
-    context.state.piSubagentsAgentNames = new Map(
-      Arr.map(named, (agent) => [agent.id, sanitizeTerminalLine(agent.name)] as const),
-    );
+  // Each result replaces what an earlier one named, so a failure names none.
+  context.state.piSubagentsNamedAgents =
+    named.length > 0 && shown ? new Set(Arr.map(named, (agent) => agent.id)) : undefined;
 };
 
 // The result names the recipient; until it arrives the heading shows what was typed.
@@ -313,7 +314,7 @@ export function registerAgentTools(
         return container;
       }),
       renderResult: (result, options, theme, context) => {
-        rememberRecipient(context, decodeAgentToolDetails(result.details));
+        rememberRecipient(context, decodeAgentToolDetails(result.details), !context.isError);
         // A failure shows its recorded user copy, or the text of one saved without it, unless its
         // issue already carries the whole failure.
         if (context.isError)
@@ -358,18 +359,18 @@ export function registerAgentTools(
                 ),
             );
           }
-          const requested = requestedLine(call, state.piSubagentsAgentNames);
-          return requested
-            ? indentedBody(
-                theme,
-                composeToolComponent((width) =>
-                  wrapTextWithAnsi(theme.fg("dim", requested), width),
-                ),
-              )
-            : new Container();
+          // The shell builds the call before the result names its agents, so the line reads them as
+          // it draws.
+          return indentedBody(
+            theme,
+            composeToolComponent((width) => {
+              const requested = requestedLine(call, state.piSubagentsNamedAgents);
+              return requested ? wrapTextWithAnsi(theme.fg("dim", requested), width) : [];
+            }),
+          );
         },
         renderResult: (result, _options, theme, context) => {
-          rememberRecipient(context, decodeAgentToolDetails(result.details));
+          rememberRecipient(context, decodeAgentToolDetails(result.details), !context.isError);
           if (context.isError) {
             const failure = escapeControlChars(rejectedFailureText(result));
             return failure && !issueCarriesFailure(result, context)

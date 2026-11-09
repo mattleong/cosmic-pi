@@ -17,7 +17,7 @@ import { codePreviewSettings } from "../../config/state";
 import type { CodePreviewSettings } from "../../config/schema";
 import { hostObject, ownField } from "../../shared/untrusted-value";
 import { escapeControlChars } from "../../shared/terminal-text";
-import { normalizePreviewLanguageAlias } from "../../syntax/language";
+import { detectPreviewLanguage } from "../../syntax/language";
 import { getPathArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
@@ -26,6 +26,7 @@ import { cachedDeferredPreview, cachedPreview } from "./shared/cache";
 import { previewCacheKey } from "./shared/preview-cache-key";
 import {
   argumentsStreaming,
+  headingLanguageFact,
   pathPreviewLanguage,
   renderContentPreview,
 } from "./shared/preview-text";
@@ -69,12 +70,13 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       const input = hostObject(args);
       const path = getPathArg(input);
       const content = stringArg(input, "content");
-      const lang = pathPreviewLanguage(path, content);
+      const detected = detectPreviewLanguage({ path, content });
+      const lang = detected?.language;
       const title = `${renderCodePreviewToolTitle("write", theme)} ${renderDisplayPath(path, cwd, theme)}`;
       const details = [
         formatBytes(Buffer.byteLength(content, "utf8")),
         countLabel(countContentLines(content), "line"),
-        lang ? normalizePreviewLanguageAlias(lang) : undefined,
+        headingLanguageFact(detected),
       ];
       // A new file needs no fact: an overwrite is told apart by the diff beneath it.
       const header = title + metadata(theme, details);

@@ -221,7 +221,7 @@ describe("builtin expansion states each fact once", () => {
       textResult("cat: missing.txt: No such file or directory\n\nCommand exited with code 1"),
       true,
     );
-    expect(occurrences(text, "code 1")).toBe(1);
+    expect(occurrences(text, "code 1") + occurrences(text, "Exit 1")).toBe(1);
     expect(text).toContain("No such file or directory");
   });
 });

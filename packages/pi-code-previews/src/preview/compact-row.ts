@@ -12,7 +12,9 @@ import {
   managerNoticeColor,
   managerNoticeGlyph,
   SUITE_STATUS_GLYPHS,
+  withoutStatusGlyphWords,
   type ManagerActivityKind,
+  type StatusGlyphMeaning,
 } from "pi-cosmic-ui/manager";
 import { escapeControlChars } from "../shared/terminal-text";
 import {
@@ -101,28 +103,13 @@ export function compactStatusIcon(
   return theme.fg(managerActivityColor(kind), managerActivityGlyph(kind, animationFrame));
 }
 
-/**
- * The words a status glyph already says, which a fact beside it would only repeat: a spinner or
- * starting glyph says `running`, `✓` says `done`, and so on. `?`, `≈`, `⚠`, `•`, and the `→`/`←`
- * message glyphs have none, since what they mean depends on the call.
- */
-const GLYPH_WORDS = {
-  running: ["running", "starting", "started", "in progress"],
-  done: ["done", "finished", "succeeded", "success", "completed", "started"],
-  failed: ["failed", "error"],
-  stopped: ["stopped", "cancelled", "canceled"],
-  queued: ["queued"],
-  paused: ["paused"],
-  uncertain: ["outcome unknown", "uncertain", "unconfirmed"],
-} as const;
-
-/** Which of {@link GLYPH_WORDS} the glyph {@link compactStatusIcon} draws for the same input says. */
+/** Which of `STATUS_GLYPH_WORDS` the glyph {@link compactStatusIcon} draws for the same input says. */
 function compactGlyphMeaning(
   status: CompactStatus,
   returnedCheckmark: boolean,
   messageIcon: CompactSummary["messageIcon"],
   hold: "waiting" | "queued" | undefined,
-): keyof typeof GLYPH_WORDS | undefined {
+): StatusGlyphMeaning | undefined {
   if (hold && (status === "pending" || status === "running"))
     return hold === "queued" ? "queued" : undefined;
   if (messageIcon && (status === "success" || status === "returned")) return undefined;
@@ -135,28 +122,6 @@ function compactGlyphMeaning(
     Match.whenOr("queued", "paused", "uncertain", (state) => state),
     Match.orElse(() => undefined),
   );
-}
-
-/**
- * Whether `fact` only restates the status glyph its heading shows, such as `running` beside a
- * spinner or `finished` beside `✓`; a heading leaves such a fact out. Counts and anything else
- * (`1 of 2 finished`, `timed out`) are facts of their own.
- */
-export function restatesStatusGlyph(
-  fact: string,
-  status: CompactStatus,
-  summary: Pick<CompactSummary, "messageIcon" | "waiting" | "queued">,
-  returnedCheckmark = false,
-): boolean {
-  const meaning = compactGlyphMeaning(
-    status,
-    returnedCheckmark,
-    summary.messageIcon,
-    compactHold(summary),
-  );
-  if (meaning === undefined) return false;
-  const words: readonly string[] = GLYPH_WORDS[meaning];
-  return Arr.contains(words, Str.toLowerCase(compactSingleLine(fact)));
 }
 
 export function renderCompactRow(input: CompactRowInput, theme: Theme, width: number): string {
@@ -217,30 +182,32 @@ const mutedParts = (theme: Theme, values: readonly string[] | undefined): string
 const FACT_SEPARATOR = " · ";
 
 /**
- * `values` without the facts that only restate the row's status glyph. A combined counter such as
- * `finished · ready to apply` keeps its other facts; an alternative left with none is dropped. Facts
- * that describe the subject's state (`subjectState`) are not the glyph's and all stay.
+ * `values` without what only restates the row's status glyph: a fact that is only the glyph's word
+ * goes, and one that measures the glyph's state keeps its duration (`finished in 1m 33s` beside `✓`
+ * reads `1m 33s`). A combined counter such as `finished · ready to apply` keeps its other facts; an
+ * alternative left with none is dropped. Facts that describe the subject's state (`subjectState`)
+ * are not the glyph's and all stay.
  */
 function withoutGlyphWords(
   values: readonly string[] | undefined,
   input: CompactRowInput,
 ): readonly string[] | undefined {
   if (values === undefined || input.summary.subjectState === true) return values;
-  const status = compactRowStatus(input);
-  const restates = (fact: string) =>
-    restatesStatusGlyph(fact, status, input.summary, input.returnedCheckmark === true);
-  if (!Arr.some(values, (value) => Arr.some(Str.split(value, FACT_SEPARATOR), restates)))
-    return values;
+  const meaning = compactGlyphMeaning(
+    compactRowStatus(input),
+    input.returnedCheckmark === true,
+    input.summary.messageIcon,
+    compactHold(input.summary),
+  );
+  if (meaning === undefined) return values;
+  const own = (fact: string): string[] => {
+    const kept = withoutStatusGlyphWords(compactSingleLine(fact), meaning);
+    return kept === undefined ? [] : [kept];
+  };
+  const reduced = (value: string) =>
+    Arr.join(Arr.flatMap(Str.split(value, FACT_SEPARATOR), own), FACT_SEPARATOR);
   return Arr.dedupe(
-    Arr.filter(
-      Arr.map(values, (value) =>
-        Arr.join(
-          Arr.filter(Str.split(value, FACT_SEPARATOR), (fact) => !restates(fact)),
-          FACT_SEPARATOR,
-        ),
-      ),
-      (value) => Str.isNonEmpty(Str.trim(value)),
-    ),
+    Arr.filter(Arr.map(values, reduced), (value) => Str.isNonEmpty(Str.trim(value))),
   );
 }
 

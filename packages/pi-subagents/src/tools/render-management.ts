@@ -158,15 +158,34 @@ const routeRowLines = (row: RouteRow, width: number, theme: Theme, expanded: boo
 const eligibleCount = (candidates: ReadonlyArray<SubagentProfileCandidateCard>): string =>
   `${Arr.filter(candidates, (candidate) => candidate.status === "eligible").length}/${candidates.length} eligible`;
 
-/** Each candidate in route order; a skipped one gives its reason. */
+/** The context and write intent a profile's defaults line states, which its candidates needn't. */
+interface CandidateDefaults {
+  readonly context: string;
+  readonly writeIntent: string;
+}
+
+/**
+ * Each candidate in route order, with its context and write intent where they differ from the
+ * defaults stated above it; a skipped one gives its reason.
+ */
 const candidateFacts = (
   candidates: ReadonlyArray<SubagentProfileCandidateCard>,
   inherited: InheritedRoute,
+  defaults?: CandidateDefaults,
 ): ReadonlyArray<string> =>
-  Arr.map(
-    candidates,
-    (candidate, index) =>
-      `  ${index + 1}. ${candidateRoute(candidate, inherited)} · ${candidate.context} · ${candidate.writeIntent}${candidate.status === "skipped" ? ` · skipped: ${candidate.reason}` : ""}`,
+  Arr.map(candidates, (candidate, index) =>
+    Arr.join(
+      Arr.filter(
+        [
+          `  ${index + 1}. ${candidateRoute(candidate, inherited)}`,
+          candidate.context !== defaults?.context && candidate.context,
+          candidate.writeIntent !== defaults?.writeIntent && candidate.writeIntent,
+          candidate.status === "skipped" && `skipped: ${candidate.reason}`,
+        ],
+        Predicate.isString,
+      ),
+      " · ",
+    ),
   );
 
 /** The effort an agent's profile gives its unpinned candidates, where the details list it. */
@@ -182,7 +201,10 @@ const profileFacts =
   (details: ModelsToolDetails) =>
   (profile: SubagentProfileRouteCard): ReadonlyArray<string> => [
     `${profile.id}: ${eligibleCount(profile.candidates)} · defaults ${profile.defaultContext} · ${profile.defaultWriteIntent} · ${effortFact(profile.defaultEffort, details.parentEffort)}`,
-    ...candidateFacts(profile.candidates, inheritedRoute(details, profile.defaultEffort)),
+    ...candidateFacts(profile.candidates, inheritedRoute(details, profile.defaultEffort), {
+      context: profile.defaultContext,
+      writeIntent: profile.defaultWriteIntent,
+    }),
   ];
 
 const agentFacts =

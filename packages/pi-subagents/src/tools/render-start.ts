@@ -163,7 +163,8 @@ const receiptStatus = (
       `Launching ${started.length + failed} of ${entries.length}`,
       spinnerFrameAt(synchronousNow()),
     );
-  // The heading already names every launch when all of them started.
+  // The heading already names every launch when all of them started. Here `✓` marks the launch,
+  // not the run, which elsewhere it would say finished, so the word stays.
   if (started.length === 0 || failed === 0) return undefined;
   return `${theme.fg("success", managerStateGlyph("done"))} ${theme.fg("muted", "Started")} ${theme.fg(
     "toolTitle",
@@ -198,7 +199,7 @@ export const renderStartReceiptComponent = (
       ...(status ? [clipToWidth(status, safeWidth)] : []),
       ...Arr.map(pending, (entry) =>
         clipToWidth(
-          `  ${theme.fg("warning", startingSpinnerFrame(0))} ${sanitizeTerminalLine(entry.name)} ${theme.fg("muted", "· starting")}`,
+          `  ${theme.fg("warning", startingSpinnerFrame(0))} ${sanitizeTerminalLine(entry.name)}`,
           safeWidth,
         ),
       ),

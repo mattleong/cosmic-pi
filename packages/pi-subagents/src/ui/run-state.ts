@@ -2,9 +2,12 @@ import {
   managerActivityColor,
   managerActivityGlyph,
   managerActivityLabel,
+  managerActivityMeaning,
   SUITE_STATUS_GLYPHS,
+  withoutStatusGlyphWords,
   type ManagerActivityKind,
   type ManagerStatusColor,
+  type StatusGlyphMeaning,
 } from "pi-cosmic-ui/manager";
 import {
   isActiveRunState,
@@ -42,6 +45,21 @@ export const runStateLabel = (state: SubagentRunState): string =>
   state === "waiting_for_parent"
     ? "waiting for reply"
     : managerActivityLabel(RUN_STATE_KINDS[state]);
+
+/**
+ * What a run's {@link runStateSnapshotGlyph} says in words. Running work's neutral `•` and a
+ * question's shared `?` say nothing, so words beside them stay.
+ */
+export const runSnapshotGlyphMeaning = (state: SubagentRunState): StatusGlyphMeaning | undefined =>
+  state === "running" ? undefined : managerActivityMeaning(RUN_STATE_KINDS[state]);
+
+/**
+ * A listed run's state word beside its snapshot glyph, or undefined where the glyph already says
+ * it: `‖ auth-review`, not `‖ auth-review · paused`; `• auth-review · running` and
+ * `? db-migration · waiting for reply` keep theirs.
+ */
+export const runRowStateLabel = (state: SubagentRunState): string | undefined =>
+  withoutStatusGlyphWords(runStateLabel(state), runSnapshotGlyphMeaning(state));
 
 export const runStateColor = (state: SubagentRunState): ManagerStatusColor =>
   managerActivityColor(RUN_STATE_KINDS[state]);

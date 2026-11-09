@@ -242,7 +242,11 @@ export const presentAsyncMessage: CodePreviewMessagePresenter = (input, options,
     },
     // The answers' hidden lines, else the request and delivery IDs.
     expandLabel: answers && answersHideMore(answers) ? "answers" : "details",
-    ...(answers && { collapsed: () => answersBody(answers, titles, theme, true) }),
+    // The heading names the questions, so a lone answer may leave its title to it.
+    ...(answers && {
+      collapsed: (headingState: WeakKey) =>
+        answersBody(answers, titles, theme, true, undefined, headingState),
+    }),
     ...(cancellation && {
       collapsed: () => cancelledLine(theme),
       expanded: () => stacked([cancelledLine(theme), expanded()]),

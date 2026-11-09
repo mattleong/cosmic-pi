@@ -2,10 +2,13 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
+import type { CompactIssue } from "../tools/compact-issues";
 
 interface IssueMessageStyleOptions {
   readonly forbidden?: readonly string[];
   readonly maxLength?: number;
+  /** A warning or info issue is not under a `✗`, so it may say what failed; errors by default. */
+  readonly severity?: CompactIssue["severity"];
 }
 
 const RULES: ReadonlyArray<readonly [RegExp, string]> = [
@@ -25,12 +28,25 @@ const RULES: ReadonlyArray<readonly [RegExp, string]> = [
   [/(?<!\.)\.$/u, "ends with a period"],
 ];
 
+// Beneath its row's `✗`, an error states the cause: `OpenAI gave no reason`, not
+// `Image generation failed: OpenAI gave no reason` or `The questionnaire failed, so …`.
+const ERROR_RULES: ReadonlyArray<readonly [RegExp, string]> = [
+  [
+    /^(?:The [\w -]+? failed,|[A-Z][\w-]*(?: [\w-]+)*? failed:) /u,
+    "says what failed before its cause",
+  ],
+];
+
 export function issueMessageStyleProblems(
   message: string,
   options: IssueMessageStyleOptions = {},
 ): string[] {
   if (!Str.trim(message)) return ["is blank"];
-  const problems = Arr.filterMap(RULES, ([pattern, problem]) =>
+  const rules =
+    options.severity === undefined || options.severity === "error"
+      ? [...RULES, ...ERROR_RULES]
+      : RULES;
+  const problems = Arr.filterMap(rules, ([pattern, problem]) =>
     pattern.test(message) ? Result.succeed(problem) : Result.failVoid,
   );
   const maxLength = options.maxLength ?? 120;

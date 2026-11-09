@@ -234,6 +234,62 @@ describe("registered questionnaire presentation", () => {
     },
   );
 
+  it.each([57, 100])(
+    "leaves a lone answer's label to a preview heading that shows its whole title at %i columns",
+    (width) => {
+      const { tools } = register("preview", "off");
+      const tool = Option.getOrThrow(Arr.findFirst(tools, (entry) => entry.name === "ask_user"));
+      const answerBody = (
+        questions: ReadonlyArray<{ readonly key: string; readonly title: string }>,
+        answers: ReadonlyArray<{
+          readonly key: string;
+          readonly text: string;
+          readonly note?: string;
+        }>,
+      ) => {
+        const answered = {
+          outcome: "submitted" as const,
+          answers: Arr.map(answers, (answer) => ({ ...answer, kind: "text" as const })),
+        };
+        const harness = createToolPresentationHarness(tool, { width });
+        harness.call({
+          questions: Arr.map(questions, (question) => ({ ...question, prompt: "?" })),
+        });
+        harness.result({
+          details: answered,
+          content: [{ type: "text", text: formatAskUserOutcome(answered) }],
+        });
+        const [, ...body] = harness.render(width);
+        return Arr.join(body, "\n");
+      };
+      const lone = answerBody(
+        [{ key: "env", title: "Environment" }],
+        [{ key: "env", text: "Staging", note: "Watch the logs" }],
+      );
+      expect(lone).toContain("Staging");
+      expect(lone).not.toContain("Environment:");
+      // A note keeps its own label.
+      expect(lone).toContain("Note:");
+      // Several answers, or a title the heading had to cut, keep their labels.
+      expect(
+        answerBody(
+          [
+            { key: "env", title: "Environment" },
+            { key: "lib", title: "Library" },
+          ],
+          [
+            { key: "env", text: "Staging" },
+            { key: "lib", text: "Intl" },
+          ],
+        ),
+      ).toContain("Environment:");
+      const long = "Deployment environment for the first release";
+      expect(answerBody([{ key: "env", title: long }], [{ key: "env", text: "Staging" }])).toMatch(
+        /: Staging/u,
+      );
+    },
+  );
+
   it("uses the registering owner's scheduler and releases it when the call settles", () => {
     const scheduler = animationSchedulerProbe();
     applyPresentationSettings({ toolCallTiming: false });

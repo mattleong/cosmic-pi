@@ -7,7 +7,11 @@ import {
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { previewIssuesSlot, withCodePreviewShell } from "pi-code-previews";
+import {
+  captureCodePreviewPresentationPolicy,
+  previewIssuesSlot,
+  withCodePreviewShell,
+} from "pi-code-previews";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import { createSubagentCompactSummary } from "./compact-summary.ts";
 import { isTypedReceipt, requestedRunIds, type SummaryArguments } from "./compact-heading.ts";
@@ -37,9 +41,11 @@ import {
   renderSubagentExpandedContent,
   decodeCallArguments,
   renderSubagentInputContent,
+  rememberWorkspaceIds,
   renderWorkspaceCallArguments,
   rememberRunNames,
   renderRequestedRuns,
+  type RequestedRowState,
   rawResultSection,
 } from "./render.ts";
 import { renderSubagentStartCall } from "./render-start.ts";
@@ -69,6 +75,17 @@ interface ExpandedCallArguments extends SummaryArguments {
   readonly until?: unknown;
   readonly timeoutSeconds?: unknown;
 }
+
+/** A tool row's shared renderer state: the await ticker's and what its result names. */
+type SubagentRowState = SubagentToolRenderContext["state"] & RequestedRowState;
+
+/**
+ * Whether a result's drawn body names each run it carries: a settled body its rows and Details,
+ * unless its issue carries the whole failure, and a running wait its progress tree, unless the
+ * panel draws that hierarchy instead.
+ */
+const bodyNamesRuns = (isPartial: boolean, carried: boolean, panelOwnsLiveHierarchy: boolean) =>
+  isPartial ? !panelOwnsLiveHierarchy : !carried;
 
 const targetsLabel = (args: SummaryArguments) =>
   countLabel(requestedRunIds(args)?.length ?? 0, "subagent");
@@ -265,6 +282,9 @@ export function registerSubagentTools(
     // Root contract tools are the script-callable ones.
     const scriptable = !nested && isSubagentContractTool(name);
     const project = createSubagentCompactSummary(name);
+    // Read when the shell is: a compact heading counts an await's runs, a preview heading doesn't.
+    const compactHeadings =
+      captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
     /** A recorded failure's issue carries all of it, so its result repeats nothing. */
     const issueCarriesFailure = (
       result: NonNullable<Parameters<typeof project>[0]["result"]>,
@@ -284,7 +304,7 @@ export function registerSubagentTools(
     const expandedCallContent = (
       args: ExpandedCallArguments,
       theme: Theme,
-      toolCallId: string,
+      row: RequestedRowState,
     ): Component | undefined => {
       const ids = requestedRunIds(args);
       if (ids && (name === SUBAGENT_TOOL_NAME.await || name === SUBAGENT_TOOL_NAME.lifecycle))
@@ -302,14 +322,14 @@ export function registerSubagentTools(
             },
             name,
             theme,
-            toolCallId,
+            row,
           ),
         );
       if (name === SUBAGENT_TOOL_NAME.workspace)
-        return renderWorkspaceCallArguments(decodeCallArguments(args), theme);
+        return renderWorkspaceCallArguments(decodeCallArguments(args), theme, row);
       return undefined;
     };
-    const tool = defineTool<SubagentToolParameters<N>>({
+    const tool = defineTool<SubagentToolParameters<N>, unknown, SubagentRowState>({
       ...spec,
       ...(name === SUBAGENT_TOOL_NAME.start && {
         promptGuidelines: [
@@ -338,9 +358,7 @@ export function registerSubagentTools(
       prepareArguments: argumentPreparers[name],
       renderCall: rejectionAwareCall(spec.label, (args, theme, context) => {
         const heading = renderCall(args, theme, context);
-        const body = context.expanded
-          ? expandedCallContent(args, theme, context.toolCallId)
-          : undefined;
+        const body = context.expanded ? expandedCallContent(args, theme, context.state) : undefined;
         if (!body) return heading;
         // Expanded, the requested runs or arguments follow the heading and its issues, indented.
         const container = new Container();
@@ -380,34 +398,39 @@ export function registerSubagentTools(
         );
       },
       renderResult: (result, options, theme, context) => {
+        const carried = issueCarriesFailure(result, options.isPartial, context);
+        const panelOwnsLiveHierarchy = panelOwnsHierarchy(result, options.isPartial, context);
         // The requested line beside this result draws later and names its runs from here.
-        rememberRunNames(context.toolCallId, decodeOutcomeDetails(result.details));
-        return issueCarriesFailure(result, options.isPartial, context)
+        rememberRunNames(
+          context.state,
+          decodeOutcomeDetails(result.details),
+          bodyNamesRuns(options.isPartial, carried, panelOwnsLiveHierarchy),
+        );
+        rememberWorkspaceIds(context.state, result, !context.isError);
+        return carried
           ? new Container()
           : renderSubagentResult(result, options.isPartial, options.expanded, theme, {
-              panelOwnsLiveHierarchy: panelOwnsHierarchy(result, options.isPartial, context),
+              panelOwnsLiveHierarchy,
               isError: context.isError,
               args: context.args,
               row: context,
             });
       },
     });
-    const wrapped = shell(tool, {
+    const wrapped = shell<SubagentToolParameters<N>, unknown, SubagentRowState, typeof tool>(tool, {
       ...(runtime.scheduleAnimation && { scheduleAnimation: runtime.scheduleAnimation }),
       expandedContent: {
         // Expanded bodies indent beneath the heading, as every workspace tool's do.
         renderCall: (args, theme, context) =>
           tool.name === SUBAGENT_TOOL_NAME.start && "agents" in args && Arr.isArray(args.agents)
             ? renderSubagentStartCall(args.agents, theme, true, true)
-            : (expandedCallContent(args, theme, context.toolCallId) ??
+            : (expandedCallContent(args, theme, context.state) ??
               indentedBody(
                 theme,
                 // Profile routes' heading names the profile it asked for.
                 renderSubagentInputContent(decodeCallArguments(args), theme, ["profile"]),
               )),
         renderResult: (result, options, theme, context) => {
-          // The requested line beside this result draws later and names its runs from here.
-          rememberRunNames(context.toolCallId, decodeOutcomeDetails(result.details));
           const panelOwnsLiveHierarchy = panelOwnsHierarchy(result, options.isPartial, context);
           const summary = project({
             phase: options.isPartial ? "running" : "settled",
@@ -415,6 +438,18 @@ export function registerSubagentTools(
             result,
             context,
           });
+          // The requested line beside this result draws later and names its runs from here.
+          rememberRunNames(
+            context.state,
+            decodeOutcomeDetails(result.details),
+            summary !== undefined &&
+              bodyNamesRuns(
+                options.isPartial,
+                issueCarriesFailure(result, options.isPartial, context),
+                panelOwnsLiveHierarchy,
+              ),
+          );
+          rememberWorkspaceIds(context.state, result, summary !== undefined && !context.isError);
           if (!summary)
             return renderSubagentResult(
               { content: result.content },
@@ -425,6 +460,7 @@ export function registerSubagentTools(
           if (issueCarriesFailure(result, options.isPartial, context)) return new Container();
           const content = renderSubagentExpandedContent(result, options.isPartial, theme, {
             panelOwnsLiveHierarchy,
+            headingCounts: compactHeadings,
             isError: context.isError,
             args: context.args,
           });

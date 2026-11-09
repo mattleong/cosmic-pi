@@ -33,7 +33,7 @@ import {
 } from "./run-presentation.ts";
 import { projectFleetTree, runTreeBranch, type FleetTreeRow } from "./run-tree-rows.ts";
 import { runLiveActivity } from "./run-live-activity.ts";
-import { runStateColor, runStateGlyph, runStateLabel } from "./run-state.ts";
+import { runRowStateLabel, runStateColor, runStateGlyph } from "./run-state.ts";
 
 export type SubagentActivityAwaitMode = "all_finished" | "any_finished";
 
@@ -212,9 +212,13 @@ export const subagentActivityPanelCadence = ({
 const runElapsed = (run: SubagentRunView, now: number): string =>
   formatSessionAge(run.endedAt ?? now, run.startedAt);
 
-/** What a run is doing, phrased as the shared Activity row phrases it: `running bash · sleep 25`. */
+/**
+ * What a run is doing, phrased as the shared Activity row phrases it: `running bash · sleep 25`. A
+ * pause is its `‖` alone; `waiting for reply` stays beside the shared `?`.
+ */
 const runActivity = (run: SubagentRunView, panel: SubagentActivityPanelProjection): string => {
-  if (run.state === "waiting_for_parent" || run.state === "paused") return runStateLabel(run.state);
+  if (run.state === "waiting_for_parent" || run.state === "paused")
+    return runRowStateLabel(run.state) ?? "";
   return sanitizeTerminalLine(runLiveActivity(run, (id) => panel.runNames.get(id)) ?? "");
 };
 
@@ -424,11 +428,14 @@ const activityMetadataVariants = (
   const { full, short, model } = identity;
   const variants: ActivityMetadataVariant[] = [
     { parts: [full, themedActivity, messages], elapsed: themedElapsed },
-    ...Arr.map([full, short], (route) => ({
-      parts: [route, themedActivity],
-      elapsed: themedElapsed,
-      clipLastAt: MIN_CLIPPED_ACTIVITY_WIDTH,
-    })),
+    // Only activity text clips; a row without any keeps its route whole or drops to the model.
+    ...(themedActivity
+      ? Arr.map([full, short], (route) => ({
+          parts: [route, themedActivity],
+          elapsed: themedElapsed,
+          clipLastAt: MIN_CLIPPED_ACTIVITY_WIDTH,
+        }))
+      : []),
     // A stall warning or recent message outranks the route when the row is too narrow for both.
     ...(stall || message
       ? [

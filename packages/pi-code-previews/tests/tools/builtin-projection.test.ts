@@ -77,7 +77,7 @@ describe("builtin failure classification", () => {
     );
     expect(exit?.outcome).toBe("error");
     expect(exit?.issues).toEqual([
-      { severity: "error", code: "shell-exit", message: "Exited with code 7: diagnostic" },
+      { severity: "error", code: "shell-exit", message: "Exit 7: diagnostic" },
     ]);
     for (const [output, cause] of [
       [" FAIL  tests/a.test.ts > adds\n Test Files  1 failed (1)", "FAIL tests/a.test.ts > adds"],
@@ -92,10 +92,10 @@ describe("builtin failure classification", () => {
       ["building…\ndone", undefined],
     ] as const) {
       const message = firstShellIssueMessage(`${output}\nCommand exited with code 1`);
-      expect(message).toBe(cause ? `Exited with code 1: ${cause}` : "Exited with code 1");
+      expect(message).toBe(cause ? `Exit 1: ${cause}` : "Exit code 1");
     }
     expect(firstShellIssueMessage("Command exited with code 127")).toBe(
-      "Exited with code 127: command not found",
+      "Exit 127: command not found",
     );
     for (const [diagnostic, subject] of [
       ["sh: foo: command not found", "foo"],
@@ -114,7 +114,7 @@ describe("builtin failure classification", () => {
       expect(message).not.toContain(diagnostic);
     }
     expect(firstShellIssueMessage("Error: out of heap\nCommand exited with code 137")).toBe(
-      "Exited with code 137: out of heap",
+      "Exit 137: out of heap",
     );
     const secret = firstShellIssueMessage("error: token=hunter2secret\nCommand exited with code 1");
     expect(secret).not.toContain("hunter2secret");

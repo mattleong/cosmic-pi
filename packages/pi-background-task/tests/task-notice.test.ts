@@ -133,6 +133,22 @@ describe("background task notice rendering", () => {
     },
   );
 
+  it("states a run time beside the compact glyph and the whole phrase in a preview heading", () => {
+    const collapsed = (style: "compact" | "preview") => {
+      const undo = applyPresentationSettings({ toolCallCollapsedStyle: style });
+      try {
+        const message = taskNoticeMessage(failedNotice);
+        return renderNotice(message.details, false, message.content);
+      } finally {
+        undo();
+      }
+    };
+    // The task ran 2m 3s; a compact `✗` already says it failed.
+    expect(collapsed("compact")).toMatch(/· 2m 3s/u);
+    expect(collapsed("compact")).not.toMatch(/failed after/u);
+    expect(collapsed("preview")).toMatch(/failed after 2m 3s/u);
+  });
+
   it("expands a notice stored without display output to the text the agent read", () => {
     const content = taskNoticeContent(failedNotice);
     const { tail: _tail, ...stored } = taskNoticeMessage(failedNotice).details;
