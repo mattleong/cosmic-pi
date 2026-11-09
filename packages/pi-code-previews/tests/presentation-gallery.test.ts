@@ -971,6 +971,40 @@ const scenarios: ReadonlyArray<
   },
   {
     tool: "codemode",
+    title: "native settled long program keeps its program stand-in and output tag",
+    args: {
+      code: Arr.join(
+        [
+          "const files = ['cart.ts', 'checkout.ts', 'invoice.ts', 'ledger.ts', 'refund.ts'];",
+          "const counts = [];",
+          "for (const file of files) {",
+          "  const result = await tools.bash({ command: `wc -l src/${file}` });",
+          "  counts.push(result.output.trim());",
+          "}",
+          "const total = counts",
+          "  .map((line) => Number(line.split(' ')[0]))",
+          "  .reduce((sum, value) => sum + value, 0);",
+          "text(counts.join('\\n'));",
+          "text(`total ${total}`);",
+          "return total;",
+        ],
+        "\n",
+      ),
+    },
+    timing: true,
+    border: true,
+    durationMs: 640,
+    result: nativeResult(
+      "completed",
+      Arr.map(["cart", "checkout", "invoice", "ledger", "refund"], (file) => ({
+        ...nativeArgumentCall("bash", { command: `wc -l src/${file}.ts` }),
+        durationMs: 12,
+      })),
+      "21 src/cart.ts\n48 src/checkout.ts\n63 src/invoice.ts\n37 src/ledger.ts\n19 src/refund.ts\ntotal 188",
+    ),
+  },
+  {
+    tool: "codemode",
     title: "native thrown error after partial output",
     args: {
       code: "text(await tools.bash({command: 'echo partial'}));\nthrow new Error('demo failure');",

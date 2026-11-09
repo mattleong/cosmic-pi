@@ -2,7 +2,13 @@ import { expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Str from "effect/String";
 import * as Fn from "effect/Function";
-import { clipProse, countLabel, formatBytes, formatClockTime } from "../src/display.ts";
+import {
+  clipProse,
+  countLabel,
+  formatBytes,
+  formatClockTime,
+  nameListForms,
+} from "../src/display.ts";
 
 it("drops a trailing .0 from sizes, as durations do", () => {
   expect(formatBytes(18 * 1024)).toBe("18 KB");
@@ -47,4 +53,14 @@ it("cuts prose at the last whole word that keeps most of the budget", () => {
 it("cuts one long token mid-word rather than giving up most of the budget", () => {
   const token = Fn.pipe("x", Str.repeat(100));
   expect(clipProse(`Failed: ${token}`, 40)).toBe(`Failed: ${Fn.pipe("x", Str.repeat(31))}…`);
+});
+
+it("narrows a list of names by counting the ones it leaves out", () => {
+  expect(nameListForms(["auth-review", "db-migration", "docs-sweep"])).toEqual([
+    "auth-review, db-migration, docs-sweep",
+    "auth-review, db-migration +1",
+    "auth-review +2",
+  ]);
+  expect(nameListForms(["auth-review"])).toEqual(["auth-review"]);
+  expect(nameListForms([])).toEqual([]);
 });

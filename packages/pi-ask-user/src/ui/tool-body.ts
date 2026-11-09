@@ -167,8 +167,8 @@ export const answersHideMore = (answers: readonly ReplayedAnswer[]): boolean =>
  * A row's answers. Bounded, each answer and note shows its first line, cut at a word boundary with
  * `…` where it doesn't fit; the row's tag, never a line of the body's own, offers the rest. Inside
  * a preview row (`row`), answers with later lines hidden name the tag `answers`. `titledHeading` is
- * the renderer state of a heading whose subject is `titles`: a lone answer to a lone question then
- * leaves out its label wherever that heading showed the title whole.
+ * the renderer state of a heading whose subject is `titles`: a lone answer to a lone question whose
+ * title fits its label uncut then leaves out its label wherever that heading showed the title whole.
  */
 export function answersBody(
   answers: readonly ReplayedAnswer[],
@@ -180,7 +180,13 @@ export function answersBody(
 ): Component {
   const entries = answerEntries(answers, titles);
   const [only] = answers;
-  const lone = titles.size === 1 && answers.length === 1 && titles.has(only?.key ?? "");
+  const loneTitle = only === undefined ? undefined : titles.get(only.key);
+  // A title `titleLabel` cut is never the whole subject, whatever the heading's layout reports.
+  const lone =
+    titles.size === 1 &&
+    answers.length === 1 &&
+    loneTitle !== undefined &&
+    stripTerminalControls(loneTitle) === titleLabel(loneTitle);
   if (!bounded)
     return widthRows((width) => {
       const lines: string[] = [];

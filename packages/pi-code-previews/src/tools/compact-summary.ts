@@ -53,6 +53,13 @@ export interface CompactSummary {
   subject: string;
   compactSubject?: string;
   /**
+   * Narrower whole forms of the subject (of `compactSubject`, when set), widest first, such as
+   * `auth-review +1` for `auth-review, db-migration`: a collapsed compact row or message heading
+   * that can't show the subject whole beside its fact shows the first form that fits whole before
+   * it cuts the subject with `…` or drops the fact. Expanded headings wrap the whole subject.
+   */
+  subjectAlternatives?: readonly string[];
+  /**
    * The subject is a file path, or ends in one, such as `src/app.ts` or `TODO in src`: when it
    * doesn't fit, it loses its middle so the file name stays visible. Every other subject is prose,
    * cut at the end on a word boundary.

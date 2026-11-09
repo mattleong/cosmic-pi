@@ -215,6 +215,8 @@ describe("async questionnaire replay rendering", () => {
         // A title the heading had to cut keeps its label beside the answer.
         const long = "Which environment should receive this release first";
         expect(lone(long, 40)).toMatch(/: Staging/u);
+        // A title cut to fit its label is never whole, however wide the heading.
+        expect(lone(long, 100)).toMatch(/: Staging/u);
         // A title longer than a label is shortened as plain text, never as escaped styling.
         expect(lone(long, 100)).not.toContain("␛");
       } finally {

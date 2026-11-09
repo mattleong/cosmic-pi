@@ -12,6 +12,7 @@ import {
   endElide,
   FACT_CUT_SLACK,
   SUBJECT_MINIMUM,
+  subjectForms,
 } from "./compact-header";
 import type { TaggableHeading } from "./heading-tag";
 import { previewHeadingText, takeHeadingRoom, wrapPreviewHeading } from "./heading-wrap";
@@ -102,11 +103,13 @@ const singleLineFacts = (values: readonly string[] | undefined): string[] =>
 /**
  * A preview heading on one row, as tool rows draw theirs: the title, then the action, subject, a
  * counter, and metadata dimmed. Counters are alternatives, widest first, as on compact rows: the
- * first that fits beside the whole subject shows, with as much metadata after it as fits. Otherwise
- * the first counter alternative that leaves the subject its minimum room stays, or without counters
- * the first metadata when the cut keeps whole words or a path's file name, so the row keeps its
- * outcome, and the subject is cut the way compact headings cut it (prose at the end on a word
- * boundary, a path in the middle).
+ * first that fits beside the whole subject shows, with as much metadata after it as fits. A subject
+ * that fits beside none shows the first of its narrower whole forms (`subjectAlternatives`) that
+ * does. Otherwise the first counter alternative that leaves the subject its minimum room stays, or
+ * without counters the first metadata when the cut keeps whole words or a path's file name, so the
+ * row keeps its outcome, and the subject is cut the way compact headings cut it (prose at the end
+ * on a word boundary, a path in the middle); only a row left with no fact shows a narrower whole
+ * form alone instead.
  */
 export function previewHeadingRow(
   title: string,
@@ -165,13 +168,8 @@ export function layoutPreviewHeadingRow(
     identityComplete,
     subjectComplete: whole && identityComplete && shown === subject,
   });
-  const fits = (shownFacts: readonly string[], count: number) =>
-    subjectWidth + visibleWidth(factTail(shownFacts, count)) <= room;
-  for (const shownFacts of counters.length > 0
-    ? Arr.map(counters, (counter) => [counter, ...metadata])
-    : [metadata])
-    for (let count = shownFacts.length; count >= 1; count--)
-      if (fits(shownFacts, count)) return draw(subject, shownFacts, count);
+  const fits = (shown: string, shownFacts: readonly string[], count: number) =>
+    visibleWidth(shown) + visibleWidth(factTail(shownFacts, count)) <= room;
   const kind = summary.pathSubject ? "path" : "prose";
   const counter = Option.getOrUndefined(
     Arr.findFirst(
@@ -180,6 +178,20 @@ export function layoutPreviewHeadingRow(
         room - visibleWidth(factTail([value], 1)) >= Math.min(subjectMinimum, subjectWidth),
     ),
   );
+  const factSets =
+    counters.length > 0
+      ? Arr.map(counters, (shownCounter) => [shownCounter, ...metadata])
+      : [metadata];
+  const firstFit = (
+    form: string,
+    sets: readonly (readonly string[])[],
+    leastCount: number,
+  ): HeadingChoice | undefined => {
+    for (const shownFacts of sets)
+      for (let count = shownFacts.length; count >= Math.max(1, leastCount); count--)
+        if (fits(form, shownFacts, count)) return { shown: form, facts: shownFacts, count };
+    return undefined;
+  };
   const cut = (kept: readonly string[]) =>
     elideSubject(
       subject,
@@ -187,11 +199,49 @@ export function layoutPreviewHeadingRow(
       kind,
       kept.length > 0 ? FACT_CUT_SLACK : undefined,
     );
-  const kept = counter === undefined ? [] : [counter];
-  // Metadata gives way only to a cut that keeps whole words, or a path's file name.
-  return counters.length > 0 || cutsCleanly(subject, cut(kept), kind)
-    ? draw(cut(kept), kept, kept.length)
-    : draw(cut([]), [], 0);
+  const subjectChoice = (): HeadingChoice => {
+    const withFacts = firstFit(subject, factSets, 1);
+    if (withFacts) return withFacts;
+    const kept = counter === undefined ? [] : [counter];
+    // Metadata gives way only to a cut that keeps whole words, or a path's file name.
+    if (kept.length > 0 && (counters.length > 0 || cutsCleanly(subject, cut(kept), kind)))
+      return { shown: cut(kept), facts: kept, count: kept.length };
+    return { shown: fits(subject, [], 0) ? subject : cut([]), facts: [], count: 0 };
+  };
+  const base = subjectChoice();
+  const alternatives = expanded
+    ? []
+    : Arr.drop(
+        subjectForms(subject, Arr.map(summary.subjectAlternatives ?? [], compactSingleLine)),
+        1,
+      );
+  // A whole subject never gives way; an alternative replaces a cut one only when it keeps the
+  // counter the cut kept, or an earlier, more informative one, and at least as many facts.
+  if (base.shown === subject || alternatives.length === 0)
+    return draw(base.shown, base.facts, base.count);
+  const keptIndex =
+    base.count > 0
+      ? Option.getOrElse(
+          Arr.findFirstIndex(counters, (value) => value === base.facts[0]),
+          () => counters.length - 1,
+        )
+      : counters.length - 1;
+  const sets = counters.length > 0 ? Arr.take(factSets, keptIndex + 1) : factSets;
+  for (const form of alternatives) {
+    const choice = firstFit(form, sets, base.count);
+    if (choice) return draw(choice.shown, choice.facts, choice.count);
+  }
+  // A row that keeps no fact shows a narrower whole form before it cuts the subject.
+  const alone =
+    base.count === 0 ? Arr.findFirst(alternatives, (form) => fits(form, [], 0)) : Option.none();
+  return Option.isSome(alone) ? draw(alone.value, [], 0) : draw(base.shown, base.facts, base.count);
+}
+
+/** The subject form and facts a one-row preview heading draws. */
+interface HeadingChoice {
+  readonly shown: string;
+  readonly facts: readonly string[];
+  readonly count: number;
 }
 
 /** A heading that names who a message goes to or comes from, such as `Message → web work`. */

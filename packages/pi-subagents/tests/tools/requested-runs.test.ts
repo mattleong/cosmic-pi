@@ -60,6 +60,20 @@ describe("requested runs beside their result", () => {
     expect(terms).toMatch(/first finishes/iu);
   });
 
+  it("leaves out a target a shown stop's Details name as not stopped", () => {
+    const row: RequestedRowState = {};
+    const partial = compactToolDetails({
+      action: "stop",
+      runs: [view({ id: "agent-1", name: "auth-review", state: "stopped" })],
+      actionFailures: [{ id: "agent-12", code: "not_found", message: "Run not found." }],
+    });
+    rememberRunNames(row, decodeOutcomeDetails(partial), true);
+    expect(requested(["agent-1", "agent-12", "agent-99"], row)).toBe("Requested agent-99");
+    // A body that isn't drawn names none of them.
+    rememberRunNames(row, decodeOutcomeDetails(partial), false);
+    expect(requested(["agent-12"], row)).toContain("agent-12");
+  });
+
   it("forgets what an earlier result named once a later one names nothing", () => {
     const row: RequestedRowState = {};
     rememberRunNames(row, decodeOutcomeDetails(stopped), true);
@@ -79,7 +93,7 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
     applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallTiming: false }),
   );
 
-  it("leaves out agents a read's result names and keeps the ones it didn't find", () => {
+  it("leaves out agents a read's result names and the ones its not-found issue names", () => {
     const harness = createToolPresentationHarness(tool("agent_read"));
     harness.call({ agentIds: ["agent-1", "agent-12"] }, { expanded: true });
     expect(expandedText(harness)).toContain("Requested agent-1, agent-12");
@@ -97,6 +111,7 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
               textStatus: "text",
               truncated: false,
               source: "report",
+              facts: ["agent-1 · scout → openai-codex/gpt-5.6-sol:low"],
             },
           ],
           missingIds: ["agent-12"],
@@ -105,8 +120,59 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
       { expanded: true },
     );
     const settled = expandedText(harness);
-    expect(settled).toContain("Requested agent-12");
-    expect(settled).not.toContain("Requested agent-1,");
+    expect(settled).not.toContain("Requested");
+    expect(settled).toContain("Not found: agent-12");
+  });
+
+  it("leaves out agents a list's not-found issue names", () => {
+    const harness = createToolPresentationHarness(tool("agent_list"));
+    harness.call({ agentIds: ["agent-7"] }, { expanded: true });
+    expect(expandedText(harness)).toContain("Requested agent-7");
+    harness.result(
+      {
+        content: [{ type: "text", text: "No agents found." }],
+        details: {
+          version: 1,
+          action: "agent_list",
+          agentCount: 0,
+          states: [],
+          entries: [],
+          missingIds: ["agent-7"],
+        },
+      },
+      { expanded: true },
+    );
+    const settled = expandedText(harness);
+    expect(settled).not.toContain("Requested");
+    expect(settled).toContain("Not found: agent-7");
+  });
+
+  it("keeps a found agent's ID requested when the read shows no Details with it", () => {
+    const harness = createToolPresentationHarness(tool("agent_read"));
+    harness.call({ agentIds: ["agent-only-id"] }, { expanded: true });
+    harness.result(
+      {
+        content: [{ type: "text", text: "Read one agent." }],
+        details: {
+          version: 1,
+          action: "agent_read",
+          agents: [
+            {
+              id: "agent-only-id",
+              name: "schema-check",
+              state: "running",
+              textStatus: "none",
+              truncated: false,
+            },
+          ],
+          missingIds: [],
+        },
+      },
+      { expanded: true },
+    );
+    const settled = expandedText(harness);
+    expect(settled).toContain("schema-check");
+    expect(settled).toContain("agent-only-id");
   });
 
   it("names a running wait's runs in its progress tree, not again on its requested line", () => {

@@ -175,6 +175,34 @@ describe("message shell", () => {
     expect(repeats("preview", long)).toBe(false);
   });
 
+  it("keeps a subject a collapsed heading showed only in its short form", () => {
+    const repeats = (style: "compact" | "preview", compactSubject?: string) =>
+      Str.includes("SUBJECT AGAIN")(
+        withPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: "off" }, () =>
+          draw(
+            withCodePreviewMessageShell(() => ({
+              name: "example",
+              summary: {
+                subject: "auth-review, db-migration",
+                ...(compactSubject !== undefined && { compactSubject }),
+                outcome: "success",
+              },
+              collapsed: (headingState) => ({
+                render: () =>
+                  headingShowedSubject(headingState) ? ["BODY"] : ["BODY", "SUBJECT AGAIN"],
+                invalidate: () => undefined,
+              }),
+            })),
+            false,
+          ),
+        ),
+      );
+    for (const style of STYLES) {
+      expect(repeats(style)).toBe(false);
+      expect(repeats(style, "2 subagents")).toBe(true);
+    }
+  });
+
   it("labels a delivered message's words beneath a heading that wraps", () => {
     const labeled = (style: "compact" | "preview", sender: string) =>
       withPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: "off" }, () =>

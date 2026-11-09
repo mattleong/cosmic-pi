@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import type { CompactSummaryProvider } from "pi-code-previews";
@@ -182,6 +183,24 @@ describe("questionnaire compact outcome projection", () => {
     ]);
     for (const issue of summary?.issues ?? [])
       expect(issueMessageStyleProblems(issue.message)).toEqual([]);
+  });
+  it("narrows a status list to its pressing state's count before only a total", () => {
+    const open = row({ status: "pending", outcome: undefined, delivery: "pending" });
+    const queued = row({ ...open, requestId: "request-2", presentation: "queued" });
+    const counters =
+      summarize(
+        asyncAskUserCompactSummary,
+        { requests: [open, queued] },
+        { args: { action: "status" } },
+      )?.counters ?? [];
+    const at = (matches: (counter: string) => boolean) =>
+      Option.getOrElse(Arr.findFirstIndex(counters, matches), () => -1);
+    const pressing = at(
+      (counter) => Str.includes("needs your input")(counter) && !Str.includes(" of ")(counter),
+    );
+    const total = at(Str.includes("questionnaire"));
+    expect(pressing).toBeGreaterThanOrEqual(0);
+    expect(pressing).toBeLessThan(total);
   });
   it("names a control call's questions by their stored titles, else only by its action", () => {
     const args = { action: "await", requestId: "request-1" };

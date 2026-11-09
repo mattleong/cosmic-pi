@@ -166,9 +166,9 @@ const NESTED_NAMESPACE = {
 const COLLAPSED_RESULT_LINES = 8;
 
 /**
- * Requested agents that nothing else on the row names: as typed before the result arrives, and
- * afterwards only those it didn't find. A shown result names each agent it found in its rows and
- * keeps its ID beside its name in Details.
+ * Requested agents whose IDs nothing else on the row shows: every one as typed before the result
+ * arrives, and afterwards those the result found without showing the ID, which it shows as an
+ * agent's name or among its Details facts. Its not-found issue names the agents it didn't find.
  */
 const requestedLine = (
   call: AgentCallEvidence,
@@ -183,13 +183,18 @@ const requestedLine = (
 /** A tool row's shared renderer state, where a result leaves the names it resolved. */
 interface SendRowState extends Record<string, unknown> {
   piSubagentsRecipient?: string | undefined;
-  /** The IDs of the agents a shown result named. */
+  /** The IDs a shown result puts on its row, as names, Details facts, or its not-found issue. */
   piSubagentsNamedAgents?: ReadonlySet<string> | undefined;
 }
 
 interface SendRenderContext {
   readonly state: SendRowState;
 }
+
+/** Whether a shown result puts an agent's ID on its row: as its name, or as a Details fact. */
+const showsAgentId = (id: string, name: string, facts: ReadonlyArray<string>): boolean =>
+  sanitizeTerminalLine(name) === id ||
+  Arr.some(facts, (line) => Arr.contains(Str.split(sanitizeTerminalLine(line), " · "), id));
 
 const rememberRecipient = (
   context: SendRenderContext,
@@ -200,15 +205,27 @@ const rememberRecipient = (
   if (details?.action === AGENT_TOOL_NAME.send)
     context.state.piSubagentsRecipient =
       details.to === MAIN_AGENT_ID ? "main" : sanitizeTerminalLine(details.name);
+  // Read facts are optional, while a listed agent's Details line falls back to its ID.
   const named =
     details?.action === AGENT_TOOL_NAME.read
-      ? details.agents
+      ? Arr.filter(details.agents, (agent) => showsAgentId(agent.id, agent.name, agent.facts ?? []))
       : details?.action === AGENT_TOOL_NAME.list
-        ? (details.entries ?? [])
+        ? Arr.filter(details.entries ?? [], (entry) =>
+            showsAgentId(
+              entry.id,
+              entry.name,
+              entry.kind === "main" ? [] : [entry.facts ?? entry.id],
+            ),
+          )
         : [];
+  // The row's not-found issue names every requested agent the result didn't find.
+  const missing =
+    details?.action === AGENT_TOOL_NAME.read || details?.action === AGENT_TOOL_NAME.list
+      ? details.missingIds
+      : [];
+  const ids = [...Arr.map(named, (agent) => agent.id), ...missing];
   // Each result replaces what an earlier one named, so a failure names none.
-  context.state.piSubagentsNamedAgents =
-    named.length > 0 && shown ? new Set(Arr.map(named, (agent) => agent.id)) : undefined;
+  context.state.piSubagentsNamedAgents = ids.length > 0 && shown ? new Set(ids) : undefined;
 };
 
 // The result names the recipient; until it arrives the heading shows what was typed.

@@ -119,14 +119,61 @@ export function cutsCleanly(text: string, cut: string, kind: CompactSubjectKind)
 /** The columns a collapsed heading's subject keeps beside a fact, unless it is shorter. */
 export const SUBJECT_MINIMUM = 12;
 
+/** The subject, then its narrower whole forms (`subjectAlternatives`), widest first. */
+export const subjectForms = (subject: string, alternatives: readonly string[] = []): string[] =>
+  Arr.dedupe([subject, ...Arr.filter(alternatives, (form) => Str.isNonEmpty(Str.trim(form)))]);
+
 /**
  * Lays out `identity subject · counter`, choosing the first counter alternative that leaves the
  * subject `subjectMinimum` columns; a subject cut beside it keeps whole words. Without counters the
  * first optional fact takes a counter's place when such a cut exists (or keeps a path's file name),
- * so a heading whose subject is cut still shows its outcome, such as `timed out after 30s`. `fact` is
- * the counter or outcome fact shown, and `identityComplete` whether the identity shows whole.
+ * so a heading whose subject is cut still shows its outcome, such as `timed out after 30s`. A
+ * subject that would be cut, or lose the row's fact, gives way to the first of its
+ * `subjectAlternatives` that shows whole and keeps a fact wherever the subject kept one. `fact` is
+ * the counter or outcome fact shown, `subjectComplete` whether the row shows the whole subject
+ * (never an alternative), and `identityComplete` whether the identity shows whole.
  */
 export function layoutCompactHeader(
+  identity: string,
+  subject: string,
+  candidateCounters: readonly string[],
+  optional: readonly (string | undefined)[],
+  width: number,
+  separator = " · ",
+  timing?: string,
+  subjectKind: CompactSubjectKind = "prose",
+  subjectMinimumColumns = SUBJECT_MINIMUM,
+  subjectAlternatives: readonly string[] = [],
+) {
+  const lay = (shown: string, counters: readonly string[]) =>
+    layoutSubjectHeader(
+      identity,
+      shown,
+      counters,
+      optional,
+      width,
+      separator,
+      timing,
+      subjectKind,
+      subjectMinimumColumns,
+    );
+  const base = lay(subject, candidateCounters);
+  if (base.subjectComplete || !base.identityComplete) return base;
+  // A narrower form takes the counter its own room allows, else the one the subject kept.
+  const counterChoices = [
+    candidateCounters,
+    ...(base.counter === undefined ? [] : [[base.counter]]),
+  ];
+  for (const form of Arr.drop(subjectForms(subject, subjectAlternatives), 1))
+    for (const counters of counterChoices) {
+      const layout = lay(form, counters);
+      if (layout.subjectComplete && (base.fact === undefined || layout.fact !== undefined))
+        return { ...layout, subjectComplete: false };
+    }
+  return base;
+}
+
+function layoutSubjectHeader(
   identity: string,
   subject: string,
   candidateCounters: readonly string[],

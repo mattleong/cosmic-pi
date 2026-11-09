@@ -155,9 +155,7 @@ export function registerAsyncAskUserTools(
           );
         },
       }),
-      // Its action (`await`, `status`, `cancel`) names the control call, so the row keeps the
-      // family's name and leaves its room to the questions and their answer count.
-      { ...presentation, displayName: "ask_user_async" },
+      presentation,
     ),
   );
 }

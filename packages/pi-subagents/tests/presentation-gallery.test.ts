@@ -997,6 +997,30 @@ const agentScenarios = Effect.all([
     { tool: "agent_read", args: { agentIds: ["agent-4"] } },
     read([runReadout(schemaCheck)]),
   ),
+  // Details saved without facts show no ID, so the requested line keeps it.
+  Effect.succeed<ToolScenario>({
+    tool: "agent_read",
+    title: "found agent saved without Details facts keeps its requested ID",
+    args: { agentIds: ["agent-only-id"] },
+    result: {
+      content: [{ type: "text", text: "schema-check is running and has no message yet." }],
+      details: {
+        version: 1,
+        action: "agent_read",
+        agents: [
+          {
+            id: "agent-only-id",
+            name: "schema-check",
+            state: "running",
+            textStatus: "none",
+            truncated: false,
+          },
+        ],
+        missingIds: [],
+      },
+    },
+    isError: false,
+  }),
   agentScenario(
     "failed worker with a next candidate",
     { tool: "agent_read", args: { agentIds: ["agent-5"] } },

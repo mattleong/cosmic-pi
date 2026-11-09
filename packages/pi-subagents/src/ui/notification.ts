@@ -5,7 +5,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import * as Match from "effect/Match";
-import { countLabel } from "pi-cosmic-core/display";
+import { countLabel, nameListForms } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth, managerActivityGlyph, managerActivityColor } from "pi-cosmic-ui/manager";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
@@ -61,16 +61,27 @@ type CompletedDetails = Extract<NoticeDetails, { readonly kind: "completed" }>;
 type StoppedDetails = Extract<NoticeDetails, { readonly kind: "stopped" }>;
 type PeerDetails = Extract<NoticeDetails, { readonly kind: "peers" }>;
 
-const namesOrCount = (names: ReadonlyArray<string>, total: number, noun: string): string =>
-  names.length === total && total > 0 && total <= 3
-    ? Arr.join(names, ", ")
-    : countLabel(total, noun);
+/**
+ * A few names, `auth-review, db-migration`, narrowing to `auth-review +1` and then the count where
+ * the row has no room, since the names are the only place the row says how many; more read as the
+ * count.
+ */
+const namesOrCount = (
+  names: ReadonlyArray<string>,
+  total: number,
+  noun: string,
+): Pick<CompactSummary, "subject" | "subjectAlternatives"> => {
+  const count = countLabel(total, noun);
+  if (names.length !== total || total === 0 || total > 3) return { subject: count };
+  const [subject = count, ...narrower] = nameListForms(names);
+  return total === 1 ? { subject } : { subject, subjectAlternatives: [...narrower, count] };
+};
 
 const peerSummary = (details: PeerDetails): CompactSummary =>
   details.total === 0
     ? { subject: "no other agents in this directory", outcome: "returned" }
     : {
-        subject: namesOrCount(
+        ...namesOrCount(
           Arr.map(details.peers, (peer) => peer.name),
           details.total,
           "other subagent",
@@ -133,11 +144,11 @@ const stoppedSummary = (details: StoppedDetails): CompactSummary => {
   const names = Arr.map(details.runs ?? [], (run) => run.name);
   const subject =
     names.length === 0 && details.total === 1 && details.name
-      ? details.name
+      ? { subject: details.name }
       : namesOrCount(names, details.total, "subagent");
   // A routine stop: the runs were stopped on purpose, which is no warning.
   return {
-    subject,
+    ...subject,
     ...(details.cause && { counters: [STOP_CAUSES[details.cause]] }),
     outcome: "cancelled",
   };

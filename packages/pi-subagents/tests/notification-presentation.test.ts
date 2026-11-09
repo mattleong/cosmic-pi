@@ -7,7 +7,14 @@ import {
   renderSubagentMessage,
 } from "../src/application/messages.ts";
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
+import {
+  STOPPED_RUNS_MESSAGE_TYPE,
+  stoppedRunsContent,
+  stoppedRunsDetails,
+} from "../src/boundary/host-stopped-runs.ts";
+import { view } from "./tools/fixtures/tool-harness.ts";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 
@@ -130,5 +137,39 @@ test.each(["compact", "preview"] as const)(
     // A heading that fits on one row leaves the words unlabeled.
     expect(report?.(180)).toEqual([]);
     expect(question?.(180)).toEqual([]);
+  },
+);
+
+test.each(["compact", "preview"] as const)(
+  "a %s stopped-runs notice narrows its names to keep how many stopped beside the cause",
+  (style) => {
+    restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
+    const runs = [
+      view({ id: "agent-1", name: "auth-review", state: "running" }),
+      view({ id: "agent-6", name: "db-migration", state: "running" }),
+    ];
+    const heading = (width: number) => {
+      const component = renderSubagentMessage(
+        {
+          role: "custom",
+          customType: STOPPED_RUNS_MESSAGE_TYPE,
+          display: true,
+          timestamp: 0,
+          content: stoppedRunsContent(runs, "reload"),
+          details: stoppedRunsDetails(runs, "reload"),
+        },
+        { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
+        plainTheme,
+      );
+      return Option.getOrElse(
+        Arr.findFirst(Arr.map(component?.render(width) ?? [], Str.trim), Str.isNonEmpty),
+        () => "",
+      );
+    };
+    // Wide enough, both names show whole; narrower, the first stays whole and counts the other.
+    expect(heading(120)).toContain("auth-review, db-migration · on reload");
+    const narrow = heading(57);
+    expect(narrow).toContain("auth-review +1 · on reload");
+    expect(narrow).not.toContain("…");
   },
 );

@@ -28,6 +28,7 @@ const Fields = {
 const Summary = Schema.Struct({
   ...Fields,
   subject: Schema.String,
+  subjectAlternatives: Schema.optionalKey(Labels),
   outcome: Schema.optionalKey(CompactOutcomeSchema),
   waiting: Schema.optionalKey(Schema.Literal(true)),
   queued: Schema.optionalKey(Schema.Literal(true)),

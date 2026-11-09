@@ -255,11 +255,16 @@ export function layoutCompactRow(
     timing,
     input.summary.pathSubject ? "path" : "prose",
     subjectMinimum,
+    input.expanded ? [] : Arr.map(input.summary.subjectAlternatives ?? [], compactSingleLine),
   );
+  const { compactSubject, subject } = input.summary;
+  // A collapsed row's short subject is never the whole one, as a preview heading's isn't.
+  const whole =
+    input.expanded === true || compactSubject === undefined || compactSubject === subject;
   return {
     row,
     issueShown: input.issueLabel !== undefined && counter === input.issueLabel,
-    subjectComplete,
+    subjectComplete: subjectComplete && whole,
     counter,
     fact,
     identityComplete,

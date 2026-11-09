@@ -9,6 +9,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   captureCodePreviewPresentationPolicy,
+  headingCounter,
   previewIssuesSlot,
   withCodePreviewShell,
 } from "pi-code-previews";
@@ -282,7 +283,7 @@ export function registerSubagentTools(
     // Root contract tools are the script-callable ones.
     const scriptable = !nested && isSubagentContractTool(name);
     const project = createSubagentCompactSummary(name);
-    // Read when the shell is: a compact heading counts an await's runs, a preview heading doesn't.
+    // Read when the shell is: a compact heading's glyph states a single awaited run's state.
     const compactHeadings =
       captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
     /** A recorded failure's issue carries all of it, so its result repeats nothing. */
@@ -460,7 +461,11 @@ export function registerSubagentTools(
           if (issueCarriesFailure(result, options.isPartial, context)) return new Container();
           const content = renderSubagentExpandedContent(result, options.isPartial, theme, {
             panelOwnsLiveHierarchy,
-            headingCounts: compactHeadings,
+            // A compact heading draws its counter only where its width fits one.
+            awaitHeading: () => ({
+              compact: compactHeadings,
+              counted: headingCounter(context.state) !== undefined,
+            }),
             isError: context.isError,
             args: context.args,
           });

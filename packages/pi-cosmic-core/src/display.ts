@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import * as DateTime from "effect/DateTime";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
@@ -56,6 +57,19 @@ export const formatCount = (count: number): string =>
 
 export const countLabel = (count: number, singular: string, plural = `${singular}s`): string =>
   `${formatCount(count)} ${count === 1 ? singular : plural}`;
+
+/**
+ * A list of names, `auth-review, db-migration`, then its narrower whole forms, widest first, which
+ * keep the leading names and count the rest (`auth-review +1`), for a heading's
+ * `subjectAlternatives`. No names, no forms.
+ */
+export const nameListForms = (names: ReadonlyArray<string>): string[] =>
+  names.length === 0
+    ? []
+    : Arr.map(Arr.reverse(Arr.range(1, names.length)), (shown) => {
+        const rest = names.length - shown;
+        return `${Arr.join(Arr.take(names, shown), ", ")}${rest > 0 ? ` +${formatCount(rest)}` : ""}`;
+      });
 
 /** One decimal place, dropping a trailing `.0` the way `formatDuration` does: `18 KB`, `1.5 MB`. */
 const oneDecimal = (value: number): string => `${Number(value.toFixed(1))}`;

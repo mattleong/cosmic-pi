@@ -44,7 +44,11 @@ import {
 import { rejectedFailureText } from "./failure-details.ts";
 import { boundToolOutput } from "./format.ts";
 import { renderCompactResultComponent, renderProfileRoutesComponent } from "./render-management.ts";
-import { formatAwaitCounters, renderAwaitProgressComponent } from "./render-await.ts";
+import {
+  formatAwaitCounters,
+  renderAwaitProgressComponent,
+  type AwaitHeading,
+} from "./render-await.ts";
 import { previewHeading, textResultBody } from "./render-preview.ts";
 import { cardBlockLines, cardFactLines } from "./render-run-cards.ts";
 import {
@@ -168,6 +172,7 @@ export const renderWorkspaceCallArguments = (
  * Records on the row the names its result resolved for its runs, for the requested line drawn
  * beside it. `shown` says the result's body draws every one of them, a settled body with their
  * rows and Details or a running wait's progress tree, so the requested line needn't name them again.
+ * A stop or interrupt's Details also name, by ID, each target it couldn't act on.
  */
 export const rememberRunNames = (
   row: RequestedRowState,
@@ -178,9 +183,16 @@ export const rememberRunNames = (
     details === undefined || !("cards" in details)
       ? undefined
       : {
-          names: new Map(
-            Arr.map(details.cards, (card) => [card.id, sanitizeTerminalLine(card.name)] as const),
-          ),
+          names: new Map([
+            ...Arr.map(
+              "actionFailures" in details ? (details.actionFailures ?? []) : [],
+              (failure) => [failure.id, sanitizeTerminalLine(failure.id)] as const,
+            ),
+            ...Arr.map(
+              details.cards,
+              (card) => [card.id, sanitizeTerminalLine(card.name)] as const,
+            ),
+          ]),
           shown,
         };
 };
@@ -188,8 +200,8 @@ export const rememberRunNames = (
 /**
  * The runs an await or lifecycle call names that nothing else on its row names yet: by name once
  * its result resolved them, by ID before that or when a run is unknown. A settled result's rows
- * and Details, or a running wait's progress tree, name each run it found, so only its unknown IDs
- * and the wait's terms remain. Read at draw time, after the row's result recorded what it names.
+ * and Details, or a running wait's progress tree, name each run it found, and a stop or interrupt's
+ * Details each target it couldn't act on, so only the other unknown IDs and the wait's terms remain. Read at draw time, after the row's result recorded what it names.
  */
 export const renderRequestedRuns = (
   ids: ReadonlyArray<string>,
@@ -235,8 +247,11 @@ const awaitScope = (details: SubagentAwaitDetails) => {
 
 interface SubagentResultRenderOptions {
   readonly panelOwnsLiveHierarchy?: boolean | undefined;
-  /** The row's compact heading counts the awaited runs, so the body needn't. */
-  readonly headingCounts?: boolean | undefined;
+  /**
+   * What the row's heading drew, so the body needn't count the awaited runs it counts. Asked at
+   * draw time: the heading draws first and leaves out a counter its width can't fit.
+   */
+  readonly awaitHeading?: (() => AwaitHeading) | undefined;
   readonly isError?: boolean | undefined;
   /** The call's arguments, which a failure's body then needn't repeat. */
   readonly args?: unknown;
@@ -260,7 +275,7 @@ const renderPartialStartAwait = (
     theme,
     hierarchy,
     expanded,
-    options.headingCounts,
+    options.awaitHeading,
   );
   return expanded ? indentedBody(theme, progress) : progress;
 };
@@ -275,15 +290,15 @@ const renderAwaitResult = (
   details: SubagentAwaitDetails,
   expanded: boolean,
   theme: Theme,
-  headingCounts = false,
+  heading?: () => AwaitHeading,
 ): Component => {
   const { hierarchy, targets } = awaitScope(details);
-  const counters = formatAwaitCounters(details.cards, hierarchy, details.awaitUntil, {
-    settled: true,
-    headingCounts,
-  });
   const rows = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
+    const counters = formatAwaitCounters(details.cards, hierarchy, details.awaitUntil, {
+      settled: true,
+      heading: heading?.(),
+    });
     return [
       ...(counters
         ? factRowLines([[counters, "muted"]], safeWidth, theme, expanded, { wholeFacts: true })
@@ -302,11 +317,11 @@ const renderSettledStartAwait = (
   details: SubagentStartAwaitCardDetails,
   expanded: boolean,
   theme: Theme,
-  headingCounts?: boolean,
+  heading?: () => AwaitHeading,
 ): Component =>
   details.action === "start"
     ? renderStartReceiptComponent(details, expanded, theme)
-    : renderAwaitResult(details, expanded, theme, headingCounts);
+    : renderAwaitResult(details, expanded, theme, heading);
 
 const renderCompactDetails = (
   compact: CompactSubagentToolDetails,
@@ -528,7 +543,7 @@ export const renderSubagentResult = (
   if (details)
     return isPartial
       ? renderPartialStartAwait(details, expanded, theme, options)
-      : renderSettledStartAwait(details, expanded, theme, options.headingCounts);
+      : renderSettledStartAwait(details, expanded, theme, options.awaitHeading);
   const compact = decodeCompactToolDetails(result.details);
   if (compact) return renderCompactDetails(compact, expanded, theme);
   const workspace =

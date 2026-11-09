@@ -64,18 +64,30 @@ const stateCounts = (
 /** The states whose counts a compact await heading shows beside how many finished. */
 const HEADING_COUNTED_STATES: ReadonlyArray<AwaitProgressRun["state"]> = ["failed", "stopped"];
 
+/** What a row's heading drew above an await body. */
+export interface AwaitHeading {
+  /** A compact heading, whose glyph states a single awaited run's state. */
+  readonly compact: boolean;
+  /** Whether it drew its counter: how many finished, failed, and stopped. */
+  readonly counted: boolean;
+}
+
 /**
  * An await body's totals: the first run to finish, how many finished and in which states, usage,
  * and descendants. Counts the row already shows are left out: a single awaited run's glyph is its
- * count, and a compact heading (`headingCounts`) shows how many finished, failed, and stopped. A
- * preview heading shows no counts, so its body keeps the rest; while a wait runs, its run rows are
- * a tree that states each run's own state, so a single run's state count stays there too.
+ * count, and a compact heading that drew its counter shows how many finished, failed, and stopped.
+ * A preview heading, or a compact one too narrow for its counter, shows no counts, so its body
+ * keeps the rest; while a wait runs, its run rows are a tree that states each run's own state, so
+ * under a preview heading a single run's state count stays there too.
  */
 export const formatAwaitCounters = (
   cards: ReadonlyArray<SubagentRunCard>,
   { awaitedRunIds }: AwaitHierarchy,
   until: SubagentAwaitUntil,
-  { settled = false, headingCounts = false }: { settled?: boolean; headingCounts?: boolean } = {},
+  {
+    settled = false,
+    heading = { compact: false, counted: false },
+  }: { settled?: boolean; heading?: AwaitHeading | undefined } = {},
 ): string => {
   const targets = Arr.filter(cards, (card) => awaitedRunIds.has(card.id));
   const first = settled ? firstFinishedRun(targets, until) : undefined;
@@ -85,13 +97,13 @@ export const formatAwaitCounters = (
   const single = awaitedRunIds.size === 1 && targets.length === 1;
   const counted = Arr.filter(
     [...ACTIVE_STATES, "failed", "stopped"] as const,
-    (state) => !(headingCounts && Arr.contains(HEADING_COUNTED_STATES, state)),
+    (state) => !(heading.counted && Arr.contains(HEADING_COUNTED_STATES, state)),
   );
   return Arr.join(
     [
       ...(first ? [firstFinishedSummary(first)] : []),
-      ...(single || headingCounts ? [] : [`${done.length}/${awaitedRunIds.size} finished`]),
-      ...(single && (settled || headingCounts) ? [] : stateCounts(targets, counted)),
+      ...(single || heading.counted ? [] : [`${done.length}/${awaitedRunIds.size} finished`]),
+      ...(single && (settled || heading.compact) ? [] : stateCounts(targets, counted)),
       ...(usage ? [usage] : []),
       ...(descendantCount > 0 ? [countLabel(descendantCount, "descendant")] : []),
     ],
@@ -219,12 +231,12 @@ export const renderAwaitProgressComponent = (
   theme: Theme,
   hierarchy: AwaitHierarchy,
   expanded = false,
-  headingCounts = false,
+  heading?: () => AwaitHeading,
 ): Component =>
   renderComponent((width) => {
     const safeWidth = Math.max(1, width);
     const frame = spinnerFrameAt(synchronousNow());
-    const counters = formatAwaitCounters(cards, hierarchy, until, { headingCounts });
+    const counters = formatAwaitCounters(cards, hierarchy, until, { heading: heading?.() });
     return [
       ...(counters
         ? factRowLines([[counters, "muted"]], safeWidth, theme, expanded, { wholeFacts: true })

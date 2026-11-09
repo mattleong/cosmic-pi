@@ -158,7 +158,7 @@ const routeRowLines = (row: RouteRow, width: number, theme: Theme, expanded: boo
 const eligibleCount = (candidates: ReadonlyArray<SubagentProfileCandidateCard>): string =>
   `${Arr.filter(candidates, (candidate) => candidate.status === "eligible").length}/${candidates.length} eligible`;
 
-/** The context and write intent a profile's defaults line states, which its candidates needn't. */
+/** The context and write intent a profile's or agent's line states, which its candidates needn't. */
 interface CandidateDefaults {
   readonly context: string;
   readonly writeIntent: string;
@@ -171,15 +171,15 @@ interface CandidateDefaults {
 const candidateFacts = (
   candidates: ReadonlyArray<SubagentProfileCandidateCard>,
   inherited: InheritedRoute,
-  defaults?: CandidateDefaults,
+  defaults: Partial<CandidateDefaults>,
 ): ReadonlyArray<string> =>
   Arr.map(candidates, (candidate, index) =>
     Arr.join(
       Arr.filter(
         [
           `  ${index + 1}. ${candidateRoute(candidate, inherited)}`,
-          candidate.context !== defaults?.context && candidate.context,
-          candidate.writeIntent !== defaults?.writeIntent && candidate.writeIntent,
+          candidate.context !== defaults.context && candidate.context,
+          candidate.writeIntent !== defaults.writeIntent && candidate.writeIntent,
           candidate.status === "skipped" && `skipped: ${candidate.reason}`,
         ],
         Predicate.isString,
@@ -207,31 +207,51 @@ const profileFacts =
     }),
   ];
 
+/**
+ * The context and write intent a custom agent's line states for its candidates: its own, else its
+ * first candidate's, so candidates that share them don't each repeat them.
+ */
+const agentCandidateDefaults = (agent: AgentRouteCard): Partial<CandidateDefaults> => {
+  const [first] = agent.candidates;
+  const context = agent.context ?? first?.context;
+  const writeIntent = agent.writeIntent ?? first?.writeIntent;
+  return {
+    ...(context !== undefined && { context }),
+    ...(writeIntent !== undefined && { writeIntent }),
+  };
+};
+
 const agentFacts =
   (details: ModelsToolDetails) =>
-  (agent: AgentRouteCard): ReadonlyArray<string> => [
-    `${agent.name}: profile ${agent.profile} · ${eligibleCount(agent.candidates)}${Arr.join(
-      Arr.map(
-        Arr.filter(
-          [
-            agent.context,
-            agent.effort && `effort ${agent.effort}`,
-            agent.isolation && `isolation ${agent.isolation}`,
-            agent.allowedToolCount !== undefined &&
-              countLabel(agent.allowedToolCount, "allowed tool"),
-            agent.deniedToolCount !== undefined && countLabel(agent.deniedToolCount, "denied tool"),
-          ],
-          Predicate.isString,
+  (agent: AgentRouteCard): ReadonlyArray<string> => {
+    const defaults = agentCandidateDefaults(agent);
+    return [
+      `${agent.name}: profile ${agent.profile} · ${eligibleCount(agent.candidates)}${Arr.join(
+        Arr.map(
+          Arr.filter(
+            [
+              defaults.context,
+              defaults.writeIntent,
+              agent.effort && `effort ${agent.effort}`,
+              agent.isolation && `isolation ${agent.isolation}`,
+              agent.allowedToolCount !== undefined &&
+                countLabel(agent.allowedToolCount, "allowed tool"),
+              agent.deniedToolCount !== undefined &&
+                countLabel(agent.deniedToolCount, "denied tool"),
+            ],
+            Predicate.isString,
+          ),
+          (fact) => ` · ${fact}`,
         ),
-        (fact) => ` · ${fact}`,
+        "",
+      )}`,
+      ...candidateFacts(
+        agent.candidates,
+        inheritedRoute(details, agentDefaultEffort(agent, details)),
+        defaults,
       ),
-      "",
-    )}`,
-    ...candidateFacts(
-      agent.candidates,
-      inheritedRoute(details, agentDefaultEffort(agent, details)),
-    ),
-  ];
+    ];
+  };
 
 /**
  * Profile routes as the user reads them: one line per profile and custom agent with the model a
