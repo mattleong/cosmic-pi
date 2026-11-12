@@ -16,6 +16,9 @@ To add an adapter:
    downstream components/caches/interactions, exact arguments, all raw output/recovery, and images.
    Both original expanded callbacks and content-only callbacks must retain raw evidence: unknown
    summaries use the original slots. Contain construction/drawing failures without replay loops.
+   An adapter's compact summary follows the [collapsed compact rules](../../../docs/architecture/tool-presentation.md#collapsed-compact-rows):
+   the collapsed row is its heading and problem lines, so `expandLabel` (or the shell's inferred
+   `output`) names what expansion shows, and only one short value (`headingValue`) joins the heading.
 5. Test through actual callbacks/resolver and `pi-code-previews/testing`; review the rows live and
    update the package architecture and public compatibility notes. Never infer domain success from
    delivery, counts, or a false Pi error flag.

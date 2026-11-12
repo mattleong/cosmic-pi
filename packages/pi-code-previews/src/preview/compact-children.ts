@@ -112,7 +112,8 @@ export function renderCompactChildren(
       );
     }
   });
-  if (!flat && omitted > 0) rows.push(...omissionRows(omitted, hiddenFailed, theme, width));
+  if (!flat && omitted > 0)
+    rows.push(...omissionRows(omitted, hiddenFailed, children.noun ?? "call", theme, width));
   return rows;
 }
 
@@ -145,11 +146,12 @@ const calls = (count: number) => (count === 1 ? "call" : "calls");
 function omissionRows(
   omitted: number,
   hiddenFailed: number,
+  noun: string,
   theme: Theme,
   width: number,
 ): string[] {
   const branch = theme.fg("dim", "  └─ ");
-  const more = `… ${countLabel(omitted, "more call")}`;
+  const more = `… ${countLabel(omitted, `more ${noun}`)}`;
   const failed = hiddenFailed > 0 ? `${formatCount(hiddenFailed)} failed` : "";
   const dim = (row: string) => theme.fg("dim", row);
   const error = (row: string) => theme.fg("error", row);

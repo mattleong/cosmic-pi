@@ -149,7 +149,7 @@ function quote(add: AddIssue, label: string, code: string, text: string, fallbac
  * A question's quote for its `asks:` row: its first line, ending with `…` when the question goes
  * on past it, and the whole question as detail unless the quote holds all of it.
  */
-const questionQuote = (question: string) => {
+export const questionQuote = (question: string) => {
   const { line, detail } = quoteText(question, { limit: QUOTED_TEXT_LIMIT });
   const shown = line ?? firstLineMessage(question, "a question", QUOTED_TEXT_LIMIT);
   const cut = detail !== undefined && !restatesText(question, shown);
@@ -162,6 +162,16 @@ const questionQuote = (question: string) => {
 
 /** Whether an `asks:` row quotes only part of `question`, so expanding shows the rest. */
 export const quotesPartOfQuestion = (question: string): boolean => questionQuote(question).cut;
+
+/**
+ * A pending question as the attention line every surface raises, `name asks: …`. Its rest is left
+ * to the surface's own body, which shows the whole question only when the quote is cut.
+ */
+export const askingIssue = (label: string, question: string, code: string): CompactIssue => ({
+  severity: "attention",
+  code,
+  message: `${label} asks: ${questionQuote(question).quote}`,
+});
 
 /** Whether a run's `asks:` row quotes only part of its question. */
 export const asksPartOfQuestion = (card: SubagentRunCard): boolean => {
@@ -224,6 +234,21 @@ function cleanupIssues(card: SubagentRunCard, label: string, add: AddIssue): voi
   );
 }
 
+/**
+ * A failure's quoted first line, and as detail the rest of its text, or all of it when the quote
+ * rephrases or cuts that line, so expansion shows each line once.
+ */
+export const failureQuote = (text: string): ReturnType<typeof quoteText> => {
+  const quotedFailure = quoteText(text, { limit: QUOTED_TEXT_LIMIT, failure: true });
+  if (quotedFailure.line === undefined || quotedFailure.detail === undefined) return quotedFailure;
+  const [first, ...rest] = Str.split(Str.trim(text), "\n");
+  if (first === undefined || !restatesText(first, quotedFailure.line)) return quotedFailure;
+  const remaining = Str.trim(Arr.join(rest, "\n"));
+  return remaining === ""
+    ? { line: quotedFailure.line }
+    : { line: quotedFailure.line, detail: remaining };
+};
+
 function evidenceIssues(
   card: SubagentRunCard,
   label: string,
@@ -231,7 +256,7 @@ function evidenceIssues(
   errorShown: boolean,
 ): void {
   if (card.error) {
-    const { line, detail } = quoteText(card.error, { limit: QUOTED_TEXT_LIMIT, failure: true });
+    const { line, detail } = failureQuote(card.error);
     // The run's own block shows the whole failure, so the issue only names it.
     add(
       "error",

@@ -58,6 +58,15 @@ const pairedAnswers = (label: string) => ({
   ],
 });
 
+const answer = (text: string, note?: string) => ({
+  outcome: "submitted",
+  answers: [{ key: "library", kind: "custom", text, ...(note && { note }) }],
+});
+const lone = (label: string) => ({
+  outcome: "submitted",
+  answers: [{ key: "store", kind: "choices", labels: [label] }],
+});
+
 describe("questionnaire compact outcome projection", () => {
   it.each([false, true])(
     "never interprets cancellation as approval or replaces its detail (Pi error flag: %s)",
@@ -73,45 +82,68 @@ describe("questionnaire compact outcome projection", () => {
       }
     },
   );
-  it("shows a lone written answer's own words, bounded to its first line", () => {
-    const long = {
-      ...submitted.answers[0],
-      text: `Keep the current library\n${Str.repeat(40)("more ")}`,
-    };
-    for (const details of [submitted, { ...submitted, answers: [long] }]) {
-      const [first] = summarize(askUserCompactSummary, details)?.counters ?? [];
-      expect(first).toContain("Keep the current library");
-      expect(first).not.toContain("more");
+  it("carries a lone short answer in its heading and counts the rest", () => {
+    const short = summarize(askUserCompactSummary, answer("Keep it"));
+    expect(short?.counters).toEqual(["Keep it"]);
+    // The answer is a fact about the questions, so a glyph's word never drops it.
+    expect(short?.subjectState).toBe(true);
+    for (const details of [
+      answer(`Keep the current library\n${Str.repeat(40)("more ")}`),
+      answer("Keep the current library and pin its version"),
+      answer("Keep it", "No upgrade"),
+      pairedAnswers("SQLite"),
+    ]) {
+      const counters = summarize(askUserCompactSummary, details)?.counters ?? [];
+      expect(counters).toHaveLength(1);
+      expect(counters[0]).toMatch(/^\d+ answers?$/u);
     }
   });
-  it("names several answers only by choice labels the call actually offered", () => {
+  it("names a lone choice in the heading only when the call actually offered it", () => {
     const args = {
       questions: [
         { key: "store", title: "Store", choices: [{ label: "SQLite" }, { label: "Postgres" }] },
-        { key: "notes", title: "Notes", mode: "text" },
       ],
     };
-    const [offered] =
-      summarize(askUserCompactSummary, pairedAnswers("SQLite"), { args })?.counters ?? [];
-    expect(offered).toContain("SQLite");
-    expect(offered).toContain("Keep prices in cents");
-    const forged = summarize(askUserCompactSummary, pairedAnswers("Drop the database"), { args });
+    expect(summarize(askUserCompactSummary, lone("SQLite"), { args })?.counters).toEqual([
+      "SQLite",
+    ]);
+    const forged = summarize(askUserCompactSummary, lone("Drop the database"), { args });
     expect(Arr.join(forged?.counters ?? [], " ")).not.toContain("Drop the database");
   });
+  it("names what a compact row's expansion reveals once answered", () => {
+    const args = { questions: [{ key: "library", title: "Library", prompt: "Which?" }] };
+    const short = {
+      outcome: "submitted",
+      answers: [{ key: "library", kind: "text", text: "Intl" }],
+    };
+    // The heading shows the answer, so expanding reveals the questions; otherwise the answers.
+    expect(summarize(askUserCompactSummary, short, { args })?.expandLabel).toBe("questions");
+    expect(summarize(askUserCompactSummary, submitted, { args })?.expandLabel).toBe("answers");
+    const awaited = { args: { action: "await", requestId: "request-1" } };
+    expect(summarize(asyncAskUserCompactSummary, row(), awaited)?.expandLabel).toBe("answers");
+    expect(
+      summarize(asyncAskUserCompactSummary, row({ outcome: short }), awaited)?.expandLabel,
+    ).toBe("details");
+  });
   it("classifies failed questionnaires as errors that say no answer was recorded", () => {
-    for (const [details, args] of [
-      [row({ status: "failed", outcome: undefined, delivery: "none" }), {}],
-      [
-        { requests: [row(), row({ status: "failed", outcome: undefined, delivery: "none" })] },
-        { action: "status" },
-      ],
-    ] as const) {
-      const summary = summarize(asyncAskUserCompactSummary, details, { args });
+    const broken = row({ status: "failed", outcome: undefined, delivery: "none" });
+    for (const args of [{}, { action: "await", requestId: "request-1" }]) {
+      const summary = summarize(asyncAskUserCompactSummary, broken, { args });
       expect(summary?.outcome).toBe("error");
       expect(summary?.issues).toEqual([expect.objectContaining({ severity: "error" })]);
       // The row's ✗ already says it failed; the issue says what that left undone.
       for (const issue of summary?.issues ?? [])
         expect(issueMessageStyleProblems(issue.message, { severity: issue.severity })).toEqual([]);
+    }
+    // A status only looks: a failure it finds is a fact in its neutral heading, not a problem line.
+    for (const [details, args] of [
+      [broken, { action: "status", requestId: "request-1" }],
+      [{ requests: [row(), broken] }, { action: "status" }],
+    ] as const) {
+      const status = summarize(asyncAskUserCompactSummary, details, { args });
+      expect(status?.outcome).toBe("returned");
+      expect(status?.issues ?? []).toEqual([]);
+      expect(Arr.join(status?.counters ?? [], " ")).toContain("failed");
     }
   });
   it("marks questionnaires awaiting answers for attention without overriding failures", () => {
@@ -123,10 +155,12 @@ describe("questionnaire compact outcome projection", () => {
       summarize(asyncAskUserCompactSummary, { requests: [row(), pending] }, { args: status })
         ?.outcome,
     ).toBe("attention");
+    // A status that finds one waiting on the user asks for it, whatever else it finds.
     expect(
       summarize(asyncAskUserCompactSummary, { requests: [pending, failed] }, { args: status })
         ?.outcome,
-    ).toBe("error");
+    ).toBe("attention");
+    expect(summarize(asyncAskUserCompactSummary, failed)?.outcome).toBe("error");
     expect(summarize(asyncAskUserCompactSummary, row())?.outcome).toBe("success");
   });
   it("marks a questionnaire queued behind others as queued, not as needing the user", () => {
@@ -202,6 +236,16 @@ describe("questionnaire compact outcome projection", () => {
     expect(pressing).toBeGreaterThanOrEqual(0);
     expect(pressing).toBeLessThan(total);
   });
+  it("counts a status list by state only where states differ or still need something", () => {
+    const status = { args: { action: "status" } };
+    const first = (requests: readonly object[]) =>
+      summarize(asyncAskUserCompactSummary, { requests }, status)?.counters?.[0];
+    const second = row({ requestId: "request-2" });
+    const open = row({ status: "pending", outcome: undefined, delivery: "pending" });
+    expect(first([row(), second])).toBe("2 questionnaires");
+    expect(first([open])).toContain("needs your input");
+    expect(first([open, second])).toMatch(/needs your input.*answered/u);
+  });
   it("names a control call's questions by their stored titles, else only by its action", () => {
     const args = { action: "await", requestId: "request-1" };
     const titled = row({ titles: [{ key: "library", title: "Library" }] });
@@ -240,22 +284,20 @@ describe("questionnaire compact outcome projection", () => {
     const failed = row({ delivery: "failed" });
     const broken = row({ status: "failed", outcome: undefined, delivery: "none" });
     const list = { args: { action: "status" } };
-    // A lone open questionnaire's heading says it needs input, so it carries no issue.
+    // An open questionnaire's heading says it needs input, so it carries no issue saying so again.
     expect(summarize(asyncAskUserCompactSummary, pending)?.issues).toBeUndefined();
+    expect(
+      summarize(asyncAskUserCompactSummary, { requests: [pending] }, list)?.issues,
+    ).toBeUndefined();
     const summaries = [
       summarize(asyncAskUserCompactSummary, { requests: [pending, queued] }, list),
       summarize(asyncAskUserCompactSummary, queued),
-      summarize(asyncAskUserCompactSummary, { requests: [pending] }, list),
       summarize(asyncAskUserCompactSummary, { requests: [queued, { ...queued }] }, list),
-      summarize(asyncAskUserCompactSummary, {
-        requests: [pending, { ...pending, requestId: "request-2" }],
-      }),
       summarize(asyncAskUserCompactSummary, failed),
       summarize(asyncAskUserCompactSummary, {
         requests: [failed, { ...failed, requestId: "request-2" }],
       }),
       summarize(asyncAskUserCompactSummary, broken),
-      summarize(asyncAskUserCompactSummary, { requests: [broken, broken] }, list),
     ];
     const messages = Arr.map(
       Arr.flatMap(summaries, (summary) => summary?.issues ?? []),

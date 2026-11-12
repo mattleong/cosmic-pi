@@ -27,7 +27,7 @@ Then run `/reload`. It requires Pi running interactively inside a Rex pane.
 /btw help
 ```
 
-Text after the command becomes the side session's first message; `/btw help` shows usage and opens nothing. The side pane opens with a one-line note saying it can read the parent session, and its reads show as `parent_conversation last 15 messages`; expand one to see the messages it read.
+Text after the command becomes the side session's first message; `/btw help` shows usage and opens nothing. The side pane opens with a one-line note saying it can read the parent session, and its reads show as `• parent_conversation last 15 messages`; expand one to see the messages it read.
 
 Things to know:
 

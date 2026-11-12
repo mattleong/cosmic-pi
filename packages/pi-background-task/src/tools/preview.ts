@@ -77,6 +77,11 @@ interface TaskLineOptions {
   readonly started?: boolean;
   /** A listed row whose issues follow beneath it. */
   readonly issuesBeneath?: boolean;
+  /**
+   * A collapsed status row states the exit status itself, since a status call's issues, which only
+   * look at the task, show only expanded.
+   */
+  readonly exit?: boolean;
 }
 
 const startedState = (task: BackgroundTaskSnapshot): boolean =>
@@ -145,13 +150,13 @@ interface Row {
 function taskPreviewRow(
   task: BackgroundTaskSnapshot,
   theme: PreviewTheme,
-  { inHeading, expanded, started = false, issuesBeneath = false }: TaskLineOptions,
+  { inHeading, expanded, started = false, issuesBeneath = false, exit = false }: TaskLineOptions,
 ): Row {
   const state =
     started && startedState(task)
       ? { color: managerActivityColor("done"), label: "started" }
       : taskStatePresentation(task.state);
-  const status = expanded ? exitStatus(task) : undefined;
+  const status = expanded || exit ? exitStatus(task) : undefined;
   const listed = listedGlyph(task);
   const { glyph, color } = listed;
   const stateLabel = inHeading
@@ -406,7 +411,7 @@ function collapsedRows(
     case "start":
       return [taskPreviewRow(details.snapshot, theme, { ...options, started: true })];
     case "status":
-      return [taskPreviewRow(details.snapshot, theme, options)];
+      return [taskPreviewRow(details.snapshot, theme, { ...options, exit: true })];
     case "stop":
       return [
         taskPreviewRow(details.snapshot, theme, options),
@@ -440,14 +445,18 @@ interface Section {
 
 /**
  * What a compact heading doesn't say about one task: its command, unless the heading drew that
- * exact command whole as an unnamed task's subject, and its runtime.
+ * exact command whole as an unnamed task's subject, and its runtime, unless the row's timeout issue
+ * (`timeoutStated`) already says how long it ran.
  */
-function taskFacts(task: BackgroundTaskSnapshot, subjectShown: boolean): Section[] {
+function taskFacts(
+  task: BackgroundTaskSnapshot,
+  subjectShown: boolean,
+  timeoutStated: boolean,
+): Section[] {
   const commandShown = subjectShown && taskDisplayName(task) === task.command;
   const facts: LabeledRow[] = [
     ...(commandShown ? [] : [{ label: "Command", lines: commandLines(task.command) }]),
-    // A timeout's issue already says how long it ran.
-    ...(task.endedAt === undefined || task.state === "timed_out"
+    ...(task.endedAt === undefined || (task.state === "timed_out" && timeoutStated)
       ? []
       : [{ label: "Ran", lines: [formatDuration(task.endedAt - task.startedAt)] }]),
   ];
@@ -466,11 +475,12 @@ function expandedSections(
   headingShowsState: boolean,
   subjectShown: boolean,
 ): Section[] {
+  // Only a status leaves a timeout to its heading's state rather than to an issue.
   const taskLine = (task: BackgroundTaskSnapshot, started = false): Section[] =>
     headingShowsState
       ? started
         ? []
-        : taskFacts(task, subjectShown)
+        : taskFacts(task, subjectShown, details.action !== "status")
       : [
           {
             rows: [taskPreviewRow(task, theme, { inHeading: true, expanded: true, started })],
@@ -483,7 +493,7 @@ function expandedSections(
       return taskLine(details.snapshot);
     case "stop":
       return headingShowsState
-        ? taskFacts(details.snapshot, subjectShown)
+        ? taskFacts(details.snapshot, subjectShown, !details.alreadyFinished)
         : [{ rows: collapsedRows(details, text, args, theme) }];
     case "clear":
       return headingShowsState ? [] : [{ rows: collapsedRows(details, text, args, theme) }];
@@ -504,7 +514,7 @@ function expandedSections(
         ...(tail.length > 0
           ? [
               {
-                label: "Recent output",
+                label: "Output",
                 rows: Arr.map(tail, (line) => ({ text: styledTaskOutputLine(line, theme) })),
               },
             ]

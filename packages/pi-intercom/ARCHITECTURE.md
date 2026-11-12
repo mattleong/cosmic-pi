@@ -198,9 +198,11 @@ after that one retry. Nothing else is retried. `session_send` is model-only; lis
 schema, so an overlong message reaches the tool and is refused as `session_message_too_long`,
 never cut. Refusals are error results with a
 compact issue. [Renderers](src/tools/render.ts) show sessions by name and a send's message or a
-read's reply as the session wrote it, rendered as markdown and bounded collapsed; a read without a
-reply says so in its heading. Ids and directories appear only expanded, and the agent's procedures
-only in the result the model reads. Replay is anchored to
+read's reply as the session wrote it, rendered as markdown: bounded in a collapsed preview body, and
+behind the row's `message` or `reply` tag in compact style. A list and a read only look, so they
+are neutral, a read stating the session's state and, without a reply, saying so in its heading.
+Ids and directories appear only expanded, and the agent's procedures only in the result the model
+reads. Replay is anchored to
 `/intercom`, whose `receive on|off` flips the per-session receive switch.
 
 ## Tests

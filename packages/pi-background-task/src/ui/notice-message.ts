@@ -21,7 +21,7 @@ import {
   stripTerminalControls,
 } from "pi-cosmic-core/security";
 import { TaskNoticeDetailsSchema, type TaskNoticeDetails } from "../task/notice.ts";
-import { taskNoticeSummary } from "./compact-summary.ts";
+import { taskExpandLabel, taskNoticeSummary } from "./compact-summary.ts";
 import { taskOutputLine } from "./output-lines.ts";
 import { displayDirectory } from "./result-facts.ts";
 import { taskDisplayName } from "./task-state.ts";
@@ -90,9 +90,10 @@ const expandedNotice = (
   };
 };
 
+/** The task's output, else its command where the heading names the task, else its details. */
 const expansionLabel = (details: TaskNoticeDetails | undefined): string => {
   if (details?.tail === undefined) return "notice";
-  return details.tail ? "output" : "details";
+  return details.tail ? "output" : taskExpandLabel(details.task);
 };
 
 /**

@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   animationSchedulerProbe,
@@ -18,6 +19,8 @@ import { TASK_NOTICE_MESSAGE_TYPE } from "../src/task/notice.ts";
 import { renderTaskNotice } from "../src/ui/notice-message.ts";
 
 const restoreSettings = applyPresentationSettings({});
+const rowsOf = (text: string | undefined) =>
+  Arr.filter(Str.split(text ?? "", "\n"), (row) => Str.isNonEmpty(Str.trim(row)));
 afterEach(restoreSettings);
 const snapshot = {
   id: "task-0000000001",
@@ -110,20 +113,84 @@ it.each(["compact", "preview"] as const)(
   (style) => {
     const failureCause = "FAIL tests/auth.test.ts > adds";
     const harness = createToolPresentationHarness(registeredTool("on", style));
-    const [collapsed] = harness.cycle(
-      { action: "status", id: "task-0000000001" },
+    const failed = { ...snapshot, state: "failed", exitCode: 1, endedAt: 2, failureCause };
+    const content = [{ type: "text" as const, text: "Rewritten by a tool_result hook" }];
+    // A wait shows how its task ended, collapsed and expanded.
+    for (const frame of harness.cycle(
+      { action: "wait", id: "task-0000000001", until: "exit" },
       {
-        content: [{ type: "text", text: "Rewritten by a tool_result hook" }],
+        content,
         details: {
-          action: "status",
-          snapshot: { ...snapshot, state: "failed", exitCode: 1, endedAt: 2, failureCause },
+          action: "wait",
+          wait: {
+            id: snapshot.id,
+            snapshot: failed,
+            outcome: "completed",
+            nextCursor: 10,
+            earliestAvailableCursor: 0,
+            droppedBytes: 0,
+          },
+          appliedWaitSeconds: 30,
         },
       },
-      { states: [false] },
+      { states: [false, true] },
+    ))
+      expect(frame.text).toContain(failureCause);
+    // A status only looks: the cause waits for expansion.
+    const [collapsed, expanded] = createToolPresentationHarness(registeredTool("on", style)).cycle(
+      { action: "status", id: "task-0000000001" },
+      { content, details: { action: "status", snapshot: failed } },
+      { states: [false, true] },
     );
-    expect(collapsed?.text).toContain(failureCause);
+    if (style === "compact") expect(collapsed?.text).not.toContain(failureCause);
+    expect(expanded?.text).toContain(failureCause);
   },
 );
+
+it("collapses each compact row to its heading, adding a problem line only for the call's own", () => {
+  const cycle = (args: Partial<BackgroundTaskToolInput>, details: BackgroundTaskToolDetails) =>
+    createToolPresentationHarness(registeredTool("off", "compact"), { width: 140 }).cycle(
+      args,
+      { content: [{ type: "text", text: "ok" }], details },
+      { states: [false, true] },
+    );
+  const failed: BackgroundTaskSnapshot = {
+    ...snapshot,
+    name: "flaky",
+    state: "failed",
+    exitCode: 3,
+    endedAt: 2,
+  };
+  const running: BackgroundTaskSnapshot = { ...snapshot, state: "running" };
+  const inspections = [
+    cycle({ action: "status", id: snapshot.id }, { action: "status", snapshot: failed }),
+    cycle(
+      { action: "logs", id: snapshot.id },
+      {
+        action: "logs",
+        logs: {
+          id: snapshot.id,
+          state: "failed",
+          nextCursor: 10,
+          earliestAvailableCursor: 0,
+          droppedBytes: 0,
+        },
+        task: { name: "flaky", command: "run" },
+      },
+    ),
+    cycle({ action: "list" }, { action: "list", tasks: [running, failed] }),
+  ];
+  for (const [collapsed, expanded] of inspections) {
+    const rows = rowsOf(collapsed?.text);
+    // One neutral heading row, which still says the task failed.
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatch(/^\s*•/u);
+    expect(rows[0]).toContain("failed");
+    expect(rowsOf(expanded?.text).length).toBeGreaterThan(rows.length);
+  }
+  // The list shows every task when expanded.
+  expect(inspections[2]?.[1]?.text).toContain("flaky");
+});
 
 it.each(["compact", "preview"] as const)(
   "names the task whose logs were read in %s style",

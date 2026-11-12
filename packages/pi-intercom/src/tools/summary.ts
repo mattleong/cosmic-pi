@@ -11,7 +11,6 @@ import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import {
   decodeSessionToolDetails,
   SESSION_TOOL,
-  type ListedSession,
   type SessionRefusal,
   type SessionToolArgs,
   type SessionToolDetails,
@@ -25,7 +24,6 @@ import {
   type SessionNames,
 } from "../identity.ts";
 import { joinInline } from "pi-cosmic-ui/manager";
-import { sessionText } from "../display.ts";
 import { UNCERTAIN_TEXT } from "./text.ts";
 
 const REFUSAL_MESSAGES: Record<ToolRefusalCode, string> = {
@@ -88,46 +86,63 @@ const pending = (
   tool: string,
   to: string | undefined,
   names: SessionNames | undefined,
+  sending: boolean,
 ): CompactSummary => {
-  // Until it settles, expansion shows only what the collapsed row does: a send's message, whose
-  // clipped quote names its own hidden lines.
+  // Until it settles, expansion shows only a send's message.
   if (tool === SESSION_TOOL.list) return { subject: "sessions", expandLabel: false };
-  return { subject: knownAddresseeSubject(to, names), expandLabel: false };
+  return { subject: knownAddresseeSubject(to, names), expandLabel: sending ? "message" : false };
 };
 
 /** What an empty listing says, in a compact heading and a preview body alike. */
 export const NO_OTHER_SESSIONS = "no other live sessions";
 
+type ListDetails = Extract<SessionToolDetails, { readonly tool: "session_list" }>;
+
 const UNUSABLE_STATES = ["unavailable", "unresponsive", "unreachable"] as const;
+const LISTED_STATES = ["idle", "busy", ...UNUSABLE_STATES] as const;
 
 /**
- * Sessions that can't take a message now. The heading shows one counter, so the counts are one
- * combined fact, with a shorter total when they don't fit.
+ * One combined counter, widest first: each state's count where the sessions' states differ
+ * (`1 idle · 2 busy`), else the total, or the shared state where no session in it can take a
+ * message (`2 unreachable`); then the total with how many can't be messaged, then the total.
  */
-const unusableCounters = (sessions: ReadonlyArray<ListedSession>): string[] => {
-  const counts = Arr.filterMap(UNUSABLE_STATES, (state) => {
-    const count = Arr.filter(sessions, (session) => session.state === state).length;
-    return count > 0 ? Result.succeed(`${count} ${SESSION_STATE_LABELS[state]}`) : Result.failVoid;
+const listCounters = (details: ListDetails, total: number): string[] => {
+  const counts = Arr.filterMap(LISTED_STATES, (state) => {
+    const count = Arr.filter(details.sessions, (session) => session.state === state).length;
+    return count > 0
+      ? Result.succeed({ state, text: `${count} ${SESSION_STATE_LABELS[state]}` })
+      : Result.failVoid;
   });
-  const total = Arr.filter(sessions, (session) =>
+  const sessions = countLabel(total, "session");
+  const [only, ...others] = counts;
+  const more = details.omitted > 0 ? [`${details.omitted} more`] : [];
+  const widest =
+    only !== undefined && (others.length > 0 || Arr.contains(UNUSABLE_STATES, only.state))
+      ? joinInline([...Arr.map(counts, (count) => count.text), ...more])
+      : sessions;
+  const unusable = Arr.filter(details.sessions, (session) =>
     Arr.contains(UNUSABLE_STATES, session.state),
   ).length;
-  if (total === 0) return [];
-  return [...new Set([joinInline(counts), `${total} can't be messaged`])];
+  return [
+    ...new Set([
+      widest,
+      ...(unusable > 0 ? [joinInline([sessions, `${unusable} can't be messaged`])] : []),
+      sessions,
+    ]),
+  ];
 };
 
-const listSummary = (
-  details: Extract<SessionToolDetails, { readonly tool: "session_list" }>,
-): CompactSummary => {
+/** A listing only looks, so it is neutral: `• session_list · 2 sessions`. */
+const listSummary = (details: ListDetails): CompactSummary => {
   const total = details.sessions.length + details.omitted;
   const duplicates = Arr.filter(details.sessions, ({ duplicate }) => duplicate).length;
   // An empty listing's counter says so, where a preview's status line can show it too.
-  if (total === 0) return { subject: "", counters: [NO_OTHER_SESSIONS], outcome: "success" };
+  if (total === 0) return { subject: "", counters: [NO_OTHER_SESSIONS], outcome: "returned" };
   return {
-    subject: countLabel(total, "session"),
-    counters: unusableCounters(details.sessions),
+    subject: "",
+    counters: listCounters(details, total),
     metadata: duplicates > 0 ? [countLabel(duplicates, "duplicate id")] : [],
-    outcome: "success",
+    outcome: "returned",
   };
 };
 
@@ -141,24 +156,17 @@ const settled = (details: SessionToolDetails): CompactSummary => {
   if (details.tool === SESSION_TOOL.list) return listSummary(details);
   if ("outcome" in details && details.outcome === "refused") return refusedSummary(details);
   if (details.tool === SESSION_TOOL.read)
-    // A reply reads as a received message beneath the heading; without one, the heading says so
-    // before routine state, and stays neutral rather than successful.
-    return details.text === undefined || Str.trim(details.text) === ""
-      ? {
-          subject: sessionSubject(details.session),
-          metadata: ["no reply yet", ...(details.state === "busy" ? ["busy"] : [])],
-          outcome: "returned",
-        }
-      : {
-          subject: sessionSubject(details.session),
-          metadata: [
-            ...(details.state === "busy" ? ["busy"] : []),
-            ...(details.truncated ? ["truncated"] : []),
-          ],
-          outcome: "success",
-          messageIcon: "received",
-          quote: sessionText(details.text),
-        };
+    // A read only looks, so it is neutral, with the session's state as its first fact and, without
+    // a reply, that there is none yet.
+    return {
+      subject: sessionSubject(details.session),
+      metadata: [
+        SESSION_STATE_LABELS[details.state],
+        ...(hasReply(details) ? [] : ["no reply yet"]),
+      ],
+      subjectState: true,
+      outcome: "returned",
+    };
   if (details.outcome === "uncertain")
     return {
       subject: sessionSubject(details.session),
@@ -174,6 +182,10 @@ const settled = (details: SessionToolDetails): CompactSummary => {
   };
 };
 
+/** Whether a read found words to show. */
+const hasReply = (details: { readonly text?: string | undefined }): boolean =>
+  details.text !== undefined && Str.isNonEmpty(Str.trim(details.text));
+
 /** Decodes a result's details when they belong to `tool`. */
 export const sessionToolDetails = (
   tool: string,
@@ -186,14 +198,17 @@ export const sessionToolDetails = (
   );
 
 /**
- * What expanding a settled row reveals: every session where a compact row only counts them,
- * otherwise sessions' ids and directories. An empty list has nothing more to show; a clipped
- * message or session list names its own hidden lines.
+ * What expanding a settled row reveals where a compact row hides it: every session, a send's
+ * message, or a read's reply. A preview row shows those collapsed, so its expansion adds the
+ * sessions' ids and directories, and a clipped body names its own hidden lines. An empty list has
+ * nothing more to show.
  */
 const settledExpandLabel = (details: SessionToolDetails, style: CollapsedStyle): string | false => {
-  if (details.tool !== SESSION_TOOL.list) return "details";
-  if (details.sessions.length === 0) return false;
-  return style === "compact" ? "sessions" : "details";
+  if (details.tool === SESSION_TOOL.list && details.sessions.length === 0) return false;
+  if (style === "preview") return "details";
+  if (details.tool === SESSION_TOOL.list) return "sessions";
+  if (details.tool === SESSION_TOOL.send) return "message";
+  return "outcome" in details || !hasReply(details) ? "details" : "reply";
 };
 
 type CollapsedStyle = "compact" | "preview";
@@ -205,16 +220,14 @@ export const sessionToolCompactSummary =
     style: CollapsedStyle = "compact",
   ): CompactSummaryProvider<SessionToolArgs> =>
   ({ phase, args, result }) => {
-    // The words a send carries, shown beneath its collapsed compact row.
-    const words =
+    // The words a send carries, which its expansion shows.
+    const sending =
       tool === SESSION_TOOL.send &&
       Predicate.isString(args.message) &&
-      Str.isNonEmpty(Str.trim(args.message))
-        ? { quote: sessionText(args.message) }
-        : {};
-    if (phase !== "settled") return { ...pending(tool, args.to, names), ...words };
+      Str.isNonEmpty(Str.trim(args.message));
+    if (phase !== "settled") return pending(tool, args.to, names, sending);
     const details = sessionToolDetails(tool, result);
     return details
-      ? { expandLabel: settledExpandLabel(details, style), ...settled(details), ...words }
+      ? { expandLabel: settledExpandLabel(details, style), ...settled(details) }
       : undefined;
   };

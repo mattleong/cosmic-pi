@@ -94,13 +94,14 @@ export interface CompactSummary {
    * instead of its check or dot. Problems and attention keep their own icons.
    */
   messageIcon?: "sent" | "received";
-  /** Words someone wrote, such as a sent message: a collapsed compact row shows them beneath it. */
-  quote?: string;
   /**
    * What expansion reveals, named by the tag on the collapsed row's heading, `▸ label` or a bare
-   * `▸`, in both collapsed styles unless the row already shows an affordance. Without it the shell infers `output`,
-   * `error`, or `details` from what the collapsed row leaves out; `false` omits the affordance
-   * because expansion only repeats what the collapsed row shows.
+   * `▸`, in both collapsed styles: a lowercase noun phrase for the hidden content, such as
+   * `message`, `report`, `answers`, or `sessions`. A collapsed compact row is only its heading and
+   * its problem lines, so the label names whatever expansion shows beyond those. Without it the
+   * shell infers `output`, `error`, or `details` from what the collapsed row leaves out; `false`
+   * omits the affordance because expansion only repeats what the collapsed row shows. A settled
+   * compact row with `children` always offers them, as `calls` unless the label is set.
    */
   expandLabel?: string | false;
   /**
@@ -109,7 +110,14 @@ export interface CompactSummary {
    */
   expandsSubjectOnly?: true;
   issues?: readonly CompactIssue[];
-  children?: { entries: readonly CompactChild[]; total: number };
+  /**
+   * Nested calls, such as a program's tool calls. While the call is pending or running, a collapsed
+   * compact row shows them as a live tree beneath it; once it settles they show only expanded, and
+   * the collapsed row lifts each hidden call's errors, warnings, and questions into its own problem
+   * lines, naming the call. Count them in `counters` too (`· 6 calls · 1 failed`).
+   */
+  /** `noun` names one child in the row counting those left out (`… 3 more agents`); `call` by default. */
+  children?: { entries: readonly CompactChild[]; total: number; noun?: string };
 }
 
 export type CompactSummaryProvider<

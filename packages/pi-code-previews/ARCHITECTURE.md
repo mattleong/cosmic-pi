@@ -123,6 +123,9 @@ hints describe source intent, separately from observed native dispatch. Renderin
 output or spill files.
 
 The shell preserves exact arguments, full output/recovery text, and native images through expansion.
+A collapsed compact row, tool or message, draws only its heading and problem lines; the shell
+enforces this rather than trusting producers, shows a call tree only while the call runs, and lifts
+a settled tree's failures into problem lines so hiding the tree never hides a failure.
 Original and content-only slots keep independent caches. A failed callback falls back to raw evidence
 without replaying that callback. Long-lived components retain the state they need, not a render
 context whose previous-component pointer would retain earlier rows. Pi continues to own images and

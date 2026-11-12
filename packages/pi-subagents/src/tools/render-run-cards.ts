@@ -58,10 +58,6 @@ export const cardWords = (card: SubagentRunCard): string | undefined => {
   return attention?.kind === "question" ? attention.message : undefined;
 };
 
-/** Whether a run's block shows its failure text. */
-export const cardShowsError = (card: SubagentRunCard): boolean =>
-  card.error !== undefined && cardWords(card) === card.error;
-
 /** Whether a run's block shows its pending question: expanded, when its issue quotes only part. */
 export const cardShowsQuestion = (card: SubagentRunCard): boolean => {
   const attention = runAttention(card);
@@ -73,22 +69,21 @@ export const cardShowsQuestion = (card: SubagentRunCard): boolean => {
 };
 
 /**
- * A run's block: its state where its glyph doesn't say it, then its words or progress. Collapsed,
- * a failure's raw text stays behind the expansion; the row's issue already names its cause. A
- * question is its issue's quote, and the block adds the rest of a long one when expanded.
+ * A run's block: its state where its glyph doesn't say it, then its report or progress. A failure
+ * is the row's issue, whose detail keeps its whole text, so the block doesn't repeat it. A question
+ * is its issue's quote, and the block adds the rest of a long one when expanded.
  */
 const cardBlock = (card: SubagentRunCard, expanded: boolean): AgentTextBlock => {
   const asking = runAttention(card)?.kind === "question";
+  const said = cardWords(card);
   const words =
-    (!expanded && cardShowsError(card)) || (asking && !(expanded && cardShowsQuestion(card)))
-      ? undefined
-      : cardWords(card);
+    said === card.error || (asking && !(expanded && cardShowsQuestion(card))) ? undefined : said;
   return {
     glyph: runStateSnapshotGlyph(card.state),
     tone: runStateColor(card.state),
     name: card.name,
     status: runRowStateLabel(asking ? "waiting_for_parent" : card.state),
-    ...(words !== undefined && { text: words, verbatim: words === card.error }),
+    ...(words !== undefined && { text: words }),
     notes: [
       ...(!isTerminalRunState(card.state) && !asking && words === undefined && card.progress
         ? [card.progress]

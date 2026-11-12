@@ -33,7 +33,7 @@ import {
   recordOwnCallHeading,
 } from "./heading-coverage";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { compactRowTag, renderCompactToolCall } from "./compact-tool-call";
+import { renderCompactToolCall } from "./compact-tool-call";
 import { compactExpandLabel } from "./expand-affordance";
 import { planCompactPresentation } from "../tools/compact-presentation";
 import { compactPhase, compactPresentationInput } from "./preview-issues";
@@ -291,10 +291,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
           expanded: true,
           phase,
           summary,
-          collapsedExpandLabel:
-            collapsedWidth === undefined
-              ? undefined
-              : compactRowTag(collapsedSummary, collapsedLabel, theme, collapsedWidth),
+          collapsedExpandLabel: collapsedWidth === undefined ? undefined : collapsedLabel,
           duration: timing?.duration,
           elapsedMs: timing?.elapsedMs,
           timingEnabled,

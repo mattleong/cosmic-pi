@@ -33,12 +33,12 @@ const Summary = Schema.Struct({
   waiting: Schema.optionalKey(Schema.Literal(true)),
   queued: Schema.optionalKey(Schema.Literal(true)),
   messageIcon: Schema.optionalKey(Schema.Literals(["sent", "received"])),
-  quote: Schema.optionalKey(Schema.String),
   expandLabel: Schema.optionalKey(Schema.Union([Schema.String, Schema.Literal(false)])),
   expandsSubjectOnly: Schema.optionalKey(Schema.Literal(true)),
   children: Schema.optionalKey(
     Schema.Struct({
       total: Schema.Natural,
+      noun: Schema.optionalKey(Schema.String),
       entries: Schema.Array(
         Schema.Struct({
           ...Fields,

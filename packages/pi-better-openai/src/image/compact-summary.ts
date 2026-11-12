@@ -225,6 +225,8 @@ export const imageCompactSummaryFor =
     if (phase !== "settled")
       return { action, subject, ...requestExpansion(args, args.prompt, style) };
     const record = imageRecord(result?.details);
+    // A heading that can't name the prompt exactly leaves it for expansion to reveal.
+    const settledLabel = imageHeadingsShowPrompt(args.prompt) ? DETAILS_LABEL : PROMPT_LABEL;
 
     if (context.isError && record?.status !== "cancelled") {
       const text = textOnlyFailure(result);
@@ -235,7 +237,7 @@ export const imageCompactSummaryFor =
             subject,
             outcome: "error",
             issues: [imageFailureIssue(text)],
-            expandLabel: DETAILS_LABEL,
+            expandLabel: settledLabel,
           };
     }
 
@@ -244,5 +246,5 @@ export const imageCompactSummaryFor =
       hasImage: result !== undefined && Arr.some(result.content, (part) => part.type === "image"),
       prompt: args.prompt,
     });
-    return summary && { ...summary, expandLabel: DETAILS_LABEL };
+    return summary && { ...summary, expandLabel: settledLabel };
   };

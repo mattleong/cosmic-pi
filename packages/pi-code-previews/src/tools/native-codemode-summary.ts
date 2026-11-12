@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import { countLabel, formatCost } from "pi-cosmic-core/display";
+import { countLabel, formatCost, formatCount } from "pi-cosmic-core/display";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { sanitizeDiagnosticContent, sanitizeDiagnosticError } from "pi-cosmic-core/security";
 import type {
@@ -42,6 +42,7 @@ import {
 import { hostContainer } from "../shared/untrusted-value";
 import { normalizeShellCommandWhitespace } from "./shell-command";
 import { errnoMessage } from "./system-diagnostics";
+import { shellFailure } from "./builtin-failure-shell";
 
 const nativeModelCalls: ReadonlySet<string> = new Set(["models.classify", "models.generateImages"]);
 const SCRIPT_ERROR = "Script error:\n";
@@ -85,9 +86,24 @@ function headingShowsArguments(name: string, preview: NativeArgumentPreview | un
 }
 
 function childIssues(call: NativeCodemodeCall): CompactIssue[] {
-  return call.status === "error"
-    ? [issue("native-child-error", call.error ?? "The nested call failed")]
-    : [];
+  if (call.status !== "error") return [];
+  const text = call.error ?? "The nested call failed";
+  const shell = call.name === "bash" ? shellExitMessage(text) : undefined;
+  if (shell === undefined) return [issue("native-child-error", text)];
+  const detail = sanitizeDiagnosticContent(text);
+  return [{ code: "native-child-error", severity: "error", message: shell, detail }];
+}
+
+/**
+ * A nested shell command's exit or timeout, in the words a `bash` row uses (`Exit 2`), rather than
+ * the first line of its output, such as `(no output)`.
+ */
+function shellExitMessage(text: string): string | undefined {
+  const lines = Str.split(Str.trimEnd(text), /\r?\n/u);
+  const [first] = shellFailure(text, lines, true).issues;
+  return first?.code === "shell-exit" || first?.code === "shell-timeout"
+    ? first.message
+    : undefined;
 }
 
 /**
@@ -195,6 +211,10 @@ function evidenceIssues(
   return [{ code: "native-call-evidence-incomplete", severity: "warning", message }, ...truncation];
 }
 
+/**
+ * How many calls the program made, with how many failed, as one combined counter whose shorter
+ * alternative keeps the failures: a settled row hides its call tree, so the heading counts it.
+ */
 function callCounters(
   evidence: NativeCallEvidence,
   calls: readonly NativeCodemodeCall[],
@@ -203,8 +223,27 @@ function callCounters(
 ): string[] {
   if (evidence.kind === "unavailable" || (complete && calls.length === 0 && intent?.discoveryOnly))
     return [];
-  if (!complete) return [`${countLabel(calls.length, "call")} listed`];
-  return [countLabel(calls.length, "call")];
+  const total = complete
+    ? countLabel(calls.length, "call")
+    : `${countLabel(calls.length, "call")} listed`;
+  const failed = Arr.filter(calls, (call) => call.status === "error").length;
+  if (failed === 0) return [total];
+  const failures = `${formatCount(failed)} failed`;
+  return [`${total} · ${failures}`, failures];
+}
+
+/**
+ * What expanding a settled program reveals beyond its row: its calls, else its output (its error
+ * when it failed), else its program.
+ */
+function settledExpandLabel(summary: CompactSummary, result: AgentToolResult<unknown>): string {
+  if ((summary.children?.total ?? 0) > 0) return "calls";
+  const output = Arr.some(
+    result.content.slice(1),
+    (part) => part.type === "image" || Str.isNonEmpty(Str.trim(part.text)),
+  );
+  if (!output) return "program";
+  return summary.outcome === "error" ? "error" : "output";
 }
 
 // Pi appends its error trailer after all script output and may join it with the preceding text,
@@ -291,7 +330,7 @@ export const nativeCodemodeSummary =
       showTiming: true as const,
       showShortTiming: true as const,
       // Until it settles, expansion reveals the program the collapsed row hides.
-      expandLabel: phase === "settled" ? "details" : "program",
+      expandLabel: "program",
     };
     if (!result) return phase === "settled" ? undefined : heading;
     const evidence = nativeCodemodeEvidence(hostContainer(result.details));
@@ -309,11 +348,13 @@ export const nativeCodemodeSummary =
     };
     if (phase !== "settled") return summary;
     if (!header) return undefined;
-    if (header === "failed")
-      return scriptFailure(
-        summary,
-        result,
-        Boolean(evidence.fullOutputPath) || truncatedEnvelope !== undefined,
-      );
-    return completedOutcome(summary, calls, complete, context.isError || result.isError === true);
+    const settled =
+      header === "failed"
+        ? scriptFailure(
+            summary,
+            result,
+            Boolean(evidence.fullOutputPath) || truncatedEnvelope !== undefined,
+          )
+        : completedOutcome(summary, calls, complete, context.isError || result.isError === true);
+    return { ...settled, expandLabel: settledExpandLabel(settled, result) };
   };

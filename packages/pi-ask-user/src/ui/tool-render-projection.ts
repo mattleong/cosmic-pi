@@ -3,6 +3,8 @@ import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
+import { headingValue } from "pi-code-previews";
 import { countLabel } from "pi-cosmic-core/display";
 import { joinInline } from "pi-cosmic-ui/manager";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
@@ -61,6 +63,25 @@ export const decodePresentation = Fn.flow(
   (progress): PendingPresentation | undefined => progress?.questionnaire,
 );
 export type ReplayedAnswer = Extract<ReplayedOutcome, { outcome: "submitted" }>["answers"][number];
+
+/**
+ * The lone short answer a heading may carry as its fact, `✓ ask_user_answers Colour · red`: one
+ * answer without a note, a single choice or written words short enough for `headingValue`.
+ * `labels` names a choice answer's labels, or undefined where they can't be shown verbatim.
+ */
+export function headingAnswer(
+  answers: readonly ReplayedAnswer[],
+  labels: (
+    answer: Extract<ReplayedAnswer, { kind: "choices" }>,
+  ) => readonly string[] | undefined = (answer) => answer.labels,
+): string | undefined {
+  const [answer, ...others] = answers;
+  if (answer === undefined || others.length > 0) return undefined;
+  if (answer.note !== undefined && Str.isNonEmpty(Str.trim(answer.note))) return undefined;
+  if (answer.kind !== "choices") return headingValue(answer.text);
+  const [label, ...more] = labels(answer) ?? [];
+  return label === undefined || more.length > 0 ? undefined : headingValue(label);
+}
 export const decodeOutcome = decodeUnknownOrUndefined(answerOutcome);
 
 const asyncSnapshotFields = {
@@ -359,17 +380,23 @@ const factLine = (segments: ReadonlyArray<string | undefined>): string =>
     " · ",
   );
 
-/** IDs and delivery of async requests, for expanded details; a list also names each state. */
+/**
+ * IDs and delivery of async requests, for expanded details; a list leads each with the titles its
+ * Questionnaires section names it by, as `Colour: request-1`.
+ */
 export function requestFacts(rows: readonly ReplayedSnapshot[], list: boolean): string[] {
   return Arr.map(rows, (row) => {
-    const state = questionnaireState(row);
+    const titles = list ? storedTitlesLabel(row.titles) : undefined;
     return factLine([
-      list && state !== undefined ? `${row.requestId}: ${STATE_WORDS[state](1)}` : row.requestId,
+      titles === undefined ? row.requestId : `${titles}: ${row.requestId}`,
       `delivery ID ${row.deliveryId}`,
       DELIVERY_WORDS[row.delivery],
     ]);
   });
 }
+
+/** A listed questionnaire's state in words, for a row whose glyph doesn't already say it. */
+export const listedStateWords = (state: QuestionnaireState): string => STATE_WORDS[state](1);
 
 export const deliveryFacts = (requestId: string, deliveryId: string): string[] => [
   factLine([requestId, `delivery ID ${deliveryId}`]),

@@ -13,13 +13,13 @@ import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import { joinInline } from "pi-cosmic-ui/manager";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
 import {
   countTaskStates,
   failingExitCode,
-  isActiveTaskState,
   skippedAmountText,
   type BackgroundOutputSkip,
   type BackgroundTaskSnapshot,
@@ -269,6 +269,27 @@ function taskReportSummary(value: BackgroundTaskSnapshot): TaskSummary {
 }
 
 /**
+ * A call that only looks at a task, such as `status`: neutral, with the task's state as a heading
+ * fact, `• background_task status flaky · failed`. The task's own failure isn't the call's
+ * problem, so its causes show only expanded; a timeout's is the state the heading already gives,
+ * and the expanded run time says how long it ran.
+ */
+function inspectedSummary(value: BackgroundTaskSnapshot): TaskSummary {
+  const task = taskReportSummary(value);
+  return {
+    ...task,
+    metadata: [taskStateLabel(value.state)],
+    subjectState: true,
+    outcome: "returned",
+    issues: Arr.filterMap(task.issues, (entry) =>
+      entry.code === `${value.id}:runtime-timeout`
+        ? Result.failVoid
+        : Result.succeed({ ...entry, severity: "info" }),
+    ),
+  };
+}
+
+/**
  * A start that admitted its task reads as done, so its row never goes stale as "running". The
  * action names what succeeded, `✓ background_task start docs`, since the check alone would read as
  * a finished task and the shell drops `started` beside it.
@@ -323,13 +344,25 @@ export function taskNoticeSummary(value: BackgroundTaskSnapshot): TaskSummary {
 const stopOutcome = (outcome: CompactOutcome): CompactOutcome =>
   outcome === "cancelled" ? "success" : outcome;
 
+/**
+ * A stop shows whether it stopped the task: `✓ background_task stop ticker`, whose action and check
+ * already say the task stopped. One that found the task already ended changed nothing, so it is
+ * neutral and says how the task had ended.
+ */
 function stopSummary(details: DetailsFor<"stop">, action: string): CompactSummary {
   const task = taskSummary(details.snapshot);
-  if (!details.alreadyFinished) return { ...task, action, outcome: stopOutcome(task.outcome) };
+  if (!details.alreadyFinished)
+    return {
+      ...task,
+      action,
+      ...(details.snapshot.state === "stopped" && { metadata: [] }),
+      outcome: stopOutcome(task.outcome),
+    };
   return {
     subject: task.subject,
     action,
     metadata: [`already ${stateDetail(details.snapshot)}`],
+    subjectState: true,
     outcome: "returned",
     issues: [],
   };
@@ -401,12 +434,30 @@ function aggregateOutcome(outcomes: readonly CompactOutcome[]): CompactOutcome {
   );
 }
 
+// States a listing names even when every task shares it, so a count never hides a failure.
+const PROBLEM_STATES: ReadonlyArray<BackgroundTaskSnapshot["state"]> = [
+  "failed",
+  "timed_out",
+  "stopping",
+];
+
+/**
+ * One combined counter, widest first: each state's count where the tasks' states differ
+ * (`2 running · 1 failed`), else the total, or the shared state where it is a problem (`2 failed`).
+ */
 function aggregateCounters(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string[] {
   const counts = Arr.flatMap(BACKGROUND_TASK_STATES, (state) => {
     const n = Arr.filter(tasks, (task) => task.state === state).length;
-    return n ? [`${n} ${taskStateLabel(state)}`] : [];
+    return n ? [{ state, text: `${n} ${taskStateLabel(state)}` }] : [];
   });
   const total = countLabel(tasks.length, "task");
+  const [only, ...others] = counts;
+  const widest =
+    only === undefined
+      ? total
+      : others.length > 0 || Arr.contains(PROBLEM_STATES, only.state)
+        ? joinInline(Arr.map(counts, (count) => count.text))
+        : total;
   const { active, failed } = countTaskStates(tasks);
   const failures = failed ? `${failed} failed` : "";
   const brief = joinInline(
@@ -414,7 +465,7 @@ function aggregateCounters(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string
   );
   // Narrower, the failures outlast the active count: a row never loses failure evidence first.
   const failedOnly = joinInline(Arr.filter([total, failures], Boolean));
-  return narrowing([joinInline(counts) || total, brief, failedOnly, total]);
+  return narrowing([widest, brief, failedOnly, total]);
 }
 
 /** Counter alternatives widest first: each is kept only when narrower than the one before it. */
@@ -559,9 +610,10 @@ function waitSummary(
 function logsIssues(details: DetailsFor<"logs">): CompactIssue[] {
   const logs = details.logs;
   const issues: CompactIssue[] = [];
-  // A failed task's state is already the row's metadata; its cause belongs to status and wait.
-  if (logs.state === "timed_out") issues.push(runtimeTimeoutIssue(logs.id, undefined));
-  if (logs.state === "stopping") issues.push(cleanupUnconfirmedIssue(logs.id));
+  // The task's state is the row's fact, and its cause belongs to status and wait; reading a task
+  // whose cleanup is unconfirmed isn't the read's problem, so it shows only expanded.
+  if (logs.state === "stopping")
+    issues.push({ ...cleanupUnconfirmedIssue(logs.id), severity: "info" });
   if (logs.skipped)
     issues.push(
       outputSkippedIssue(
@@ -597,24 +649,18 @@ function logsIssues(details: DetailsFor<"logs">): CompactIssue[] {
   return issues;
 }
 
-function logsOutcome(
-  state: BackgroundTaskSnapshot["state"],
-  issues: readonly CompactIssue[],
-): CompactOutcome {
-  if (state === "failed" || state === "timed_out") return "error";
-  if (state === "stopped") return "cancelled";
-  if (state === "stopping") return "uncertain";
-  if (Arr.some(issues, (entry) => entry.severity === "warning")) return "warning";
-  return isActiveTaskState(state) ? "returned" : "success";
-}
-
+/**
+ * A read only looks, so it is neutral with the task's state as a fact, `• background_task logs
+ * flaky · failed`; only output the read itself missed or couldn't show warns.
+ */
 function logsSummary(details: DetailsFor<"logs">, action: string): CompactSummary {
   const issues = logsIssues(details);
   return {
     action,
     subject: taskDisplayName(details.task),
-    metadata: stateMetadata(details.logs.state),
-    outcome: logsOutcome(details.logs.state, issues),
+    metadata: [taskStateLabel(details.logs.state)],
+    subjectState: true,
+    outcome: Arr.some(issues, (entry) => entry.severity === "warning") ? "warning" : "returned",
     issues,
   };
 }
@@ -636,17 +682,24 @@ export const projectBackgroundTaskCompactSummary = ({
 };
 
 /**
- * What expanding a settled row reveals that its heading and collapsed body don't: a task's command
- * and identity, its output, or every listed task. A summary may set its own label first.
+ * What a task's expansion shows beyond its heading: the command where the heading names the task,
+ * else only its technical details.
+ */
+export const taskExpandLabel = (task: Pick<BackgroundTaskSnapshot, "name" | "command">): string =>
+  taskDisplayName(task) === sanitizeTerminalLine(task.command) ? "details" : "command";
+
+/**
+ * What expanding a settled row reveals that its heading and collapsed body don't: a task's output,
+ * else its command, or every listed task. A summary may set its own label first.
  */
 function settledExpandLabel(details: DecodedTaskDetails): string | false {
   switch (details.action) {
     case "start":
     case "status":
     case "stop":
-      return "details";
+      return taskExpandLabel(details.snapshot);
     case "wait":
-      return details.wait.tail ? "output" : "details";
+      return details.wait.tail ? "output" : taskExpandLabel(details.wait.snapshot);
     case "logs":
       return "output";
     case "list":
@@ -690,7 +743,7 @@ function settledSummary(
     case "start":
       return startSummary(details.snapshot, action);
     case "status":
-      return { ...taskReportSummary(details.snapshot), action };
+      return { ...inspectedSummary(details.snapshot), action };
     case "stop":
       return stopSummary(details, action);
     case "clear":

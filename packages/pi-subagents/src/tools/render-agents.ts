@@ -8,7 +8,15 @@ import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth, managerActivityColor, type ManagerStatusColor } from "pi-cosmic-ui/manager";
 import { composeToolComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { SUBAGENT_RUN_STATES } from "../run/model.ts";
-import { expandedBody, expandedFields } from "pi-code-previews";
+import {
+  expandedAuthoredText,
+  expandedBody,
+  expandedFields,
+  expandedSection,
+  expandedText,
+  headingShowedSubject,
+} from "pi-code-previews";
+import * as Str from "effect/String";
 import {
   agentTextBlockLines,
   COLLAPSED_AGENT_TEXT_ROWS,
@@ -159,7 +167,8 @@ export const renderListResult = (
         : entries.slice(0, COLLAPSED_AGENT_TEXT_ROWS);
     const hidden = details.agentCount - shown.length;
     return [
-      ...(entries.length === 0 ? [theme.fg("muted", "No matching agents")] : []),
+      // An empty listing says so once: here collapsed, beside a preview heading without a counter.
+      ...(entries.length === 0 && !expanded ? [theme.fg("muted", "no agents")] : []),
       ...Arr.flatMap(shown, (entry) => listRowLines(entry, safeWidth, theme, expanded)),
       ...(hidden > 0
         ? [
@@ -174,11 +183,20 @@ export const renderListResult = (
     ];
   };
   if (!expanded) return composeToolComponent(rows);
-  return expandedRowsBody(
-    theme,
-    rows,
-    Arr.flatMap(entries, (entry) =>
-      entry.kind === "main" ? [] : agentFactLines(entry.name, [entry.facts ?? entry.id]),
+  // One labelled list of glyph-led rows, then each run's technical facts.
+  return expandedBody(
+    entries.length === 0
+      ? undefined
+      : expandedSection(
+          theme,
+          "Agents",
+          composeToolComponent((width) => rows(Math.max(1, width))),
+        ),
+    expandedFactDetails(
+      theme,
+      Arr.flatMap(entries, (entry) =>
+        entry.kind === "main" ? [] : agentFactLines(entry.name, [entry.facts ?? entry.id]),
+      ),
     ),
   );
 };
@@ -190,11 +208,49 @@ const READ_SOURCE_NOTES = {
   question: undefined,
 } as const;
 
+const READ_SOURCE_LABELS = {
+  report: "Report",
+  error: "Error",
+  assistant: "Message",
+  question: "Question",
+} as const;
+
+/**
+ * One agent read, expanded: its heading names it and states its state, so the body is its words
+ * under a label naming what they are, then its notes and `Details`. A question its issue quotes
+ * whole shows only there.
+ */
+const singleReadBody = (agent: ReadDetails["agents"][number], theme: Theme): Component => {
+  const source = agent.source ?? "assistant";
+  const quoted = source === "question" && agent.text !== undefined && quotesWhole(agent.text);
+  const text = quoted ? undefined : agent.text;
+  const notes = [
+    ...(agent.notes ?? []),
+    ...(agent.text === undefined && !agent.notes?.length
+      ? [agent.source === "report" ? "Report saved to a file" : "No message yet"]
+      : []),
+    ...(agent.textCut && text !== undefined ? ["Shown up to its display limit"] : []),
+  ];
+  return expandedBody(
+    text === undefined
+      ? undefined
+      : source === "error"
+        ? expandedText(theme, READ_SOURCE_LABELS.error, Str.split(text, "\n"))
+        : expandedAuthoredText(theme, READ_SOURCE_LABELS[source], text),
+    expandedText(theme, undefined, Arr.map(notes, sanitizeTerminalLine), "muted"),
+    expandedFactDetails(
+      theme,
+      agent.facts === undefined ? [] : savedAgentFactLines(agent.name, agent.facts),
+    ),
+  );
+};
+
 /** Undefined when saved details carry no display copies; their content then renders as text. */
 export const renderReadResult = (
   details: ReadDetails,
   expanded: boolean,
   theme: Theme,
+  headingState?: WeakKey,
 ): Component | undefined => {
   const agents = details.agents;
   // Details saved before display copies existed fall back to the text the agent read.
@@ -203,11 +259,17 @@ export const renderReadResult = (
     Arr.every(agents, (agent) => agent.textStatus === "text" && agent.text === undefined)
   )
     return undefined;
+  const [only] = agents;
+  const single = expanded && only !== undefined && agents.length === 1;
+  // Expanded, several reports read as one labelled list, whose label says what each row holds.
+  const allReports = Arr.every(agents, (agent) => agent.source === "report");
   const blocks = Arr.map(agents, (agent) => {
     const { glyph, tone, label } = agentStatePresentation(agent.state);
     // A failed run's words are its failure, which its state already says.
     const source =
-      agent.source === undefined || (agent.source === "error" && agent.state === "failed")
+      agent.source === undefined ||
+      (agent.source === "error" && agent.state === "failed") ||
+      (expanded && allReports)
         ? undefined
         : READ_SOURCE_NOTES[agent.source];
     // A question is its issue's quote; expansion adds the whole of a long one.
@@ -234,11 +296,27 @@ export const renderReadResult = (
   });
   const rows = (width: number) => agentTextBlockLines(blocks, width, theme, expanded);
   if (!expanded) return composeToolComponent(rows);
-  return expandedRowsBody(
-    theme,
-    rows,
-    Arr.flatMap(agents, (agent) =>
-      agent.facts === undefined ? [] : savedAgentFactLines(agent.name, agent.facts),
-    ),
+  const facts = Arr.flatMap(agents, (agent) =>
+    agent.facts === undefined ? [] : savedAgentFactLines(agent.name, agent.facts),
+  );
+  const listed = single
+    ? expandedRowsBody(theme, rows, facts)
+    : expandedBody(
+        agents.length === 0
+          ? undefined
+          : expandedSection(
+              theme,
+              allReports ? "Reports" : "Agents",
+              composeToolComponent((width) => rows(Math.max(1, width))),
+            ),
+        expandedFactDetails(theme, facts),
+      );
+  if (!single) return listed;
+  // The heading draws first: one that named the agent leaves the body only its words.
+  const alone = singleReadBody(only, theme);
+  return composeToolComponent((width) =>
+    headingState !== undefined && headingShowedSubject(headingState)
+      ? alone.render(width)
+      : listed.render(width),
   );
 };

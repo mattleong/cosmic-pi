@@ -61,8 +61,11 @@ export const presentAgentMessage: CodePreviewMessagePresenter = (input, options,
     : [];
   return {
     ...presentation,
-    // The words show collapsed, clipped with their own affordance; expansion adds the sender's IDs.
-    ...(facts.length > 0 && { expandLabel: "details" }),
+    // A collapsed compact row hides the words. In preview style they show collapsed, clipped with
+    // their own affordance, and expansion adds the sender's IDs.
+    ...(options.collapsedStyle === "compact"
+      ? { expandLabel: "message" }
+      : facts.length > 0 && { expandLabel: "details" }),
     collapsed: () =>
       composeToolComponent((width) =>
         agentTextLines(words, width, theme, { expanded: false, indent: bodyIndent(options) }),

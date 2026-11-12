@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import type { CompactIssue } from "pi-code-previews";
 import { clipText } from "pi-cosmic-core/display";
 import { MESSAGE_TEXT_LIMIT } from "pi-cosmic-core/message-text";
@@ -137,27 +138,38 @@ export const sendDetails = (result: AgentSendResult): AgentToolDetails => ({
 });
 
 /**
- * The issues a run's status card raises, bounded for persisted details. A failed worker is the
- * reader's attention, not a failed read, so failures become warnings.
+ * The issues a run's status card raises, bounded for persisted details. Reading a run that failed
+ * or warned is no problem of the read, so only a question waiting on a reply stays a problem line;
+ * the rest describe the run and show expanded.
  */
 const boundedReadIssue = ({ severity, code, message, detail }: CompactIssue): CompactIssue => ({
-  severity: severity === "error" ? "warning" : severity,
+  severity: severity === "attention" ? severity : "info",
   code: clipText(code, MAX_AGENT_READ_ISSUE_TEXT_CHARS),
   message: clipText(message, MESSAGE_TEXT_LIMIT),
   ...(detail !== undefined && { detail: clipText(detail, MAX_AGENT_READ_ISSUE_TEXT_CHARS) }),
 });
 
-/** The read's text is the run's failure or question, which its issue then doesn't repeat whole. */
+/** Codes of the issue that states a run's own failure. */
+const FAILURE_ISSUE_CODES = [":error", ":run-failed"] as const;
+
+/**
+ * The read's text is the run's failure or question. A failure it shows needs no issue, since the
+ * row's state already says the run failed; a question's issue quotes it, and the text adds the rest.
+ */
 const readIssues = (
   run: SubagentRunView,
   shown: { readonly error: boolean; readonly question: boolean },
 ): ReadonlyArray<CompactIssue> => {
   const { finalText: _finalText, ...card } = projectSubagentRunCard(run);
   return Arr.map(
-    compactRunIssues([card], {
-      showsError: () => shown.error,
-      showsQuestion: () => shown.question,
-    }).slice(0, MAX_AGENT_READ_ISSUES),
+    Arr.filter(
+      compactRunIssues([card], {
+        showsError: () => shown.error,
+        showsQuestion: () => shown.question,
+      }),
+      (issue) =>
+        !(shown.error && Arr.some(FAILURE_ISSUE_CODES, (code) => Str.endsWith(code)(issue.code))),
+    ).slice(0, MAX_AGENT_READ_ISSUES),
     boundedReadIssue,
   );
 };

@@ -51,12 +51,8 @@ import {
 } from "./render-await.ts";
 import { previewHeading, textResultBody } from "./render-preview.ts";
 import { cardBlockLines, cardFactLines } from "./render-run-cards.ts";
-import {
-  expandedFactDetails,
-  expandedRowsBody,
-  factRowLines,
-  indentedBody,
-} from "../ui/agent-text.ts";
+import { expandedFactDetails, factRowLines, indentedBody } from "../ui/agent-text.ts";
+import { aggregateUsage } from "../ui/metrics.ts";
 import { renderStartReceiptComponent } from "./render-start.ts";
 import { isTextFragment } from "./text-fragments.ts";
 import { homeDisplayPath } from "../ui/display-path.ts";
@@ -293,24 +289,48 @@ const renderAwaitResult = (
   heading?: () => AwaitHeading,
 ): Component => {
   const { hierarchy, targets } = awaitScope(details);
-  const rows = (width: number): string[] => {
-    const safeWidth = Math.max(1, width);
+  const counterRows = (width: number): string[] => {
+    // Expanded, usage is a technical fact, so it moves to `Details`.
     const counters = formatAwaitCounters(details.cards, hierarchy, details.awaitUntil, {
       settled: true,
       heading: heading?.(),
+      usage: !expanded,
     });
-    return [
-      ...(counters
-        ? factRowLines([[counters, "muted"]], safeWidth, theme, expanded, { wholeFacts: true })
-        : []),
-      ...cardBlockLines(targets, safeWidth, theme, expanded),
-      // Details too large for their reports keep the rest; the agent still received every report.
-      ...(details.contentOmitted ? [clipToWidth(theme.fg("dim", OMITTED_NOTE), safeWidth)] : []),
-    ];
+    return counters
+      ? factRowLines([[counters, "muted"]], width, theme, expanded, { wholeFacts: true })
+      : [];
   };
-  return expanded
-    ? expandedRowsBody(theme, rows, Arr.flatMap(details.cards, cardFactLines))
-    : renderComponent(rows);
+  const blockRows = (width: number): string[] => [
+    ...cardBlockLines(targets, width, theme, expanded),
+    // Details too large for their reports keep the rest; the agent still received every report.
+    ...(details.contentOmitted ? [clipToWidth(theme.fg("dim", OMITTED_NOTE), width)] : []),
+  ];
+  if (!expanded)
+    return renderComponent((width) => {
+      const safeWidth = Math.max(1, width);
+      return [...counterRows(safeWidth), ...blockRows(safeWidth)];
+    });
+  const total = details.cards.length > 1 ? aggregateUsage(details.cards) : undefined;
+  // The wait's totals, then its runs as one labelled list, then each run's technical facts.
+  return expandedBody(
+    indentedBody(
+      theme,
+      renderComponent((width) => counterRows(Math.max(1, width))),
+    ),
+    expandedSection(
+      theme,
+      Arr.every(targets, (card) => card.state === "completed")
+        ? targets.length === 1
+          ? "Report"
+          : "Reports"
+        : "Subagents",
+      renderComponent((width) => blockRows(Math.max(1, width))),
+    ),
+    expandedFactDetails(theme, [
+      ...(total ? [`Total: ${total}`] : []),
+      ...Arr.flatMap(details.cards, cardFactLines),
+    ]),
+  );
 };
 
 const renderSettledStartAwait = (

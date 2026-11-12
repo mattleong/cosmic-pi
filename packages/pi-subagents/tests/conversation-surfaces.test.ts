@@ -133,10 +133,11 @@ describe("conversation surfaces", () => {
       for (const expanded of [false, true]) {
         const text = renderMessage(message, expanded);
         expect(text).not.toMatch(AGENT_PROCEDURES);
-        // Messages keep agents' words visible collapsed in both styles.
-        expect(text).toContain(
-          message.customType === "pi-subagents-question" ? question : "docs/auth.md:42",
-        );
+        // A collapsed compact message is its heading and problem lines; preview keeps the words.
+        if (expanded || style === "preview")
+          expect(text).toContain(
+            message.customType === "pi-subagents-question" ? question : "docs/auth.md:42",
+          );
       }
       expect(JSON.stringify(message)).toBe(before);
     }

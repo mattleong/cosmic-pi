@@ -70,17 +70,18 @@ test.each(["compact", "preview"] as const)(
         );
         const text = Arr.join(component!.render(180), "\n");
         expect(Fn.pipe(text, Str.includes("PRIVATE_RUN_ID"))).toBe(expanded);
-        // What agents wrote stays readable collapsed, as tool rows keep their output.
-        expect(
-          Fn.pipe(
-            text,
-            Str.includes(
-              message.customType === "pi-subagents-completed"
-                ? "PRIVATE_STACK_TRACE"
-                : "AGENT_QUESTION",
+        // What agents wrote stays readable expanded, and collapsed in preview style.
+        if (expanded || style === "preview")
+          expect(
+            Fn.pipe(
+              text,
+              Str.includes(
+                message.customType === "pi-subagents-completed"
+                  ? "PRIVATE_STACK_TRACE"
+                  : "AGENT_QUESTION",
+              ),
             ),
-          ),
-        ).toBe(true);
+          ).toBe(true);
         if (!expanded) expect(text).not.toMatch(/agent_send|agent_lifecycle|agent_worktree/);
         expect(JSON.stringify(message)).toBe(before);
       }

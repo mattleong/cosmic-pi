@@ -7,14 +7,19 @@ import {
 import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
-import { withCodePreviewShell, type CompactAnimationScheduler } from "pi-code-previews";
+import {
+  captureCodePreviewPresentationPolicy,
+  withCodePreviewShell,
+  type CompactAnimationScheduler,
+} from "pi-code-previews";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { AskUserParameters, type AskUserRequest } from "../questionnaire/schema.ts";
-import { askUserCompactSummary } from "../ui/compact-summary.ts";
+import { askUserCompactSummaryFor } from "../ui/compact-summary.ts";
 import {
+  answerInCompactHeading,
   answersBody,
   callBody,
   cancelledLine,
@@ -125,7 +130,10 @@ export function registerAskUserTool(
   });
   pi.registerTool(
     shell(tool, {
-      compactSummary: askUserCompactSummary,
+      // Read when the shell is, so the summary names what that style's collapsed row hides.
+      compactSummary: askUserCompactSummaryFor(
+        captureCodePreviewPresentationPolicy().toolCallCollapsedStyle,
+      ),
       expandedContent: {
         renderCall: (args, theme, context) =>
           pendingRequest(theme, requestArguments(args), context),
@@ -140,16 +148,18 @@ export function registerAskUserTool(
 function expandedContent<Details>(
   result: AgentToolResult<Details>,
   theme: Theme,
-  context: Pick<RenderContext, "args" | "isError">,
+  context: Pick<RenderContext, "args" | "isError" | "state">,
   partial = false,
 ): Component {
   const details = decodeOutcome(result.details);
+  const answers = details?.outcome === "submitted" ? details.answers : undefined;
   return expandedResult(
     {
       raw: fallbackText(result.content),
       isError: context.isError,
       decoded: details !== undefined,
-      answers: details?.outcome === "submitted" ? details.answers : undefined,
+      answers,
+      ...(answers && { answerInHeading: answerInCompactHeading(answers, context) }),
       titles: titlesByKey(context.args),
       // The call still shows the request until the final result arrives.
       ...(!partial && { args: requestArguments(context.args) }),

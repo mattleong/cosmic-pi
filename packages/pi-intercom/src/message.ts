@@ -78,8 +78,10 @@ export const presentIntercomMessage: CodePreviewMessagePresenter = (message, opt
     };
   return {
     ...presentation,
-    // The sender's session id and directory; a clipped message also names its hidden lines.
-    expandLabel: "details",
+    // A compact message is its heading alone, so expanding it reveals the message; a preview body
+    // shows the message, so expanding adds the sender's session id and directory, and a clipped
+    // message names its own hidden lines.
+    expandLabel: options.collapsedStyle === "compact" ? "message" : "details",
     collapsed: () =>
       textBody(text, theme, false, options.collapsedStyle === "preview" ? PREVIEW_BODY_INDENT : 0),
     expanded: () =>

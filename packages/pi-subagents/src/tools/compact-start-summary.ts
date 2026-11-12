@@ -44,26 +44,41 @@ const launchFailureDetail = (failure: SubagentCardFailure, quote: string | undef
   return Arr.join(Arr.filter([account, recovery], Str.isNonEmpty), "\n\n");
 };
 
+/**
+ * A launch that failed or may have started. Beneath a heading that names the lone launch, whose
+ * glyph says it failed or is unconfirmed, the issue states only the cause.
+ */
 const launchFailureIssue = (
   failure: SubagentCardFailure,
   label: string,
   uncertain: boolean,
+  named: boolean,
 ): CompactIssue => {
-  const quote = uncertain
-    ? undefined
-    : failureMessage(failure.message, "startup failed", QUOTED_TEXT_LIMIT);
+  const quote =
+    uncertain && !named
+      ? undefined
+      : failureMessage(
+          failure.message,
+          uncertain ? "it may have started" : "startup failed",
+          QUOTED_TEXT_LIMIT,
+        );
   const detail = launchFailureDetail(failure, quote);
   return {
     severity: uncertain ? "warning" : "error",
     code: `launch:${failure.index}:start-failed`,
     message:
-      quote === undefined ? `${label} may have started` : `${label} couldn't start: ${quote}`,
+      quote === undefined
+        ? `${label} may have started`
+        : named
+          ? quote
+          : `${label} couldn't start: ${quote}`,
     ...(detail && { detail }),
   };
 };
 
-const startedCounter = (started: number, total: number, subject: string): string =>
-  started === 1 && total === 1 && Str.trim(subject) ? "started" : `${started}/${total} started`;
+/** A lone named launch's glyph says whether it started, so it counts only a batch. */
+const startedCounter = (started: number, total: number, subject: string): string[] =>
+  total === 1 && Str.trim(subject) ? [] : [`${started}/${total} started`];
 
 export function summarizeStart(
   details: SubagentStartDetails,
@@ -73,7 +88,8 @@ export function summarizeStart(
 ): CompactSummary {
   const started = Arr.filter(details.startEntries, (entry) => entry.status === "started").length;
   const total = details.startEntries.length;
-  summary.counters = [startedCounter(started, total, summary.subject)];
+  summary.counters = startedCounter(started, total, summary.subject);
+  const named = total === 1 && Str.isNonEmpty(Str.trim(summary.subject));
   for (const entry of details.startEntries) {
     const label = Fn.pipe(entry.name, Str.slice(0, 60));
     if (entry.routeStatus === "selected" && entry.warning)
@@ -86,7 +102,7 @@ export function summarizeStart(
   for (const failure of details.startFailures ?? []) {
     const label = Fn.pipe(failure.name ?? `Launch ${failure.index + 1}`, Str.slice(0, 60));
     const uncertain = isUncertainToolFailure(failure);
-    issues.push(launchFailureIssue(failure, label, uncertain));
+    issues.push(launchFailureIssue(failure, label, uncertain, named));
     const recovery = failure.admittedRun;
     if (!recovery) continue;
     const quarantined = recovery.cleanupDisposition === "quarantined";

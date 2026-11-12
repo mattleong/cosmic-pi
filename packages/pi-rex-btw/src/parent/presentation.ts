@@ -57,7 +57,7 @@ const ISSUES: Record<ParentReadFailure["failure"], CompactIssue> = {
 
 export const failureIssue = (failure: ParentReadFailure): CompactIssue => ISSUES[failure.failure];
 
-/** `parent_conversation last 15 messages`; a failed read keeps its request and says why. */
+/** `• parent_conversation last 15 messages`; a failed read keeps its request and says why. */
 export const parentCompactSummary: CompactSummaryProvider<ParentToolArgs> = ({
   phase,
   args,
@@ -74,9 +74,10 @@ export const parentCompactSummary: CompactSummaryProvider<ParentToolArgs> = ({
       issues: [failureIssue(details)],
       expandLabel: "details",
     };
+  // A read only looks, so it is neutral: `• parent_conversation last 15 messages`.
   return {
     subject: readSummary(details),
-    outcome: "success",
+    outcome: "returned",
     // Collapsed rows show only the heading; expansion shows the whole read, or the parent's id.
     expandLabel: details.items.length > 0 ? "messages" : "details",
   };

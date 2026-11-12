@@ -7,11 +7,13 @@ import {
   applyPresentationSettings,
   captureRegistrations,
   createToolPresentationHarness,
+  expansionOffers,
 } from "pi-code-previews/testing";
 import {
   contractEnvelope,
   SESSION_TOOL,
   type SessionRefusal,
+  type SessionToolArgs,
   type SessionToolDetails,
   type SessionToolName,
 } from "../src/tools/contract.ts";
@@ -171,14 +173,18 @@ describe("session tool rows", () => {
     expect(expanded?.text).toContain("line 30");
   });
 
-  it("shows a read reply collapsed in compact style, rendered as markdown", () => {
+  it("keeps a read reply for expansion in compact style, rendered as markdown", () => {
     const reply = { ...read, text: "Use `pnpm test` now.\nThen **lint**." } as const;
     const harness = createToolPresentationHarness(toolFor(SESSION_TOOL.read, "compact"));
-    const [collapsed] = harness.cycle({ to: web.sessionId }, result(readText(reply), reply), {
-      states: [false],
-    });
-    expect(collapsed?.text).toContain("Use pnpm test now.");
-    expect(collapsed?.text).toContain("Then lint.");
+    const [collapsed, expanded] = harness.cycle(
+      { to: web.sessionId },
+      result(readText(reply), reply),
+      { states: [false, true] },
+    );
+    expect(collapsed?.text).not.toContain("Use pnpm test now.");
+    expect(expansionOffers(Str.split(collapsed?.text ?? "", "\n")).length).toBeGreaterThan(0);
+    expect(expanded?.text).toContain("Use pnpm test now.");
+    expect(expanded?.text).toContain("Then lint.");
   });
 
   const longName = "checkout redesign review for the acme platform team and billing";
@@ -292,5 +298,75 @@ describe("session tool rows", () => {
       { states: [false, true] },
     );
     expect(expanded?.text).toContain("Saved reply text");
+  });
+});
+
+const rowsOf = (text: string | undefined) =>
+  Arr.filter(Str.split(stripTerminalControls(text ?? ""), "\n"), (row) =>
+    Str.isNonEmpty(Str.trim(row)),
+  );
+
+describe("collapsed compact session rows", () => {
+  const cycle = (
+    tool: SessionToolName,
+    args: SessionToolArgs,
+    settled: AgentToolResult<SessionToolDetails>,
+  ) =>
+    createToolPresentationHarness(toolFor(tool, "compact"), { width: 140 }).cycle(args, settled, {
+      states: [false, true],
+    });
+  const api = { sessionId: "019a2f6e-api", name: "api work", cwd: "/work/api" };
+
+  it("lists sessions on one neutral row, counting states only where they differ", () => {
+    const twoIdle = {
+      ...listing,
+      sessions: [
+        { ...web, state: "idle", duplicate: false },
+        { ...api, state: "idle", duplicate: false },
+      ],
+    } as const;
+    const mixed = {
+      ...twoIdle,
+      sessions: [twoIdle.sessions[0], { ...api, state: "busy", duplicate: false }],
+    } as const;
+    const [same] = cycle(SESSION_TOOL.list, {}, result(listText(twoIdle), twoIdle));
+    const [differ, expanded] = cycle(SESSION_TOOL.list, {}, result(listText(mixed), mixed));
+    for (const frame of [same, differ]) {
+      const rows = rowsOf(frame?.text);
+      expect(rows).toHaveLength(1);
+      expect(Str.trim(rows[0] ?? "")).toMatch(/^• session_list · /u);
+    }
+    expect(same?.text).toContain("2 sessions");
+    expect(differ?.text).toMatch(/1 idle.*1 busy/u);
+    // Expanded, every session is listed, then their ids.
+    for (const session of [web, api]) {
+      expect(expanded?.text).toContain(session.name);
+      expect(expanded?.text).toContain(session.sessionId);
+    }
+  });
+
+  it("reads neutrally, with the session's state and its reply only expanded", () => {
+    const [collapsed, expanded] = cycle(
+      SESSION_TOOL.read,
+      { to: web.sessionId },
+      result(readText(read), read),
+    );
+    const rows = rowsOf(collapsed?.text);
+    expect(rows).toHaveLength(1);
+    expect(Str.trim(rows[0] ?? "")).toMatch(/^• session_read web work · idle/u);
+    expect(expansionOffers(rows)).toEqual(["reply"]);
+    expect(expanded?.text).toContain("I fixed the header snapshot.");
+  });
+
+  it("offers a sent message behind its one row", () => {
+    const [collapsed, expanded] = cycle(
+      SESSION_TOOL.send,
+      { to: web.sessionId, message },
+      result(sendText(delivered), delivered),
+    );
+    const rows = rowsOf(collapsed?.text);
+    expect(rows).toHaveLength(1);
+    expect(expansionOffers(rows)).toEqual(["message"]);
+    expect(expanded?.text).toContain("The endpoint moved to /v2/items.");
   });
 });

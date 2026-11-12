@@ -107,14 +107,21 @@ describe("message shell", () => {
             const collapsed = draw(render, false);
             const expanded = draw(render, true);
             expect(collapsed).toContain("MESSAGE SUBJECT");
-            expect(collapsed).toContain(WORDS[0]);
+            // A collapsed compact message is its heading row alone; preview keeps bounded words.
+            if (style === "compact") {
+              expect(Str.split(collapsed, "\n")).toHaveLength(1);
+              expect(collapsed).not.toContain(WORDS[0]);
+            } else {
+              expect(collapsed).toContain(WORDS[0]);
+              // Narrow widths still draw without losing the words.
+              expect(draw(render, false, message, 12)).toContain("line");
+            }
             expect(collapsed).not.toContain(WORDS[29]);
+            expect(expanded).toContain(WORDS[0]);
             expect(expanded).toContain(WORDS[29]);
             expect(Str.split(expanded, "\n").length).toBeGreaterThan(
               Str.split(collapsed, "\n").length,
             );
-            // Narrow widths still draw without losing the words.
-            expect(draw(render, false, message, 12)).toContain("line");
             expect(draw(render, true, message, 4).length).toBeGreaterThan(0);
             expect(JSON.stringify(message)).toBe(before);
           },
@@ -197,10 +204,9 @@ describe("message shell", () => {
           ),
         ),
       );
-    for (const style of STYLES) {
-      expect(repeats(style)).toBe(false);
-      expect(repeats(style, "2 subagents")).toBe(true);
-    }
+    // Only preview style draws a collapsed body.
+    expect(repeats("preview")).toBe(false);
+    expect(repeats("preview", "2 subagents")).toBe(true);
   });
 
   it("labels a delivered message's words beneath a heading that wraps", () => {
@@ -267,8 +273,13 @@ describe("message shell", () => {
         withPresentationSettings(
           { toolCallCollapsedStyle: style, toolCallBackground: mode },
           () => {
-            for (const render of [failing, failingBody, failingCallback])
+            // A collapsed compact message draws no body, so only a failing presenter falls back.
+            for (const render of style === "compact"
+              ? [failing]
+              : [failing, failingBody, failingCallback])
               expect(draw(render, false)).toContain("FULL MODEL-FACING CONTENT");
+            for (const render of [failingBody, failingCallback])
+              expect(draw(render, true)).toContain("FULL MODEL-FACING CONTENT");
           },
         );
     const hostile: Message = {

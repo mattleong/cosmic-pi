@@ -314,6 +314,9 @@ export function compactWorkspaceSummary(
     counters: workspaceCounters(details),
     metadata: details.operation === "list" && line === undefined ? ["worktree metadata"] : [],
     issues,
-    outcome: compactIssueSeverity(issues) ?? "success",
+    // Listing and reviewing only look, so they are neutral unless they raise a problem.
+    outcome:
+      compactIssueSeverity(issues) ??
+      (details.operation === "list" || details.operation === "review" ? "returned" : "success"),
   };
 }

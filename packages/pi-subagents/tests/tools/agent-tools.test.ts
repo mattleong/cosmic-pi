@@ -304,11 +304,12 @@ describe("agent tools", () => {
           })?.outcome;
         });
       expect(yield* outcomeFor("waiting_for_parent")).toBe("attention");
-      expect(yield* outcomeFor("running")).toBe("success");
+      // A listing only looks, so it is neutral when nothing waits on a reply.
+      expect(yield* outcomeFor("running")).toBe("returned");
     }),
   );
 
-  it.effect("raises each read run's status issues without failing the read", () =>
+  it.effect("keeps a read neutral, raising only a pending question as a problem line", () =>
     Effect.gen(function* () {
       const asking = view({
         id: "agent-1",
@@ -340,16 +341,20 @@ describe("agent tools", () => {
         },
         context: renderContextFixture({}),
       });
-      expect(summary?.outcome).toBe("warning");
+      // Something waits on a reply; reading a failed or warning run is no problem of the read.
+      expect(summary?.outcome).toBe("attention");
       const issues = summary?.issues ?? [];
+      const problems = Arr.filter(issues, (issue) => issue.severity !== "info");
+      expect(Arr.map(problems, (issue) => [issue.severity, issue.message])).toEqual([
+        ["attention", stringContaining("May I continue?")],
+      ]);
+      // The run's warning, and a failure the read has no text for, stay for expansion.
       expect(Arr.map(issues, (issue) => issue.message)).toEqual(
         expect.arrayContaining([
-          stringContaining("May I continue?"),
           stringContaining("Credentials were exposed"),
           stringContaining("Tests failed"),
         ]),
       );
-      expect(Arr.filter(issues, (issue) => issue.severity === "error")).toEqual([]);
       expect(Arr.flatMap(issues, (issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
     }),
   );

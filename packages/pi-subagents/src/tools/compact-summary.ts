@@ -40,7 +40,7 @@ import {
 import { compactWorkspaceSummary } from "./compact-workspace-summary.ts";
 import { summarizeStart } from "./compact-start-summary.ts";
 import { profileRow } from "./render-management.ts";
-import { cardShowsError, cardShowsQuestion } from "./render-run-cards.ts";
+import { cardShowsQuestion } from "./render-run-cards.ts";
 import { formatRunRoute } from "../ui/run-presentation.ts";
 
 function cardCounters(
@@ -75,14 +75,61 @@ const TOOL_ACTIONS: Readonly<Record<SubagentToolName, string>> = {
   [SUBAGENT_TOOL_NAME.workspace]: "workspace",
 };
 
+type CollapsedStyle = "compact" | "preview";
+
+const plural = (count: number, noun: string): string => (count === 1 ? noun : `${noun}s`);
+
 /**
- * What expanding a receipt reveals in both collapsed styles: a review's diff, or otherwise each
- * run's full words and its `Details`. A clipped body already ends with its own affordance.
+ * What a collapsed compact row hides, which its tag names: a launch's tasks, a wait's reports, the
+ * subagents a stop or interrupt reached, the profiles listed, or the worktrees inspected.
  */
-const receiptExpandLabel = (summary: CompactSummary, operation: string): CompactSummary =>
-  summary.expandLabel === undefined
-    ? { ...summary, expandLabel: operation === "review" ? "diff" : "details" }
-    : summary;
+const compactReceiptLabel = (
+  details: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails | undefined,
+  operation: string,
+): string | undefined => {
+  if (operation === "review") return "diff";
+  if (operation === "list") return "worktrees";
+  if (details === undefined) return undefined;
+  switch (details.action) {
+    case "start":
+      return plural(details.startEntries.length, "task");
+    case "models":
+      return details.profiles.length === 0 ? undefined : "profiles";
+    case "await": {
+      const targets = new Set(details.awaitedRunIds ?? Arr.map(details.cards, (card) => card.id));
+      const reports = Arr.filter(
+        details.cards,
+        (card) =>
+          targets.has(card.id) &&
+          card.state === "completed" &&
+          (card.finalText !== undefined || card.finalTextTruncated === true),
+      ).length;
+      return reports > 0 ? plural(reports, "report") : undefined;
+    }
+    case "interrupt":
+    case "stop":
+      return details.cards.length > 1 ? "subagents" : undefined;
+  }
+  return Fn.absurd(details);
+};
+
+/**
+ * What expanding a receipt reveals. In compact style the tag names what the row hides; in preview
+ * style, whose body shows each run's words, a review's diff or otherwise their `Details`. A clipped
+ * body already ends with its own affordance.
+ */
+const receiptExpandLabel = (
+  summary: CompactSummary,
+  operation: string,
+  style: CollapsedStyle,
+  details?: SubagentStartDetails | SubagentAwaitDetails | CompactSubagentToolDetails,
+): CompactSummary => {
+  if (summary.expandLabel !== undefined) return summary;
+  const label =
+    (style === "compact" ? compactReceiptLabel(details, operation) : undefined) ??
+    (operation === "review" ? "diff" : "details");
+  return { ...summary, expandLabel: label };
+};
 
 /** A launch not yet answered: its row shows each task's first line, and expansion all of it. */
 const pendingExpandLabel = (lanes: CompactSummary, input: SummaryArguments, action: string) =>
@@ -90,7 +137,14 @@ const pendingExpandLabel = (lanes: CompactSummary, input: SummaryArguments, acti
     ? { ...lanes, expandLabel: input.agents.length === 1 ? "task" : "tasks" }
     : lanes;
 
-export function createSubagentCompactSummary(toolName: SubagentToolName): CompactSummaryProvider {
+/**
+ * Compact headings for the subagent tools. `style` is the collapsed style the row was wrapped with,
+ * whose tag names what that style's collapsed row hides.
+ */
+export function createSubagentCompactSummary(
+  toolName: SubagentToolName,
+  style: CollapsedStyle = "compact",
+): CompactSummaryProvider {
   const action = TOOL_ACTIONS[toolName];
   return ({ phase, args, result, context }) => {
     if (!Predicate.isObject(args)) return undefined;
@@ -103,7 +157,7 @@ export function createSubagentCompactSummary(toolName: SubagentToolName): Compac
         : pendingExpandLabel(lanes, input, action);
     if (action === "workspace" && !context.isError) {
       const summary = compactWorkspaceSummary(result, operation);
-      return summary && receiptExpandLabel(summary, operation);
+      return summary && receiptExpandLabel(summary, operation, style);
     }
     const details =
       action === "workspace" ? undefined : decodeSubagentOutcomeDetails(operation, result);
@@ -113,7 +167,7 @@ export function createSubagentCompactSummary(toolName: SubagentToolName): Compac
         : undefined;
     if (context.isError && !hasSubagentToolFailure(details)) return undefined;
     const summary = summarizeReceipt(details, input, phase, lanes);
-    return summary && receiptExpandLabel(summary, operation);
+    return summary && receiptExpandLabel(summary, operation, style, details);
   };
 }
 
@@ -379,8 +433,9 @@ function summarizeModels(
       withoutProvider(lead),
     ]),
   ];
-  if (summary.outcome === "success" && compactIssueSeverity(issues) === "warning")
-    summary.outcome = "warning";
+  // Listing routes only looks, so it is neutral unless a profile can't start.
+  if (summary.outcome === "success")
+    summary.outcome = compactIssueSeverity(issues) === "warning" ? "warning" : "returned";
   return summary;
 }
 
@@ -491,11 +546,9 @@ function summarizeDetails(
   issues.push(
     ...compactRunIssues(cards, {
       quietHistory,
-      // An await draws each target's words: its report, failure, or question.
-      ...(details.action === "await" && {
-        showsError: cardShowsError,
-        showsQuestion: cardShowsQuestion,
-      }),
+      // An await draws each target's report, and the rest of a long question; a failure is only
+      // its issue, whose detail keeps the whole text.
+      ...(details.action === "await" && { showsQuestion: cardShowsQuestion }),
     }),
   );
   issues.push(...compactAttentionIssues(asking));

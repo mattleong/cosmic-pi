@@ -9,7 +9,12 @@ import {
   type CodePreviewMessagePresenter,
   type CompactSummary,
 } from "pi-code-previews";
-import { imagePromptSubject, imageRecord, imageRecordSummary } from "./compact-summary.ts";
+import {
+  imageHeadingsShowPrompt,
+  imagePromptSubject,
+  imageRecord,
+  imageRecordSummary,
+} from "./compact-summary.ts";
 import {
   base64ByteLength,
   imageMessageRevealsMore,
@@ -64,7 +69,9 @@ export const presentImageMessage =
       name: ready ? "image_ready" : "image_result",
       label: ready ? "Image ready" : "Image result",
       summary: compact ? collapsedSummary : previewSummary,
-      ...(imageMessageRevealsMore(view) && { expandLabel: EXPAND_LABEL }),
+      ...(imageMessageRevealsMore(view) && {
+        expandLabel: prompt && !imageHeadingsShowPrompt(prompt) ? "prompt" : "details",
+      }),
       ...(!compact && { collapsed: body }),
       expanded: (headingState) => {
         const shown = new Container();
@@ -94,8 +101,7 @@ export const presentImageMessage =
     };
   };
 
-// Expanded, the message adds the revised prompt, where the file was saved, and the complete prompt
-// when its heading shortened it.
-const EXPAND_LABEL = "details";
+// Expanded, the message adds the complete prompt where its heading can't name it exactly, which
+// its tag then names, and the revised prompt and where the file was saved.
 // The Prompt section draws unless the heading showed the whole prompt exactly.
 const IMAGE_REQUEST = { prompt: false, action: true } as const;

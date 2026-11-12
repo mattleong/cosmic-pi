@@ -12,6 +12,8 @@ import {
   headingCounter,
   previewIssuesSlot,
   withCodePreviewShell,
+  type CompactPhase,
+  type CompactSummary,
 } from "pi-code-previews";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import { createSubagentCompactSummary } from "./compact-summary.ts";
@@ -32,7 +34,11 @@ import {
 } from "./details-decode.ts";
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
 import { hasReturnedFailureEvidence } from "./outcome.ts";
-import { syncAwaitProgressTicker, type SubagentToolRenderContext } from "./render-await.ts";
+import {
+  awaitLiveChildren,
+  syncAwaitProgressTicker,
+  type SubagentToolRenderContext,
+} from "./render-await.ts";
 import { indentedBody } from "../ui/agent-text.ts";
 import { rejectionAwareCall } from "./render-preview.ts";
 import { hasRecordedFailure } from "./failure-details.ts";
@@ -264,6 +270,25 @@ export function registerSubagentTools(
     return owned;
   };
 
+  /**
+   * A running wait's run tree beneath its collapsed compact row, unless the Activity panel draws
+   * that tree; the shell drops it once the wait settles.
+   */
+  const withLiveRunTree = (
+    summary: CompactSummary | undefined,
+    input: {
+      readonly phase: CompactPhase;
+      readonly result: { readonly details?: unknown } | undefined;
+    },
+  ): CompactSummary | undefined => {
+    if (summary === undefined || input.phase === "settled") return summary;
+    const details = decodeStartAwaitCardDetails(input.result?.details);
+    if (details?.action !== "await" || details.cancelled === true) return summary;
+    if (runtime.toolPresentation?.isLiveHierarchyAvailable() === true) return summary;
+    const awaited = new Set(details.awaitedRunIds ?? Arr.map(details.cards, (card) => card.id));
+    return { ...summary, children: awaitLiveChildren(details.cards, awaited) };
+  };
+
   const nested = runtime.proxyCall !== undefined;
   const agents = nested ? undefined : (runtime.agents ?? []);
   const startParameters = startToolParameters(agents);
@@ -282,10 +307,11 @@ export function registerSubagentTools(
     const { lease, renderCall, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
     // Root contract tools are the script-callable ones.
     const scriptable = !nested && isSubagentContractTool(name);
-    const project = createSubagentCompactSummary(name);
-    // Read when the shell is: a compact heading's glyph states a single awaited run's state.
-    const compactHeadings =
-      captureCodePreviewPresentationPolicy().toolCallCollapsedStyle === "compact";
+    // Read when the shell is: a compact heading's glyph states a single awaited run's state, and its
+    // collapsed row hides what the tag names.
+    const collapsedStyle = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle;
+    const compactHeadings = collapsedStyle === "compact";
+    const project = createSubagentCompactSummary(name, collapsedStyle);
     /** A recorded failure's issue carries all of it, so its result repeats nothing. */
     const issueCarriesFailure = (
       result: NonNullable<Parameters<typeof project>[0]["result"]>,
@@ -488,7 +514,7 @@ export function registerSubagentTools(
         const summary = project(input);
         if (!input.context.isPartial || !input.context.expanded)
           syncAwaitProgressTicker(undefined, false, input.context, startUiTicker);
-        return summary;
+        return withLiveRunTree(summary, input);
       },
     });
     return wrapped;

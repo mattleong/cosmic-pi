@@ -69,6 +69,7 @@ export { selectCompactChildren, renderCompactChildren } from "./src/preview/comp
 export { compactPlainText, renderCompactRow } from "./src/preview/compact-row";
 export { endElide, middleElide } from "./src/preview/compact-header";
 export { headingCounter, headingShowedSubject } from "./src/preview/heading-coverage";
+export { headingValue, HEADING_VALUE_COLUMNS } from "./src/preview/heading-value";
 export { previewHeadingText, wrapPreviewHeading } from "./src/preview/heading-wrap";
 export { previewMessageHeading, type PreviewMessageHeading } from "./src/preview/preview-heading";
 export { expandedArguments, expandedSection } from "./src/preview/expanded-section";

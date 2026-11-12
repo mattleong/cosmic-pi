@@ -30,8 +30,10 @@ export interface CodePreviewMessage {
   /** The settled heading: action, subject, counters, metadata, outcome, and issues. */
   readonly summary: CompactSummary;
   /**
-   * The collapsed body, which the caller bounds. Omitted, a compact row stands alone.
-   * `headingState` is the key `headingShowedSubject` reads, as for the expanded body.
+   * The collapsed preview-style body, which the caller bounds, such as authored text cut to about
+   * ten rows. Only preview style draws it: a collapsed compact message is its heading row and its
+   * problem lines, and its words show only expanded. `headingState` is the key
+   * `headingShowedSubject` reads, as for the expanded body.
    */
   readonly collapsed?: ((headingState: WeakKey) => Component | undefined) | undefined;
   /**
@@ -40,10 +42,11 @@ export interface CodePreviewMessage {
    */
   readonly expanded?: ((headingState: WeakKey) => Component | undefined) | undefined;
   /**
-   * What expansion reveals, such as `details` or `conversation`: in both styles the collapsed
-   * message's heading then ends in its tag, `▸ label` or a bare `▸`, unless its body already ends in
-   * an affordance.
-   * Defaults to the summary's `expandLabel`.
+   * What expansion reveals, such as `report`, `message`, or `answers`: in both styles the collapsed
+   * message's heading then ends in its tag, `▸ label` or a bare `▸`, unless a collapsed preview
+   * body already ends in an affordance. Defaults to the summary's `expandLabel`. Where neither is
+   * set, a collapsed compact message with a body still offers it, named by its `bodyLabel`, else
+   * `message` for a delivered message, else `details`.
    */
   readonly expandLabel?: string | undefined;
   /** Native components, such as images, drawn unchanged below the frame as Pi draws tool images. */
@@ -216,7 +219,7 @@ class MessageShell implements Component {
           summary,
           expanded,
           collapsedWidth: this.renderWidth,
-          collapsedExpandLabel: this.expandLabel(),
+          collapsedExpandLabel: this.collapsedTag(),
         },
         theme,
         width,
@@ -235,11 +238,14 @@ class MessageShell implements Component {
           compact || expanded ? ROW_INDENT : "",
         ),
       ]);
+    // A collapsed compact message is one row and its problems; its words wait for expansion.
     const content = expanded
       ? message.expanded
         ? message.expanded(this.headingState)
         : message.collapsed?.(this.headingState)
-      : message.collapsed?.(this.headingState);
+      : compact
+        ? undefined
+        : message.collapsed?.(this.headingState);
     // Unlabeled words would share the column of a wrapped heading's rows.
     const bodyLabel = Str.isNonEmpty(Str.trim(message.bodyLabel ?? ""))
       ? message.bodyLabel
@@ -252,7 +258,7 @@ class MessageShell implements Component {
         : content;
     const shown = new Container();
     // A collapsed compact message is a bare compact row, as a collapsed compact tool row is.
-    if (compact && !expanded) shown.addChild(this.tagged(heading, body && beneathRow(body)));
+    if (compact && !expanded) shown.addChild(this.tagged(heading, undefined));
     else shown.addChild(this.frame(heading, body, status));
     for (const attachment of message.attachments ?? []) {
       shown.addChild(new Spacer(1));
@@ -294,7 +300,7 @@ class MessageShell implements Component {
     heading: (tag: string | undefined) => Component,
     body: Component | undefined,
   ): Component {
-    const hint = this.options.expanded ? undefined : this.expandLabel();
+    const hint = this.options.expanded ? undefined : this.collapsedTag();
     const untagged = heading(undefined);
     if (hint === undefined)
       // The heading draws first: an expanded body reads whether it showed the subject whole.
@@ -325,6 +331,27 @@ class MessageShell implements Component {
       ? undefined
       : declared;
   }
+
+  /**
+   * The tag a collapsed heading draws. A collapsed compact message hides its whole body, so one
+   * whose presenter declares nothing still offers a body expansion would show.
+   */
+  private collapsedTag(): string | undefined {
+    const declared = this.expandLabel();
+    const { message } = this;
+    if (
+      declared !== undefined ||
+      this.policy.toolCallCollapsedStyle !== "compact" ||
+      message.expandLabel !== undefined ||
+      message.summary.expandLabel !== undefined
+    )
+      return declared;
+    const body = (message.expanded ?? message.collapsed)?.(this.headingState);
+    if (body === undefined) return undefined;
+    const label = Str.toLowerCase(Str.trim(message.bodyLabel ?? ""));
+    if (Str.isNonEmpty(label)) return label;
+    return message.summary.messageIcon === undefined ? "details" : "message";
+  }
 }
 
 /**
@@ -339,19 +366,6 @@ function labeledBeneathWrappedHeading(
   return {
     render: (width) =>
       drawWithBodyLabel(headingWrapped(headingState) ? label : undefined, () => body.render(width)),
-    invalidate: () => body.invalidate(),
-  };
-}
-
-/** A body beneath a compact row, indented as the row's issues are. */
-function beneathRow(body: Component): Component {
-  return {
-    render: (width) => {
-      const indent = width > ROW_INDENT.length * 2 ? ROW_INDENT : "";
-      return Arr.map(body.render(Math.max(1, width - indent.length)), (line) =>
-        line === "" ? line : `${indent}${line}`,
-      );
-    },
     invalidate: () => body.invalidate(),
   };
 }

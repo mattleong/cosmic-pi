@@ -27,7 +27,11 @@ const NoticeRun = Schema.Struct({
   outcome: Schema.Literals(["completed", "failed"]),
   /** The report, or the failure; a display copy bounded with the notice. */
   text: Schema.optionalKey(Text),
-  /** Short human status such as where the rest of a cut report is, a warning, or a proposal. */
+  /** The display copy holds only part of the report, so its size isn't the report's. */
+  textCut: Schema.optionalKey(Schema.Literal(true)),
+  /** Problems the run reported, each a problem line beneath the notice's heading. */
+  warnings: Schema.optionalKey(Facts),
+  /** Short human status such as where the rest of a cut report is, or a proposal. */
   notes: Schema.optionalKey(Facts),
   /** Technical facts for the expanded view: ID, profile, files, routes. */
   facts: Schema.optionalKey(Facts),

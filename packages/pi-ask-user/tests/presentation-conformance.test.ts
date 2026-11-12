@@ -59,6 +59,13 @@ const detailsFor = <Blocking, Row>(toolName: string, blocking: Blocking, row: Ro
     Match.orElse(() => ({ requests: [row] })),
   );
 
+const rowsOf = (text: string | undefined) =>
+  Arr.filter(Str.split(text ?? "", "\n"), (row) => Str.isNonEmpty(Str.trim(row)));
+const occurrences = (text: string, part: string) => Str.split(text, part).length - 1;
+/** Where `part` first appears in `text`, or past its end when it doesn't. */
+const position = (text: string, part: string) =>
+  Option.getOrElse(Str.indexOf(part)(text), () => text.length);
+
 describe("registered questionnaire presentation", () => {
   it("preserves answers and full call input, showing model text only without details", () => {
     const selected = {
@@ -289,6 +296,91 @@ describe("registered questionnaire presentation", () => {
       );
     },
   );
+
+  describe("collapsed compact rows", () => {
+    const ask = (
+      questions: ReadonlyArray<{ readonly key: string; readonly title: string }>,
+      answers: ReadonlyArray<{ readonly key: string; readonly text: string }>,
+    ) => {
+      const tool = Option.getOrThrow(
+        Arr.findFirst(register("compact", "off").tools, (entry) => entry.name === "ask_user"),
+      );
+      const answered = {
+        outcome: "submitted" as const,
+        answers: Arr.map(answers, (answer) => ({ ...answer, kind: "text" as const })),
+      };
+      return createToolPresentationHarness(tool, { width: 140 }).cycle(
+        {
+          questions: Arr.map(questions, (question) => ({
+            ...question,
+            prompt: `${question.title}?`,
+          })),
+        },
+        { details: answered, content: [{ type: "text", text: formatAskUserOutcome(answered) }] },
+        { states: [false, true] },
+      );
+    };
+
+    it("carries a lone short answer in its one row and shows it once expanded", () => {
+      const [collapsed, expanded] = ask(
+        [{ key: "colour", title: "Colour" }],
+        [{ key: "colour", text: "Teal" }],
+      );
+      expect(rowsOf(collapsed?.text)).toHaveLength(1);
+      expect(collapsed?.text).toContain("Teal");
+      expect(occurrences(expanded?.text ?? "", "Teal")).toBe(1);
+      expect(expanded?.text).toContain("Colour?");
+    });
+
+    it("counts several answers in its one row and shows each, after the questions, expanded", () => {
+      const [collapsed, expanded] = ask(
+        [
+          { key: "colour", title: "Colour" },
+          { key: "size", title: "Size" },
+        ],
+        [
+          { key: "colour", text: "Teal" },
+          { key: "size", text: "Large" },
+        ],
+      );
+      expect(rowsOf(collapsed?.text)).toHaveLength(1);
+      expect(collapsed?.text).not.toContain("Teal");
+      const text = expanded?.text ?? "";
+      for (const value of ["Teal", "Large"]) expect(occurrences(text, value)).toBe(1);
+      expect(position(text, "Size?")).toBeLessThan(position(text, "Teal"));
+    });
+
+    it("keeps a status list to its heading, listing each questionnaire expanded", () => {
+      const tool = Option.getOrThrow(
+        Arr.findFirst(
+          register("compact", "off").tools,
+          (entry) => entry.name === "ask_user_async_control",
+        ),
+      );
+      const open = {
+        requestId: "request-open",
+        deliveryId: "delivery-open",
+        status: "pending" as const,
+        delivery: "pending" as const,
+        presentation: "open" as const,
+        titles: [{ key: "colour", title: "Colour" }],
+      };
+      const done = { ...snapshot, titles: [{ key: "decision", title: "Scope" }] };
+      const [collapsed, expanded] = createToolPresentationHarness(tool, { width: 140 }).cycle(
+        { action: "status" },
+        { details: { requests: [open, done] }, content: [{ type: "text", text: "status" }] },
+        { states: [false, true] },
+      );
+      expect(rowsOf(collapsed?.text)).toHaveLength(1);
+      const text = expanded?.text ?? "";
+      // Each questionnaire is a listed row; Details key its IDs by the same name.
+      for (const title of ["Colour", "Scope"])
+        expect(Arr.filter(rowsOf(text), (row) => Str.includes(title)(row))).toHaveLength(2);
+      expect(text).toContain(open.requestId);
+      // The heading counts what needs the user's input; no information line says it again.
+      expect(text).not.toContain("ℹ");
+    });
+  });
 
   it("uses the registering owner's scheduler and releases it when the call settles", () => {
     const scheduler = animationSchedulerProbe();

@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core/security";
@@ -63,8 +64,9 @@ export function previewBodiesShowContent<TArgs, TDetails, TState>(
 /**
  * What expanding a collapsed compact row reveals: the producer's `expandLabel`, else the result's
  * visible content (`output`), else issues kept for expansion or, before the call settles, its
- * arguments (`details`). A partial result without visible content counts as no result. Undefined
- * when expansion adds nothing.
+ * arguments (`details`). A partial result without visible content counts as no result. A settled
+ * row always offers the call tree its collapsed row hides (`calls`), whatever it declares.
+ * Undefined when expansion adds nothing.
  */
 export function compactExpandLabel(
   summary: CompactSummary,
@@ -73,7 +75,9 @@ export function compactExpandLabel(
   input: HostObject | undefined,
 ): string | undefined {
   const label = declared(summary);
-  if (label !== undefined) return label === false ? undefined : label;
+  if (Predicate.isString(label)) return label;
+  if (phase === "settled" && (summary.children?.total ?? 0) > 0) return "calls";
+  if (label === false) return undefined;
   if (showsContent(result)) return contentLabel(summary);
   const pendingInput = phase !== "settled" && input !== undefined && Rec.keys(input).length > 0;
   return hidesIssueDetail(summary) || pendingInput ? "details" : undefined;

@@ -17,6 +17,7 @@ import {
   getTextContent,
   previewIssuesSlot,
   previewMessageHeading,
+  captureCodePreviewPresentationPolicy,
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
@@ -244,6 +245,7 @@ const detailsBody = (
   result: AgentRenderResult,
   expanded: boolean,
   theme: Theme,
+  headingState: WeakKey | undefined,
 ): Component | undefined => {
   const details = decodeAgentToolDetails(result.details);
   if (details?.action !== name) return undefined;
@@ -251,7 +253,7 @@ const detailsBody = (
     case AGENT_TOOL_NAME.list:
       return renderListResult(details, expanded, theme);
     case AGENT_TOOL_NAME.read:
-      return renderReadResult(details, expanded, theme);
+      return renderReadResult(details, expanded, theme, headingState);
     case AGENT_TOOL_NAME.send:
       return renderSendResult(details, expanded, theme);
   }
@@ -270,7 +272,13 @@ export function registerAgentTools(
   const buildTool = <N extends AgentToolName>(name: N) => {
     const { title, ...spec }: AgentToolSpec<N> = TOOL_SPECS[name];
     const scriptable = name !== AGENT_TOOL_NAME.send;
-    const summarize = createAgentCompactSummary(name);
+    // Read when the shell is: a collapsed compact row hides the listing and the words read, and its
+    // heading names the agent a single read is about.
+    const collapsedStyle = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle;
+    const summarize = createAgentCompactSummary(name, collapsedStyle);
+    // A preview heading never names the agent, so its body always does.
+    const headingState = (state: WeakKey): WeakKey | undefined =>
+      collapsedStyle === "compact" ? state : undefined;
     /** A recorded failure's issue carries all of it, so its result repeats nothing. */
     const issueCarriesFailure = (
       result: NonNullable<Parameters<typeof summarize>[0]["result"]>,
@@ -344,7 +352,7 @@ export function registerAgentTools(
                 COLLAPSED_RESULT_LINES,
               );
         return (
-          detailsBody(name, result, options.expanded, theme) ??
+          detailsBody(name, result, options.expanded, theme, headingState(context.state)) ??
           textResultBody(
             theme,
             plainText(result),
@@ -396,7 +404,7 @@ export function registerAgentTools(
           }
           const text = escapeControlChars(getTextContent(result.content));
           return (
-            detailsBody(name, result, true, theme) ??
+            detailsBody(name, result, true, theme, headingState(context.state)) ??
             (text
               ? indentedBody(theme, new Text(theme.fg("toolOutput", text), 0, 0))
               : new Container())

@@ -245,8 +245,9 @@ const listExpanded = (details: ListDetails, theme: Theme, compact: boolean): Com
       ...(details.omitted > 0 ? [theme.fg("muted", `and ${details.omitted} more`)] : []),
     ];
   });
+  // A compact heading only counts the sessions, so the list is labeled; a preview heading names it.
   return expandedBody(
-    expandedSection(theme, undefined, rows),
+    expandedSection(theme, compact ? "Sessions" : undefined, rows),
     expandedDetails(
       theme,
       Arr.map(details.sessions, (session, index) => `${label(index)} · ${session.sessionId}`),
@@ -334,7 +335,8 @@ const readCollapsed = (details: ReadOutcome, theme: Theme): ReadonlyArray<Compon
 
 /**
  * Expanded, the reply in full, then the session's state, then its id and directory. A compact
- * heading already says when there is no reply yet; a preview heading doesn't.
+ * heading already says the session's state and when there is no reply yet; a preview heading
+ * doesn't.
  */
 const readExpanded = (
   details: ReadOutcome,
@@ -352,7 +354,7 @@ const readExpanded = (
     expandedAuthoredText(theme, "Reply", reply && sessionText(reply)),
     expandedFields(theme, [
       ...noReply,
-      { label: "State", lines: [SESSION_STATE_LABELS[details.state]] },
+      ...(compact ? [] : [{ label: "State", lines: [SESSION_STATE_LABELS[details.state]] }]),
       ...(details.truncated
         ? [{ label: "Length", lines: [`Cut to the first ${formatBytes(MAX_READ_BYTES)}`] }]
         : []),

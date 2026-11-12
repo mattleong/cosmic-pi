@@ -428,18 +428,16 @@ describe("shared background task command", () => {
         status: () => Effect.succeed(failed),
         list: () => Effect.succeed([running, failed]),
       };
+      // A listing shows each task's failure beneath that task, and a status, which only looks,
+      // shows it expanded; neither makes it the call's own problem.
       const errorMessages = (
         args: Partial<BackgroundTaskToolInput>,
         details: BackgroundTaskToolDetails,
       ) =>
         Arr.map(
-          Arr.filter(
-            // A listing shows each task's failure beneath that task, not as the call's issue.
-            details.action === "list"
-              ? Arr.flatMap(details.tasks, listedTaskIssues)
-              : (summarize(args, { details })?.issues ?? []),
-            (issue) => issue.severity === "error",
-          ),
+          details.action === "list"
+            ? Arr.flatMap(details.tasks, listedTaskIssues)
+            : (summarize(args, { details })?.issues ?? []),
           (issue) => issue.message,
         );
       for (const input of [{ action: "status", id: "bg-2" }, { action: "list" }] as const) {

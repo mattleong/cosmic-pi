@@ -103,12 +103,22 @@ export function projectedSubject(
 ): string {
   if (details.action === "models" && Predicate.isString(input.profile)) return input.profile;
   const requested = targets ?? requestedRunIds(input);
-  if (requested?.length === 1 && "cards" in details)
-    return displayName(
-      Option.getOrUndefined(Arr.findFirst(details.cards, (entry) => entry.id === requested[0])),
+  if (!requested || !("cards" in details)) return subject;
+  const names = Arr.map(requested, (id) =>
+    displayName(
+      Option.getOrUndefined(Arr.findFirst(details.cards, (entry) => entry.id === id)),
       requested,
-    );
-  return subject;
+    ),
+  );
+  if (names.length === 1) return names[0] ?? subject;
+  // A wait names a few runs it waited for, as a launch names its batch; its counter counts them.
+  const joined = Arr.join(names, ", ");
+  return details.action === "await" &&
+    names.length <= MAX_NAMED_LAUNCHES &&
+    Arr.every(names, Str.isNonEmpty) &&
+    joined.length <= MAX_NAMED_LAUNCH_CHARS
+    ? joined
+    : subject;
 }
 
 export function applyArgumentLanes(
@@ -143,14 +153,17 @@ export function rejectedCall(
   if (isTypedReceipt(result)) return undefined;
   const failure = rejectedFailure(result);
   const target = rejectedTarget(input, action);
+  const runAction = action === "await" || action === "lifecycle";
   // Await and lifecycle failures are phrased from their code; other actions' text is classified.
-  const coded =
-    action === "await" || action === "lifecycle"
-      ? codedActionFailureIssue(failure, operation, { oneOfMany: target === "the subagents" })
-      : undefined;
+  const coded = runAction
+    ? codedActionFailureIssue(failure, operation, { oneOfMany: target === "the subagents" })
+    : undefined;
+  const ids = requestedRunIds(input) ?? [];
+  // A run the call couldn't resolve has no name, and its ID shows only expanded, so the heading
+  // keeps how many runs the call asked for.
   return {
     ...lanes,
-    counters: [],
+    counters: runAction && ids.length > 0 ? [countLabel(ids.length, "subagent")] : [],
     outcome: coded?.severity === "warning" ? "uncertain" : "error",
     issues: [coded ?? rejectedCallIssue(operation, failure.message, target)],
   };

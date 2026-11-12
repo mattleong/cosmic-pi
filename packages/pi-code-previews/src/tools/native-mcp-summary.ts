@@ -258,6 +258,8 @@ export const nativeMcpSummary =
     return {
       ...summary,
       counters: [countLabel(listing.count, noun)],
+      // Expansion shows the listing the row counts.
+      ...(listing.count > 0 && { expandLabel: `${noun}s` }),
       issues: [
         ...listingFailureIssues(listing),
         ...output,

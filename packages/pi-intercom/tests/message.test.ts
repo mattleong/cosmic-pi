@@ -1,7 +1,8 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
-import { applyPresentationSettings } from "pi-code-previews/testing";
+import * as Str from "effect/String";
+import { applyPresentationSettings, expansionOffers } from "pi-code-previews/testing";
 import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import {
   frameMessage,
@@ -44,14 +45,27 @@ describe("intercom message", () => {
       for (const expanded of [false, true]) {
         const shown = Arr.join(render(text, expanded)(160), "\n");
         expect(shown).toContain("api work");
-        expect(shown).toContain("Please rerun the tests.");
         expect(shown).not.toContain("\u001b");
         expect(shown).not.toContain("session_send");
-        if (expanded || style === "preview") expect(shown).toContain("Then lint.");
+        // A collapsed compact message is its heading alone; its words wait for expansion.
+        if (expanded || style === "preview") {
+          expect(shown).toContain("Please rerun the tests.");
+          expect(shown).toContain("Then lint.");
+        } else expect(shown).not.toContain("Please rerun the tests.");
         if (expanded) expect(shown).toContain(from.sessionId);
       }
     },
   );
+
+  it("is one compact row naming its sender, offering the message", () => {
+    applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallBackground: "off" });
+    const rows = Arr.filter(render("Please rerun the tests.\nThen lint.", false)(160), (row) =>
+      Str.isNonEmpty(Str.trim(row)),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("api work");
+    expect(expansionOffers(rows)).toEqual(["message"]);
+  });
 
   it("bounds a long message collapsed and fits each width", () => {
     applyPresentationSettings({ toolCallCollapsedStyle: "preview" });

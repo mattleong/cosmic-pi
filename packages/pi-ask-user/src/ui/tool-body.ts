@@ -10,6 +10,7 @@ import {
   expandedArguments,
   expandedDetails,
   expandedSection,
+  headingCounter,
   headingShowedSubject,
   hiddenPreviewExpandHintForShell,
   previewHeadingText,
@@ -32,6 +33,7 @@ import type {
 } from "../questionnaire/schema.ts";
 import { appendWrapped, titleLabel } from "./layout.ts";
 import {
+  headingAnswer,
   requestArguments,
   type ReplayedAnswer,
   type RequestArguments,
@@ -339,8 +341,8 @@ export function requestSection(
 }
 
 /**
- * Before a result arrives the call shows what it asked; afterward the result leads with the
- * answers and repeats the request beneath them.
+ * Before a result arrives the call shows what it asked; afterward the result shows the request
+ * above its answers.
  */
 export const pendingRequest = (
   theme: Theme,
@@ -394,12 +396,39 @@ export interface ExpandedResultInput {
   readonly decoded: boolean;
   readonly answers?: readonly ReplayedAnswer[] | undefined;
   readonly titles?: ReadonlyMap<string, string>;
+  /**
+   * Whether the heading drawn just before the body carried the lone answer as its fact, read as the
+   * body draws, so the answer shows once.
+   */
+  readonly answerInHeading?: () => boolean;
+  /** A result section between the request and the details, such as a list of questionnaires. */
+  readonly listing?: Component | undefined;
   /** Technical facts, such as request and delivery IDs, for the dim details section. */
   readonly facts?: readonly string[];
-  /** The call's arguments, written out after the answers once the result arrived. */
+  /** The call's arguments, written out above the answers once the result arrived. */
   readonly args?: RequestArguments | undefined;
 }
 
+/** A section drawn only while `hidden` says nothing else on the row shows it. */
+const unlessShown = (hidden: () => boolean, component: Component): Component => ({
+  render: (width) => (hidden() ? [] : component.render(width)),
+  invalidate: () => component.invalidate(),
+});
+
+/**
+ * Whether a row's expanded compact heading, drawn just before its body, carried `answers` as its
+ * fact. Only a compact heading records its counter, so a preview row always keeps its answers.
+ */
+export const answerInCompactHeading =
+  (answers: readonly ReplayedAnswer[], context: Partial<Pick<RenderContext, "state">>) =>
+  (): boolean => {
+    const state: unknown = context.state;
+    if (!Predicate.isObject(state)) return false;
+    const shown = headingCounter(state);
+    return shown !== undefined && shown === headingAnswer(answers);
+  };
+
+/** The result in the shared order: what was asked, then the answers or list, then Details. */
 export function expandedResult(input: ExpandedResultInput, theme: Theme): Component {
   const request =
     input.args === undefined ? [] : [requestSection(theme, input.args, input.decoded)];
@@ -411,17 +440,17 @@ export function expandedResult(input: ExpandedResultInput, theme: Theme): Compon
       ...request,
     ]);
   const facts = input.facts ?? [];
+  const answers =
+    input.answers &&
+    expandedSection(
+      theme,
+      "Answers",
+      answersBody(input.answers, input.titles ?? new Map(), theme, false),
+    );
   return stacked([
-    ...(input.answers
-      ? [
-          expandedSection(
-            theme,
-            "Answers",
-            answersBody(input.answers, input.titles ?? new Map(), theme, false),
-          ),
-        ]
-      : []),
     ...request,
+    ...(answers ? [unlessShown(input.answerInHeading ?? (() => false), answers)] : []),
+    ...(input.listing ? [input.listing] : []),
     ...(facts.length > 0 ? [detailsSection(theme, facts)] : []),
   ]);
 }

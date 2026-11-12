@@ -14,6 +14,7 @@ import { aggregateUsage } from "../ui/metrics.ts";
 import { runStateColor, runStateGlyph, runStateLabel } from "../ui/run-state.ts";
 import { factRowLines } from "../ui/agent-text.ts";
 import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
+import type { CompactChild, CompactStatus, CompactSummary } from "pi-code-previews";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
 import { runTiming, type RunHierarchy } from "./render-run-rows.ts";
@@ -87,7 +88,13 @@ export const formatAwaitCounters = (
   {
     settled = false,
     heading = { compact: false, counted: false },
-  }: { settled?: boolean; heading?: AwaitHeading | undefined } = {},
+    usage: withUsage = true,
+  }: {
+    settled?: boolean;
+    heading?: AwaitHeading | undefined;
+    /** Whether the totals carry usage, which an expanded wait keeps in its `Details`. */
+    usage?: boolean;
+  } = {},
 ): string => {
   const targets = Arr.filter(cards, (card) => awaitedRunIds.has(card.id));
   const first = settled ? firstFinishedRun(targets, until) : undefined;
@@ -104,7 +111,7 @@ export const formatAwaitCounters = (
       ...(first ? [firstFinishedSummary(first)] : []),
       ...(single || heading.counted ? [] : [`${done.length}/${awaitedRunIds.size} finished`]),
       ...(single && (settled || heading.compact) ? [] : stateCounts(targets, counted)),
-      ...(usage ? [usage] : []),
+      ...(usage && withUsage ? [usage] : []),
       ...(descendantCount > 0 ? [countLabel(descendantCount, "descendant")] : []),
     ],
     " · ",
@@ -220,6 +227,40 @@ export const syncAwaitProgressTicker = (
 };
 
 export const DESCENDANTS_OMITTED = "Some descendants are not shown";
+
+const LIVE_CHILD_STATUS: Readonly<Record<SubagentRunCard["state"], CompactStatus>> = {
+  starting: "pending",
+  running: "running",
+  stopping: "running",
+  waiting_for_parent: "attention",
+  paused: "paused",
+  completed: "success",
+  failed: "error",
+  stopped: "cancelled",
+};
+
+/**
+ * A wait's run tree as the live calls beneath its collapsed compact row: each run with its state
+ * and current tool, descendants marked, in tree order. A run's own problems are the row's issues,
+ * so its entry carries none. Elapsed time shows once a run ends, since the row redraws only when
+ * the wait reports progress.
+ */
+export const awaitLiveChildren = (
+  cards: ReadonlyArray<SubagentRunCard>,
+  awaitedRunIds: ReadonlySet<string>,
+): NonNullable<CompactSummary["children"]> => {
+  const entries = Arr.map(projectRunCardTree(cards), ({ run }): CompactChild => {
+    const ended = run.endedAt !== undefined && run.startedAt !== undefined;
+    return {
+      label: sanitizeTerminalLine(run.name),
+      status: LIVE_CHILD_STATUS[run.state],
+      counters: run.currentTool === undefined ? [] : [sanitizeTerminalLine(run.currentTool)],
+      metadata: awaitedRunIds.has(run.id) ? [] : ["descendant"],
+      ...(ended && { durationMs: Math.max(0, (run.endedAt ?? 0) - (run.startedAt ?? 0)) }),
+    };
+  });
+  return { entries, total: entries.length, noun: "agent" };
+};
 
 /**
  * A wait in progress: the muted totals, then one row per run of the awaited tree with its state,

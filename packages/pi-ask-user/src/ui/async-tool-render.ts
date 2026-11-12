@@ -1,19 +1,26 @@
 import type {
   AgentToolResult,
   Theme,
+  ThemeColor,
   ToolRenderResultOptions,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { Text } from "@earendil-works/pi-tui";
-import { withCodePreviewMessageShell, type CodePreviewMessagePresenter } from "pi-code-previews";
+import {
+  expandedSection,
+  withCodePreviewMessageShell,
+  type CodePreviewMessagePresenter,
+} from "pi-code-previews";
+import { INLINE_SEPARATOR, SUITE_STATUS_GLYPHS, wrapFacts } from "pi-cosmic-ui/manager";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { countLabel } from "pi-cosmic-core/display";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
-import { toolRunningLine } from "pi-cosmic-ui/tool";
+import { composeToolComponent, toolRunningLine } from "pi-cosmic-ui/tool";
 import type { PendingPresentation } from "../questionnaire/async-model.ts";
 import {
+  answerInCompactHeading,
   answersBody,
   answersHideMore,
   callBody,
@@ -36,6 +43,8 @@ import {
   decodePresentation,
   contentText,
   deliveryFacts,
+  headingAnswer,
+  listedStateWords,
   isStatusList,
   requestFacts,
   isPendingState,
@@ -101,6 +110,42 @@ function submittedAnswers(
     : undefined;
 }
 
+/** How each listed questionnaire's glyph marks its state, as Activity marks them. */
+const LISTED_GLYPHS = {
+  waiting: { glyph: SUITE_STATUS_GLYPHS.waiting, color: "accent", says: false },
+  hidden: { glyph: SUITE_STATUS_GLYPHS.waiting, color: "accent", says: false },
+  queued: { glyph: SUITE_STATUS_GLYPHS.queued, color: "muted", says: true },
+  answered: { glyph: SUITE_STATUS_GLYPHS.succeeded, color: "success", says: false },
+  cancelled: { glyph: SUITE_STATUS_GLYPHS.stopped, color: "muted", says: true },
+  failed: { glyph: SUITE_STATUS_GLYPHS.failed, color: "error", says: true },
+} as const satisfies Record<
+  QuestionnaireState,
+  { readonly glyph: string; readonly color: ThemeColor; readonly says: boolean }
+>;
+
+/**
+ * A list's questionnaires, one glyph-led row each, named by their titles, with the state its glyph
+ * doesn't already say: `? Colour · needs your input`, `⊘ Scope`.
+ */
+function questionnaireList(rows: readonly ReplayedSnapshot[], theme: Theme): Component {
+  const entries = Arr.map(rows, (row) => {
+    const state = questionnaireState(row);
+    const mark = state === undefined ? undefined : LISTED_GLYPHS[state];
+    const name = theme.fg("toolOutput", storedTitlesLabel(row.titles) ?? row.requestId);
+    const words =
+      state === undefined || mark?.says ? [] : [theme.fg("muted", listedStateWords(state))];
+    const lead = mark ? `${theme.fg(mark.color, mark.glyph)} ` : "";
+    return `${lead}${Arr.join([name, ...words], theme.fg("dim", INLINE_SEPARATOR))}`;
+  });
+  return expandedSection(
+    theme,
+    "Questionnaires",
+    composeToolComponent((width) =>
+      width < 1 ? [] : Arr.flatMap(entries, (entry) => wrapFacts(entry, width, "  ")),
+    ),
+  );
+}
+
 export function renderAsyncContent(
   input: AsyncToolResult,
   options: ToolRenderResultOptions,
@@ -110,13 +155,16 @@ export function renderAsyncContent(
   const result = envelope(input);
   const rows = decodeExpandedAsyncRows(result?.details);
   const list = rows?.length !== 1 || isStatusList(context.args);
+  const answers = submittedAnswers(rows);
   return expandedResult(
     {
       raw: contentText(result?.content),
       isError: context.isError ?? false,
       decoded: rows !== undefined,
-      answers: submittedAnswers(rows),
+      answers,
+      ...(answers && { answerInHeading: answerInCompactHeading(answers, context) }),
       titles: rowTitles(rows),
+      listing: rows && list && rows.length > 0 ? questionnaireList(rows, theme) : undefined,
       facts: rows ? requestFacts(rows, list) : [],
       // The call still shows the request until the final result arrives.
       ...(!options.isPartial && { args: requestArguments(context.args) }),
@@ -215,6 +263,9 @@ export const presentAsyncMessage: CodePreviewMessagePresenter = (input, options,
         isError: false,
         decoded: delivered !== undefined,
         answers,
+        // A compact heading carries a lone short answer, so its body leaves it out.
+        answerInHeading: () =>
+          !preview && answers !== undefined && headingAnswer(answers) !== undefined,
         titles,
         facts: delivered ? deliveryFacts(delivered.requestId, delivered.deliveryId) : [],
       },
@@ -233,15 +284,25 @@ export const presentAsyncMessage: CodePreviewMessagePresenter = (input, options,
   const cancelled = outcome.outcome === "cancelled";
   // The preview heading carries no glyph, so its body names the cancellation.
   const cancellation = preview && cancelled;
+  // A compact heading carries a lone short answer itself, `✓ ask_user_answers Colour · red`, and
+  // then expanding shows only the request and delivery IDs; it counts other answers, which
+  // expansion shows. A preview body shows the answers beneath a count.
+  const lone = !preview && answers ? headingAnswer(answers) : undefined;
   return {
     ...presentation,
     summary: {
       subject,
       outcome: cancelled ? "cancelled" : "success",
-      counters: answers?.length ? [countLabel(answers.length, "answer")] : [],
+      // An answer is a fact about the questions, so it stays even where it is a word the glyph says.
+      ...(lone === undefined
+        ? { counters: answers?.length ? [countLabel(answers.length, "answer")] : [] }
+        : { counters: [lone], subjectState: true }),
     },
     // The answers' hidden lines, else the request and delivery IDs.
-    expandLabel: answers && answersHideMore(answers) ? "answers" : "details",
+    expandLabel:
+      answers && lone === undefined && (!preview || answersHideMore(answers))
+        ? "answers"
+        : "details",
     // The heading names the questions, so a lone answer may leave its title to it.
     ...(answers && {
       collapsed: (headingState: WeakKey) =>

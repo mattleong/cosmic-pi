@@ -153,4 +153,11 @@ describe("image expansion", () => {
     for (const summary of [imageCompactSummary(input()), failed])
       expect(summary?.expandLabel).toEqual(expect.any(String));
   });
+
+  it("names a settled prompt its heading can't show exactly as what expansion reveals", () => {
+    const settled = (prompt: string) =>
+      imageCompactSummary({ ...input(), args: { prompt, action: "generate" } })?.expandLabel;
+    expect(settled(Str.repeat(30)("otter "))).not.toBe(settled("An otter"));
+    expect(settled("An otter\nat dawn")).toBe(settled(Str.repeat(30)("otter ")));
+  });
 });

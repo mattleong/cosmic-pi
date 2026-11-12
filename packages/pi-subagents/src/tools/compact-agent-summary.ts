@@ -7,6 +7,7 @@ import {
   type CompactSummaryProvider,
 } from "pi-code-previews";
 import * as Option from "effect/Option";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { countLabel } from "pi-cosmic-core/display";
@@ -68,11 +69,19 @@ const missingIssue = (missingIds: ReadonlyArray<string>): CompactIssue[] =>
         },
       ];
 
-const settled = (summary: CompactSummary, issues: CompactIssue[]): CompactSummary => {
+/**
+ * A settled call's outcome from its issues: a call that changed something succeeded, and one that
+ * only looked returned neutrally, unless it raised a problem or something waits on a reply.
+ */
+const settled = (
+  summary: CompactSummary,
+  issues: CompactIssue[],
+  routine: "success" | "returned" = "success",
+): CompactSummary => {
   const severity = compactIssueSeverity(issues);
   return {
     ...summary,
-    outcome: severity === "warning" || severity === "attention" ? severity : "success",
+    outcome: severity === "warning" || severity === "attention" ? severity : routine,
     issues,
   };
 };
@@ -83,32 +92,36 @@ const summarizeList = (
   const states = Arr.map(details.states, ({ state, count }) =>
     details.agentCount === 1 ? stateLabel(state) : `${count} ${stateLabel(state)}`,
   );
-  // Agents waiting on their parent's reply lead the heading; the list rows show who.
-  const waiting = Arr.reduce(details.states, 0, (total, { state, count }) =>
-    state === "waiting_for_parent" ? total + count : total,
-  );
+  const waiting = Arr.some(details.states, ({ state }) => state === "waiting_for_parent");
+  const agents = countLabel(details.agentCount, "agent");
+  // One combined counter: how many, then how many in each state when they differ.
+  const counters =
+    details.agentCount === 0
+      ? ["no agents"]
+      : details.only
+        ? states
+        : states.length > 1
+          ? [`${agents} · ${Arr.join(states, " · ")}`, agents]
+          : [agents];
   const summary = settled(
     {
       subject: details.only ? displayName(details.only.name) : "",
-      // One agent's state describes the agent, which the listing's own `✓` doesn't say.
+      // One agent's state describes the agent, which the listing's own glyph doesn't say.
       ...(details.only && { subjectState: true as const }),
-      counters: details.only
-        ? states
-        : [
-            ...(waiting > 0
-              ? [
-                  `${countLabel(details.agentCount, "agent")} · ${waiting} ${stateLabel("waiting_for_parent")}`,
-                ]
-              : []),
-            countLabel(details.agentCount, "agent"),
-          ],
-      metadata: details.only ? [] : Arr.filter([Arr.join(states, " · ")], Boolean),
+      counters,
+      // An empty listing says so in its heading, so expanding it would show nothing more.
+      expandLabel:
+        details.agentCount === 0 && details.missingIds.length === 0
+          ? false
+          : details.agentCount === 1
+            ? "agent"
+            : "agents",
     },
     missingIssue(details.missingIds),
+    "returned",
   );
-  return waiting > 0 && summary.outcome === "success"
-    ? { ...summary, outcome: "attention" }
-    : summary;
+  // An agent waiting on its parent's reply is a decision someone owes; the list rows show who.
+  return waiting && summary.outcome === "returned" ? { ...summary, outcome: "attention" } : summary;
 };
 
 type SendDetails = Extract<AgentToolDetails, { readonly action: "agent_send" }>;
@@ -140,6 +153,48 @@ const summarizeSend = (details: SendDetails): CompactSummary => {
   );
 };
 
+// A few short names read as a list in the heading; more leave it to the counter.
+const MAX_NAMED_AGENTS = 3;
+const MAX_NAMED_AGENT_CHARS = 48;
+
+type ReadAgent = Extract<AgentToolDetails, { readonly action: "agent_read" }>["agents"][number];
+
+/** What reading an agent shows of it, as a tag names it: `report`, `error`, `question`. */
+const readNoun = (agent: ReadAgent): string => {
+  if (agent.textStatus === "none" && agent.source !== "report") return "details";
+  switch (agent.source) {
+    case "report":
+      return "report";
+    case "error":
+      return "error";
+    case "question":
+      return "question";
+    case "assistant":
+    case undefined:
+      return "message";
+  }
+  return Fn.absurd(agent.source);
+};
+
+/**
+ * What expanding a read reveals: each agent's words, named for what they are, or a question its
+ * `asks:` line only begins. A whole question is that line, so expansion adds only `Details`.
+ */
+const readExpandLabel = (agents: ReadonlyArray<ReadAgent>): string => {
+  const nouns = Arr.dedupe(
+    Arr.map(agents, (agent) =>
+      agent.source === "question" && !(agent.text !== undefined && quotesPartOfQuestion(agent.text))
+        ? "details"
+        : readNoun(agent),
+    ),
+  );
+  const [noun] = nouns;
+  if (noun === undefined) return "details";
+  if (agents.length === 1) return noun;
+  if (nouns.length > 1) return "messages";
+  return noun === "details" ? noun : `${noun}s`;
+};
+
 const summarizeRead = (
   details: Extract<AgentToolDetails, { readonly action: "agent_read" }>,
 ): CompactSummary => {
@@ -151,30 +206,41 @@ const summarizeRead = (
     (agent) => agent.textStatus === "none" && agent.source !== "report",
   ).length;
   const truncated = Arr.filter(details.agents, (agent) => agent.truncated).length;
-  // Each run's status card raises its own attention; reading it still succeeded.
+  // Each run's status raises its own issues: a question waits on a reply, and the rest describe
+  // the run, not the read, so they show expanded.
   const statusIssues = Arr.flatMap(details.agents, (agent) => agent.issues ?? []);
-  // When every agent read asks a question its row only begins, expanding reveals the questions.
-  const askingInPart = Arr.every(
-    details.agents,
-    (agent) =>
-      agent.source === "question" && agent.text !== undefined && quotesPartOfQuestion(agent.text),
+  const names = Arr.map(details.agents, (agent) => displayName(agent.name));
+  const named = Arr.join(names, ", ");
+  // How many agents were read in each state, as one combined counter.
+  const states = Fn.pipe(
+    Arr.groupBy(details.agents, (agent) => stateLabel(agent.state)),
+    (groups) => Arr.map(Rec.toEntries(groups), ([state, agents]) => `${agents.length} ${state}`),
+    Arr.join(" · "),
   );
+  const agents = countLabel(details.agents.length, "agent");
   return settled(
     {
-      ...(details.agents.length > 0 &&
-        askingInPart && { expandLabel: single ? "question" : "questions" }),
-      subject: single ? displayName(only.name) : "",
-      // The agent's state, such as `finished`, isn't what the read's own `✓` says.
-      ...(single && { subjectState: true as const }),
-      counters: single ? [stateLabel(only.state)] : [countLabel(details.agents.length, "agent")],
+      expandLabel: readExpandLabel(details.agents),
+      // A few agents read are named, as a wait names the runs it waited for.
+      subject: single
+        ? displayName(only.name)
+        : names.length <= MAX_NAMED_AGENTS && named.length <= MAX_NAMED_AGENT_CHARS
+          ? named
+          : "",
+      // The agents' states, such as `failed`, describe the agents; reading them is neutral.
+      ...(details.agents.length > 0 && { subjectState: true as const }),
+      counters: single
+        ? [stateLabel(only.state)]
+        : details.agents.length > 0
+          ? [states, agents]
+          : [agents],
       metadata: [
         ...(empty > 0 ? [single ? "no message yet" : `${empty} without a message`] : []),
         ...(truncated > 0 ? [single ? "truncated" : `${truncated} truncated`] : []),
-        ...(single && only.source === "report" ? ["report"] : []),
-        ...(single && only.source === "error" ? ["error"] : []),
       ],
     },
     [...statusIssues, ...missingIssue(details.missingIds)],
+    "returned",
   );
 };
 
@@ -192,10 +258,10 @@ const failureSubject = (tool: AgentToolName, args: AgentCallEvidence): string =>
   return "The agents";
 };
 
-// The words a send carries, shown beneath its collapsed compact row.
-const sentWords = (args: AgentCallEvidence): Pick<CompactSummary, "quote"> =>
+// The words a send carries, which only its expansion shows.
+const sentWords = (args: AgentCallEvidence): Pick<CompactSummary, "expandLabel"> =>
   args.message !== undefined && Str.isNonEmpty(Str.trim(args.message))
-    ? { quote: args.message }
+    ? { expandLabel: "message" }
     : {};
 
 const argumentLanes = (tool: AgentToolName, args: AgentCallEvidence): CompactSummary => {
@@ -208,9 +274,13 @@ const argumentLanes = (tool: AgentToolName, args: AgentCallEvidence): CompactSum
   };
 };
 
-/** Compact headings for `agent_*`: what was listed, where a message went, whose message was read. */
+/**
+ * Compact headings for `agent_*`: what was listed, where a message went, whose message was read.
+ * A collapsed compact row hides the listing and the words read, so its tag names them; a preview
+ * row's body shows them, so its tag names only their `Details`.
+ */
 export const createAgentCompactSummary =
-  (tool: AgentToolName): CompactSummaryProvider =>
+  (tool: AgentToolName, style: "compact" | "preview" = "compact"): CompactSummaryProvider =>
   ({ phase, args, result, context }) => {
     const input = decodeAgentCall(args);
     if (!input) return undefined;
@@ -232,7 +302,9 @@ export const createAgentCompactSummary =
     }
     const details = decodeAgentToolDetails(result.details);
     if (details?.action !== tool) return undefined;
-    // Expansion keeps every agent's words and adds each one's `Details`, in both styles.
-    const summary: CompactSummary = { expandLabel: "details", ...summarizeDetails(details) };
-    return tool === AGENT_TOOL_NAME.send ? { ...summary, ...sentWords(input) } : summary;
+    const summary = summarizeDetails(details);
+    if (tool === AGENT_TOOL_NAME.send) return { ...summary, ...sentWords(input) };
+    return style === "preview" && summary.expandLabel !== false
+      ? { ...summary, expandLabel: "details" }
+      : summary;
   };

@@ -23,7 +23,7 @@ import { managerStateGlyph } from "pi-cosmic-ui/manager";
 import { composeToolComponent, toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
 import { MAX_PARENT_MESSAGE_CHARS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import { rejectedCallIssue } from "./compact-action-failures.ts";
-import { QUOTED_TEXT_LIMIT } from "./compact-run-issues.ts";
+import { QUOTED_TEXT_LIMIT, questionQuote } from "./compact-run-issues.ts";
 import {
   errorSection,
   previewHeading,
@@ -86,8 +86,7 @@ const isCancelledQuestion = (result: {
 }) => Str.trim(getTextContent(result.content)) === CANCELLED_QUESTION;
 
 /**
- * A short heading naming the kind of contact, with the agent's words quoted beneath it as a sent
- * message's are. A warning's words are its issue instead.
+ * Whether a warning's words fit its issue whole, so expanding it shows nothing more.
  */
 const warningFitsIssue = (message: string): boolean => {
   const { line } = quoteText(message, { limit: QUOTED_TEXT_LIMIT });
@@ -103,7 +102,7 @@ export const contactParentCompactSummary: CompactSummaryProvider = ({
   const request = contactRequest(args);
   if (!request) return undefined;
   const warning = request.kind === "warning";
-  // Expanded, the quoted words only gain a label, so the row offers expansion only for a reply.
+  // A collapsed compact row hides the agent's words, so expansion offers them, then any reply.
   const summary: CompactSummary = {
     action: request.kind,
     subject: "",
@@ -114,16 +113,21 @@ export const contactParentCompactSummary: CompactSummaryProvider = ({
           // A warning short enough for its issue has nothing more to show expanded.
           ...(warningFitsIssue(request.message) && { expandLabel: false as const }),
         }
-      : { quote: stripTerminalControls(request.message), expandLabel: false as const }),
+      : { expandLabel: request.kind === "question" ? "question" : "message" }),
   };
-  if (!result)
-    return phase === "settled" || context.isError
-      ? undefined
-      : {
-          ...summary,
-          // Once sent, an open question waits on the parent's reply.
-          ...(request.kind === "question" && phase === "running" && { waiting: true as const }),
-        };
+  if (!result) {
+    if (phase === "settled" || context.isError) return undefined;
+    if (request.kind !== "question" || phase !== "running") return summary;
+    // Once sent, an open question waits on the parent's reply, and is quoted as its problem line;
+    // expansion adds the rest of one the quote cuts.
+    const { quote, cut } = questionQuote(stripTerminalControls(request.message));
+    return {
+      ...summary,
+      waiting: true,
+      issues: [{ severity: "attention", code: "parent-question", message: quote }],
+      expandLabel: cut ? "question" : false,
+    };
+  }
   if (context.isError) {
     if (phase !== "settled") return undefined;
     if (request.kind === "question" && isCancelledQuestion(result))
@@ -168,8 +172,16 @@ export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["
   {
     renderCall: (args, theme, context) => {
       const request = contactRequest(args);
-      // A warning's words are its issue, unless the call failed before the warning was sent.
+      // A warning's words are its issue, unless the call failed before the warning was sent, and so
+      // are an open question's while its quote holds all of it.
       if (!request || (request.kind === "warning" && !context.isError)) return new Container();
+      if (
+        request.kind === "question" &&
+        context.executionStarted &&
+        context.isPartial &&
+        !questionQuote(stripTerminalControls(request.message)).cut
+      )
+        return new Container();
       return expandedAuthoredText(theme, MESSAGE_LABELS[request.kind], request.message);
     },
     renderResult: (result, options, theme, context) => {
@@ -193,7 +205,14 @@ const COLLAPSED_REPLY_LINES = 4;
 export const contactParentRenderers = {
   renderCall: rejectionAwareCall(CONTACT_PARENT_LABEL, (args, theme, context) => {
     const request = contactRequest(args);
-    const message = request && request.kind !== "warning" ? request.message : undefined;
+    // An open question its issue quotes whole shows only there.
+    const quotedWhole =
+      request?.kind === "question" &&
+      context.executionStarted &&
+      context.isPartial &&
+      !questionQuote(stripTerminalControls(request.message)).cut;
+    const message =
+      request && request.kind !== "warning" && !quotedWhole ? request.message : undefined;
     const container = new Container();
     container.addChild(
       previewHeading({ title: CONTACT_PARENT_LABEL, subtitle: request?.kind }, theme),

@@ -1,5 +1,6 @@
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { applyPresentationSettings } from "pi-code-previews/testing";
@@ -61,6 +62,11 @@ const question = (title: string): AskUserQuestion => ({
   title,
   prompt: "Prompt?",
   mode: "text",
+});
+
+const answered = (...answers: ReadonlyArray<{ key: string; text: string; note?: string }>) => ({
+  outcome: "submitted" as const,
+  answers: Arr.map(answers, (answer) => ({ ...answer, kind: "text" as const })),
 });
 
 describe("async questionnaire replay rendering", () => {
@@ -182,7 +188,74 @@ describe("async questionnaire replay rendering", () => {
     ).toContain("Route:");
   });
 
-  it.each(["compact", "preview"] as const)(
+  describe("in compact style", () => {
+    const delivered = { generation: "g", deliveryId: "delivery-id", requestId: "request-id" };
+    const render = (
+      settled: ReturnType<typeof answered> | { readonly outcome: "cancelled" },
+      expanded: boolean,
+      titles = [{ key: "env", title: "Environment" }],
+    ) => {
+      const restore = applyPresentationSettings({
+        toolCallCollapsedStyle: "compact",
+        toolCallBackground: "off",
+        toolCallTiming: false,
+      });
+      try {
+        return Arr.filter(
+          renderAsyncMessage(
+            asyncMessage("", { ...delivered, outcome: settled, titles }),
+            { ...keybindingHintsFixture, expanded, outputPad: 0 },
+            theme,
+          ).render(100),
+          (row) => Str.isNonEmpty(Str.trim(row)),
+        );
+      } finally {
+        restore();
+      }
+    };
+
+    it("is one heading row carrying a lone short answer, shown once expanded", () => {
+      const [heading, ...rest] = render(answered({ key: "env", text: "Staging" }), false);
+      expect(rest).toEqual([]);
+      expect(heading).toContain("Environment");
+      expect(heading).toContain("Staging");
+      const expanded = Arr.join(render(answered({ key: "env", text: "Staging" }), true), "\n");
+      expect(Str.split(expanded, "Staging")).toHaveLength(2);
+      expect(expanded).toContain("request-id");
+    });
+
+    it("counts several, long, or annotated answers and shows them only expanded", () => {
+      const long = "Staging first, then production after a day of monitoring";
+      const titles = [
+        { key: "env", title: "Environment" },
+        { key: "lib", title: "Library" },
+      ];
+      for (const settled of [
+        answered({ key: "env", text: "Staging" }, { key: "lib", text: "Intl" }),
+        answered({ key: "env", text: long }),
+        answered({ key: "env", text: "Staging", note: "Watch the logs" }),
+      ]) {
+        const [heading, ...rest] = render(settled, false, titles);
+        expect(rest).toEqual([]);
+        expect(heading).toMatch(/\d answers?/u);
+        expect(heading).not.toContain("Staging");
+        const expanded = Arr.join(render(settled, true, titles), "\n");
+        for (const answer of settled.answers) {
+          expect(expanded).toContain(answer.text);
+          if (answer.note) expect(expanded).toContain(answer.note);
+        }
+      }
+    });
+
+    it("says a cancellation in its one heading row", () => {
+      const collapsed = render({ outcome: "cancelled" }, false);
+      expect(collapsed).toHaveLength(1);
+      expect(collapsed[0]).toContain("⊘");
+    });
+  });
+
+  // A collapsed compact message draws no body, so only preview style shows the answer beneath it.
+  it.each(["preview"] as const)(
     "leaves a lone answer's label to a %s heading that shows its whole title",
     (style) => {
       const restore = applyPresentationSettings({

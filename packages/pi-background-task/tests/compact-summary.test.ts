@@ -100,10 +100,36 @@ describe("background task compact semantics", () => {
     [{ state: "failed", exitCode: 0 }, "error", "failed", "error"],
     [{ state: "stopping" }, "uncertain", "cleanup-unconfirmed", "warning"],
     [{ state: "exited" }, "uncertain", "exit-unknown", "warning"],
-  ])("projects status causes as issues: %j", (fields, outcome, code, severity) => {
-    const result = project({ action: "status", snapshot: { ...snapshot, ...fields } });
+  ] as const)("projects how a task ended as issues: %j", (fields, outcome, code, severity) => {
+    const result = taskNoticeSummary({ ...snapshot, ...fields });
     expect(result?.outcome).toBe(outcome);
     expect(find(result, `task-0000000001:${code}`)?.severity).toBe(severity);
+  });
+
+  it.each([
+    { state: "exited", exitCode: 2 },
+    { state: "exited", signal: "SIGKILL", exitCode: null },
+    { state: "timed_out" },
+    { state: "failed", error: "spawn ENOENT" },
+    { state: "stopping" },
+    { state: "exited" },
+  ])("keeps a status neutral, its task's state a fact and its causes expanded: %j", (fields) => {
+    const result = project({ action: "status", snapshot: { ...snapshot, ...fields } });
+    expect(result?.outcome).toBe("returned");
+    expect(result?.subjectState).toBe(true);
+    expect(result?.metadata).toHaveLength(1);
+    // Reading a task that failed is not the read's problem: nothing beyond the heading collapsed.
+    expect(Arr.filter(result?.issues ?? [], (entry) => entry.severity !== "info")).toEqual([]);
+  });
+
+  it("keeps a read of a failed task's logs neutral, warning only about output it missed", () => {
+    for (const state of ["failed", "timed_out", "stopping", "stopped"]) {
+      const read = project(logs(state), "logs");
+      expect(read?.outcome).toBe("returned");
+      expect(read?.metadata).toHaveLength(1);
+      expect(Arr.filter(read?.issues ?? [], (entry) => entry.severity !== "info")).toEqual([]);
+    }
+    expect(project(logs("failed", { skipped: { bytes: 64 } }), "logs")?.outcome).toBe("warning");
   });
 
   it("states a failing exit code with its cause, or what the code means", () => {
@@ -201,8 +227,10 @@ describe("background task row outcomes", () => {
     // A start reports its admission, which stays true after the task finishes.
     ["a started task", { action: "start", snapshot }, "start", "success"],
     ["a start whose task already failed", { action: "start", snapshot: failed }, "start", "error"],
-    ["a cleanly exited task", { action: "status", snapshot: exited }, "status", "success"],
-    ["a stopped task's status", { action: "status", snapshot: stopped }, "status", "cancelled"],
+    // A status only looks, so it is neutral whatever state it finds.
+    ["a cleanly exited task", { action: "status", snapshot: exited }, "status", "returned"],
+    ["a stopped task's status", { action: "status", snapshot: stopped }, "status", "returned"],
+    ["a failed task's status", { action: "status", snapshot: failed }, "status", "returned"],
     [
       "a confirmed stop",
       { action: "stop", snapshot: stopped, alreadyFinished: false },
@@ -229,7 +257,10 @@ describe("background task row outcomes", () => {
     ["matched output", wait("matched", snapshot, { matchCursor: 4 }), "wait", "success"],
     ["a timed-out wait", wait("timeout", snapshot), "wait", "warning"],
     ["a running task's logs", logs("running"), "logs", "returned"],
-    ["a finished task's logs", logs("exited"), "logs", "success"],
+    ["a finished task's logs", logs("exited"), "logs", "returned"],
+    ["a failed task's logs", logs("failed"), "logs", "returned"],
+    // A wait shows how the task it waited for ended.
+    ["a wait for a failed task", wait("completed", failed), "wait", "error"],
   ] as const)("classifies %s", (_label, details, action, outcome) => {
     expect(project(details, action)?.outcome).toBe(outcome);
   });
@@ -342,6 +373,15 @@ describe("background task heading facts", () => {
       action: "start",
       outcome: "success",
     });
+  });
+
+  it("counts listed tasks by state only where their states differ, unless all failed", () => {
+    const first = (tasks: ReadonlyArray<typeof snapshot>) =>
+      project({ action: "list", tasks }, "list")?.counters?.[0];
+    const running = { ...snapshot, id: "task-0000000002" };
+    expect(first([snapshot, running])).toBe("2 tasks");
+    expect(first([snapshot, failed])).toMatch(/1 running.*1 failed/u);
+    expect(first([failed, { ...failed, id: "task-0000000002" }])).toBe("2 failed");
   });
 
   it("offers list counters widest first, keeping failures until only the total is left", () => {

@@ -91,11 +91,11 @@ export const reportPartlySaved = (run: SubagentCompletionNotification): boolean 
  * file, either only the notice's copy was cut, so the agent can still read the retained report, or
  * only the start of the report was kept.
  */
-const reportCutNote = (run: SubagentCompletionNotification): string => {
+const reportCutNote = (run: SubagentCompletionNotification): string | undefined => {
   const archive = run.reportArchive;
   if (archive?.complete === true) return "The rest of this report is in its saved file";
-  if (archive !== undefined)
-    return "Warning: Report too long to save in full; its saved file holds part of it";
+  // A partly saved report is a warning instead.
+  if (archive !== undefined) return undefined;
   return run.finalTextTruncation === undefined
     ? "Shown up to its display limit; your agent can read the rest with agent_read"
     : "Only the start of this report was kept";
@@ -104,16 +104,27 @@ const reportCutNote = (run: SubagentCompletionNotification): string => {
 const completionNotes = (
   run: SubagentCompletionNotification,
   reportCut: boolean,
-): ReadonlyArray<string> => {
+): ReadonlyArray<string> =>
+  Arr.filter(
+    [
+      reportCut ? reportCutNote(run) : undefined,
+      run.workspaceId && run.outcome === "completed"
+        ? workspaceNote(run.workspaceOutcome)
+        : undefined,
+    ],
+    isTextFragment,
+  );
+
+/** The problems a run reported beside its report or failure, each a line beneath the heading. */
+const completionWarnings = (run: SubagentCompletionNotification): ReadonlyArray<string> => {
   const warning = Str.trim(redacted(userWarning(run), MAX_NOTICE_FACT_CHARS) ?? "");
   return Arr.filter(
     [
-      reportCut ? reportCutNote(run) : undefined,
-      warning && Str.trim(userWarning(run) ?? "") !== Str.trim(userError(run) ?? "")
-        ? `Warning: ${warning}`
+      reportPartlySaved(run)
+        ? "Report too long to save in full; its saved file holds part of it"
         : undefined,
-      run.workspaceId && run.outcome === "completed"
-        ? workspaceNote(run.workspaceOutcome)
+      warning && Str.trim(userWarning(run) ?? "") !== Str.trim(userError(run) ?? "")
+        ? warning
         : undefined,
     ],
     isTextFragment,
@@ -138,12 +149,17 @@ export const completionNoticeRuns = (
     const reportCut =
       run.outcome === "completed" && (words?.cut === true || run.finalTextTruncation !== undefined);
     const notes = completionNotes(run, reportCut);
+    const warnings = completionWarnings(run);
     const facts = completionFacts(run);
     return {
       id: run.id,
       name: noticeName(run.name),
       outcome: run.outcome,
       ...(words && { text: words.text }),
+      ...(reportCut && { textCut: true }),
+      ...(warnings.length > 0 && {
+        warnings: Arr.map(warnings.slice(0, MAX_NOTICE_FACTS), noticeFact),
+      }),
       ...(notes.length > 0 && {
         notes: Arr.map(notes.slice(0, MAX_NOTICE_FACTS), noticeFact),
       }),
