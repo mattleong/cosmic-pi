@@ -57,6 +57,23 @@ export interface SessionProfileSnapshot extends SessionProfileOverrideSeed {
   readonly effectiveConfig: ResolvedSubagentConfig;
 }
 
+/**
+ * Whether the session runs `profile` differently from the set it is based on, so that route is
+ * saved in no set. The dashboard marks it `●` and the footer `*`.
+ */
+export const sessionProfileChanged = (
+  snapshot: SessionProfileSnapshot,
+  profile: ProfileId,
+): boolean => {
+  const override = snapshot.overrides[profile];
+  return override !== undefined && !sameProfileRoute(override, snapshot.baseline.profiles[profile]);
+};
+
+export const sessionChangedProfiles = (
+  snapshot: SessionProfileSnapshot,
+): ReadonlyArray<ProfileId> =>
+  Arr.filter(PROFILE_IDS, (profile) => sessionProfileChanged(snapshot, profile));
+
 export interface SessionProfilePatch {
   readonly profile: ProfileId;
   readonly route?: ProfileRoute | undefined;

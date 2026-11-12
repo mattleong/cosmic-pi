@@ -1,7 +1,9 @@
-import * as Rec from "effect/Record";
 import type { CosmicFooterTextContribution } from "pi-cosmic-ui/protocol";
 import type { ResolvedProfileSetSelection } from "../config/options.ts";
-import type { SessionProfileSnapshot } from "../profiles/session-overrides.ts";
+import {
+  sessionChangedProfiles,
+  type SessionProfileSnapshot,
+} from "../profiles/session-overrides.ts";
 
 export const SESSION_FOOTER_ID = "subagents";
 
@@ -17,7 +19,8 @@ export const sessionFooterContribution = (
 ): CosmicFooterTextContribution => {
   const origin = snapshot.baseline.origin;
   const mode = snapshot.effectiveConfig.delegation;
-  const edited = Rec.size<string, unknown>(snapshot.overrides) > 0 ? "*" : "";
+  // An override equal to the set it replaces is no edit, as in the profiles dashboard.
+  const edited = sessionChangedProfiles(snapshot).length > 0 ? "*" : "";
   const delegation = mode === "normal" ? "" : ` · ${mode}`;
   const value = `${profileSetLabel(origin)}${edited}${delegation}`;
   return {

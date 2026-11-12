@@ -1,5 +1,7 @@
-import { KeybindingsManager, TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
+import { KeybindingsManager, TUI_KEYBINDINGS, visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
+import * as Str from "effect/String";
 import { describe, expect, it, vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { fullScreenKeybindingOptions, splitKeyLabel } from "../src/manager/key-labels.ts";
@@ -98,5 +100,83 @@ describe("configured key labels", () => {
     expect(screen()).not.toContain("C-c");
     component.handleInput("?");
     expect(screen()).toMatch(/Esc\/C-c\/h\/q Back/u);
+  });
+});
+
+const grouped = (value: string, group?: string) => ({
+  value,
+  item: { value, label: value },
+  searchText: value,
+  payload: value,
+  group,
+});
+
+const groupedPage = (height = 20, overrides: { readonly initialSearchMode?: boolean } = {}) => {
+  const fixture = page(height);
+  const component = new SearchableSelectPage<string>({
+    ...fixture.options,
+    choices: [
+      grouped("beta/one", "beta"),
+      grouped("alpha/one", "alpha"),
+      grouped("beta/two", "beta"),
+      grouped("inherit"),
+      grouped("alpha/two", "alpha"),
+    ],
+    current: undefined,
+    ...overrides,
+  });
+  const screen = () => Arr.join(component.render(60), "\n");
+  return { component, select: fixture.select, screen };
+};
+
+describe("grouped choices", () => {
+  it("lists ungrouped choices first, then each group together under one heading", () => {
+    const { screen } = groupedPage();
+    const lines = Str.split(screen(), "\n");
+    const at = (text: string) =>
+      Option.getOrElse(Arr.findFirstIndex(lines, Str.includes(text)), () => -1);
+    expect(at("inherit")).toBeLessThan(at("beta/one"));
+    expect(at("beta/one")).toBeLessThan(at("beta/two"));
+    expect(at("beta/two")).toBeLessThan(at("alpha/one"));
+    expect(Arr.filter(lines, (line) => /^│\s*beta\s*│$/u.test(line))).toHaveLength(1);
+  });
+
+  it("moves between choices without stopping on headings", () => {
+    const { component, select } = groupedPage();
+    for (const expected of ["inherit", "beta/one", "beta/two", "alpha/one", "alpha/two"]) {
+      component.handleInput("\r");
+      expect(select).toHaveBeenLastCalledWith(expected);
+      component.handleInput("j");
+    }
+  });
+
+  it("counts only choices and keeps a heading only while its group has matches", () => {
+    const { component, screen } = groupedPage(9);
+    expect(screen()).toMatch(/\b1 of 5\b/u);
+    component.handleInput("/");
+    for (const key of "alpha") component.handleInput(key);
+    const filtered = screen();
+    expect(filtered).toContain("alpha/one");
+    expect(filtered).not.toContain("beta");
+    expect(filtered).not.toContain("inherit");
+  });
+});
+
+describe("embedded select", () => {
+  it("draws its rows for a host pane and takes the same input", () => {
+    const { component, select } = groupedPage();
+    const rows = component.renderBody(30, 8);
+    expect(rows.length).toBeLessThanOrEqual(8);
+    for (const row of rows) {
+      expect(row).not.toMatch(/[│╭╰]/u);
+      expect(visibleWidth(row)).toBeLessThanOrEqual(30);
+    }
+    expect(Arr.join(rows, "\n")).toContain("inherit");
+    const hints = component.keyHints(40);
+    expect(visibleWidth(hints.border)).toBeLessThanOrEqual(40);
+    expect(`${hints.border} ${hints.overflow}`).toContain("Move");
+    component.handleInput("j");
+    component.handleInput("\r");
+    expect(select).toHaveBeenCalledWith("beta/one");
   });
 });

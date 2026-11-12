@@ -1,7 +1,12 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import { managerActivityLabel, managerNoticeColor } from "../manager/chrome.ts";
-import type { ActivityRow } from "./model.ts";
+import {
+  managerActivityColor,
+  managerActivityLabel,
+  managerNoticeColor,
+  type ManagerStatusColor,
+} from "../manager/chrome.ts";
+import { isFinished, type ActivityRow } from "./model.ts";
 import type { ActivityItem } from "./protocol.ts";
 
 export function activityAttention(item: ActivityItem): "user" | "parent" | "blocked" | undefined {
@@ -30,6 +35,13 @@ export const activityQueued = (item: ActivityItem): boolean =>
   item.status === "pending" &&
   item.startedAt === undefined &&
   (item.kind === "agent" || item.kind === "command");
+
+/**
+ * Whether a source can still produce output to follow: work that has started and not finished.
+ * Queued work hasn't started, and a question's detail never streams.
+ */
+export const activityCanFollow = (row: ActivityRow): boolean =>
+  row.retained !== true && row.kind !== "question" && row.status !== "pending" && !isFinished(row);
 
 export function activityStatus(item: ActivityItem): string {
   if (item.status === "needs-input")
@@ -77,13 +89,29 @@ export const addAttention = (
 export const activityAttentionColor = (counts: ActivityAttentionCounts) =>
   counts.blocked > 0 || counts.failed > 0 ? "warning" : managerNoticeColor("attention");
 
-export const activityAttentionLabels = (counts: ActivityAttentionCounts): string[] =>
-  Arr.filter(
+/** Each attention count with its words and the tone its row glyphs use. */
+export const activityAttentionParts = (
+  counts: ActivityAttentionCounts,
+): ReadonlyArray<{ readonly label: string; readonly tone: ManagerStatusColor }> => {
+  const waiting = managerNoticeColor("attention");
+  return Arr.filter(
     [
-      counts.user ? `${counts.user} ${counts.user === 1 ? "needs" : "need"} your input` : "",
-      counts.parent ? `${counts.parent} waiting for reply` : "",
-      counts.blocked ? `${counts.blocked} blocked` : "",
-      counts.failed ? `${counts.failed} failed` : "",
+      {
+        label: counts.user
+          ? `${counts.user} ${counts.user === 1 ? "needs" : "need"} your input`
+          : "",
+        tone: waiting,
+      },
+      { label: counts.parent ? `${counts.parent} waiting for reply` : "", tone: waiting },
+      { label: counts.blocked ? `${counts.blocked} blocked` : "", tone: "warning" as const },
+      {
+        label: counts.failed ? `${counts.failed} failed` : "",
+        tone: managerActivityColor("failed"),
+      },
     ],
-    Str.isNonEmpty,
+    (part) => Str.isNonEmpty(part.label),
   );
+};
+
+export const activityAttentionLabels = (counts: ActivityAttentionCounts): string[] =>
+  Arr.map(activityAttentionParts(counts), (part) => part.label);

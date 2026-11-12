@@ -16,12 +16,11 @@ To add an adapter:
    downstream components/caches/interactions, exact arguments, all raw output/recovery, and images.
    Both original expanded callbacks and content-only callbacks must retain raw evidence: unknown
    summaries use the original slots. Contain construction/drawing failures without replay loops.
-5. Test through actual callbacks/resolver and `pi-code-previews/testing`; add gallery scenarios and
+5. Test through actual callbacks/resolver and `pi-code-previews/testing`; review the rows live and
    update the package architecture and public compatibility notes. Never infer domain success from
    delivery, counts, or a false Pi error flag.
 
-To remove support, delete the adapter's registry entry, directory, tests, and documentation/gallery
-scenarios. No builtin settings or execution wiring needs migration.
+To remove support, delete the adapter's registry entry, directory, tests, and documentation. No builtin settings or execution wiring needs migration.
 
 ## pi-web-access compatibility
 

@@ -157,6 +157,7 @@ const ACTION_FIELDS = Rec.keys({
   label: true,
   confirmation: true,
   handoff: true,
+  scope: true,
 } as const satisfies Record<keyof ActivityAction, true>);
 const sameActions = (left: ActivityItem["actions"], right: ActivityItem["actions"]) =>
   left === right ||

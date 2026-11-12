@@ -94,19 +94,33 @@ export const activityActionForKey = (
     Arr.findFirst(activityActionKeys(actions, page).shown, (keyed) => keyed.key === key),
   )?.action;
 
+/** An action that acts on its item's whole section, which Activity offers on the heading. */
+export const isSectionAction = (action: ActivityAction): boolean => action.scope === "section";
+
 export interface ActivityActionHints {
-  /** Every action key on this page, named as the pane lists them. */
+  /** The keys the pane lists for this page, named as the pane lists them. */
   readonly primary: string | undefined;
+  /** Section actions a row's keys still run, named only in the expanded help. */
+  readonly section: ReadonlyArray<string>;
 }
 
+/**
+ * Hints for the actions on screen. A row lists its own actions; its section's actions still run
+ * from it but are named only in expanded help. A section heading passes `heading`, where its
+ * section actions are its own.
+ */
 export function activityActionHints(
-  row: ActivityRow | undefined,
+  actions: ReadonlyArray<ActivityAction>,
   page: number,
+  heading = false,
 ): ActivityActionHints {
-  const keys = activityActionKeys(row && !row.retained ? row.actions : [], page);
-  const only = keys.numbered.length === 1 ? keys.numbered[0] : undefined;
-  const last = keys.numbered.at(-1);
-  const first = keys.numbered[0];
+  const keys = activityActionKeys(actions, page);
+  const own = (keyed: KeyedActivityAction) => heading || !isSectionAction(keyed.action);
+  const lettered = Arr.filter(keys.lettered, own);
+  const numberedOwn = Arr.filter(keys.numbered, own);
+  const only = numberedOwn.length === 1 ? numberedOwn[0] : undefined;
+  const last = numberedOwn.at(-1);
+  const first = numberedOwn[0];
   const numbered = only
     ? keyHint(only.key, only.action.label)
     : first && last
@@ -115,9 +129,13 @@ export function activityActionHints(
   return {
     primary:
       joinKeyHints([
-        ...Arr.map(keys.lettered, ({ key, action }) => keyHint(key, action.label)),
+        ...Arr.map(lettered, ({ key, action }) => keyHint(key, action.label)),
         numbered,
         keys.pages > 1 && keyHint("a", "More actions"),
       ]) || undefined,
+    section: Arr.map(
+      Arr.filter(keys.shown, (keyed) => !own(keyed)),
+      ({ key, action }) => keyHint(key, action.label),
+    ),
   };
 }

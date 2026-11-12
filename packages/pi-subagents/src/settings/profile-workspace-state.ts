@@ -1,6 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
+import { ListDetailShell } from "pi-cosmic-ui/manager/list-detail-shell";
 import type { SearchableSelectPage } from "pi-cosmic-ui/manager/searchable-select";
 import {
   PROFILE_IDS,
@@ -18,7 +18,11 @@ import {
 } from "./profile-route-editor.ts";
 import type { ProfileWorkspaceOptions } from "./profile-workspace.ts";
 import type { profileModelPickerPage } from "./ui/model-picker.ts";
-import { profileWorkspaceRows, type ProfileWorkspaceField } from "./ui/profile-workspace-model.ts";
+import {
+  profileWorkspaceRows,
+  type ProfileWorkspaceField,
+  type ProfileWorkspacePane,
+} from "./ui/profile-workspace-model.ts";
 import { ProfileEditVisit } from "./profile-edit-visit.ts";
 import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 
@@ -43,9 +47,11 @@ type WorkspaceMessage = {
 export abstract class ProfileWorkspaceState {
   protected inspection: ProfileSettingsInspection;
   protected readonly scope: ProfileSettingsScope;
-  protected pane: "profiles" | "fields" = "profiles";
-  protected saveFocused = false;
-  protected profileIndex: number;
+  /**
+   * Pane focus, the profile selection, the arrangement, and list paging. The fields pane keeps its
+   * own cursor (`fieldIndex`), so movement there never reaches the shell's detail scrolling.
+   */
+  protected readonly shell = new ListDetailShell();
   protected candidateIndex = 0;
   protected fieldIndex = 0;
   protected addingCandidate = false;
@@ -62,7 +68,6 @@ export abstract class ProfileWorkspaceState {
   protected selectPage: SearchableSelectPage<string> | undefined;
   protected focusState = false;
   protected disposed = false;
-  protected readonly keymap = new FullScreenKeymap();
   protected readonly options: ProfileWorkspaceOptions;
   protected readonly editVisit: ProfileEditVisit;
 
@@ -74,7 +79,6 @@ export abstract class ProfileWorkspaceState {
     this.inspection = options.inspection;
     this.editVisit = options.editVisit ?? new ProfileEditVisit(options.inspection);
     this.scope = profileWorkspaceScope(options.target);
-    this.saveFocused = options.target.kind === "session" && options.initialSaveFocused === true;
     for (const saved of options.initialSelections ?? []) {
       this.selections.set(saved.profile, {
         control: saved.control,
@@ -83,14 +87,34 @@ export abstract class ProfileWorkspaceState {
         expanded: new Set(saved.expanded),
       });
     }
-    this.profileIndex = Math.max(0, PROFILE_IDS.indexOf(options.initialProfile ?? PROFILE_IDS[0]));
+    this.shell.select(
+      Math.max(0, PROFILE_IDS.indexOf(options.initialProfile ?? PROFILE_IDS[0])),
+      PROFILE_IDS,
+    );
     this.candidateIndex = options.initialCandidateIndex ?? 0;
-    this.pane = options.initialFocus ?? "profiles";
+    if (options.initialFocus === "fields") this.focusPane("fields");
     this.advancedExpanded = options.initialAdvancedExpanded ?? false;
     this.reconcile();
     this.selectField(options.initialField ?? "model");
   }
 
+  protected get keymap() {
+    return this.shell.keymap;
+  }
+  protected get profileIndex(): number {
+    return this.shell.state.selected;
+  }
+  protected get pane(): ProfileWorkspacePane {
+    return this.shell.state.pane === "detail" ? "fields" : "profiles";
+  }
+  /** Moves focus to a pane; a single-pane arrangement shows the pane it focuses. */
+  protected focusPane(pane: ProfileWorkspacePane): void {
+    if (pane === this.pane) return;
+    this.shell.applyMotion(pane === "fields" ? "forward" : "back", {
+      rowCount: PROFILE_IDS.length,
+      hasSelection: true,
+    });
+  }
   get focused(): boolean {
     return this.focusState;
   }
@@ -128,7 +152,6 @@ export abstract class ProfileWorkspaceState {
     );
     return {
       initialSelections,
-      initialSaveFocused: this.saveFocused,
       initialProfile: this.profile(),
       initialCandidateIndex: this.candidateIndex,
       initialField: this.rows()[this.fieldIndex]?.field ?? "model",
@@ -194,7 +217,6 @@ export abstract class ProfileWorkspaceState {
     );
   }
   protected reconcile(): void {
-    this.profileIndex = Math.max(0, Math.min(PROFILE_IDS.length - 1, this.profileIndex));
     this.candidateIndex = Math.max(
       0,
       Math.min(Math.max(0, this.draft().candidates.length - 1), this.candidateIndex),
@@ -239,21 +261,14 @@ export abstract class ProfileWorkspaceState {
     );
   }
   protected selectCandidate(index: number): void {
-    this.saveFocused = false;
     this.rememberSelection();
     this.candidateIndex = Math.max(0, Math.min(this.draft().candidates.length - 1, index));
     this.selectField(this.selection().fields.get(this.candidateIndex) ?? "model");
   }
   protected selectProfileRow(index: number): void {
     this.rememberSelection();
-    const last = PROFILE_IDS.length - (this.options.target.kind === "session" ? 0 : 1);
-    const selected = Math.max(0, Math.min(last, index));
-    if (selected === PROFILE_IDS.length) {
-      this.saveFocused = true;
-    } else {
-      this.profileIndex = selected;
-      this.resetSelectionForProfile();
-    }
+    this.shell.select(index, PROFILE_IDS);
+    this.resetSelectionForProfile();
   }
   protected moveRow(index: number): void {
     this.rememberSelection();
@@ -263,7 +278,6 @@ export abstract class ProfileWorkspaceState {
     this.rememberSelection();
   }
   protected resetSelectionForProfile(): void {
-    this.saveFocused = false;
     this.candidateIndex = this.selection().candidateIndex;
     this.reconcile();
     this.selectField(

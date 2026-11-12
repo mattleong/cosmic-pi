@@ -16,7 +16,6 @@ export const ESCAPE = "\x1b";
 export const DOWN = "\x1b[B";
 export const RIGHT = "\x1b[C";
 export const LEFT = "\x1b[D";
-export const SPACE = " ";
 export const EXTERNAL_EDITOR = "\x07";
 
 const KEY_BINDINGS = new Map<string, KeyId>([

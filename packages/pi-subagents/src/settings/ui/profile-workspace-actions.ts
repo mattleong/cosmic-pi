@@ -83,6 +83,7 @@ export const profileWorkspaceConfirmation = (input: {
   readonly candidateCount: number;
   readonly scope: ProfileSettingsScope;
 }): ProfileWorkspaceConfirmation => ({
+  verb: "Remove",
   title: `Remove ${profileRouteOptionLabel(input.candidateIndex)} from ${input.profile}?`,
   detail:
     input.candidateCount === 1

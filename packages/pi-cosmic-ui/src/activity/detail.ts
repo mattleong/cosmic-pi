@@ -19,6 +19,7 @@ const VALUE_LENGTH = 1_024;
 const SectionSchema = Schema.Struct({
   title: Schema.optional(Schema.String),
   body: Schema.String,
+  expandedBody: Schema.optional(Schema.String),
   format: Schema.optional(Schema.Literals(["plain", "markdown"])),
 });
 const FieldSchema = Schema.Struct({ label: Schema.String, value: Schema.String });
@@ -59,9 +60,17 @@ const cleanSections = (
     const body = Str.trimEnd(cleanLines(section.body, remaining));
     remaining -= body.length + title.length;
     if (!Str.isNonEmpty(Str.trim(body))) continue;
+    // The inspected form shares the budget; one that adds nothing to the preview's is dropped.
+    const expanded =
+      section.expandedBody === undefined || remaining <= 0
+        ? ""
+        : Str.trimEnd(cleanLines(section.expandedBody, remaining));
+    const expandedBody = Str.isNonEmpty(Str.trim(expanded)) && expanded !== body ? expanded : "";
+    remaining -= expandedBody.length;
     cleaned.push({
       ...(title && { title }),
       body,
+      ...(expandedBody && { expandedBody }),
       ...(section.format === "markdown" && { format: "markdown" as const }),
     });
   }

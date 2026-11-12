@@ -310,6 +310,25 @@ describe("manager table", () => {
     expect(table.widths[2]).toBe(0);
     for (const row of cells) expect(table.row(row)).toContain(row[1]);
   });
+
+  it("lays out a header row over the shown columns only", () => {
+    const cells = [["scout", "high", ""]];
+    const table = managerTable(
+      cells,
+      [
+        { minWidth: 4, priority: 3, header: "Profile" },
+        { minWidth: 4, priority: 2, header: "Effort" },
+        { minWidth: 4, priority: 1, header: "Fallbacks" },
+      ],
+      48,
+    );
+    expect(table.header).toContain("Effort");
+    expect(table.header).not.toContain("Fallbacks");
+    expect(Fn.pipe(table.header ?? "", Str.indexOf("Effort"))).toEqual(
+      Fn.pipe(table.row(cells[0]!), Str.indexOf("high")),
+    );
+    expect(managerTable(cells, [{ minWidth: 4, priority: 1 }], 48).header).toBeUndefined();
+  });
 });
 
 // A pair splits into its keys and its verb: `↑↓/j/k Move` names `↑↓/j/k` for Move.

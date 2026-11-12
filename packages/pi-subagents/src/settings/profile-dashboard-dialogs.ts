@@ -1,35 +1,32 @@
 import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
-import {
-  Input,
-  Key,
-  matchesKey,
-  wrapTextWithAnsi,
-  type Component,
-  type Focusable,
-} from "@earendil-works/pi-tui";
+import { Input, Key, matchesKey, wrapTextWithAnsi, type Focusable } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { FullScreenKeymap, pageSteps } from "pi-cosmic-ui/manager/keymap";
-import { isListMotion, nextListMotionIndex } from "pi-cosmic-ui/manager/list-navigation";
+import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
+import { selectionMarker } from "pi-cosmic-ui/manager/style";
 import { normalizeProfileSetName } from "../config/schema.ts";
 import type { ProfileSetSaveDestination } from "./profile-set-actions.ts";
 import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
-import { clipToWidth } from "pi-cosmic-ui/manager";
 import {
   configuredKeyLabels,
-  framedKeyHintBar,
+  exitKeyHint,
+  joinKeyHints,
   keyHint,
   TEXT_INPUT_KEY_LABELS,
-  wrapKeyHints,
 } from "pi-cosmic-ui/manager/key-labels";
-import { FRAME_GUTTER } from "pi-cosmic-ui/manager/list-detail-shell";
+import type { DashboardPrompt } from "./ui/profile-dashboard-render.ts";
 
-type DialogOptions = SearchableSelectHostOptions & {
+type DialogOptions = Pick<
+  SearchableSelectHostOptions,
+  "requestRender" | "matchesKeybinding" | "keybindingLabel"
+> & {
   readonly theme: Theme;
   readonly title: string;
   readonly body?: string;
   readonly initial?: string;
+  /** What Enter does, such as `Delete` or `Save`; the border names it. */
+  readonly verb: string;
 } & (
     | { readonly kind: "confirm"; readonly close: (confirmed: true | undefined) => void }
     | {
@@ -44,20 +41,15 @@ type DialogOptions = SearchableSelectHostOptions & {
       }
   );
 
-export interface ProfileDashboardDialogLayout {
-  readonly rows: string[];
-  /** Text for the dashboard's bottom border. */
-  readonly border: string;
-}
-
-export class ProfileDashboardDialog implements Component, Focusable {
+/**
+ * A decision the dashboard keeps beside the pane it concerns: a confirmation, or a name with an
+ * optional destination. `prompt` draws it for the pane's prompt band, and the pane stays in view.
+ */
+export class ProfileDashboardDialog implements Focusable {
   private readonly input = new Input();
   private readonly keymap = new FullScreenKeymap();
   private disposed = false;
   private message = "";
-  private offset = 0;
-  private maxOffset = 0;
-  private reviewed = false;
   private focusState = false;
   private scope: ProfileSetSaveDestination["scope"];
   private readonly options: DialogOptions;
@@ -92,25 +84,12 @@ export class ProfileDashboardDialog implements Component, Focusable {
     else if (this.options.kind === "name") {
       if (!this.toggleDestination(data)) this.input.handleInput(data);
       this.message = "";
-    } else {
-      const motion = this.keymap.resolve(data, {
-        mode: "navigation",
-        matchesKeybinding: this.options.matchesKeybinding,
-      });
-      if (Predicate.isTagged(motion, "Action") && isListMotion(motion.action))
-        this.offset = nextListMotionIndex(
-          motion.action,
-          this.offset,
-          this.maxOffset + 1,
-          pageSteps(Math.max(1, this.options.getHeight() - 3)),
-        );
     }
     this.options.requestRender();
   }
   private submit(): void {
     if (this.options.kind === "confirm") {
-      if (this.reviewed) this.options.close(true);
-      else this.message = "Scroll through the complete details before confirming.";
+      this.options.close(true);
       return;
     }
     const name = normalizeProfileSetName(this.input.getValue());
@@ -125,72 +104,52 @@ export class ProfileDashboardDialog implements Component, Focusable {
     if (destination.projectTrusted) this.scope = this.scope === "project" ? "global" : "project";
     return true;
   }
-  /**
-   * The dialog's rows inside the dashboard's frame, and the hint for its bottom border. \`width\`
-   * is the text width between the frame's gutters; pairs that don't fit the border wrap into rows
-   * at the bottom of the dialog.
-   */
-  layout(width: number): ProfileDashboardDialogLayout {
-    if (this.disposed) return { rows: [], border: "" };
-    const label = this.options.keybindingLabel ?? ((_id, fallback) => fallback);
-    const height = Math.max(0, this.options.getHeight());
-    const text = wrapTextWithAnsi(this.options.body ?? "", Math.max(1, width));
-    const destination = this.options.kind === "name" && this.options.destination;
-    const scopeRows = destination
-      ? [
-          `Destination: ${this.scope === "project" ? "Project · For this project" : "Global · For all projects"}${destination.projectTrusted ? "" : this.options.theme.fg("dim", " (Project requires trust)")}`,
-        ]
-      : [];
-    // A name dialog types into its input, so a configured key that types text never labels a hint.
-    const keys = configuredKeyLabels(label, TEXT_INPUT_KEY_LABELS);
-    const cancel = keys.primary("tui.select.cancel", "Esc");
-    const hints = (scrolls: boolean) => {
-      const { border, overflow } = framedKeyHintBar(
-        {
-          hints: [
-            scrolls && keyHint("↑↓", "Scroll"),
-            destination && destination.projectTrusted && keyHint("↑↓", "Destination"),
-            keyHint(keys.primary("tui.select.confirm", "Enter"), "Confirm"),
-          ],
-          exit: "decision",
-          // `?` types into the name, so the dialog has no expanded help to list aliases in.
-          exitKey: cancel,
-        },
-        false,
-        width + 2 * FRAME_GUTTER,
-      );
-      return {
-        border,
-        rows: Arr.map(wrapKeyHints(overflow, width), (row) => this.options.theme.fg("dim", row)),
-      };
-    };
-    const body =
-      this.options.kind === "confirm"
-        ? text
-        : this.input.render(Math.max(1, width)).concat(scopeRows, this.options.body ? text : []);
-    // Scroll appears only when the body doesn't fit beside the hint without it.
-    const scrolls =
-      this.options.kind === "confirm" && body.length > height - 2 - hints(false).rows.length;
-    const hint = hints(scrolls);
-    const bodyHeight = Math.max(0, height - 2 - hint.rows.length);
-    this.maxOffset = this.options.kind === "confirm" ? Math.max(0, body.length - bodyHeight) : 0;
-    this.offset = Math.min(this.offset, this.maxOffset);
-    if (bodyHeight > 0 && this.offset === this.maxOffset) this.reviewed = true;
-    return {
-      border: hint.border,
-      rows: Arr.map(
-        [
-          this.options.theme.fg("accent", this.options.title),
-          ...body.slice(this.offset, this.offset + bodyHeight),
-          this.message,
-          ...hint.rows,
-        ].slice(0, height),
-        (line) => clipToWidth(line, Math.max(0, width)),
-      ),
-    };
+  /** Both destinations as single-select rows, so `↑↓ Destination` has something to move. */
+  private destinationRows(projectTrusted: boolean): ReadonlyArray<string> {
+    const { theme } = this.options;
+    const row = (scope: ProfileSetSaveDestination["scope"], label: string) =>
+      `${selectionMarker("single", this.scope === scope)} ${label}`;
+    return [
+      projectTrusted
+        ? row("project", "Project · for this project")
+        : theme.fg("dim", row("project", "Project · trust this project to save here")),
+      row("global", "Global · for all projects"),
+    ];
   }
-  render(width: number): string[] {
-    return this.layout(width).rows;
+  /** The dialog's band text for a pane `width` columns wide, and the keys for the border. */
+  prompt(width: number): DashboardPrompt {
+    if (this.disposed) return { text: "", hint: "" };
+    const { theme, kind } = this.options;
+    // A name dialog types into its input, so a configured key that types text never labels a hint.
+    const keys = configuredKeyLabels(this.options.keybindingLabel, TEXT_INPUT_KEY_LABELS);
+    const destination = kind === "name" ? this.options.destination : undefined;
+    const title = theme.fg(
+      kind === "confirm" ? "warning" : "accent",
+      theme.bold(this.options.title),
+    );
+    const body = this.options.body
+      ? [theme.fg(kind === "confirm" ? "warning" : "muted", this.options.body)]
+      : [];
+    const wrap = (lines: ReadonlyArray<string>) =>
+      Arr.flatMap(lines, (line) => wrapTextWithAnsi(line, Math.max(1, width)));
+    // The input keeps its one row whole; everything else wraps to the band.
+    const lines = [
+      ...wrap([title]),
+      ...(kind === "name" ? this.input.render(Math.max(1, width)) : []),
+      ...wrap([
+        ...(destination ? this.destinationRows(destination.projectTrusted) : []),
+        ...body,
+        ...(this.message ? [theme.fg("error", this.message)] : []),
+      ]),
+    ];
+    return {
+      text: lines,
+      hint: joinKeyHints([
+        destination?.projectTrusted === true && keyHint("↑↓", "Destination"),
+        keyHint(keys.primary("tui.select.confirm", "Enter"), this.options.verb),
+        exitKeyHint("decision", [], keys.primary("tui.select.cancel", "Esc")),
+      ]),
+    };
   }
   invalidate(): void {
     this.input.invalidate();

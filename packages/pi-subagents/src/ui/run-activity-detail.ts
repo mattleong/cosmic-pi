@@ -33,12 +33,15 @@ const section = (
   body: string,
   maximumLength: number,
   format?: "markdown",
+  expandedBody?: string,
 ): ActivityDetailSection[] =>
   Str.isNonEmpty(Str.trim(body))
     ? [
         {
           ...(title && { title }),
           body: bounded(body, maximumLength),
+          ...(expandedBody !== undefined &&
+            expandedBody !== body && { expandedBody: bounded(expandedBody, maximumLength) }),
           ...(format && { format }),
         },
       ]
@@ -66,32 +69,35 @@ const TOOL_EVENT_GLYPHS = {
   running: SUITE_STATUS_GLYPHS.neutral,
 } as const satisfies Record<ToolEvent["state"], string>;
 
+interface ToolLines {
+  /** The call as one line: its state's glyph, tool, target, and outcome. */
+  readonly line: string;
+  /** The call's output as printed, indented beneath it, for an inspected item. */
+  readonly output: readonly string[];
+}
+
 /**
  * A tool call as one line: its state's glyph, then an owned agent tool's phrased result, or
- * another tool's target and its output as printed. Agent tools' model-facing envelopes never reach
- * this view.
+ * another tool's target, with its output as printed kept apart for an inspected item. Agent
+ * tools' model-facing envelopes never reach this view.
  */
-const toolLine = (event: ToolEvent, nameOf: RunNameLookup): string => {
+const toolLines = (event: ToolEvent, nameOf: RunNameLookup): ToolLines => {
   const { activity } = event;
   const outcome = activity
     ? [activity.summary]
     : event.state === "running"
       ? [event.toolName === SUBAGENT_TOOL_NAME.await ? waitingOn(event, nameOf) : "running"]
       : [];
-  const output =
-    activity || event.outputPreview === undefined || isOwnedAgentTool(event.toolName)
-      ? []
-      : Arr.map(Str.split(event.outputPreview, "\n"), (line) => `  ${line}`);
-  return Arr.join(
-    [
-      `${TOOL_EVENT_GLYPHS[event.state]} ${Arr.join(
-        Arr.filter([event.toolName, event.target, ...outcome], isTextFragment),
-        " · ",
-      )}`,
-      ...output,
-    ],
-    "\n",
-  );
+  return {
+    line: `${TOOL_EVENT_GLYPHS[event.state]} ${Arr.join(
+      Arr.filter([event.toolName, event.target, ...outcome], isTextFragment),
+      " · ",
+    )}`,
+    output:
+      activity || event.outputPreview === undefined || isOwnedAgentTool(event.toolName)
+        ? []
+        : Arr.map(Str.split(event.outputPreview, "\n"), (line) => `  ${line}`),
+  };
 };
 
 // The final report is shown once, as the Result, so recent activity leaves it out.
@@ -102,22 +108,26 @@ const isFinalReport = (run: SubagentRunView, event: SubagentSessionEvent): boole
 
 /**
  * Recent events in order: tool calls and notices stay verbatim, while the agent's own messages and
- * the words its agent tools returned render as Markdown, the way the transcript shows them.
+ * the words its agent tools returned render as Markdown, the way the transcript shows them. A
+ * preview lists each tool call on one line; an inspected item shows each call's output beneath it.
  */
 const recentActivity = (run: SubagentRunView, nameOf: RunNameLookup): ActivityDetailSection[] => {
   const events = Arr.filter(
     run.sessionEvents.slice(-RECENT_EVENTS),
     (event) => !isFinalReport(run, event),
   );
-  const groups: Array<{ markdown: boolean; lines: string[] }> = [];
-  const push = (markdown: boolean, text: string) => {
+  const groups: Array<{ markdown: boolean; lines: string[]; expanded: string[] }> = [];
+  const push = (markdown: boolean, text: string, output: readonly string[] = []) => {
     const last = groups.at(-1);
-    if (last && !markdown && !last.markdown) last.lines.push(text);
-    else groups.push({ markdown, lines: [text] });
+    if (last && !markdown && !last.markdown) {
+      last.lines.push(text);
+      last.expanded.push(text, ...output);
+    } else groups.push({ markdown, lines: [text], expanded: [text, ...output] });
   };
   for (const event of events) {
     if (event.type === "tool") {
-      push(false, toolLine(event, nameOf));
+      const { line, output } = toolLines(event, nameOf);
+      push(false, line, output);
       // The words an agent tool returned, such as a report or reply, read as the agent wrote them.
       if (event.activity?.text) push(true, event.activity.text);
     } else if (event.type === "assistant") push(true, Fn.pipe(event.text, Str.slice(-600)));
@@ -130,6 +140,7 @@ const recentActivity = (run: SubagentRunView, nameOf: RunNameLookup): ActivityDe
       Arr.join(group.lines, "\n"),
       3_000,
       group.markdown ? "markdown" : undefined,
+      Arr.join(group.expanded, "\n"),
     ),
   );
 };

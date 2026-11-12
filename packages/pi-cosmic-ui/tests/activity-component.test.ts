@@ -101,8 +101,9 @@ describe("activity presentation", () => {
     expect(run("2")).toBe("pin");
     expect(run("3")).toBeUndefined();
   });
-  it("keeps inspected running details still but picks up the final result unless scrolled", () => {
+  it("keeps unfollowed running details still but picks up the final result unless scrolled", () => {
     const short = inspectRunning(2);
+    short.component.handleInput("f");
     const before = short.loads.length;
     short.advance({ ...short.row(), revision: "2" });
     expect(short.loads.length).toBe(before);
@@ -112,7 +113,7 @@ describe("activity presentation", () => {
     expect(Arr.join(short.component.render(120), "\n")).toContain("final result");
 
     const scrolled = inspectRunning(60);
-    scrolled.component.handleInput("j");
+    for (const key of ["f", "g", "g", "j"]) scrolled.component.handleInput(key);
     scrolled.component.render(120);
     expect(scrolled.component.shell.detailAtTop).toBe(false);
     const loaded = scrolled.loads.length;

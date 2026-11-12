@@ -1,8 +1,12 @@
 import { plainTheme } from "pi-cosmic-core/testing";
 import { ActivityComponent, type ActivityComponentOptions } from "../../src/activity/component.ts";
 import type { ActivityRow } from "../../src/activity/model.ts";
-import { activityKey, type ActivityItem } from "../../src/activity/protocol.ts";
-import { plainActivityDetail } from "../../src/activity/detail.ts";
+import {
+  activityKey,
+  type ActivityDetail,
+  type ActivityItem,
+} from "../../src/activity/protocol.ts";
+import { decodeActivityDetail, plainActivityDetail } from "../../src/activity/detail.ts";
 import {
   ActivityService,
   type ActivityActionRequest,
@@ -56,7 +60,11 @@ export const mountActivity = (
   } = {},
 ) => {
   const closed: Array<ActivityActionRequest | undefined> = [];
-  const loads: Array<{ readonly request: ActivityDetailRequest; deliver(text: string): void }> = [];
+  const loads: Array<{
+    readonly request: ActivityDetailRequest;
+    deliver(text: string): void;
+    deliverDetail(detail: ActivityDetail): void;
+  }> = [];
   let cancels = 0;
   const component = new ActivityComponent({
     ...options,
@@ -68,7 +76,11 @@ export const mountActivity = (
     },
     requestRender: () => undefined,
     loadDetail: (request, deliver) => {
-      loads.push({ request, deliver: (text) => deliver(plainActivityDetail(text)) });
+      loads.push({
+        request,
+        deliver: (text) => deliver(plainActivityDetail(text)),
+        deliverDetail: (detail) => deliver(decodeActivityDetail(detail) ?? { sections: [] }),
+      });
     },
     cancelDetail: () => {
       cancels++;

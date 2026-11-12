@@ -253,11 +253,15 @@ describe("persistent dashboard", () => {
     const f = dashboard();
     f.press("\t", "\r", "\t");
     f.untrust();
-    f.press("\u001b[Z", "\r");
+    f.press("\u001b[Z");
+    expect(disposed).toHaveBeenCalledTimes(1);
+    // Enter now reaches only a Global set; the retired Project editor stays closed.
+    f.press("\r");
     expect(disposed).toHaveBeenCalledTimes(1);
     expect(f.saveDraft).not.toHaveBeenCalled();
     f.component.dispose();
-    expect(disposed).toHaveBeenCalledTimes(2);
+    // The session editor and the Global set's editor.
+    expect(disposed).toHaveBeenCalledTimes(3);
     disposed.mockRestore();
   });
   effectTest("serializes snapshot writes and blocks navigation while one is pending", function* () {

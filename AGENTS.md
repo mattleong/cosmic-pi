@@ -48,7 +48,7 @@ Pi owns native codemode/MCP execution, activation, permissions, connections, and
 
 Load trusted project preview settings before session tool registration. Factory-time replay bridges capture their originating owner, publish only after successful registration, settle startup, and retire on shutdown. Historical rendering must never execute tools or borrow another session's settings or scheduler.
 
-Every error or warning has a short human-facing `CompactIssue.message` visible collapsed and expanded; recovery procedures and diagnostics belong in expanded `detail`. Preserve complete input, output, recovery evidence, and native images through expansion. Exercise actual registrations or public renderer callbacks with `pi-code-previews/testing`, including `issueMessageStyleProblems` for issue producers. Use `pnpm presentation:gallery` for visual review and add a scenario when introducing a visible state.
+Every error or warning has a short human-facing `CompactIssue.message` visible collapsed and expanded; recovery procedures and diagnostics belong in expanded `detail`. Preserve complete input, output, recovery evidence, and native images through expansion. Exercise actual registrations or public renderer callbacks with `pi-code-previews/testing`, including `issueMessageStyleProblems` for issue producers. Review every new or changed visible state live through Rex, as described in [Reviewing a surface](docs/architecture/ui-conventions.md#reviewing-a-surface).
 
 ## Testing policy
 

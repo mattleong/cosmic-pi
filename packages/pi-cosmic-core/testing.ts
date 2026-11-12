@@ -41,7 +41,6 @@ export type {
   ExtensionEventName,
   ExtensionEventNamed,
 } from "./src/testing/extension-events.ts";
-export { galleryDirectory, writeGallerySection } from "./src/testing/gallery.ts";
 export { spawnIpcChild, temporaryDirectory } from "./src/testing/ipc-child.ts";
 export { yieldUntil } from "./src/testing/polling.ts";
 export { reusedProcessIdentity } from "./src/testing/process.ts";

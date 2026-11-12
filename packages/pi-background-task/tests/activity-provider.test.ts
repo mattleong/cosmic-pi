@@ -4,6 +4,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
@@ -97,6 +98,16 @@ describe("background task activity provider", () => {
       tasks: [{ ...task, logs, state: "exited", exitCode: 0, endedAt: 2 }],
     });
     expect(JSON.stringify(finished)).not.toContain("tick 18");
+  });
+
+  it("offers clearing finished tasks as an action on the whole Tasks section", () => {
+    const [finished] = backgroundTaskActivityItems({
+      tasks: [{ ...task, state: "exited", exitCode: 0, endedAt: 2 }],
+    });
+    const clear = Arr.findFirst(finished?.actions ?? [], (action) => action.id === "clear");
+    expect(Option.getOrUndefined(clear)?.scope).toBe("section");
+    const [running] = backgroundTaskActivityItems({ tasks: [task] });
+    expect(Arr.every(running?.actions ?? [], (action) => action.scope === undefined)).toBe(true);
   });
 
   it("redacts credentials before publishing summaries or selected details", () => {

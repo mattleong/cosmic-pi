@@ -1,8 +1,9 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey } from "@earendil-works/pi-tui";
+import { Input, Key, matchesKey } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Str from "effect/String";
 import { FullScreenResolution } from "../manager/keymap.ts";
 import type {
   FullScreenAction,
@@ -11,8 +12,15 @@ import type {
 } from "../manager/keymap.ts";
 import { listDetailMotionFromAction, type DetailWindowPosition } from "../manager/list-detail.ts";
 import { ListDetailShell } from "../manager/list-detail-shell.ts";
-import { activityActionForKey, activityActionPages, activityShortcuts } from "./action-keys.ts";
-import { needsYou } from "./attention.ts";
+import { isListMotion } from "../manager/list-navigation.ts";
+import {
+  activityActionForKey,
+  activityActionPages,
+  activityShortcuts,
+  isSectionAction,
+} from "./action-keys.ts";
+import { activityCanFollow, needsYou } from "./attention.ts";
+import { activityFilterMatcher } from "./filter.ts";
 import { activityInspectionKey } from "./widget-projection.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
@@ -23,7 +31,7 @@ import {
   groupedActivityTree,
   type GroupedActivityRow,
 } from "./grouped-tree.ts";
-import { renderGroupedActivity } from "./grouped-render.ts";
+import { renderGroupedActivity, type ActivityFilterView } from "./grouped-render.ts";
 import type { ActivitySection } from "./view-protocol.ts";
 import type { ActivityDetail } from "./protocol.ts";
 
@@ -72,6 +80,11 @@ interface VisibleCache extends TreeCache {
   readonly focus: string | undefined;
   readonly collapsed: ReadonlySet<string>;
   readonly expandedHistory: ReadonlySet<string>;
+  readonly query: string;
+}
+interface ActivityMatcher {
+  readonly query: string;
+  readonly matches: ((row: ActivityRow) => boolean) | undefined;
 }
 const sameSet = (left: ReadonlySet<string>, right: ReadonlySet<string>) =>
   left.size === right.size && Arr.every([...left], (value) => right.has(value));
@@ -81,6 +94,7 @@ const sameAction = (left: ActivityAction, right: ActivityAction) =>
   left.id === right.id &&
   left.label === right.label &&
   left.confirmation === right.confirmation &&
+  left.scope === right.scope &&
   handsOff(left) === handsOff(right);
 
 interface PendingConfirmation {
@@ -88,6 +102,16 @@ interface PendingConfirmation {
   readonly action: ActivityAction;
   readonly key: string | undefined;
 }
+
+/** An action on screen and the source it runs on; a section heading gathers its members'. */
+interface ActionOffer {
+  readonly row: ActivityRow;
+  readonly action: ActivityAction;
+}
+
+/** Running work opens following its newest output; anything else opens at its top. */
+const opensFollowed = (row: ActivityRow | undefined): boolean =>
+  row?.status === "running" && activityCanFollow(row);
 
 export class ActivityComponent {
   readonly shell: ListDetailShell;
@@ -105,7 +129,21 @@ export class ActivityComponent {
   private initialized = false;
   private selectedIdentity: string | undefined;
   private requested: ActivityDetailRequest | undefined;
-  private displayed: { readonly row: ActivityRow; readonly actionPage: number } | undefined;
+  private displayed:
+    | {
+        readonly identity: string | undefined;
+        readonly offers: ReadonlyArray<ActionOffer>;
+        readonly actionPage: number;
+      }
+    | undefined;
+  private filterQuery = "";
+  private filterTyping = false;
+  private readonly filterInput = new Input();
+  /** Branches folded while a filter applies; a new query opens every branch to its matches. */
+  private readonly filterFolded = new Set<string>();
+  /** The selection when filtering began, restored if a query left nothing selected. */
+  private filterOrigin: string | undefined;
+  private matcherCache: ActivityMatcher = { query: "", matches: undefined };
   private loaded:
     | { readonly request: ActivityDetailRequest; readonly detail: ActivityDetail }
     | undefined;
@@ -137,38 +175,60 @@ export class ActivityComponent {
     };
     return this.fullTree;
   }
+  /** The typed filter's matcher, or `undefined` while no query filters the tree. */
+  private matcher(): ((row: ActivityRow) => boolean) | undefined {
+    if (this.matcherCache.query !== this.filterQuery)
+      this.matcherCache = {
+        query: this.filterQuery,
+        matches: activityFilterMatcher(this.filterQuery),
+      };
+    return this.matcherCache.matches;
+  }
   private entries() {
     const prefs = this.presentation;
     const rows = this.options.snapshot();
     const all = this.allEntries();
     if (prefs.focus && !Arr.some(all, (entry) => entry.id === prefs.focus)) prefs.focus = undefined;
+    const matches = this.matcher();
+    const query = matches ? this.filterQuery : "";
+    const collapsed = matches ? this.filterFolded : prefs.collapsed;
     const cached = this.visibleTree;
     if (
       cached?.rows === rows &&
       cached.focus === prefs.focus &&
-      sameSet(cached.collapsed, prefs.collapsed) &&
+      cached.query === query &&
+      sameSet(cached.collapsed, collapsed) &&
       sameSet(cached.expandedHistory, prefs.expandedHistory)
     )
       return cached.entries;
     const entries = groupedActivityTree(rows, {
-      collapsed: prefs.collapsed,
+      collapsed,
       expandedHistory: prefs.expandedHistory,
       ...(prefs.focus && { focus: prefs.focus }),
+      ...(matches && { matches }),
     });
     this.visibleTree = {
       rows,
       entries,
       focus: prefs.focus,
-      collapsed: new Set(prefs.collapsed),
+      collapsed: new Set(collapsed),
       expandedHistory: new Set(prefs.expandedHistory),
+      query,
     };
     return entries;
   }
   private reveal(id: string): void {
     this.presentation.focus = undefined;
+    const matches = this.matcher();
+    const row = Option.getOrUndefined(
+      Arr.findFirst(this.options.snapshot(), (candidate) => candidate.key === id),
+    );
+    // A filter that hides the item gives way to it.
+    if (matches && row && !matches(row)) this.resetFilter();
     const all = this.allEntries();
     for (const entry of groupedActivityPath(all, id)) {
       this.presentation.collapsed.delete(entry.id);
+      this.filterFolded.delete(entry.id);
       this.presentation.expandedHistory.add(entry.id);
     }
     this.selectId(this.entries(), id);
@@ -182,16 +242,30 @@ export class ActivityComponent {
       Arr.map(entries, (entry) => entry.id),
     );
   }
+  /**
+   * Opening selects what needs the user's input first: the first such item in the tree, or, for
+   * `/tasks` and `/subagents`, the first in that section. Otherwise `/activity` keeps the last
+   * selection and the others select their first matching item.
+   */
   private initialEntry(): GroupedActivityRow | undefined {
     const all = this.allEntries();
     const section = this.options.initialSection;
+    const waiting = new Set(Arr.map(needsYou(this.options.snapshot()), (row) => row.key));
+    const needsInput = (entry: GroupedActivityRow) =>
+      entry.type === "member" && waiting.has(entry.id);
     if (!section)
-      return this.shell.state.selectedId
-        ? undefined
-        : Option.getOrUndefined(Arr.findFirst(all, (entry) => entry.type === "member"));
+      return (
+        Option.getOrUndefined(Arr.findFirst(all, needsInput)) ??
+        (this.shell.state.selectedId
+          ? undefined
+          : Option.getOrUndefined(Arr.findFirst(all, (entry) => entry.type === "member")))
+      );
     const matching = (entry: GroupedActivityRow) =>
       source(entry)?.kind === (section === "tasks" ? "command" : "agent");
     return (
+      Option.getOrUndefined(
+        Arr.findFirst(all, (entry) => entry.section === section && needsInput(entry)),
+      ) ??
       Option.getOrUndefined(
         Arr.findFirst(all, (entry) => entry.section === section && matching(entry)),
       ) ??
@@ -207,12 +281,12 @@ export class ActivityComponent {
       if (ancestor.history) this.presentation.expandedHistory.add(ancestor.id);
     return this.entries();
   }
-  private resetSelectionState(identity: string | undefined): void {
+  private resetSelectionState(identity: string | undefined, row: ActivityRow | undefined): void {
     this.selectedIdentity = identity;
-    this.follow = false;
+    this.follow = opensFollowed(row);
     this.actionPage = 0;
     this.preserveDetailPosition = false;
-    this.openAtTop = true;
+    this.openAtTop = !this.follow;
     this.anchored = false;
     this.cancellationPending ||= this.requested !== undefined;
     this.requested = undefined;
@@ -230,10 +304,9 @@ export class ActivityComponent {
     const selected = entries[this.shell.state.selected];
     const row = source(selected);
     const identity = row ? JSON.stringify([row.key, row.generation]) : selected?.id;
-    if (identity !== this.selectedIdentity) this.resetSelectionState(identity);
-    this.shell.ensureSelectionPane(
-      selected !== undefined && !(selected.type === "section" && selected.children === 0),
-    );
+    if (identity !== this.selectedIdentity) this.resetSelectionState(identity, row);
+    // A section heading folds in place; only a source's detail can be entered.
+    this.shell.ensureSelectionPane(selected?.type === "member");
     return { entries, selected };
   }
   private cancelDetails(): void {
@@ -332,6 +405,10 @@ export class ActivityComponent {
     }
     const { entries, selected } = this.selected();
     this.flushCancellation();
+    if (this.filterTyping) {
+      this.handleFilterInput(data, entries, selected);
+      return this.settleInput();
+    }
     const row = source(selected);
     if (
       this.shell.state.pane === "list" &&
@@ -347,12 +424,86 @@ export class ActivityComponent {
     if (!result) return;
     FullScreenResolution.$match(result, {
       Shortcut: ({ key }) => this.handleShortcut(key, selected, row),
-      Action: ({ action }) => {
-        if (action === "confirm" && selected) this.enterSelection();
-        else this.handleNavigation(action, entries, selected);
-      },
+      Action: ({ action }) => this.handleAction(action, entries, selected),
     });
     if (!this.closed) this.settleInput();
+  }
+  private handleAction(
+    action: FullScreenAction,
+    entries: readonly GroupedActivityRow[],
+    selected: GroupedActivityRow | undefined,
+  ): void {
+    const inList = this.shell.state.pane === "list";
+    if (action === "confirm" && selected?.type === "section") {
+      if (selected.children) this.setExpanded(selected.id, !selected.expanded);
+    } else if (action === "confirm" && selected) this.enterSelection();
+    // There is nothing to filter until something appears.
+    else if (action === "search" && inList && this.fullTreeCache().members > 0) this.startFilter();
+    // An applied filter is cleared before the next Esc closes.
+    else if (action === "cancel" && inList && this.matcher()) this.resetFilter();
+    else this.handleNavigation(action, entries, selected);
+  }
+  /** While the filter takes the keys, letters type and only list motions, Enter, and Esc act. */
+  private handleFilterInput(
+    data: string,
+    entries: readonly GroupedActivityRow[],
+    selected: GroupedActivityRow | undefined,
+  ): void {
+    const result = this.shell.keymap.resolve(data, {
+      mode: "search",
+      matchesKeybinding: this.options.matchesKeybinding,
+    });
+    if (Predicate.isTagged(result, "Action")) {
+      if (result.action === "cancel") this.resetFilter();
+      else if (result.action === "confirm") {
+        this.filterTyping = false;
+        if (!this.matcher()) this.resetFilter();
+      } else if (isListMotion(result.action))
+        this.handleNavigation(result.action, entries, selected);
+      return;
+    }
+    this.filterInput.handleInput(data);
+    const query = this.filterInput.getValue();
+    if (query !== this.filterQuery) this.applyFilter(query);
+  }
+  private startFilter(): void {
+    if (!this.matcher()) this.filterOrigin = this.shell.state.selectedId;
+    this.filterTyping = true;
+    this.filterInput.setValue(this.filterQuery);
+    this.shell.keymap.resetChord();
+  }
+  /** A new query opens every branch to its matches and keeps the selection when it still shows. */
+  private applyFilter(query: string): void {
+    this.filterQuery = query;
+    this.filterFolded.clear();
+    const entries = this.entries();
+    if (Arr.some(entries, (entry) => entry.id === this.shell.state.selectedId)) return;
+    const matches = this.matcher();
+    const first =
+      Option.getOrUndefined(
+        Arr.findFirst(
+          entries,
+          (entry) => entry.type === "member" && (matches === undefined || matches(entry.row)),
+        ),
+      ) ?? entries[0];
+    if (first) this.selectId(entries, first.id);
+  }
+  /** Clears the filter, keeping the selected item in view. */
+  private resetFilter(): void {
+    const filtered = this.matcher() !== undefined;
+    this.filterTyping = false;
+    this.filterQuery = "";
+    this.filterInput.setValue("");
+    this.filterFolded.clear();
+    const id = this.shell.state.selectedId ?? this.filterOrigin;
+    this.filterOrigin = undefined;
+    if (
+      filtered &&
+      id &&
+      !Arr.some(this.entries(), (entry) => entry.id === this.shell.state.selectedId) &&
+      Arr.some(this.allEntries(), (entry) => entry.id === id)
+    )
+      this.reveal(id);
   }
   private handleConfirmationInput(data: string, confirmation: PendingConfirmation): void {
     const result = this.shell.keymap.resolve(data, {
@@ -382,9 +533,12 @@ export class ActivityComponent {
   ): boolean {
     const back = matchesKey(data, "h") || matchesKey(data, Key.left);
     const forward = matchesKey(data, "l") || matchesKey(data, Key.right);
+    // A section heading unfolds, but has no detail to enter.
+    if (forward && selected.type === "section" && (selected.expanded || !selected.children))
+      return true;
     if ((back && selected.expanded) || (forward && selected.children && !selected.expanded)) {
+      // Folding changes the tree, not the selection, so the preview keeps its place.
       this.setExpanded(selected.id, !back);
-      this.shell.resetDetailScroll();
       return true;
     }
     if (
@@ -397,6 +551,12 @@ export class ActivityComponent {
     return true;
   }
   private setExpanded(id: string, expanded: boolean): void {
+    // Folding under a filter lasts only as long as its query.
+    if (this.matcher()) {
+      if (expanded) this.filterFolded.delete(id);
+      else this.filterFolded.add(id);
+      return;
+    }
     if (expanded) {
       this.presentation.collapsed.delete(id);
       this.presentation.expandedHistory.add(id);
@@ -412,17 +572,20 @@ export class ActivityComponent {
   ): void {
     if (key === "w") this.revealNextWaiting(row);
     else if (key === "a")
-      this.actionPage = (this.actionPage + 1) % activityActionPages(row?.actions);
+      this.actionPage =
+        (this.actionPage + 1) %
+        activityActionPages(Arr.map(this.offers(selected), (offer) => offer.action));
     else if (key === "z")
       this.presentation.focus = this.presentation.focus ? undefined : selected?.id;
     else if (row) this.handleRowShortcut(key, row);
+    else if (selected) this.invokeShortcutAction(key);
   }
   private handleRowShortcut(key: string, row: ActivityRow): void {
     if (key === "r") this.loadDetails(row, !this.follow);
     else if (key === "t") this.technical = !this.technical;
     else if (!row.retained) {
       if (key === "f") this.toggleFollow(row);
-      else this.invokeShortcutAction(key, row);
+      else this.invokeShortcutAction(key);
     }
   }
   private revealNextWaiting(row: ActivityRow | undefined): void {
@@ -438,20 +601,77 @@ export class ActivityComponent {
       ];
     if (urgent) this.reveal(urgent.key);
   }
+  /** Only work that can still produce output is followed; following stops from any row. */
   private toggleFollow(row: ActivityRow): void {
+    if (!this.follow && !activityCanFollow(row)) return;
     this.follow = !this.follow;
     if (this.follow) this.loadDetails(row);
-    else this.cancelDetails();
+    else {
+      this.cancelDetails();
+      this.keepDetailPlace();
+    }
   }
-  private invokeShortcutAction(key: string, row: ActivityRow): void {
+  /**
+   * The actions on screen: a row's own, or, on a section heading, the section actions its
+   * members offer, once per provider and action.
+   */
+  private offers(selected: GroupedActivityRow | undefined): ReadonlyArray<ActionOffer> {
+    if (!selected) return [];
+    if (selected.type === "member") {
+      const row = selected.row;
+      return row.retained ? [] : Arr.map(row.actions ?? [], (action) => ({ row, action }));
+    }
+    const seen = new Set<string>();
+    const offers: ActionOffer[] = [];
+    for (const entry of this.allEntries()) {
+      if (entry.type !== "member" || entry.section !== selected.section || entry.row.retained)
+        continue;
+      for (const action of entry.row.actions ?? []) {
+        const id = JSON.stringify([entry.row.providerId, action.id]);
+        if (!isSectionAction(action) || seen.has(id)) continue;
+        seen.add(id);
+        offers.push({ row: entry.row, action });
+      }
+    }
+    return offers;
+  }
+  /** The selected member's direct children, in tree order. */
+  private childrenOf(selected: GroupedActivityRow | undefined): readonly ActivityRow[] {
+    if (selected?.type !== "member") return [];
+    return Arr.flatMap(this.allEntries(), (entry) =>
+      entry.type === "member" && entry.parentId === selected.id ? [entry.row] : [],
+    );
+  }
+  private filterView(): ActivityFilterView | undefined {
+    const matches = this.matcher();
+    if (!this.filterTyping && !matches) return undefined;
+    const theme = this.options.theme;
+    return {
+      query: matches ? Str.trim(this.filterQuery) : "",
+      typing: this.filterTyping,
+      matches: matches
+        ? Arr.filter(this.allEntries(), (entry) => entry.type === "member" && matches(entry.row))
+            .length
+        : this.fullTreeCache().members,
+      input: (width) => theme.fg("accent", this.filterInput.render(Math.max(1, width))[0] ?? ""),
+    };
+  }
+  private invokeShortcutAction(key: string): void {
     const shown = this.displayed;
-    if (!shown || shown.row.key !== row.key || shown.row.generation !== row.generation) return;
-    const action = activityActionForKey(shown.row.actions ?? [], key, shown.actionPage);
-    if (!action) return;
+    if (!shown || shown.identity !== this.selectedIdentity) return;
+    const action = activityActionForKey(
+      Arr.map(shown.offers, (offer) => offer.action),
+      key,
+      shown.actionPage,
+    );
+    const offer = Option.getOrUndefined(
+      Arr.findFirst(shown.offers, (candidate) => candidate.action === action),
+    );
+    if (!action || !offer) return;
     const request = {
-      key: shown.row.key,
-      generation: shown.row.generation,
-      revision: shown.row.revision,
+      key: offer.row.key,
+      generation: offer.row.generation,
+      revision: offer.row.revision,
       actionId: action.id,
     };
     if (handsOff(action) || !this.options.invoke) this.cancelDetails();
@@ -515,8 +735,12 @@ export class ActivityComponent {
     const { entries, selected } = this.selected();
     const row = source(selected);
     const detailPosition = this.detailPosition();
-    this.actionPage = Math.min(this.actionPage, activityActionPages(row?.actions) - 1);
-    this.displayed = row && !row.retained ? { row, actionPage: this.actionPage } : undefined;
+    const offers = this.offers(selected);
+    const actions = Arr.map(offers, (offer) => offer.action);
+    this.actionPage = Math.min(this.actionPage, activityActionPages(actions) - 1);
+    this.displayed = offers.length
+      ? { identity: this.selectedIdentity, offers, actionPage: this.actionPage }
+      : undefined;
     const lines = renderGroupedActivity(
       this.options,
       {
@@ -539,11 +763,15 @@ export class ActivityComponent {
         follow: this.follow,
         technical: this.technical,
         detailPosition,
+        actions,
+        children: this.childrenOf(selected),
+        filter: this.filterView(),
       },
       width,
     );
-    // A narrow list hides the preview; elsewhere the selected item's detail is on screen.
-    if (row && (this.shell.state.layout !== "narrow" || this.shell.state.details))
+    // A single pane showing the list hides the preview; otherwise the selected item's detail is
+    // on screen.
+    if (row && (this.shell.state.arrangement !== "single" || this.shell.state.details))
       this.markInspected(row);
     if (this.options.height() > 3) this.preserveDetailPosition = false;
     if (

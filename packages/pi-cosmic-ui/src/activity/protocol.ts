@@ -46,6 +46,11 @@ const ActivityFields = {
         label: Text,
         confirmation: Schema.optional(Text),
         handoff: Schema.optional(Schema.Boolean),
+        /**
+         * `section`: the action acts on the item's whole section, such as clearing every finished
+         * task. Activity offers it on the section heading rather than among the row's own actions.
+         */
+        scope: Schema.optional(Schema.Literal("section")),
       }),
     ).check(Schema.isMaxLength(ACTIVITY_LIMITS.actions)),
   ),
@@ -94,6 +99,11 @@ export const activityKey = (providerId: string, itemId: string): string =>
 export interface ActivityDetailSection {
   readonly title?: string | undefined;
   readonly body: string;
+  /**
+   * A fuller body shown in place of `body` once the item is inspected, such as tool calls with
+   * their output where `body` lists one line per call. It counts toward the detail limit too.
+   */
+  readonly expandedBody?: string | undefined;
   /** Agent-authored prose renders as Markdown; everything else, such as logs, stays verbatim. */
   readonly format?: "plain" | "markdown" | undefined;
 }

@@ -13,29 +13,32 @@ Part of the [pi-subagents](../README.md) architecture documentation. Routing pol
 
 ## Profile editor
 
-One dashboard holds Current session and Saved profiles tabs, each remembering its position. Editors keep the selected profile, candidate, field, and Advanced expansion during internal navigation. The dashboard keeps editors and dialogs in one custom host lifetime, opened on Cosmic UI's shared `screen` surface.
+One dashboard holds Current session and Saved profiles tabs, named in its top border and each remembering its position. Editors keep the selected profile, candidate, field, and Advanced expansion during internal navigation. The dashboard keeps editors and dialogs in one custom host lifetime, opened on Cosmic UI's shared `screen` surface.
 
-- Candidate sections are labelled Primary and Fallback N. Main fields are Model, Reasoning, and File access; Advanced holds Context and OpenAI fast mode where applicable.
-- Each section's Manage menu has Duplicate, valid Move up/Move down, and Delete. Delete confirms and warns when it would disable the profile; there is no standalone Disable.
-- Add fallback and Undo changes appear under the profile name; disabled profiles show Add model instead.
-- Save these profiles as a set, below the profile list, captures all seven profiles.
+- Both tabs are two-pane surfaces on Cosmic UI's `ListDetailShell`, arranged by `managerArrangement` (side by side, stacked on a narrow frame at least 30 rows tall, else one pane at a time). The shell owns pane focus, the selection, and the arrangement; the editor's fields pane keeps its own field cursor, and the library's preview scrolls through the shell. Each pane that overflows names its position in its heading.
+- One status row under the top border carries each tab's context: the set the session is based on and how many profiles differ from it, the saved set an editor writes to, or that saved sets stay separate until used. Messages such as `Updating scout…`, a finished change, and errors take that row while they apply.
+- Candidate sections are labelled Primary and Fallback N. Main fields are Model, Reasoning, and File access; Advanced holds Context and OpenAI fast mode where applicable. The fields pane holds only settings; a profile with no candidates shows one `Add model…` row.
+- Each candidate's Manage menu (`a`) has Duplicate, valid Move up/Move down, and Delete. Delete confirms and warns when it would disable the profile; there is no standalone Disable.
+- Short choice lists (Reasoning, File access, Context, fast mode, Manage, profile search, and a saved set's Actions) open inside the fields or preview pane, keeping the list in view; one pane at a time, they take the pane. The model picker takes the whole dashboard. Confirmations and the name dialogs sit in a band above the bottom border, below the panes they concern.
 
 Keys:
 
 - Up/k and Down/j move without writing; Right/l focuses fields and Left/h the profile list; Enter opens the selected editor or picker.
 - Tab and Shift+Tab switch tabs; Esc closes the nearest picker or backs up one level; `?` expands the hint bar to every key below and collapses it again.
 - `m` and `e` open Model and Reasoning. `a` opens the candidate's Manage menu, and `+` adds a fallback after a model is chosen.
-- `[` and `]` move between candidates, `/` searches profiles, and `s` opens the save dialog.
+- `[` and `]` move between candidates, and `/` searches profiles.
+- `u` undoes the selected profile's changes from this visit, after a confirmation; the hint appears only when there is something to undo.
+- On Current session, `s` saves the session's seven profiles as a new set. Its hint is in the default bar when the session differs from the set it is based on, and behind `? More` otherwise; a saved set's editor neither offers nor accepts it.
 - `/subagents profiles worker` opens a profile directly.
 
 Behavior:
 
 - An unpinned value reads as the value it inherits on every surface: `inherit (anthropic/claude-opus-5-5)` for the parent's model (the profile table drops the provider) and `inherit (low)` for the profile's default reasoning, as a picker row too, ahead of the pinned levels. The profile table keeps `inherit (low)` unless its models would clip, then shows the bare level. Pickers keep unavailable configured models on cancellation, which is silent and changes nothing.
 - Edits auto-save serially. Conflicts refresh without retrying, and a failed refresh blocks edits until reopening. Catalog cancellation, disposal, and activation replacement suppress late continuations.
+- On Current session, `●` marks a profile whose route differs from the set the session is based on, so no saved set holds it; the footer marks the same state with `*`. A saved set's editor writes each change to the set, so it shows no `●`.
 
 ### Undo during an editor visit
 
-- `●` marks this visit's own changes that Undo can restore, not a persistent override or unsaved edit.
 - Undo restores the selected profile's opening declaration in the current session or a saved set, preserving absence, disabled state, optional fields, and order. It never resets the current session to its saved default.
 - Checkpoints survive tab switches, pickers, and forms, but not closing the dashboard. Renaming a set carries its checkpoint, deleting drops it, and a confirmed Use resets the session checkpoint.
 - Undo uses checked writes and committed receipts. An external change to the same route withdraws Undo ownership rather than overwriting it, and unrestorable invalid declarations fail safely.
@@ -46,11 +49,11 @@ Behavior:
 
 ## Saved-set library
 
-The Saved profiles tab groups sets by Project and Global. Untrusted Project rows stay visible but unavailable, without reading their configuration. Selecting a set previews its seven resolved profiles, including inherited, disabled, and invalid routes.
+The Saved profiles tab lists sets under Project and Global headings, marking the default and the set the session is based on (`in use`). An empty scope, and an untrusted Project, show a muted note that can't be selected, without reading untrusted configuration. Selecting a set previews its seven resolved profiles, including inherited, disabled, and invalid routes, saying once where they come from and naming only the profiles that differ.
 
-- Enter edits, `u` opens Use, `a` opens More (Make/clear default, Copy, Rename, Delete), and Esc closes the library.
+- Enter edits, `u` opens Use, `a` opens Actions (Make/clear default, Copy, Rename, Delete), `→` focuses the preview to scroll it, and Esc closes the library.
 - Use previews and confirms before replacing the current session. Opening or editing a set never applies it or makes it a default.
-- A saved editor reads `Editing name · session not affected`. Its edits change only that value, and making a set default affects new sessions only, so no reload is requested.
+- A saved set's editor names the set in the status row (`Editing Global/name · each change saves to this set · this session is unchanged`). Its edits change only that value, and making a set default affects new sessions only, so no reload is requested.
 - Clearing the Project default falls back to Global; clearing Global falls back to built-ins. A selected default can't be deleted until it is replaced or cleared.
 - Invalid sets stay visible and can't be used or made default. Project-set status includes routes inherited from the selected Global set. Route-invalid sets remain editable; structurally invalid sets must be deleted and recreated; a malformed unnamed default appears as a clearable repair row.
 - Saving is available only from the current session. The dialog takes a name and a destination (Project by default when trusted, otherwise Global). One store action writes all seven effective routes, and refuses fail-closed routes. The profile service holds its revision lock through the transaction, so an interleaved session edit either commits first and rejects the save, or waits.

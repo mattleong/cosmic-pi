@@ -30,7 +30,6 @@
     "typecheck:scripts": "tsc --noEmit -p scripts/tsconfig.json",
     "effect:diagnostics": "pnpm --workspace-concurrency=4 --no-sort -r run effect:diagnostics",
     "pack:smoke": "node scripts/verify-packed-core.ts",
-    "presentation:gallery": "node scripts/presentation-gallery.ts",
     "validate": "pnpm version:check && pnpm check && pnpm test && pnpm pack:smoke",
     "version:check": "node scripts/check-versions.ts",
     "version:set": "node scripts/set-version.ts"

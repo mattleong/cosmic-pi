@@ -1,8 +1,8 @@
-import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
-import { pageSteps } from "pi-cosmic-ui/manager/keymap";
+import { pageSteps, type FullScreenAction } from "pi-cosmic-ui/manager/keymap";
+import { listDetailMotionFromAction } from "pi-cosmic-ui/manager/list-detail";
 import { isMovementMotion, movementOffset } from "pi-cosmic-ui/manager/list-navigation";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../profiles/model.ts";
@@ -13,9 +13,17 @@ import {
   type ProfileWorkspaceTarget,
 } from "./profile-route-editor.ts";
 import type { CandidateModelPickerData } from "./profile-model-catalog.ts";
-import type { ProfileWorkspacePane, ProfileWorkspaceField } from "./ui/profile-workspace-model.ts";
+import { sessionChangedProfiles } from "../profiles/session-overrides.ts";
+import {
+  type ProfileWorkspacePane,
+  type ProfileWorkspaceField,
+} from "./ui/profile-workspace-model.ts";
 import { profileWorkspaceConfirmation } from "./ui/profile-workspace-actions.ts";
-import { renderProfileWorkspace } from "./ui/profile-workspace-render.ts";
+import {
+  renderProfileWorkspace,
+  type ProfileWorkspaceConfirmation,
+} from "./ui/profile-workspace-render.ts";
+import type { DashboardPrompt } from "./ui/profile-dashboard-render.ts";
 import {
   PROFILE_WORKSPACE_SHORTCUTS,
   isWorkspaceNavigationKey,
@@ -39,13 +47,14 @@ export type ProfileWorkspaceSaveResult =
 
 export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
+  /** The whole surface's height, which with the width decides how panes are arranged. */
+  readonly getFrameHeight?: (() => number) | undefined;
   readonly inspection: ProfileSettingsInspection;
   readonly target: ProfileWorkspaceTarget;
   readonly initialProfile?: ProfileId | undefined;
   readonly initialField?: ProfileWorkspaceField | undefined;
   readonly initialCandidateIndex?: number | undefined;
   readonly initialFocus?: ProfileWorkspacePane | undefined;
-  readonly initialSaveFocused?: boolean | undefined;
   readonly initialAdvancedExpanded?: boolean | undefined;
   readonly initialSelections?: ReadonlyArray<ProfileWorkspaceSelectionMemory> | undefined;
   readonly parentModel?: string | undefined;
@@ -75,10 +84,18 @@ export class ProfileWorkspaceComponent
   extends ProfileWorkspacePickers
   implements Component, Focusable
 {
+  /** A transient message for the host's status row, such as `Updating scout…`. */
+  get status() {
+    return this.message;
+  }
+
+  /** Lets a finished message go, as when its tab is left; a pending write or a block stays. */
+  dismissStatus(): void {
+    if (!this.busy && !this.refreshBlocked) this.message = undefined;
+  }
+
   protected openActions(): void {
-    if (this.pane === "profiles" && this.saveFocused) return;
     if (!this.draft().candidates[this.candidateIndex]) return;
-    if (this.pane === "fields" && this.rows()[this.fieldIndex]?.scope !== "candidate") return;
     this.showSelectPage(
       routeActionsSelector({
         ...selectHost(this.options),
@@ -102,25 +119,21 @@ export class ProfileWorkspaceComponent
     this.renderSoon();
   }
 
+  /** Whether `u` can undo the selected profile's changes from this visit. */
+  protected canUndo(): boolean {
+    return this.editVisit.isEdited(this.options.target, this.profile(), this.inspection);
+  }
+
+  protected undo(): void {
+    if (this.canUndo()) this.arm("reset");
+    else this.notice("info", `No changes to ${this.profile()} to undo.`);
+  }
+
   protected openSelectedField(): void {
     const row = this.rows()[this.fieldIndex];
     if (!row || this.busy) return;
-    if (row.field === "reset") {
-      if (this.editVisit.isEdited(this.options.target, this.profile(), this.inspection))
-        this.arm("reset");
-      else this.notice("info", "No undoable changes from this visit.");
-      return;
-    }
     if (row.fixed) {
       this.notice("info", row.fixedReason ?? "Nothing to change");
-      return;
-    }
-    if (row.field === "add") {
-      this.performDraftAction("add");
-      return;
-    }
-    if (row.field === "actions") {
-      this.openActions();
       return;
     }
     if (row.field === "advanced") {
@@ -129,14 +142,15 @@ export class ProfileWorkspaceComponent
       this.renderSoon();
       return;
     }
-    const candidate = this.draft().candidates[this.candidateIndex];
+    const candidate =
+      row.scope === "candidate" ? this.draft().candidates[this.candidateIndex] : undefined;
     if (candidate) this.openCandidateField(candidate, row.field);
-    else if (row.field === "model") this.performDraftAction("add");
+    else this.performDraftAction("add");
   }
 
   private openCandidateField(
     candidate: ProfileCandidate,
-    field: Exclude<ProfileWorkspaceField, "reset" | "add" | "actions" | "advanced">,
+    field: Exclude<ProfileWorkspaceField, "advanced">,
   ): void {
     if (field === "model") this.openModelPicker(candidate);
     else if (field === "openaiFastMode") this.openFastModePicker(candidate);
@@ -147,25 +161,17 @@ export class ProfileWorkspaceComponent
     this.message = undefined;
     this.pendingAction = undefined;
     this.keymap.resetChord();
-    if (this.pane === "fields") this.pane = "profiles";
+    if (this.pane === "fields") this.focusPane("profiles");
     else this.options.close();
     this.renderSoon();
   }
 
   protected forward(): void {
     this.message = undefined;
-    if (this.pane === "profiles" && this.saveFocused) this.saveSession();
-    else if (this.pane === "profiles") this.pane = "fields";
+    if (this.pane === "profiles") this.focusPane("fields");
     else this.openSelectedField();
     this.keymap.resetChord();
     this.renderSoon();
-  }
-
-  protected moveToEndpoint(action: "first" | "last"): void {
-    const last = action === "last";
-    if (this.pane === "profiles") {
-      this.selectProfileRow(last ? PROFILE_IDS.length : 0);
-    } else this.moveRow(last ? this.rows().length - 1 : 0);
   }
 
   protected saveSession(): void {
@@ -178,11 +184,11 @@ export class ProfileWorkspaceComponent
       return true;
     }
     if (key === "m" || key === "e") {
-      this.saveFocused = false;
       this.selectField(key === "m" ? "model" : "effort");
-      this.pane = "fields";
+      this.focusPane("fields");
       this.openSelectedField();
     } else if (key === "a") this.openActions();
+    else if (key === "u") this.undo();
     else if (key === "+") this.performDraftAction("add");
     else if (key === "[" || key === "]")
       this.selectCandidate(this.candidateIndex + (key === "[" ? -1 : 1));
@@ -242,99 +248,110 @@ export class ProfileWorkspaceComponent
       if (!this.handleShortcutKey(resolution.key)) this.renderSoon();
       return;
     }
-    const steps = pageSteps(this.options.getHeight() - 8);
-    const move = (offset: number): void => {
-      if (this.pane === "profiles") {
-        this.selectProfileRow((this.saveFocused ? PROFILE_IDS.length : this.profileIndex) + offset);
-      } else this.moveRow(this.fieldIndex + offset);
-      this.message = undefined;
-    };
-    if (isMovementMotion(resolution.action)) {
-      move(movementOffset(resolution.action, steps));
-      this.renderSoon();
-      return;
-    }
     if (this.handleNavigationAction(resolution.action)) this.renderSoon();
   }
 
-  protected handleNavigationAction(action: string): boolean {
-    switch (action) {
-      case "cancel":
-      case "quit":
-        this.back();
-        return false;
-      case "back":
-        this.pane = "profiles";
-        return true;
-      case "confirm":
-        this.forward();
-        return false;
-      case "forward":
-        this.pane = "fields";
-        return true;
-      case "first":
-      case "last":
-        this.moveToEndpoint(action);
-        return true;
-      case "help":
-        this.hintsExpanded = !this.hintsExpanded;
-        return true;
-      case "pending-first":
-        return true;
+  /** The fields pane moves its own cursor; the shell moves the profile selection and focus. */
+  protected handleNavigationAction(action: FullScreenAction): boolean {
+    if (action === "help") {
+      this.hintsExpanded = !this.hintsExpanded;
+      return true;
     }
-    return false;
+    if (action === "confirm") {
+      this.forward();
+      return false;
+    }
+    if (action === "cancel" || action === "quit") {
+      this.back();
+      return false;
+    }
+    if (this.pane === "fields" && isMovementMotion(action)) {
+      this.moveRow(
+        this.fieldIndex + movementOffset(action, pageSteps(this.options.getHeight() - 8)),
+      );
+      this.message = undefined;
+      return true;
+    }
+    if (this.pane === "fields" && (action === "first" || action === "last")) {
+      this.moveRow(action === "last" ? this.rows().length - 1 : 0);
+      return true;
+    }
+    const motion = listDetailMotionFromAction(action);
+    if (!motion) return action === "pending-first";
+    const result = this.shell.applyMotion(motion, {
+      rowCount: PROFILE_IDS.length,
+      hasSelection: true,
+    });
+    if (!Predicate.isTagged(result, "Update")) return false;
+    if (result.movedSelection) {
+      this.selectProfileRow(result.state.selected);
+      this.message = undefined;
+    }
+    return true;
+  }
+
+  private confirmation(): ProfileWorkspaceConfirmation | undefined {
+    const profile = this.profile();
+    if (this.pendingAction === "reset")
+      return {
+        title: `Undo changes to ${profile}?`,
+        detail:
+          "Restores it to how it was when you opened the dashboard. Other profiles and active runs are not changed.",
+        verb: "Undo",
+      };
+    return this.pendingAction
+      ? profileWorkspaceConfirmation({
+          profile,
+          candidateIndex: this.candidateIndex,
+          candidateCount: this.draft().candidates.length,
+          scope: this.scope,
+        })
+      : undefined;
+  }
+
+  /** Changes the session makes to the set it is based on, which `s` can save as a set. */
+  private changedProfiles(): ReadonlySet<ProfileId> {
+    return this.options.target.kind === "session"
+      ? new Set(sessionChangedProfiles(this.inspection.session))
+      : new Set();
   }
 
   render(width: number): string[] {
+    return this.renderWithPrompt(width);
+  }
+
+  /** Draws the editor; a host's `prompt`, such as a confirmation, takes a band above the border. */
+  renderWithPrompt(width: number, prompt?: DashboardPrompt): string[] {
     if (this.disposed) return [];
     if (this.modelPicker) return this.modelPicker.render(width);
-    if (this.selectPage) return this.selectPage.render(width);
     this.reconcile();
-    const profile = this.profile();
-    const draft = this.draft();
-    const pendingConfirmation =
-      this.pendingAction === "reset"
-        ? {
-            title: `Undo changes to ${profile}?`,
-            detail:
-              "Restore this profile to the start of this editing visit. Other profiles and active runs are not changed.",
-          }
-        : this.pendingAction
-          ? profileWorkspaceConfirmation({
-              profile,
-              candidateIndex: this.candidateIndex,
-              candidateCount: draft.candidates.length,
-              scope: this.scope,
-            })
-          : undefined;
+    const changed = this.changedProfiles();
     return renderProfileWorkspace(
       {
         inspection: this.inspection,
         target: this.options.target,
         parentEffort: this.options.parentEffort,
         parentModel: this.options.parentModel,
-        pane: this.pane,
-        profileIndex: this.profileIndex,
-        saveFocused: this.saveFocused,
+        shell: this.shell,
         candidateIndex: this.candidateIndex,
         fieldIndex: this.fieldIndex,
-        draft,
+        draft: this.draft(),
         expandedCandidates: this.selection().expanded,
         hintsExpanded: this.hintsExpanded,
-        editedProfiles: new Set(
-          Arr.filter(PROFILE_IDS, (id) =>
-            this.editVisit.isEdited(this.options.target, id, this.inspection),
-          ),
-        ),
+        changedProfiles: changed,
+        canUndo: !this.busy && this.canUndo(),
+        sessionChanged: changed.size > 0,
         busy: this.busy,
         cancellableBusy: this.catalogLoad !== undefined,
-        message: this.message,
-        pendingConfirmation,
+        choices: this.selectPage,
+        confirmation: this.confirmation(),
+        prompt,
       },
       {
         theme: this.options.theme,
         width,
         height: this.options.getHeight(),
+        frameHeight: this.options.getFrameHeight?.() ?? this.options.getHeight(),
         keybindingLabel: this.options.keybindingLabel,
       },
     );

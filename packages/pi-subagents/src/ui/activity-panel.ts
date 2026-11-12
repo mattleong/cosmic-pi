@@ -10,8 +10,8 @@ import * as Str from "effect/String";
 import { MAIN_AGENT_ID } from "../run/agent-messaging.ts";
 import { runStall, runStallLabel } from "../run/stall.ts";
 import {
-  managerLayoutTier,
-  type ManagerLayoutTier,
+  managerDensity,
+  type ManagerDensity,
   type ManagerStatusColor,
   clipToWidth,
   SPINNER_FRAME_MS,
@@ -487,11 +487,11 @@ const clippedActivityRow = (
   identity: string,
   compactRoute: string,
   width: number,
-  tier: ManagerLayoutTier,
+  density: ManagerDensity,
   separator: string,
 ): string => {
   if (width < 12) return clipToWidth(identity, width, "");
-  const minimumIdentityWidth = tier === "narrow" ? 6 : 8;
+  const minimumIdentityWidth = density === "narrow" ? 6 : 8;
   const maximumRouteWidth = width - minimumIdentityWidth - visibleWidth(separator);
   if (maximumRouteWidth < 8) return clipToWidth(identity, width, "");
   const routeWidth = Math.min(visibleWidth(compactRoute), maximumRouteWidth);
@@ -503,7 +503,7 @@ const renderActivityRow = (
   row: FleetTreeRow,
   panel: SubagentActivityPanelProjection,
   width: number,
-  tier: ManagerLayoutTier,
+  density: ManagerDensity,
   theme: Theme,
   now: number,
   duplicates: ReadonlySet<string>,
@@ -517,7 +517,7 @@ const renderActivityRow = (
     const fitted = fitActivityMetadata(identity, variant, width, separator);
     if (fitted !== undefined) return fitted;
   }
-  return clippedActivityRow(identity, route.model, width, tier, separator);
+  return clippedActivityRow(identity, route.model, width, density, separator);
 };
 
 export const renderProjectedSubagentActivityPanel = (
@@ -532,14 +532,14 @@ export const renderProjectedSubagentActivityPanel = (
     return [];
   const inset = safeWidth > 1 ? " " : "";
   const contentWidth = safeWidth - visibleWidth(inset);
-  const tier = managerLayoutTier(safeWidth);
+  const density = managerDensity(safeWidth);
   const duplicates = duplicateRunNames(Arr.map(panel.rows, ({ run }) => run));
   return [
     `${inset}${panelHeader(panel, contentWidth, theme)}`,
     ...Arr.map(
       panel.rows,
       (row) =>
-        `${inset}${renderActivityRow(row, panel, contentWidth, tier, theme, now, duplicates)}`,
+        `${inset}${renderActivityRow(row, panel, contentWidth, density, theme, now, duplicates)}`,
     ),
   ];
 };

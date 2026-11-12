@@ -176,10 +176,8 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         parentModel: this.options.parentModel,
         select: (profile) => {
           this.selectPage = undefined;
-          this.rememberSelection();
-          this.profileIndex = PROFILE_IDS.indexOf(profile);
-          this.resetSelectionForProfile();
-          this.pane = "fields";
+          this.selectProfileRow(PROFILE_IDS.indexOf(profile));
+          this.focusPane("fields");
           this.renderSoon();
         },
         cancel: () => this.closeSelectPage(),

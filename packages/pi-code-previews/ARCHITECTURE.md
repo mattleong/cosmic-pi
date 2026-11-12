@@ -139,5 +139,6 @@ appearance modes.
 [native codemode SDK](tests/application/native-codemode-sdk.test.ts),
 [tool-search SDK](tests/application/native-tool-search-sdk.test.ts), and
 [MCP SDK](tests/application/native-mcp-sdk.test.ts) tests check the real host boundary.
-Use `pi-code-previews/testing` for presentation behavior and `pnpm presentation:gallery` for visual
+Use `pi-code-previews/testing` for presentation behavior and
+[live review through Rex](../../docs/architecture/ui-conventions.md#reviewing-a-surface) for visual
 review; neither presentation rendering nor replay should execute a tool.

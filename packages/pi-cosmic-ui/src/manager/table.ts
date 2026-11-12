@@ -8,6 +8,8 @@ import { clipToWidth } from "./chrome.ts";
 interface ManagerTableColumn {
   readonly minWidth: number;
   readonly priority: number;
+  /** Column heading for the table's `header` row; it widens its column but never keeps an empty one. */
+  readonly header?: string | undefined;
 }
 
 type IndexedColumn = ManagerTableColumn & { readonly index: number };
@@ -20,6 +22,8 @@ const columnPriorityOrder = Order.combine(
 /**
  * Lays out rows in columns that fit `width`, admitting columns by priority and growing them to
  * their natural width. A column whose cells are all empty takes no space and renders nothing.
+ * When any column names a `header`, `header` is that row laid out like the others, for the caller
+ * to style (muted) above them; otherwise it is `undefined`.
  */
 export const managerTable = (
   rows: ReadonlyArray<ReadonlyArray<string>>,
@@ -32,9 +36,14 @@ export const managerTable = (
   const priority = Arr.sort(
     Arr.filterMap(columns, (column, index) => {
       const content = Math.max(0, ...Arr.map(rows, (row) => visibleWidth(row[index] ?? "")));
+      const heading = visibleWidth(column.header ?? "");
       return content === 0
         ? Result.failVoid
-        : Result.succeed({ ...column, index, natural: Math.max(column.minWidth, content) });
+        : Result.succeed({
+            ...column,
+            index,
+            natural: Math.max(column.minWidth, content, heading),
+          });
     }),
     columnPriorityOrder,
   );
@@ -59,14 +68,17 @@ export const managerTable = (
   }
   const cell = (text: string, column: number): string =>
     padListDetailRow(clipToWidth(text, widths[column] ?? 0), widths[column] ?? 0);
+  const row = (cells: ReadonlyArray<string>): string =>
+    Arr.join(
+      Arr.filterMap(columns, (_, index) =>
+        widths[index] ? Result.succeed(cell(cells[index] ?? "", index)) : Result.failVoid,
+      ),
+      gap,
+    );
+  const headed = Arr.some(columns, (column) => Boolean(column.header));
   return {
     widths,
-    row: (cells: ReadonlyArray<string>): string =>
-      Arr.join(
-        Arr.filterMap(columns, (_, index) =>
-          widths[index] ? Result.succeed(cell(cells[index] ?? "", index)) : Result.failVoid,
-        ),
-        gap,
-      ),
+    row,
+    header: headed ? row(Arr.map(columns, (column) => column.header ?? "")) : undefined,
   };
 };

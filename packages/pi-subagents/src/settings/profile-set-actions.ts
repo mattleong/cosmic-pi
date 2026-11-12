@@ -4,11 +4,13 @@ import type { SubagentCommandActions } from "./controller.ts";
 import { PROFILE_IDS } from "../profiles/model.ts";
 import {
   resolvedSet,
+  SCOPE_LABELS,
   type ProfileSettingsInspection,
   type ProfileWorkspaceTarget,
 } from "./profile-route-editor.ts";
 import type { ProfileSetPickerAction } from "./profile-set-picker.ts";
 import { profileSetPatchBase } from "./profile-write-context.ts";
+import { qualifiedProfileSetLabel } from "./ui/profile-set-picker-model.ts";
 
 export interface ProfileSetSaveDestination {
   readonly scope: "global" | "project";
@@ -20,8 +22,9 @@ export interface ProfileSetActionHost {
   readonly isCurrent: () => boolean;
   readonly trusted: () => boolean;
   readonly refresh: () => Promise<ProfileSettingsInspection>;
-  readonly confirm: (title: string, body: string) => Promise<boolean>;
-  readonly name: (title: string, initial: string) => Promise<string | undefined>;
+  /** Asks before an action; `verb` names what confirming does, such as `Delete`. */
+  readonly confirm: (title: string, body: string, verb: string) => Promise<boolean>;
+  readonly name: (title: string, initial: string, verb: string) => Promise<string | undefined>;
   readonly save: () => Promise<ProfileSetSaveDestination | undefined>;
   readonly used: (baseline: ProfileSettingsInspection, latest: ProfileSettingsInspection) => void;
   readonly renamed: (
@@ -38,6 +41,8 @@ const invalidSession = (inspection: ProfileSettingsInspection): boolean =>
       inspection.session.effectiveConfig.profileSources[profile],
     ),
   );
+
+const label = (scope: Scope, name: string): string => qualifiedProfileSetLabel({ scope, name });
 
 type PersistentAction = Exclude<
   ProfileSetPickerAction,
@@ -101,7 +106,7 @@ const saveSession = ({ host, inspection, guard, finish }: ActionRun): Promise<vo
         })
         .then(() =>
           finish(
-            `Saved the current session as ${destination.scope}/${destination.name}. Default unchanged.`,
+            `Saved the current session as ${label(destination.scope, destination.name)} · default unchanged`,
           ),
         );
     });
@@ -117,27 +122,12 @@ const useSet = (
   if (resolved.status !== "resolved" || resolved.invalidProfiles.length > 0)
     throw new Error("Fix this invalid saved set before using it or making it default.");
   if (action.action === "use-current") {
-    const preview = Fn.pipe(
-      PROFILE_IDS,
-      Arr.map(
-        (profile) =>
-          `${profile}: ${
-            Fn.pipe(
-              resolved.profiles[profile].candidates,
-              Arr.map(
-                (candidate) =>
-                  `${candidate.model}${candidate.openaiFastMode ? " ⚡" : ""} · ${candidate.effort}`,
-              ),
-              Arr.join(" → "),
-            ) || "disabled"
-          }`,
-      ),
-      Arr.join("\n"),
-    );
+    // The set's preview stays in view above the confirmation, so it isn't repeated here.
     return host
       .confirm(
-        `Use ${scope}/${action.target.name} in the current session?`,
-        `Replace all seven profiles. Active runs stay unchanged. Later edits remain separate.\n\n${preview}`,
+        `Use ${label(scope, action.target.name)} in the current session?`,
+        "Replaces all seven profiles. Active runs stay unchanged. Later edits stay in the session.",
+        "Use",
       )
       .then((confirmed) => {
         guard(scope);
@@ -151,7 +141,7 @@ const useSet = (
           })
           .then((snapshot) =>
             finish(
-              `Copied ${scope}/${action.target.name} into the current session. Active runs unchanged.`,
+              `Copied ${label(scope, action.target.name)} into the current session · active runs unchanged`,
               (latest) => host.used({ ...latest, session: snapshot }, latest),
             ),
           );
@@ -164,7 +154,7 @@ const useSet = (
       throw new Error("Fix this invalid saved set before making it default.");
     return host.actions
       .patchDefaultProfileSet({ ...base(), defaultProfileSet: action.target.name })
-      .then(() => finish(`Default updated for ${scope}. Current session unchanged.`));
+      .then(() => finish(`${SCOPE_LABELS[scope]} default updated · current session unchanged`));
   });
 };
 
@@ -175,8 +165,9 @@ const nameSet = (
   const source = action.action === "copy" ? action.source : action.target;
   return host
     .name(
-      `${action.action === "copy" ? "Duplicate" : "Rename"} ${scope}/${source.name}`,
+      `${action.action === "copy" ? "Copy" : "Rename"} ${label(scope, source.name)}`,
       action.action === "copy" ? `${source.name} copy` : source.name,
+      action.action === "copy" ? "Copy" : "Rename",
     )
     .then((name) => {
       guard(scope);
@@ -184,11 +175,11 @@ const nameSet = (
       if (action.action === "copy")
         return host.actions
           .copyProfileSet({ ...base(), sourceProfileSet: source.name, profileSet: name })
-          .then(() => finish(`Created ${scope}/${name}. Current session unchanged.`));
+          .then(() => finish(`Created ${label(scope, name)} · current session unchanged`));
       return host.actions
         .renameProfileSet({ ...base(), profileSet: source.name, nextProfileSet: name })
         .then(() =>
-          finish(`Renamed ${scope}/${name}. Current session unchanged.`, (latest) =>
+          finish(`Renamed ${label(scope, name)} · current session unchanged`, (latest) =>
             host.renamed(
               { kind: "profile-set", set: source },
               { kind: "profile-set", set: { ...source, name } },
@@ -205,21 +196,19 @@ const deleteSet = (
 ): Promise<void> =>
   host
     .confirm(
-      `Delete ${scope}/${action.target.name}?`,
+      `Delete ${label(scope, action.target.name)}?`,
       "This deletes the saved set. Current session will not change.",
+      "Delete",
     )
     .then((confirmed) => {
       guard(scope);
-      if (!confirmed) {
-        host.notify("Delete cancelled");
-        return undefined;
-      }
+      if (!confirmed) return undefined;
       return host.actions
         .deleteProfileSet({ ...base(), profileSet: action.target.name })
         .then(() => {
           guard();
           host.deleted({ kind: "profile-set", set: action.target });
-          return finish(`Deleted ${scope}/${action.target.name}. Current session unchanged.`);
+          return finish(`Deleted ${label(scope, action.target.name)} · current session unchanged`);
         });
     });
 
@@ -253,7 +242,9 @@ const runPersistentAction = (run: ActionRun, action: PersistentAction): Promise<
     case "clear-scope-default":
       return run.host.actions
         .patchDefaultProfileSet(scoped.base())
-        .then(() => run.finish(`${scope} default cleared. Current session unchanged.`));
+        .then(() =>
+          run.finish(`${SCOPE_LABELS[scope]} default cleared · current session unchanged`),
+        );
     case "copy":
     case "rename":
       return nameSet(scoped, action);

@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import { describe, expect, it, vi } from "vitest";
 import { plainTheme } from "pi-cosmic-core/testing";
 import {
@@ -75,5 +76,54 @@ describe("ModelPickerPage", () => {
 
     page.handleInput("\r");
     expect(select).not.toHaveBeenCalled();
+  });
+});
+
+describe("model picker groups", () => {
+  const models: ModelPickerModel[] = [
+    { provider: "profile", id: "parent", selector: "parent", label: "inherit", pinned: true },
+    { provider: "openai-codex", id: "gpt-6-luna" },
+    { provider: "anthropic", id: "claude-opus" },
+    { provider: "openai-codex", id: "gpt-6-sol" },
+  ];
+
+  it("lists models under their provider, with pinned rows first", () => {
+    const choices = createModelPickerChoices(models);
+    expect(choices[0]?.group).toBeUndefined();
+    expect(Arr.map(choices.slice(1), (choice) => choice.group)).toEqual([
+      "openai-codex",
+      "anthropic",
+      "openai-codex",
+    ]);
+    expect(choices[1]?.item.label).not.toContain("openai-codex");
+    const select = vi.fn();
+    const page = new ModelPickerPage({
+      theme: plainTheme,
+      scopedModels: models,
+      getHeight: () => 20,
+      requestRender: vi.fn(),
+      select,
+      cancel: vi.fn(),
+    });
+    page.handleInput("j");
+    page.handleInput("j");
+    page.handleInput("\r");
+    expect(select).toHaveBeenLastCalledWith(models[3]);
+  });
+
+  it("still finds a model by its whole provider/model selector", () => {
+    const select = vi.fn();
+    const page = new ModelPickerPage({
+      theme: plainTheme,
+      scopedModels: models,
+      initialSearchMode: true,
+      getHeight: () => 20,
+      requestRender: vi.fn(),
+      select,
+      cancel: vi.fn(),
+    });
+    for (const key of "anthropic/claude") page.handleInput(key);
+    page.handleInput("\r");
+    expect(select).toHaveBeenLastCalledWith(models[2]);
   });
 });

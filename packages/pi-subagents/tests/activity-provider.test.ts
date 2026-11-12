@@ -390,11 +390,34 @@ describe("subagent activity provider", () => {
     const body = Arr.join(
       Arr.map(
         subagentActivityDetail({ revision: 1, runs: [run] }, "run")?.sections ?? [],
-        (section) => section.body,
+        (section) => section.expandedBody ?? section.body,
       ),
       "\n",
     );
     expect(body).toContain("      1  import thing;\n      2  export thing;");
+  });
+
+  it("previews each tool call on one line and shows its output once inspected", () => {
+    const started = startToolSessionEvent([], {
+      toolCallId: "t",
+      toolName: "read",
+      args: { path: "src/thing.ts" },
+      startedAt: 1,
+    });
+    const finished = childToolEvent(started, "t", "read", {
+      content: [{ type: "text", text: "import thing;\nexport thing;\n" }],
+    });
+    const run = view({ id: "run", state: "running", sessionEvents: finished });
+    const recent = Option.getOrUndefined(
+      Arr.findFirst(
+        subagentActivityDetail({ revision: 1, runs: [run] }, "run")?.sections ?? [],
+        (section) => section.title === "Recent activity",
+      ),
+    );
+    const preview = Str.split(recent?.body ?? "", "\n");
+    expect(preview).toHaveLength(1);
+    expect(preview[0]).toContain("src/thing.ts");
+    expect(recent?.expandedBody).toContain("export thing;");
   });
 
   it("phrases agent tools from their details and keeps envelopes, IDs, and report files technical", () => {

@@ -24,7 +24,13 @@ export interface ProfileModelOption extends ModelPickerModel {
   readonly fastModeAvailable: boolean;
 }
 
-const pseudoModel = (selector: string) => ({ provider: "profile", id: selector, selector });
+// Pseudo models, such as inherit, are pinned above the provider groups.
+const pseudoModel = (selector: string) => ({
+  provider: "profile",
+  id: selector,
+  selector,
+  pinned: true,
+});
 
 export function createPiModelOptions(input: {
   readonly models: ReadonlyArray<ProjectedPiModel>;
@@ -99,8 +105,8 @@ export const profileModelPickerPage = (options: ProfileModelPickerPageOptions) =
   return new ModelPickerPage({
     ...selectHost(options),
     breadcrumb: profileBreadcrumb(targetLabel, context.profile, optionLabel, "Model"),
-    title: `Choose model · ${context.profile} · ${optionLabel}`,
-    subtitle: targetLabel,
+    // The breadcrumb names the session, profile, and candidate; the subtitle names the scope.
+    title: "Choose model",
     scopedModels: scopedChoices ?? [],
     allModels: options.choices,
     current: initialSelection,

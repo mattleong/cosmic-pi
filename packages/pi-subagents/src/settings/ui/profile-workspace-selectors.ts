@@ -68,11 +68,6 @@ export const shortTargetLabel = (target: ProfileWorkspaceTarget): string =>
 export const profileBreadcrumb = (...parts: ReadonlyArray<string>): string =>
   Arr.join(parts, " › ");
 
-const targetLabel = (target: ProfileWorkspaceTarget): string =>
-  target.kind === "session"
-    ? "Editing current session"
-    : `${qualifiedProfileSetLabel(target.set)} · session not affected`;
-
 interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
@@ -123,8 +118,8 @@ export const candidateFieldSelector = (
       label,
     ),
     title: `Choose ${Str.toLowerCase(label)}`,
-    // The list marks the current value, so the subtitle doesn't repeat it.
-    subtitle: targetLabel(options.target),
+    // The list marks the current value, and the pane heading names the profile.
+    subtitle: profileRouteOptionLabel(options.candidateIndex),
     choices: Arr.map(candidateFieldChoices(options.field, changeOptions), (choice) =>
       selectChoice(choice.value, choice.label, choice.description, choice.value),
     ),
@@ -162,8 +157,8 @@ export const routeActionsSelector = (
       profileRouteOptionLabel(options.candidateIndex),
       "Actions",
     ),
-    title: `Manage ${profileRouteOptionLabel(options.candidateIndex)} · ${options.profile}`,
-    subtitle: targetLabel(options.target),
+    title: `Manage ${profileRouteOptionLabel(options.candidateIndex)}`,
+    subtitle: "",
     choices: Arr.map(choices, (choice) =>
       selectChoice(choice.action, choice.label, choice.description, choice.action),
     ),
@@ -194,9 +189,9 @@ export const profileSearchSelector = (
 ): SearchableSelectPage<string> => {
   return new SearchableSelectPage<string>({
     ...selectHost(options),
-    breadcrumb: targetLabel(options.target),
+    breadcrumb: profileBreadcrumb(shortTargetLabel(options.target), "Search"),
     title: "Search profiles",
-    subtitle: targetLabel(options.target),
+    subtitle: "",
     choices: Arr.map(PROFILE_IDS, (profile) => {
       const summary = targetProfilePrimarySummary(
         options.inspection,

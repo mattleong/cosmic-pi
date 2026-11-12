@@ -15,6 +15,7 @@ import {
   type CandidateMenuAction,
 } from "./ui/profile-workspace-actions.ts";
 import { ProfileWorkspaceState } from "./profile-workspace-state.ts";
+import { qualifiedProfileSetLabel } from "./ui/profile-set-picker-model.ts";
 
 export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
   protected performDraftAction(action: CandidateMenuAction | "add" | "reset"): void {
@@ -83,7 +84,12 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
     this.selectField(field);
     this.busy = true;
     this.pendingAction = undefined;
-    this.notice("info", `Saving ${profile}…`);
+    this.notice(
+      "info",
+      this.options.target.kind === "session"
+        ? `Updating ${profile}…`
+        : `Saving ${profile} to ${qualifiedProfileSetLabel(this.options.target.set)}…`,
+    );
     void Promise.resolve()
       .then(() =>
         restore
@@ -112,9 +118,14 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
           this.options.onInspection?.(result.inspection);
           this.optimisticDraft = undefined;
           this.optimisticProfile = undefined;
+          // A session edit applies to later launches; only a saved set's edit is saved.
+          const done =
+            this.options.target.kind === "session"
+              ? `Updated ${profile}`
+              : `Saved ${profile} to ${qualifiedProfileSetLabel(this.options.target.set)}`;
           this.setMessage(
             result.conflictMessage ? "warning" : successNotice ? "info" : "success",
-            result.conflictMessage ?? (successNotice ? `Saved · ${successNotice}` : "Saved"),
+            result.conflictMessage ?? (successNotice ? `${done} · ${successNotice}` : done),
           );
         }
         this.selectField(field);
@@ -144,7 +155,7 @@ export abstract class ProfileWorkspaceSave extends ProfileWorkspaceState {
       const draft = this.draft();
       const next = addRouteCandidate(draft, update.candidate);
       if (next) {
-        this.pane = "fields";
+        this.focusPane("fields");
         this.fieldIndex = 0;
         this.persist(next, draft.candidates.length, Arr.join(update.notices, " "));
       }

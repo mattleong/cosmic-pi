@@ -1,23 +1,19 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type Component, type Focusable } from "@earendil-works/pi-tui";
 import {
   decodeFullScreenPrintable,
-  FullScreenKeymap,
   pageSteps,
-  type PageSteps,
+  type FullScreenAction,
 } from "pi-cosmic-ui/manager/keymap";
+import { listDetailMotionFromAction } from "pi-cosmic-ui/manager/list-detail";
+import { ListDetailShell } from "pi-cosmic-ui/manager/list-detail-shell";
 import type { SubagentConfigScope } from "../config/store.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
-import {
-  isListMotion,
-  isMovementMotion,
-  nextListMotionIndex,
-} from "pi-cosmic-ui/manager/list-navigation";
+import { isListMotion, nextListMotionIndex } from "pi-cosmic-ui/manager/list-navigation";
 import {
   SCOPE_LABELS,
   type PersistentProfileSetRef,
@@ -25,10 +21,13 @@ import {
 } from "./profile-route-editor.ts";
 import {
   initialProfileSetPickerIndex,
+  isSelectableProfileSetEntry,
   profileSetPickerEntries,
   qualifiedProfileSetLabel,
   type ProfileSetPickerEntry,
+  type SelectableProfileSetEntry,
 } from "./ui/profile-set-picker-model.ts";
+import type { DashboardPrompt } from "./ui/profile-dashboard-render.ts";
 import { PROFILE_SET_SHORTCUTS, renderProfileSetPicker } from "./ui/profile-set-picker-render.ts";
 import { selectChoice } from "./ui/profile-workspace-selectors.ts";
 import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
@@ -54,6 +53,8 @@ interface ProfileSetPickerOptions extends Pick<
   "getHeight" | "requestRender" | "matchesKeybinding" | "keybindingLabel"
 > {
   readonly theme: Theme;
+  /** The whole surface's height, which with the width decides how panes are arranged. */
+  readonly getFrameHeight?: (() => number) | undefined;
   readonly inspection: ProfileSettingsInspection;
   readonly projectTrusted: boolean;
   /** The parent's model and reasoning, which inherited candidates run with. */
@@ -61,11 +62,6 @@ interface ProfileSetPickerOptions extends Pick<
   readonly parentEffort?: SubagentEffort | undefined;
   readonly close: (action: ProfileSetPickerAction | undefined) => void;
 }
-
-type SavedSetMenuEntry = Extract<
-  ProfileSetPickerEntry,
-  { readonly kind: "set" | "invalid-default" }
->;
 
 const menuChoice = (
   payload: ProfileSetPickerAction,
@@ -78,7 +74,7 @@ const menuChoice = (
 });
 
 const savedSetMenuChoices = (
-  entry: SavedSetMenuEntry,
+  entry: SelectableProfileSetEntry,
 ): ReadonlyArray<SearchableSelectPageChoice<ProfileSetPickerAction>> => {
   const project = entry.scope === "project";
   const clearDefault = menuChoice(
@@ -119,7 +115,7 @@ const savedSetMenuChoices = (
 };
 
 const savedSetMenuPage = (
-  entry: SavedSetMenuEntry,
+  entry: SelectableProfileSetEntry,
   host: Omit<
     SearchableSelectPageOptions<ProfileSetPickerAction>,
     "breadcrumb" | "title" | "subtitle" | "choices"
@@ -127,10 +123,10 @@ const savedSetMenuPage = (
 ): SearchableSelectPage<ProfileSetPickerAction> =>
   new SearchableSelectPage({
     ...host,
-    breadcrumb: "Saved profiles › More",
+    breadcrumb: "Saved profiles › Actions",
     title:
       entry.kind === "set"
-        ? qualifiedProfileSetLabel(entry.ref)
+        ? `Actions · ${qualifiedProfileSetLabel(entry.ref)}`
         : `${SCOPE_LABELS[entry.scope]} default`,
     subtitle:
       entry.kind === "invalid-default"
@@ -142,17 +138,23 @@ const savedSetMenuPage = (
     emptyText: "No matching actions",
   });
 
+/**
+ * The Saved profiles tab: saved sets grouped by scope beside a read-only preview of the selected
+ * set. The shared shell owns pane focus, the selection, the preview's scrolling, and the panes'
+ * arrangement; Enter edits the selected set from either pane.
+ */
 export class ProfileSetPickerComponent implements Component, Focusable {
   private allEntries: ReadonlyArray<ProfileSetPickerEntry>;
-  private selectedIndex: number;
   private query = "";
   private searching = false;
   private hintsExpanded = false;
+  // The preview opens at its first line whenever it shows another set.
+  private previewAtTop = true;
   private menu: SearchableSelectPage<ProfileSetPickerAction> | undefined;
   private message:
     | { readonly kind: "info" | "warning" | "error"; readonly text: string }
     | undefined;
-  private readonly keymap = new FullScreenKeymap();
+  private readonly shell = new ListDetailShell();
   private options: ProfileSetPickerOptions;
   private disposed = false;
   private focusState = false;
@@ -163,7 +165,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       matchesKeybinding: withoutNavigationKeys(options.matchesKeybinding),
     };
     this.allEntries = profileSetPickerEntries(options.inspection, options.projectTrusted);
-    this.selectedIndex = initialProfileSetPickerIndex(this.allEntries);
+    this.reset();
   }
 
   get focused(): boolean {
@@ -179,32 +181,64 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     return this.menu !== undefined || this.searching;
   }
 
+  /** A transient message for the host's status row. */
+  get status() {
+    return this.message;
+  }
+
+  dismissStatus(): void {
+    this.message = undefined;
+  }
+
   updateInspection(inspection: ProfileSettingsInspection, projectTrusted: boolean): void {
     if (this.disposed) return;
-    const selected = this.selected()?.key;
     this.options = { ...this.options, inspection, projectTrusted };
     this.allEntries = profileSetPickerEntries(inspection, projectTrusted);
-    this.selectedIndex = Option.getOrElse(
-      Arr.findFirstIndex(this.entries(), (entry) => entry.key === selected),
-      () => 0,
-    );
+    if (this.shell.reconcile(this.ids()).changed) this.previewAtTop = true;
     this.menu = undefined;
   }
 
+  private get keymap() {
+    return this.shell.keymap;
+  }
+
+  /** Entries the filter keeps, notes included, in display order. */
   private entries(): ReadonlyArray<ProfileSetPickerEntry> {
     const query = Fn.pipe(this.query, Str.trim, Str.toLocaleLowerCase());
     if (!query) return this.allEntries;
-    return Arr.filter(this.allEntries, (entry) =>
-      Fn.pipe(
-        `${entry.label} ${entry.description} ${entry.scope}`,
-        Str.toLocaleLowerCase(),
-        Str.includes(query),
-      ),
+    return Arr.filter(
+      this.allEntries,
+      (entry) =>
+        isSelectableProfileSetEntry(entry) &&
+        Fn.pipe(
+          `${entry.label} ${entry.description} ${entry.scope}`,
+          Str.toLocaleLowerCase(),
+          Str.includes(query),
+        ),
     );
   }
 
-  private selected(): ProfileSetPickerEntry | undefined {
-    return this.entries()[this.selectedIndex];
+  private selectable(): ReadonlyArray<SelectableProfileSetEntry> {
+    return Arr.filter(this.entries(), isSelectableProfileSetEntry);
+  }
+
+  private ids(): ReadonlyArray<string> {
+    return Arr.map(this.selectable(), (entry) => entry.key);
+  }
+
+  private selected(): SelectableProfileSetEntry | undefined {
+    return this.selectable()[this.shell.state.selected];
+  }
+
+  private select(index: number): void {
+    if (this.shell.select(index, this.ids()).changed) this.previewAtTop = true;
+  }
+
+  /** Selects the default set, or the first set, with the list focused. */
+  private reset(): void {
+    this.select(initialProfileSetPickerIndex(this.selectable()));
+    if (this.shell.state.pane === "detail")
+      this.shell.applyMotion("back", { rowCount: 0, hasSelection: false });
   }
 
   private renderSoon(): void {
@@ -231,11 +265,8 @@ export class ProfileSetPickerComponent implements Component, Focusable {
 
   private openActions(): void {
     const entry = this.selected();
-    if (entry?.kind !== "set" && entry?.kind !== "invalid-default") {
-      this.setMessage(
-        entry?.scope === "project" && !this.options.projectTrusted ? "warning" : "info",
-        entry?.description ?? "Select a saved set first.",
-      );
+    if (!entry) {
+      this.setMessage("info", "Save the current session as a set first.");
       return;
     }
     this.message = undefined;
@@ -255,24 +286,25 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     this.renderSoon();
   }
 
-  private applyMotionAction(action: string, steps: PageSteps): boolean {
+  private moveSearchSelection(action: FullScreenAction): boolean {
     if (!isListMotion(action)) return false;
-    this.selectedIndex = nextListMotionIndex(
-      action,
-      this.selectedIndex,
-      this.entries().length,
-      steps,
+    this.select(
+      nextListMotionIndex(
+        action,
+        this.shell.state.selected,
+        this.selectable().length,
+        pageSteps(this.options.getHeight() - 8),
+      ),
     );
-    if (isMovementMotion(action)) this.message = undefined;
     return true;
   }
 
-  private handleSearchAction(action: string, steps: PageSteps): void {
-    if (this.applyMotionAction(action, steps)) return;
+  private handleSearchAction(action: FullScreenAction): void {
+    if (this.moveSearchSelection(action)) return;
     if (action === "cancel") {
       this.searching = false;
       this.query = "";
-      this.selectedIndex = initialProfileSetPickerIndex(this.allEntries);
+      this.reset();
     } else if (action === "confirm") {
       const selected = this.selected();
       if (!selected) {
@@ -281,7 +313,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       }
       this.searching = false;
       this.query = "";
-      this.selectedIndex = this.allEntries.indexOf(selected);
+      this.select(this.ids().indexOf(selected.key));
       this.activate("edit");
     }
   }
@@ -292,19 +324,29 @@ export class ProfileSetPickerComponent implements Component, Focusable {
       matchesKeybinding: this.options.matchesKeybinding,
     });
     if (Predicate.isTagged(resolution, "Action")) {
-      this.handleSearchAction(resolution.action, pageSteps(this.options.getHeight() - 8));
+      this.handleSearchAction(resolution.action);
     } else if (data === "\u007f" || data === "\b") {
       this.query = Fn.pipe(this.query, Str.slice(0, -1));
-      this.selectedIndex = 0;
+      this.select(0);
       this.message = undefined;
     } else {
       const printable = decodeFullScreenPrintable(data);
       if (printable && printable !== "/") {
         this.query += printable;
-        this.selectedIndex = 0;
+        this.select(0);
         this.message = undefined;
       }
     }
+    this.renderSoon();
+  }
+
+  private startSearch(): void {
+    this.searching = true;
+    this.query = "";
+    this.select(0);
+    if (this.shell.state.pane === "detail")
+      this.shell.applyMotion("back", { rowCount: 0, hasSelection: false });
+    this.message = undefined;
     this.renderSoon();
   }
 
@@ -318,27 +360,30 @@ export class ProfileSetPickerComponent implements Component, Focusable {
     if (Predicate.isTagged(resolution, "Shortcut")) {
       if (resolution.key === "u") this.activate("use-current");
       else if (resolution.key === "a") this.openActions();
-      else {
-        this.searching = true;
-        this.query = "";
-        this.selectedIndex = 0;
-        this.message = undefined;
-        this.renderSoon();
-      }
-      return;
-    }
-    if (this.applyMotionAction(resolution.action, pageSteps(this.options.getHeight() - 8))) {
-      this.renderSoon();
+      else this.startSearch();
       return;
     }
     const { action } = resolution;
-    if (action === "cancel" || action === "quit" || action === "back")
-      this.options.close(undefined);
-    else if (action === "confirm" || action === "forward") this.activate("edit");
+    if (action === "confirm") this.activate("edit");
+    else if (action === "help") this.hintsExpanded = !this.hintsExpanded;
     else {
-      if (action === "help") this.hintsExpanded = !this.hintsExpanded;
-      this.renderSoon();
+      const motion = listDetailMotionFromAction(action);
+      const result = motion
+        ? this.shell.applyMotion(motion, {
+            rowCount: this.selectable().length,
+            hasSelection: this.selected() !== undefined,
+          })
+        : undefined;
+      if (result && Predicate.isTagged(result, "Close")) {
+        this.options.close(undefined);
+        return;
+      }
+      if (result && Predicate.isTagged(result, "Update") && result.movedSelection) {
+        this.select(result.state.selected);
+        this.message = undefined;
+      }
     }
+    this.renderSoon();
   }
 
   handleInput(data: string): void {
@@ -352,25 +397,34 @@ export class ProfileSetPickerComponent implements Component, Focusable {
   }
 
   render(width: number): string[] {
+    return this.renderWithPrompt(width);
+  }
+
+  /** Draws the library; a host's `prompt`, such as a confirmation, takes a band above the border. */
+  renderWithPrompt(width: number, prompt?: DashboardPrompt): string[] {
     if (this.disposed) return [];
-    if (this.menu) return this.menu.render(width);
-    const entries = this.entries();
-    this.selectedIndex = Math.max(0, Math.min(Math.max(0, entries.length - 1), this.selectedIndex));
+    this.shell.reconcile(this.ids());
+    const follow = this.previewAtTop ? "top" : false;
+    this.previewAtTop = false;
     return renderProfileSetPicker(
       {
-        entries,
-        selectedIndex: this.selectedIndex,
-        query: this.query,
+        entries: this.entries(),
+        selected: this.selected(),
+        shell: this.shell,
+        previewFollow: follow,
         searching: this.searching,
+        query: this.query,
         hintsExpanded: this.hintsExpanded,
         parentModel: this.options.parentModel,
         parentEffort: this.options.parentEffort,
-        ...(this.message && { message: this.message }),
+        menu: this.menu,
+        prompt,
       },
       {
         theme: this.options.theme,
         width,
         height: this.options.getHeight(),
+        frameHeight: this.options.getFrameHeight?.() ?? this.options.getHeight(),
         keybindingLabel: this.options.keybindingLabel,
       },
     );

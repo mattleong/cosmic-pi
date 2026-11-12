@@ -3,6 +3,7 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
+import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import {
   PROFILE_IDS,
@@ -34,6 +35,8 @@ export type ProfileSetPickerEntry =
       readonly scope: SubagentConfigScope;
       readonly ref: PersistentProfileSetRef;
       readonly scopeDefault: boolean;
+      /** The set the current session is based on. */
+      readonly inUse: boolean;
       readonly invalid: boolean;
       readonly repairable: boolean;
       readonly preview: ReadonlyArray<ProfileSetPreviewProfile>;
@@ -56,6 +59,36 @@ export type ProfileSetPickerEntry =
       readonly description: string;
     };
 
+/** Where a profile a set doesn't declare comes from, such as `built-in` or `from Global`. */
+export const profileSourceLabel = (source: ProfileRouteSource): string => {
+  const scope = Fn.pipe(source, Str.replace("-invalid", ""));
+  return scope === "builtin"
+    ? "built-in"
+    : scope === "global" || scope === "project"
+      ? `from ${SCOPE_LABELS[scope]}`
+      : `from ${scope}`;
+};
+
+const ownSource = (scope: SubagentConfigScope, source: ProfileRouteSource): boolean =>
+  source === scope || source === `${scope}-invalid`;
+
+/** What a set holds: `all built-in`, `2 profiles set here, rest built-in`, or `all 7 set here`. */
+const setContents = (
+  scope: SubagentConfigScope,
+  sources: ReadonlyArray<ProfileRouteSource>,
+): string => {
+  const inherited = Arr.dedupe(
+    Arr.filterMap(sources, (source) =>
+      ownSource(scope, source) ? Result.failVoid : Result.succeed(profileSourceLabel(source)),
+    ),
+  );
+  const own = Arr.filter(sources, (source) => ownSource(scope, source)).length;
+  const rest = inherited.length === 1 ? (inherited[0] ?? "inherited") : "inherited";
+  if (own === 0) return `all ${rest}`;
+  if (inherited.length === 0) return "all profiles set here";
+  return `${countLabel(own, "profile")} set here, rest ${rest}`;
+};
+
 const scopeEntries = (
   inspection: ProfileSettingsInspection,
   scope: SubagentConfigScope,
@@ -77,16 +110,23 @@ const scopeEntries = (
       const invalid = resolved.status !== "resolved";
       const repairable = invalid && !structurallyInvalid;
       const invalidProfileCount = resolved.invalidProfiles.length;
-      const profileCount = profileSet ? Rec.size<string, unknown>(profileSet.profiles) : 0;
       const scopeDefault = decoded.file.defaultProfileSet === name;
+      const origin = inspection.session.baseline.origin;
+      const inUse = origin.scope === scope && origin.name === name;
       const status = Arr.filter(
         [
           scopeDefault ? "default for new sessions" : undefined,
+          inUse ? "in use" : undefined,
           invalid
             ? repairable
               ? `${countLabel(invalidProfileCount, "invalid profile")}, fix before use`
               : "invalid structure, delete and create a new set"
-            : countLabel(profileCount, "saved profile"),
+            : profileSet
+              ? setContents(
+                  scope,
+                  Arr.map(PROFILE_IDS, (id) => resolved.profileSources[id]),
+                )
+              : undefined,
         ],
         Predicate.isNotUndefined,
       );
@@ -96,6 +136,7 @@ const scopeEntries = (
         scope,
         ref: { scope, name },
         scopeDefault,
+        inUse,
         invalid,
         repairable,
         preview: Arr.map(PROFILE_IDS, (id) => {
@@ -165,11 +206,21 @@ export const profileSetPickerEntries = (
   ];
 };
 
-export const initialProfileSetPickerIndex = (entries: ReadonlyArray<ProfileSetPickerEntry>) =>
-  Fn.pipe(
-    Arr.findFirstIndex(entries, (entry) => entry.kind !== "scope-note" && entry.scopeDefault),
-    Option.orElse(() => Arr.findFirstIndex(entries, (entry) => entry.kind !== "scope-note")),
-    Option.getOrElse(() => 0),
+/** A saved set, or a repair row for an invalid default: the entries a reader can select. */
+export type SelectableProfileSetEntry = Exclude<
+  ProfileSetPickerEntry,
+  { readonly kind: "scope-note" }
+>;
+
+export const isSelectableProfileSetEntry = (
+  entry: ProfileSetPickerEntry,
+): entry is SelectableProfileSetEntry => entry.kind !== "scope-note";
+
+/** The default set, else the first, among selectable `entries`. */
+export const initialProfileSetPickerIndex = (entries: ReadonlyArray<SelectableProfileSetEntry>) =>
+  Option.getOrElse(
+    Arr.findFirstIndex(entries, (entry) => entry.scopeDefault),
+    () => 0,
   );
 
 export const qualifiedProfileSetLabel = (ref: PersistentProfileSetRef): string =>

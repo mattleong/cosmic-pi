@@ -224,7 +224,10 @@ describe("state words beside a row's glyph", () => {
         renderActivityWidget(rows, width, 12, { now: 29_000, theme: plainTheme }),
         stripAnsi,
       ),
-      manager: Arr.map(component.render(width), stripAnsi),
+      // The list pane alone: a wide manager previews the selected parent's children beside it.
+      manager: Arr.map(component.render(width), (rendered) =>
+        Arr.join(Str.split(stripAnsi(rendered), "│").slice(0, 2), "│"),
+      ),
     };
   };
 

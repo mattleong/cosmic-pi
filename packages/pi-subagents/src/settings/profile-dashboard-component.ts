@@ -2,8 +2,9 @@ import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { type Component, type Focusable } from "@earendil-works/pi-tui";
+import { visibleWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
 import { FullScreenKeymap } from "pi-cosmic-ui/manager/keymap";
+import { joinInline } from "pi-cosmic-ui/manager";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import type { SubagentCommandActions } from "./controller.ts";
 import { ProfileEditVisit } from "./profile-edit-visit.ts";
@@ -17,14 +18,16 @@ import { ProfileSetPickerComponent, type ProfileSetPickerAction } from "./profil
 import { ProfileDashboardDialog } from "./profile-dashboard-dialogs.ts";
 import { runProfileSetAction, type ProfileSetSaveDestination } from "./profile-set-actions.ts";
 import {
-  profileDashboardChildHeight,
-  profileDashboardChildWidth,
+  profileDashboardContext,
+  profileDashboardStatusLines,
+  profileDashboardTextWidth,
   renderProfileDashboard,
+  type DashboardStatus,
 } from "./ui/profile-dashboard-render.ts";
 import { profileSetPickerEntries } from "./ui/profile-set-picker-model.ts";
 import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
 
-type Child = Component & { focused?: boolean; dispose?: () => void };
+type Pane = ProfileWorkspaceComponent | ProfileSetPickerComponent;
 
 interface ProfileDashboardOptions {
   readonly workspace: ProfileWorkspaceOptions;
@@ -45,13 +48,15 @@ export class ProfileDashboardComponent implements Component, Focusable {
   private readonly library: ProfileSetPickerComponent;
   private tab: "session" | "saved" = "session";
   private savedTarget: ProfileWorkspaceTarget | undefined;
-  private overlay: Child | undefined;
+  private overlay: ProfileDashboardDialog | undefined;
   private cancelDialog: (() => void) | undefined;
   private busy = false;
   private blocked = false;
   private disposed = false;
   private focusState = false;
-  private message = "";
+  private message: DashboardStatus | undefined;
+  // Rows the status row takes; the current pane gets the rest below the top border.
+  private statusRows = 1;
 
   private readonly options: ProfileDashboardOptions;
   constructor(options: ProfileDashboardOptions) {
@@ -82,10 +87,11 @@ export class ProfileDashboardComponent implements Component, Focusable {
   private readonly renderSoon = (): void => {
     if (this.current()) this.options.workspace.requestRender();
   };
-  private host(framed = true) {
+  private host() {
     return {
       ...this.options.workspace,
-      getHeight: () => profileDashboardChildHeight(this.options.workspace.getHeight(), framed),
+      getHeight: () => Math.max(0, this.options.workspace.getHeight() - 1 - this.statusRows),
+      getFrameHeight: () => this.options.workspace.getHeight(),
       requestRender: this.renderSoon,
     };
   }
@@ -149,7 +155,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
         return workspace.saveDraft(editorTarget, profile, draft, restore).then((result) => {
           if (this.current() && "refreshError" in result) {
             this.blocked = true;
-            this.message = result.refreshError;
+            this.message = { kind: "error", text: result.refreshError };
           }
           return result;
         });
@@ -171,8 +177,8 @@ export class ProfileDashboardComponent implements Component, Focusable {
     this.focused = this.focusState;
     this.renderSoon();
   }
-  private child(): Child {
-    if (this.overlay) return this.overlay;
+  /** The pane the current tab shows: the session editor, a saved set's editor, or the library. */
+  private pane(): Pane {
     const target: ProfileWorkspaceTarget | undefined =
       this.tab === "session" ? { kind: "session" } : this.savedTarget;
     return (target && this.editors.get(keyFor(target))) ?? this.library;
@@ -183,11 +189,12 @@ export class ProfileDashboardComponent implements Component, Focusable {
   set focused(value: boolean) {
     this.focusState = value;
     for (const editor of this.editors.values()) editor.focused = false;
-    if (this.overlay) this.overlay.focused = false;
-    this.child().focused = value;
+    this.library.focused = false;
+    if (this.overlay) this.overlay.focused = value;
+    else this.pane().focused = value;
   }
   private dialog<T>(
-    make: (close: (value: T | undefined) => void) => Child,
+    make: (close: (value: T | undefined) => void) => ProfileDashboardDialog,
   ): Promise<T | undefined> {
     if (!this.current()) return Promise.resolve(undefined);
     return this.options.awaitDialog<T | undefined>((resolve) => {
@@ -236,7 +243,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
       return;
     }
     this.busy = true;
-    this.message = "";
+    this.message = undefined;
     this.renaming =
       action.action === "rename" ? keyFor({ kind: "profile-set", set: action.target }) : undefined;
     void runProfileSetAction(
@@ -246,24 +253,26 @@ export class ProfileDashboardComponent implements Component, Focusable {
         isCurrent: this.current,
         trusted: () => isProjectTrusted(this.options.ctx),
         refresh: () => this.refresh(),
-        confirm: (title, body) =>
+        confirm: (title, body, verb) =>
           this.dialog<boolean>(
             (close) =>
               new ProfileDashboardDialog({
-                ...this.host(false),
+                ...this.host(),
                 title,
                 body,
+                verb,
                 kind: "confirm",
                 close,
               }),
           ).then((value) => value === true),
-        name: (title, initial) =>
+        name: (title, initial, verb) =>
           this.dialog<string>(
             (close) =>
               new ProfileDashboardDialog({
-                ...this.host(false),
+                ...this.host(),
                 title,
                 initial,
+                verb,
                 kind: "name",
                 close,
               }),
@@ -272,9 +281,10 @@ export class ProfileDashboardComponent implements Component, Focusable {
           this.dialog<ProfileSetSaveDestination>(
             (close) =>
               new ProfileDashboardDialog({
-                ...this.host(false),
-                title: "Save these profiles as a set",
-                body: "Copies all seven profiles of the current session. Does not apply the set or change the default.",
+                ...this.host(),
+                title: "Save the session's profiles as a set",
+                body: "Copies all seven profiles. It doesn't change which set the session is based on or the default.",
+                verb: "Save",
                 kind: "name",
                 destination: { projectTrusted: isProjectTrusted(this.options.ctx) },
                 close,
@@ -287,7 +297,7 @@ export class ProfileDashboardComponent implements Component, Focusable {
           this.editor({ kind: "session" });
         },
         notify: (message) => {
-          if (this.current()) this.message = message;
+          if (this.current()) this.message = { kind: "success", text: message };
         },
         renamed: (previous, next, inspection) => {
           this.visit.renameTarget(previous, next, inspection);
@@ -304,7 +314,10 @@ export class ProfileDashboardComponent implements Component, Focusable {
     )
       .catch((cause: unknown) => {
         if (!this.current()) return undefined;
-        this.message = cause instanceof Error ? cause.message : "Could not update profiles.";
+        this.message = {
+          kind: "error",
+          text: cause instanceof Error ? cause.message : "Could not update profiles.",
+        };
         return this.refresh().then(
           (inspection) => {
             if (this.current()) this.visit.reconcile(inspection);
@@ -312,7 +325,10 @@ export class ProfileDashboardComponent implements Component, Focusable {
           },
           () => {
             if (this.current())
-              this.message = "Could not refresh profiles. Close and reopen the dashboard.";
+              this.message = {
+                kind: "error",
+                text: "Could not refresh profiles. Close and reopen the dashboard.",
+              };
           },
         );
       })
@@ -327,19 +343,24 @@ export class ProfileDashboardComponent implements Component, Focusable {
       });
     this.renderSoon();
   }
-  private ownsInput(child: Child): boolean {
-    if (child === this.overlay) return true;
-    if (child === this.library) return this.library.hasOverlay;
-    return child instanceof ProfileWorkspaceComponent && (child.hasOverlay || child.isBusy);
+  private ownsInput(pane: Pane): boolean {
+    if (pane instanceof ProfileSetPickerComponent) return pane.hasOverlay;
+    return pane.hasOverlay || pane.isBusy;
   }
   handleInput(data: string): void {
     if (!this.current()) return;
-    const child = this.child();
+    if (this.overlay) {
+      this.overlay.handleInput(data);
+      return;
+    }
+    const child = this.pane();
     if (this.ownsInput(child)) {
-      child.handleInput?.(data);
+      child.handleInput(data);
       return;
     }
     if (this.busy) return;
+    // A finished action's message gives way to the tab's context at the next key.
+    if (!this.blocked) this.message = undefined;
     const resolution = this.keymap.resolve(data, {
       mode: "navigation",
       matchesKeybinding: withoutNavigationKeys(this.options.workspace.matchesKeybinding),
@@ -354,35 +375,55 @@ export class ProfileDashboardComponent implements Component, Focusable {
     this.focused = this.focusState;
     this.renderSoon();
   }
-  private route(child: Child, data: string, action: string | undefined, shortcut: boolean): void {
+  private route(child: Pane, data: string, action: string | undefined, shortcut: boolean): void {
     if (action === "next-pane" || action === "previous-pane") this.switchTab();
-    else if (!(this.tab === "saved" && shortcut)) child.handleInput?.(data);
+    // `s` saves the session as a set, so it does nothing on the saved tab.
+    else if (!(this.tab === "saved" && shortcut)) child.handleInput(data);
   }
   private switchTab(): void {
+    this.pane().dismissStatus();
     this.reconcileTargets();
     this.library.updateInspection(this.inspection, isProjectTrusted(this.options.ctx));
     this.tab = this.tab === "session" ? "saved" : "session";
     if (this.tab === "session") this.editor({ kind: "session" });
     else if (this.savedTarget) this.editor(this.savedTarget);
+    this.pane().dismissStatus();
+  }
+  /** The status row: a blocking or transient message, else the tab's standing context. */
+  private status(width: number): DashboardStatus {
+    const pane = this.pane();
+    if (this.blocked)
+      return this.message ?? { kind: "error", text: "Close and reopen to continue editing." };
+    if (this.busy && !this.overlay) return { kind: "info", text: "Saving…" };
+    const transient = this.message ?? pane.status;
+    const editing = pane instanceof ProfileWorkspaceComponent ? pane.target : undefined;
+    // A success keeps the tab's context beside it, such as how many profiles now differ.
+    if (transient?.kind === "success")
+      return {
+        kind: "success",
+        text: joinInline([
+          transient.text,
+          profileDashboardContext(
+            this.inspection,
+            editing,
+            width - visibleWidth(transient.text) - 5,
+            true,
+          ),
+        ]),
+      };
+    if (transient) return transient;
+    return { kind: "plain", text: profileDashboardContext(this.inspection, editing, width) };
   }
   render(width: number): string[] {
     if (!this.current()) return [];
-    const child = this.child();
-    const dialog =
-      child instanceof ProfileDashboardDialog
-        ? child.layout(profileDashboardChildWidth(width))
-        : undefined;
+    const { theme } = this.options.workspace;
+    const text = profileDashboardTextWidth(width);
+    const status = profileDashboardStatusLines(this.status(text), theme, text);
+    this.statusRows = status.length;
+    const prompt = this.overlay?.prompt(text);
     return renderProfileDashboard(
-      {
-        tab: this.tab,
-        message: this.message,
-        blocked: this.blocked,
-        busy: this.busy && !this.overlay,
-        rows: dialog?.rows ?? child.render(width),
-        framedChild: dialog === undefined,
-        ...(dialog && { border: dialog.border }),
-      },
-      { theme: this.options.workspace.theme, width, height: this.options.workspace.getHeight() },
+      { tab: this.tab, status, rows: this.pane().renderWithPrompt(width, prompt) },
+      { theme, width, height: this.options.workspace.getHeight() },
     );
   }
   invalidate(): void {

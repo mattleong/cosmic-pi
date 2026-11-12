@@ -104,8 +104,6 @@ Wrap a custom-message presenter with `withCodePreviewMessageShell(present)` and 
 
 The shell draws the frame a settled tool row has under the owner's loaded `toolCallBackground` and `toolCallCollapsedStyle`: Code Previews' outcome-coloured border, Pi's tool-row backgrounds, or none; collapsed compact rows are unframed in every mode. Messages have no duration, so no timing appears. Pi rebuilds message components whenever it redraws them, so a message adopts the settings its owner loads at session start, as that owner's tool registration captures them. Pi's own spacer separates messages exactly as it separates tool rows; the shell adds no blank rows. A presenter, body, or drawing failure falls back to the message's plain text. The wrapper is presentation only: it never executes anything, changes message content, or acquires resources.
 
-Gallery helpers draw every scenario collapsed and expanded at 100 and 57 columns (`GALLERY_VIEWS`); pass explicit `GalleryView`s to `galleryFrames` for other widths. `galleryMessageFrames` draws a message in each background mode, and `galleryTranscriptFrames` draws tool rows and messages through Pi's own transcript components so they can be reviewed side by side.
-
 ## Prompt for extension authors
 
 Give this to an agent working on another pi extension:

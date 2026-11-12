@@ -1,11 +1,17 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type * as Types from "effect/Types";
-import { managerLayoutTier, type ManagerLayoutTier, clipToWidth, wrapFacts } from "./chrome.ts";
+import {
+  clipToWidth,
+  joinInline,
+  managerArrangement,
+  wrapFacts,
+  type ManagerArrangement,
+} from "./chrome.ts";
 import { FullScreenKeymap, pageSteps } from "./keymap.ts";
 import {
   clampListIndex,
@@ -23,7 +29,7 @@ import {
 
 interface ListDetailShellState extends ListDetailMotionState {
   readonly selectedId: string | undefined;
-  readonly layout: ManagerLayoutTier;
+  readonly arrangement: ManagerArrangement;
 }
 
 export class ListDetailShell {
@@ -33,13 +39,15 @@ export class ListDetailShell {
     details: false,
     selected: 0,
     selectedId: undefined,
-    layout: "narrow",
+    arrangement: "single",
     detailScroll: 0,
   };
   private detailMaxScroll = 0;
   private detailLineCount = 0;
   private detailPageSize = 1;
   private listPageSize = 1;
+  /** The first detail line to keep in view through the next window, across a pane change. */
+  private heldDetailStart: number | undefined;
 
   get state(): ListDetailShellState {
     return this.current;
@@ -61,14 +69,18 @@ export class ListDetailShell {
     return this.select(existing >= 0 ? existing : selected, ids);
   }
 
-  syncLayout(width: number): ManagerLayoutTier {
-    const layout = managerLayoutTier(width);
-    if (layout !== this.current.layout) {
-      this.current.layout = layout;
-      if (layout === "narrow") this.current.details = this.current.pane === "detail";
+  /**
+   * Arranges the panes for a frame `width` by `height` (`managerArrangement`). Entering a single
+   * pane keeps whichever pane had focus on screen.
+   */
+  syncArrangement(width: number, height: number): ManagerArrangement {
+    const arrangement = managerArrangement(width, height);
+    if (arrangement !== this.current.arrangement) {
+      this.current.arrangement = arrangement;
+      if (arrangement === "single") this.current.details = this.current.pane === "detail";
       this.keymap.resetChord();
     }
-    return layout;
+    return arrangement;
   }
 
   ensureSelectionPane(hasSelection: boolean): void {
@@ -79,11 +91,20 @@ export class ListDetailShell {
   }
 
   enterPane(): void {
-    const details = this.current.layout === "narrow" ? !this.current.details : this.current.details;
-    this.current.pane = this.current.layout === "narrow" && !details ? "list" : "detail";
+    const single = this.current.arrangement === "single";
+    const details = single ? !this.current.details : this.current.details;
+    this.current.pane = single && !details ? "list" : "detail";
     this.current.details = details;
-    this.current.detailScroll = 0;
+    this.holdDetailStart();
     this.keymap.resetChord();
+  }
+
+  /**
+   * Entering or leaving the detail pane keeps the reader's place: the line at the top of the
+   * detail stays there, even when the pane then shows fuller content, unless it is followed.
+   */
+  private holdDetailStart(): void {
+    this.heldDetailStart = Math.max(0, this.detailMaxScroll - this.current.detailScroll);
   }
 
   applyMotion(
@@ -91,7 +112,7 @@ export class ListDetailShell {
     context: { readonly rowCount: number; readonly hasSelection: boolean },
   ) {
     const result = listDetailMotion(this.current, motion, {
-      layout: this.current.layout,
+      arrangement: this.current.arrangement,
       rowCount: context.rowCount,
       hasSelection: context.hasSelection,
       detailMaxScroll: this.detailMaxScroll,
@@ -99,6 +120,8 @@ export class ListDetailShell {
       listSteps: pageSteps(this.listPageSize),
     });
     if (Predicate.isTagged(result, "Update")) {
+      if (result.state.pane !== this.current.pane || result.state.details !== this.current.details)
+        this.holdDetailStart();
       this.current.pane = result.state.pane;
       this.current.details = result.state.details;
       this.current.detailScroll = result.state.detailScroll;
@@ -108,7 +131,9 @@ export class ListDetailShell {
   }
 
   detailWindow(lines: ReadonlyArray<string>, height: number, follow?: DetailWindowPosition) {
-    const window = computeDetailWindow({
+    const held = this.heldDetailStart;
+    this.heldDetailStart = undefined;
+    const computed = computeDetailWindow({
       lines,
       height,
       previous: {
@@ -118,6 +143,18 @@ export class ListDetailShell {
       },
       follow,
     });
+    // Scroll counts up from the last line, so a held first line is `maxScroll - start` from it.
+    const window =
+      held === undefined || follow === true || follow === "top"
+        ? computed
+        : computeDetailWindow({
+            lines,
+            height,
+            previous: {
+              scroll: Math.max(0, computed.maxScroll - held),
+              lineCount: lines.length,
+            },
+          });
     this.current.detailScroll = window.scroll;
     this.detailMaxScroll = window.maxScroll;
     this.detailPageSize = window.pageSize;
@@ -128,10 +165,6 @@ export class ListDetailShell {
   /** Whether the detail pane rests at its first line, so the reader hasn't scrolled into it. */
   get detailAtTop(): boolean {
     return this.current.detailScroll >= this.detailMaxScroll;
-  }
-
-  resetDetailScroll(): void {
-    this.current.detailScroll = 0;
   }
 
   resetDetailWindow(): void {
@@ -317,6 +350,57 @@ export const framedBodyWithHints = (
     ...framedFill(frame, hints, hints.length, inner),
   ];
 };
+
+// A prompt band leaves at least this many body rows above it before it takes the whole body.
+const PROMPT_CONTEXT_ROWS = 3;
+
+/**
+ * Places a prompt, such as a confirmation, in a band between a framed body and its bottom border,
+ * set off by a divider, so the panes above stay in view while the border names the decision keys.
+ * `prompt` may be styled; it wraps inside the frame's gutters. Pass lines instead when the band
+ * holds a row that must not wrap, such as a text input: each is kept whole, cut to the gutters'
+ * width. A two-pane layout passes its pane widths so the divider closes the column rule. A frame too short to show the body beside the band
+ * gives the prompt the whole body, ending with `…` if even that cuts it short. To add wrapped hint
+ * rows as well, wrap this in `framedBodyWithHints` without `columns`.
+ */
+export const framedBodyWithPrompt = (
+  frame: ListDetailFrame,
+  options: {
+    readonly height: number;
+    readonly inner: number;
+    readonly prompt: string | ReadonlyArray<string>;
+    readonly columns?: { readonly listWidth: number; readonly detailWidth: number } | undefined;
+  },
+  body: (height: number) => ReadonlyArray<string>,
+): ReadonlyArray<string> => {
+  const { height, inner, columns } = options;
+  if (height <= 0) return [];
+  const room = Math.max(1, inner - 2 * FRAME_GUTTER);
+  const wrapped = Predicate.isString(options.prompt)
+    ? wrapTextWithAnsi(options.prompt, room)
+    : Arr.map(options.prompt, (line) => clipToWidth(line, room, ""));
+  if (height >= wrapped.length + 1 + PROMPT_CONTEXT_ROWS)
+    return [
+      ...body(height - wrapped.length - 1),
+      framedDivider(frame, inner, columns),
+      ...framedFill(frame, framedGutter(wrapped, inner), wrapped.length, inner),
+    ];
+  const shown = wrapped.slice(0, height);
+  if (wrapped.length > height)
+    shown[height - 1] = `${clipToWidth(shown[height - 1] ?? "", room - 1, "")}…`;
+  return framedFill(frame, framedGutter(shown, inner), height, inner);
+};
+
+/**
+ * A pane heading's text: its title, then where its rows sit when they scroll, from
+ * `listWindowPositionLabel` or `detailWindowPositionLabel` (`Items · 2 more above`,
+ * `Details · lines 1–22 of 27`), cut to `width`. Style it with `listDetailHeading`.
+ */
+export const paneHeadingText = (
+  title: string,
+  position: string | undefined,
+  width: number,
+): string => clipToWidth(joinInline([title, position]), width, "…");
 
 export const framedScreen = (
   frame: ListDetailFrame,

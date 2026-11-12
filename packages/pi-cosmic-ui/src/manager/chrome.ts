@@ -57,10 +57,38 @@ export const SUITE_STATUS_GLYPHS = {
   neutral: "•",
 } as const;
 
-export type ManagerLayoutTier = "narrow" | "stacked" | "wide";
+/**
+ * How densely rows are set, by width alone: `narrow` rows wrap onto continuation lines, drop
+ * columns, and wrap hint bars sooner. Pane arrangement is a separate decision
+ * ({@link managerArrangement}), so a tall narrow frame keeps narrow rows in two panes.
+ */
+export type ManagerDensity = "narrow" | "regular";
 
-export const managerLayoutTier = (width: number): ManagerLayoutTier =>
-  width >= 100 ? "wide" : width >= 60 ? "stacked" : "narrow";
+const NARROW_BELOW = 60;
+const COLUMNS_FROM = 100;
+
+export const managerDensity = (width: number): ManagerDensity =>
+  width >= NARROW_BELOW ? "regular" : "narrow";
+
+/**
+ * How a two-pane surface places its panes: `columns` side by side, `stacked` with the list above
+ * the detail, or `single`, one pane at a time with Enter switching to the detail.
+ */
+export type ManagerArrangement = "columns" | "stacked" | "single";
+
+/**
+ * The frame height (whole screen rows, borders included) from which a narrow surface stacks its
+ * panes. A phone client (57×46) stacks; a short narrow terminal (57×20) keeps one pane, where a
+ * stacked list and preview would each get only a few rows.
+ */
+export const NARROW_STACKED_MIN_HEIGHT = 30;
+
+/** Pane arrangement for a frame `width` columns wide and `height` rows tall. */
+export const managerArrangement = (width: number, height: number): ManagerArrangement => {
+  if (width >= COLUMNS_FROM) return "columns";
+  if (width >= NARROW_BELOW || height >= NARROW_STACKED_MIN_HEIGHT) return "stacked";
+  return "single";
+};
 
 /** `attention` marks work waiting on a person's or agent's reply or decision; it is not a problem. */
 export type ManagerNoticeKind = "info" | "success" | "warning" | "error" | "attention";

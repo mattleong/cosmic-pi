@@ -80,7 +80,8 @@ const makeSections = () => {
     tasks: sectionNode("tasks", "Tasks"),
     attention: sectionNode("attention", "Attention"),
   } satisfies Record<Section, SectionNode>;
-  return { byName, ordered: [byName.subagents, byName.tasks, byName.attention] };
+  // What needs the user leads.
+  return { byName, ordered: [byName.attention, byName.subagents, byName.tasks] };
 };
 
 interface GroupedActivityTreeOptions {
@@ -88,6 +89,11 @@ interface GroupedActivityTreeOptions {
   readonly expandedHistory?: ReadonlySet<string>;
   readonly focus?: string;
   readonly hideHistory?: boolean;
+  /**
+   * Keeps only matching rows and the owners above them, with each branch that leads to a match
+   * open unless `collapsed` folds it, and drops sections without a match.
+   */
+  readonly matches?: (row: ActivityRow) => boolean;
 }
 
 const rowContext = (
@@ -150,6 +156,23 @@ function completeNode(node: Node, section: Section, hideHistory: boolean): void 
     !row.awaited;
 }
 
+/** Nodes that match, or lead to a match, or `undefined` when nothing filters the tree. */
+const matchedNodes = (
+  sections: readonly Node[],
+  matches: ((row: ActivityRow) => boolean) | undefined,
+): ReadonlySet<Node> | undefined => {
+  if (!matches) return undefined;
+  const kept = new Set<Node>();
+  const visit = (node: Node): boolean => {
+    let leads = false;
+    for (const child of node.children) leads = visit(child) || leads;
+    if (leads || (node.type === "member" && matches(node.row))) kept.add(node);
+    return kept.has(node);
+  };
+  for (const section of sections) visit(section);
+  return kept;
+};
+
 export function groupedActivityTree(
   rows: readonly ActivityRow[],
   options: GroupedActivityTreeOptions = {},
@@ -166,7 +189,11 @@ export function groupedActivityTree(
     node.row.kind === "question" &&
     node.parentId === activitySectionId("attention") &&
     isFinished(node.row);
-  const visible = (node: Node) => !settledQuestion(node) && (!options.hideHistory || !node.history);
+  const matched = matchedNodes(sections, options.matches);
+  const visible = (node: Node) =>
+    !settledQuestion(node) &&
+    (!options.hideHistory || !node.history) &&
+    (matched === undefined || matched.has(node));
   const result: GroupedActivityRow[] = [];
   const focused = options.focus ? nodes.get(options.focus) : undefined;
   // `Subagents` and `Tasks` name their rows' kind; `Attention` doesn't, and a focused subtree is
@@ -182,7 +209,7 @@ export function groupedActivityTree(
     const expanded =
       children.length > 0 &&
       !options.collapsed?.has(node.id) &&
-      (!node.history || options.expandedHistory?.has(node.id) === true);
+      (!node.history || matched !== undefined || options.expandedHistory?.has(node.id) === true);
     const base: PresentationBase = {
       id: node.id,
       title: node.title,

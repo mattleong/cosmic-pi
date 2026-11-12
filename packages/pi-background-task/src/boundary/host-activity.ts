@@ -101,12 +101,14 @@ export function backgroundTaskActivityItems(
                 }),
               ]
             : [
+                // Clears every finished task, so Activity offers it on the Tasks heading.
                 Object.freeze({
                   id: "clear",
                   label: "Clear all finished",
                   confirmation:
                     "Clear all finished tasks from this session? Running tasks keep running.",
                   handoff: false,
+                  scope: "section",
                 }),
               ],
         ),

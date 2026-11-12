@@ -1,23 +1,12 @@
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { stripTerminalControls } from "pi-cosmic-core/security";
-import { plainTheme } from "pi-cosmic-core/testing";
-import { ActivityComponent, freshActivityPresentation } from "./component.ts";
-import type { ActivityRow } from "./model.ts";
 import {
   ACTIVITY_DISCOVER,
   ACTIVITY_EVENT,
   ACTIVITY_HOST,
   ActivityEnvelopeSchema,
-  activityKey,
-  type ActivityDetailContent,
   type ActivityEnvelope,
   type ActivityEvents,
-  type ActivityItem,
 } from "./protocol.ts";
-import { renderActivityWidget } from "./widget.ts";
-import { decodeActivityDetail } from "./detail.ts";
 
 const isActivityEnvelope = Schema.is(ActivityEnvelopeSchema);
 
@@ -51,89 +40,4 @@ export function fakeActivityHost(sessionId = "session") {
     }
   });
   return { events, hostToken, get: () => envelope, capability: () => capability };
-}
-
-interface ActivityGalleryOptions {
-  readonly title: string;
-  readonly providerId: string;
-  readonly items: readonly ActivityItem[];
-  readonly detail?: (itemId: string) => ActivityDetailContent | undefined;
-  /** Also renders each opened item with its Technical section shown. */
-  readonly technical?: boolean;
-  readonly open?: readonly string[];
-  readonly widths?: readonly number[];
-  /** Widths for each opened item's manager frames; the default 140 stays out of the heading. */
-  readonly managerWidths?: readonly number[];
-  readonly maxRows?: readonly number[];
-  readonly now?: number;
-}
-
-const plain = (frame: readonly string[]) => Arr.map(frame, (line) => stripTerminalControls(line));
-
-const DEFAULT_MANAGER_WIDTH = 140;
-
-export function activityGalleryFrames(options: ActivityGalleryOptions): string[] {
-  const { providerId } = options;
-  const rows: readonly ActivityRow[] = Object.freeze(
-    Arr.map(options.items, (item) => ({
-      ...item,
-      key: activityKey(providerId, item.id),
-      providerId,
-      generation: 1,
-    })),
-  );
-  const now = options.now ?? 0;
-  const lines: string[] = [];
-  for (const maxRows of options.maxRows ?? [8])
-    for (const width of options.widths ?? [60, 80, 100])
-      lines.push(
-        `── activity widget · ${options.title} · ${width} cols · ${maxRows} rows`,
-        ...plain(renderActivityWidget(rows, width, maxRows, { now, theme: plainTheme })),
-        "",
-      );
-  const width = DEFAULT_MANAGER_WIDTH;
-  const managerWidths = options.managerWidths ?? [DEFAULT_MANAGER_WIDTH];
-  const atWidth = (frameWidth: number) =>
-    frameWidth === DEFAULT_MANAGER_WIDTH ? "" : ` · ${frameWidth} cols`;
-  for (const itemId of options.open ?? []) {
-    const presentation = freshActivityPresentation();
-    for (const row of rows) presentation.expandedHistory.add(row.key);
-    const component = new ActivityComponent({
-      snapshot: () => rows,
-      presentation,
-      theme: plainTheme,
-      height: () => 32,
-      now: () => now,
-      close: () => undefined,
-      requestRender: () => undefined,
-      loadDetail: (request, deliver) => {
-        const id = Option.getOrUndefined(Arr.findFirst(rows, (row) => row.key === request.key))?.id;
-        const content = id === undefined ? undefined : options.detail?.(id);
-        const detail = content === undefined ? undefined : decodeActivityDetail(content);
-        if (detail !== undefined) deliver(detail);
-      },
-    });
-    const key = activityKey(providerId, itemId);
-    component.render(width);
-    for (let step = 0; step <= rows.length * 4 && component.shell.state.selectedId !== key; step++)
-      component.handleInput("j");
-    const found = component.shell.state.selectedId === key;
-    if (found) component.handleInput("\r");
-    for (const frameWidth of managerWidths)
-      lines.push(
-        `── activity manager · ${options.title} · ${itemId}${found ? "" : " (not reachable)"}${atWidth(frameWidth)}`,
-        ...plain(component.render(frameWidth)),
-        "",
-      );
-    if (found && options.technical) {
-      component.handleInput("t");
-      for (const frameWidth of managerWidths)
-        lines.push(
-          `── activity manager · ${options.title} · ${itemId} · technical${atWidth(frameWidth)}`,
-          ...plain(component.render(frameWidth)),
-          "",
-        );
-    }
-  }
-  return lines;
 }

@@ -10,6 +10,7 @@ export const PROFILE_WORKSPACE_SHORTCUTS: ReadonlySet<string> = new Set([
   "m",
   "e",
   "a",
+  "u",
   "+",
   "[",
   "]",

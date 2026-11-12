@@ -18,9 +18,7 @@ import type {
 } from "../src/settings/profile-workspace.ts";
 
 const openUndo = (component: ProfileWorkspaceComponent): void => {
-  component.handleInput("l");
-  component.handleInput("G");
-  component.handleInput("\r");
+  component.handleInput("u");
 };
 
 describe("editing visit integration", () => {

@@ -7,17 +7,14 @@ import * as Predicate from "effect/Predicate";
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import {
-  MAX_PROFILE_CANDIDATES,
   supportsSubagentFastMode,
   type ProfileCandidate,
   type ProfileId,
 } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
-  CANDIDATE_LIMIT_REACHED,
   candidateEfforts,
   loadProfileRouteDraft,
-  profileRouteOptionLabel,
   profileWorkspaceScope,
   updateCandidateControls,
   type CandidateUpdate,
@@ -28,16 +25,14 @@ import {
 } from "../profile-route-editor.ts";
 
 export type ProfileWorkspacePane = "profiles" | "fields";
+
 export type ProfileWorkspaceField =
   | "model"
   | "effort"
   | "writeIntent"
   | "advanced"
   | "context"
-  | "openaiFastMode"
-  | "actions"
-  | "add"
-  | "reset";
+  | "openaiFastMode";
 
 interface ProfileWorkspaceFieldRow {
   readonly field: ProfileWorkspaceField;
@@ -193,7 +188,6 @@ export const candidateFieldRows = (
   parentEffort: SubagentEffort,
   parentModel?: string,
   advancedExpanded = false,
-  candidateIndex = 0,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
   const advancedValues = advancedSummaryValues(candidate, parentModel);
   return [
@@ -221,12 +215,6 @@ export const candidateFieldRows = (
       fixed: false,
     },
     ...(advancedExpanded ? advancedCandidateRows(candidate, parentModel) : []),
-    {
-      field: "actions",
-      label: `Manage ${profileRouteOptionLabel(candidateIndex)}…`,
-      value: "",
-      fixed: false,
-    },
   ];
 };
 
@@ -236,53 +224,46 @@ export type ProfileWorkspaceRow = ProfileWorkspaceFieldRow &
     | { readonly scope: "profile"; readonly candidateIndex?: undefined }
   );
 
+/**
+ * The fields pane's rows: each candidate's settings, or, for a profile with no candidates, one
+ * `Add model…` row so the pane always offers a next step. Actions on a candidate (Manage, Add
+ * fallback, Undo) are keys, not rows.
+ */
 export const profileWorkspaceRows = (
   draft: ProfileRouteDraft,
   profile: ProfileId,
   parentEffort: SubagentEffort,
   parentModel: string | undefined,
   expanded: ReadonlySet<number>,
-  canUndo = false,
-): ReadonlyArray<ProfileWorkspaceRow> => [
-  ...Arr.flatMap(draft.candidates, (candidate, candidateIndex) =>
-    Arr.map(
-      candidateFieldRows(
-        candidate,
-        profile,
-        parentEffort,
-        parentModel,
-        expanded.has(candidateIndex),
-        candidateIndex,
-      ),
-      (row): ProfileWorkspaceRow => ({ ...row, scope: "candidate", candidateIndex }),
-    ),
-  ),
-  {
-    scope: "profile",
-    field: draft.candidates.length === 0 ? "model" : "add",
-    label: draft.candidates.length === 0 ? "Add model…" : "Add fallback…",
-    value: Match.value(draft.kind).pipe(
-      Match.when("invalid", () => "repair this profile"),
-      Match.when("disabled", () => "enable this profile"),
-      Match.orElse(() => ""),
-    ),
-    fixed: draft.candidates.length >= MAX_PROFILE_CANDIDATES,
-    fixedReason: CANDIDATE_LIMIT_REACHED,
-  },
-  {
-    scope: "profile",
-    field: "reset",
-    label: "Undo changes",
-    value: "",
-    fixed: !canUndo,
-    fixedReason: "No undoable changes from this visit.",
-  },
-];
+): ReadonlyArray<ProfileWorkspaceRow> =>
+  draft.candidates.length === 0
+    ? [
+        {
+          scope: "profile",
+          field: "model",
+          label: "Add model…",
+          value: Match.value(draft.kind).pipe(
+            Match.when("invalid", () => "repair this profile"),
+            Match.when("disabled", () => "enable this profile"),
+            Match.orElse(() => ""),
+          ),
+          fixed: false,
+        },
+      ]
+    : Arr.flatMap(draft.candidates, (candidate, candidateIndex) =>
+        Arr.map(
+          candidateFieldRows(
+            candidate,
+            profile,
+            parentEffort,
+            parentModel,
+            expanded.has(candidateIndex),
+          ),
+          (row): ProfileWorkspaceRow => ({ ...row, scope: "candidate", candidateIndex }),
+        ),
+      );
 
-export type SelectableCandidateField = Exclude<
-  ProfileWorkspaceField,
-  "model" | "advanced" | "actions" | "add" | "reset"
->;
+export type SelectableCandidateField = Exclude<ProfileWorkspaceField, "model" | "advanced">;
 
 export const candidateFieldChoices = (
   field: SelectableCandidateField,

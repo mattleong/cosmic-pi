@@ -32,6 +32,8 @@ describe("grouped activity detail", () => {
       loading: false,
       actionPage: 0,
       technical: true,
+      actions: [],
+      children: [],
     });
     const text = Arr.join(Arr.map(blocks, blockText), "\n");
     expect(text).not.toContain("\u001b");
@@ -62,6 +64,8 @@ describe("grouped activity detail", () => {
             loading: false,
             actionPage: 0,
             technical,
+            actions: [],
+            children: [],
           }),
           blockText,
         ),

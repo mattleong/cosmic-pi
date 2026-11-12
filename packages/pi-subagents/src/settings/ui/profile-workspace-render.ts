@@ -1,24 +1,33 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { listWindowStart } from "pi-cosmic-ui/manager/list-detail";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+  listWindowPositionLabel,
+  listWindowStart,
+  stackedListHeight,
+  type ListDetailPane,
+} from "pi-cosmic-ui/manager/list-detail";
 import {
   FRAME_GUTTER,
   framedBodyWithHints,
+  framedBodyWithPrompt,
   framedFill,
   framedGutter,
   framedScreen,
   framedStackedRows,
   framedWideRows,
-  listDetailHeading,
   listDetailFrame,
+  listDetailHeading,
+  paneHeadingText,
+  type ListDetailShell,
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import { focusedField, LIST_CURSOR, managerTone } from "pi-cosmic-ui/manager/style";
-import { managerLayoutTier, managerNoticeColor, clipToWidth } from "pi-cosmic-ui/manager";
+import { clipToWidth, type ManagerArrangement } from "pi-cosmic-ui/manager";
 import { managerTable } from "pi-cosmic-ui/manager/table";
 import {
   borderKeyHint,
@@ -31,7 +40,12 @@ import {
   moveKeyHint,
   type FramedKeyHints,
 } from "pi-cosmic-ui/manager/key-labels";
-import { PROFILE_IDS, type ProfileId, type ProfileCandidate } from "../../profiles/model.ts";
+import {
+  MAX_PROFILE_CANDIDATES,
+  PROFILE_IDS,
+  type ProfileId,
+  type ProfileCandidate,
+} from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
   loadProfileRouteDraft,
@@ -47,48 +61,59 @@ import {
   candidateFastModeApplied,
   candidateModelLabel,
   profileWorkspaceRows,
-  type ProfileWorkspacePane,
   type ProfileWorkspaceRow,
 } from "./profile-workspace-model.ts";
-import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
+import type {
+  SearchableSelectHostOptions,
+  SearchableSelectPage,
+} from "pi-cosmic-ui/manager/searchable-select";
 import { profileWorkspaceKeys } from "./profile-workspace-keys.ts";
-import { qualifiedProfileSetLabel } from "./profile-set-picker-model.ts";
+import type { DashboardPrompt } from "./profile-dashboard-render.ts";
 import { countLabel } from "pi-cosmic-core/display";
 
 export interface ProfileWorkspaceConfirmation {
   readonly title: string;
   readonly detail: string;
+  /** The verb Enter performs, such as `Remove`. */
+  readonly verb: string;
 }
 interface ProfileWorkspaceRenderState {
   readonly inspection: ProfileSettingsInspection;
   readonly target: ProfileWorkspaceTarget;
   readonly parentEffort: SubagentEffort;
   readonly parentModel?: string | undefined;
-  readonly pane: ProfileWorkspacePane;
-  readonly profileIndex: number;
-  readonly saveFocused?: boolean | undefined;
+  /** Pane focus, the profile selection, and the arrangement. */
+  readonly shell: ListDetailShell;
   readonly candidateIndex: number;
   readonly fieldIndex: number;
   readonly draft: ProfileRouteDraft;
   readonly expandedCandidates: ReadonlySet<number>;
-  readonly editedProfiles?: ReadonlySet<ProfileId> | undefined;
+  /** Profiles whose session route no set holds, marked `●`. */
+  readonly changedProfiles: ReadonlySet<ProfileId>;
+  /** Whether `u` can undo the selected profile's changes from this visit. */
+  readonly canUndo: boolean;
+  /** Whether the session differs from the set it is based on, so saving it is worth offering. */
+  readonly sessionChanged: boolean;
   /** `?` expanded the hint bar to every key the editor takes. */
   readonly hintsExpanded?: boolean | undefined;
   readonly busy: boolean;
   readonly cancellableBusy: boolean;
-  readonly message?:
-    | { readonly kind: "info" | "success" | "warning" | "error"; readonly text: string }
-    | undefined;
-  readonly pendingConfirmation?: ProfileWorkspaceConfirmation | undefined;
+  /** A short choice list, drawn in the fields pane. */
+  readonly choices?: SearchableSelectPage<string> | undefined;
+  readonly confirmation?: ProfileWorkspaceConfirmation | undefined;
+  /** A host's pending decision, such as saving the session as a set, in a band above the border. */
+  readonly prompt?: DashboardPrompt | undefined;
 }
 interface ProfileWorkspaceRenderOptions {
   readonly theme: Theme;
   readonly width: number;
   readonly height: number;
+  /** The whole surface's height, which with the width decides how panes are arranged. */
+  readonly frameHeight: number;
   readonly keybindingLabel?: SearchableSelectHostOptions["keybindingLabel"];
 }
 const selectedProfile = (state: ProfileWorkspaceRenderState): ProfileId =>
-  PROFILE_IDS[state.profileIndex] ?? PROFILE_IDS[0];
+  PROFILE_IDS[state.shell.state.selected] ?? PROFILE_IDS[0];
 const editorRows = (state: ProfileWorkspaceRenderState, profile: ProfileId) =>
   profileWorkspaceRows(
     state.draft,
@@ -96,26 +121,9 @@ const editorRows = (state: ProfileWorkspaceRenderState, profile: ProfileId) =>
     state.parentEffort,
     state.parentModel,
     state.expandedCandidates,
-    state.editedProfiles?.has(profile) ?? false,
   );
-const targetHeading = (target: ProfileWorkspaceTarget): string =>
-  target.kind === "session"
-    ? "Editing current session"
-    : `Editing ${target.set.name} · session not affected`;
-/** Where edits go, shortened rather than clipped when the full sentence doesn't fit. */
-const destination = (target: ProfileWorkspaceTarget, width: number): string => {
-  const [full, short] =
-    target.kind === "session"
-      ? [
-          "Changes affect later launches. Active runs are unchanged.",
-          "Changes affect later launches.",
-        ]
-      : [
-          `Saving to ${qualifiedProfileSetLabel(target.set)} · session not affected`,
-          `Saving to ${qualifiedProfileSetLabel(target.set)}`,
-        ];
-  return visibleWidth(full) <= width ? full : short;
-};
+const focusedPane = (state: ProfileWorkspaceRenderState): ListDetailPane =>
+  state.choices ? "detail" : state.shell.state.pane;
 
 const workspaceCandidateSummary = (
   candidate: ProfileCandidate,
@@ -144,6 +152,9 @@ const fittedModelLabel = (
   return visibleWidth(full) <= width ? full : candidateModelLabel(candidate, parentModel, true);
 };
 
+// Inherited values are drawn dimmer than pinned ones, so what a profile pins stands out.
+const INHERITED_TONE = "dim";
+
 interface ProfileTableRow {
   readonly profile: ProfileId;
   readonly selected: boolean;
@@ -153,8 +164,8 @@ interface ProfileTableRow {
   /** The bare level a narrow list shows instead, such as `low`. */
   readonly shortEffort: string;
   readonly fallbacks: number;
-  /** Whether this profile changed during the visit, so its row carries the unsaved marker. */
-  readonly edited: boolean;
+  /** Whether no saved set holds this profile's route, so its row carries `●`. */
+  readonly changed: boolean;
 }
 
 const profileTableRows = (
@@ -162,18 +173,25 @@ const profileTableRows = (
   theme: Theme,
 ): ReadonlyArray<ProfileTableRow> =>
   Arr.map(PROFILE_IDS, (profile, index) => {
-    const selected = index === state.profileIndex;
+    const selected = index === state.shell.state.selected;
     const draft = selected
       ? state.draft
       : loadProfileRouteDraft(state.inspection, state.target, profile);
     const first = draft.kind === "invalid" ? undefined : draft.candidates[0];
     const fast =
       first && candidateFastModeApplied(first, state.parentModel) ? theme.fg("warning", " ⚡") : "";
+    const effortTone = first?.effort === "default" ? INHERITED_TONE : "text";
     return {
       profile,
-      selected: selected && !state.saveFocused,
+      selected,
       model: theme.fg(
-        first ? managerTone.value : draft.kind === "invalid" ? "error" : "muted",
+        first
+          ? first.model === "parent"
+            ? INHERITED_TONE
+            : managerTone.value
+          : draft.kind === "invalid"
+            ? "error"
+            : "muted",
         first
           ? candidateModelLabel(first, state.parentModel, true)
           : draft.kind === "invalid"
@@ -182,13 +200,13 @@ const profileTableRows = (
       ),
       // An inherited level reads `inherit (low)` like the editor pane, unless the list is narrow.
       effort: first
-        ? `${theme.fg("muted", candidateEffortLabel(profile, first, state.parentEffort))}${fast}`
+        ? `${theme.fg(effortTone, candidateEffortLabel(profile, first, state.parentEffort))}${fast}`
         : "",
       shortEffort: first
-        ? `${theme.fg("muted", candidateEffortLevel(profile, first, state.parentEffort))}${fast}`
+        ? `${theme.fg(effortTone, candidateEffortLevel(profile, first, state.parentEffort))}${fast}`
         : "",
       fallbacks: Math.max(0, draft.candidates.length - 1),
-      edited: state.editedProfiles?.has(profile) ?? false,
+      changed: state.changedProfiles.has(profile),
     };
   });
 
@@ -197,9 +215,9 @@ const PROFILE_CURSOR_WIDTH = 2;
 
 // The model is what the list is for, so it keeps its width before the reasoning label.
 const PROFILE_COLUMNS = [
-  { minWidth: 10, priority: 5 },
-  { minWidth: 8, priority: 4 },
-  { minWidth: 4, priority: 3 },
+  { minWidth: 10, priority: 5, header: "Profile" },
+  { minWidth: 8, priority: 4, header: "Model" },
+  { minWidth: 4, priority: 3, header: "Reasoning" },
   { minWidth: 2, priority: 1 },
 ] as const;
 
@@ -215,12 +233,6 @@ const fallbackLabel = (count: number, compact: boolean): string =>
  * bare `+1`, then `inherit (…)` around an inherited reasoning level.
  */
 type ProfileTableFit = "full" | "compact" | "short";
-
-const PROFILE_TABLE_FITS = [
-  "full",
-  "compact",
-  "short",
-] as const satisfies ReadonlyArray<ProfileTableFit>;
 
 const effortCell = (row: ProfileTableRow, fallbacks: string, fit: ProfileTableFit): string => {
   const effort = fit === "short" ? row.shortEffort : row.effort;
@@ -243,19 +255,24 @@ const profileTableCells = (
 
 /**
  * The width the profile table needs to show every model and fallback count unclipped, measured as
- * the table lays out: each shown column at least its minimum, and empty columns not at all.
+ * the table lays out: each shown column at least its minimum, and empty columns not at all. Column
+ * headings count only when `headed`; where one doesn't fit, it is left out.
  */
 const profileTableNaturalWidth = (
   rows: ReadonlyArray<ProfileTableRow>,
   fit: ProfileTableFit = "full",
+  headed = false,
+  marked = Arr.some(rows, (row) => row.changed),
 ): number => {
-  const marked = Arr.some(rows, (row) => row.edited);
   const shown = Arr.filterMap(PROFILE_COLUMNS, (column, index) => {
     const widest = Math.max(
       0,
       ...Arr.map(rows, (row) => visibleWidth(profileTableCells(row, marked, fit)[index] ?? "")),
     );
-    return widest === 0 ? Result.failVoid : Result.succeed(Math.max(column.minWidth, widest));
+    const heading = headed && "header" in column ? column.header.length : 0;
+    return widest === 0
+      ? Result.failVoid
+      : Result.succeed(Math.max(column.minWidth, widest, heading));
   });
   return (
     PROFILE_CURSOR_WIDTH +
@@ -264,39 +281,56 @@ const profileTableNaturalWidth = (
   );
 };
 
-const profileTableLines = (
-  state: ProfileWorkspaceRenderState,
-  theme: Theme,
-  width: number,
-): ReadonlyArray<string> => {
+const profileTable = (state: ProfileWorkspaceRenderState, theme: Theme, width: number) => {
   const rows = profileTableRows(state, theme);
-  const marked = Arr.some(rows, (row) => row.edited);
-  const fit = Option.getOrElse(
-    Arr.findFirst(PROFILE_TABLE_FITS, (each) => profileTableNaturalWidth(rows, each) <= width),
-    () => "short" as const,
+  const marked = Arr.some(rows, (row) => row.changed);
+  // The fallback count moves beside the reasoning before the headings go, and the headings go
+  // before an inherited level loses its `inherit (…)`.
+  const layouts = [
+    { fit: "full", headed: true },
+    { fit: "compact", headed: true },
+    { fit: "compact", headed: false },
+    { fit: "short", headed: true },
+    { fit: "short", headed: false },
+  ] as const;
+  const { fit, headed } = Option.getOrElse(
+    Arr.findFirst(
+      layouts,
+      (layout) => profileTableNaturalWidth(rows, layout.fit, layout.headed) <= width,
+    ),
+    () => ({ fit: "short" as const, headed: false }),
   );
   const compact = fit !== "full";
+  const listFocused = focusedPane(state) === "list" && !state.prompt && !state.confirmation;
   // The shared table leaves out a column with no cells, such as fallbacks when there are none.
   const table = managerTable(
     Arr.map(rows, (row) => profileTableCells(row, marked, fit)),
-    PROFILE_COLUMNS,
+    headed
+      ? PROFILE_COLUMNS
+      : Arr.map(PROFILE_COLUMNS, ({ minWidth, priority }) => ({ minWidth, priority })),
     width - PROFILE_CURSOR_WIDTH,
   );
-  return Arr.map(rows, (row) => {
-    const identity =
-      row.selected && state.pane === "profiles"
-        ? focusedField(theme, row.profile)
-        : theme.fg(managerTone.identity, row.profile);
-    const marker = row.edited ? theme.fg("warning", " ●") : "";
-    const label = fallbackLabel(row.fallbacks, compact);
-    const fallbacks = label ? theme.fg("muted", label) : "";
-    return `${row.selected ? LIST_CURSOR : " "} ${table.row([
-      identity + marker,
-      row.model,
-      effortCell(row, fallbacks, fit),
-      compact ? "" : fallbacks,
-    ])}`;
-  });
+  return {
+    header:
+      table.header === undefined
+        ? undefined
+        : theme.fg("muted", `${Fn.pipe(" ", Str.repeat(PROFILE_CURSOR_WIDTH))}${table.header}`),
+    rows: Arr.map(rows, (row) => {
+      const identity =
+        row.selected && listFocused
+          ? focusedField(theme, row.profile)
+          : theme.fg(managerTone.identity, row.profile);
+      const marker = row.changed ? theme.fg("warning", " ●") : "";
+      const label = fallbackLabel(row.fallbacks, compact);
+      const fallbacks = label ? theme.fg("muted", label) : "";
+      return `${row.selected ? LIST_CURSOR : " "} ${table.row([
+        identity + marker,
+        row.model,
+        effortCell(row, fallbacks, fit),
+        compact ? "" : fallbacks,
+      ])}`;
+    }),
+  };
 };
 
 // The editor pane keeps room for its labels and a model route beside the list.
@@ -308,37 +342,38 @@ const textWidth = (paneWidth: number): number => Math.max(1, paneWidth - 2 * FRA
 
 /** Wide layouts give the list what its models need, and the editor everything else. */
 const wideListWidth = (state: ProfileWorkspaceRenderState, theme: Theme, inner: number) => {
-  const natural = profileTableNaturalWidth(profileTableRows(state, theme)) + 2 * FRAME_GUTTER;
+  // Room for the `●` marker is always kept, so the panes don't shift when an edit adds one.
+  const natural =
+    profileTableNaturalWidth(profileTableRows(state, theme), "full", true, true) + 2 * FRAME_GUTTER;
   const most = Math.max(MIN_LIST_WIDTH, inner - 1 - MIN_EDITOR_WIDTH);
   return Math.max(MIN_LIST_WIDTH, Math.min(natural, most, Math.floor(inner * 0.6)));
 };
 
+/** Lines the profile pane draws when every row shows: its heading, column headings, and rows. */
+const PROFILE_PANE_LINES = PROFILE_IDS.length + 2;
+
+/** The profile pane: its heading with the rows scrolled off, column headings, and the rows. */
 const profileLines = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
   height: number,
 ): ReadonlyArray<string> => {
-  const save = clipToWidth(
-    `${state.saveFocused ? LIST_CURSOR : " "} Save these profiles as a set…`,
-    width,
+  const table = profileTable(state, theme, width);
+  const header = height >= 3 && table.header !== undefined ? [table.header] : [];
+  const window = state.shell.visibleWindow(
+    table.rows.length,
+    Math.max(1, height - 1 - header.length),
   );
-  const lines = [
-    ...profileTableLines(state, theme, width),
-    ...(state.target.kind === "session"
-      ? [
-          "",
-          listDetailHeading(theme, "Current session", false, managerTone.session),
-          state.saveFocused && state.pane === "profiles" ? focusedField(theme, save) : save,
-        ]
-      : []),
-  ];
-  const count = Math.max(1, height - 1);
-  const selected = state.saveFocused ? lines.length - 1 : state.profileIndex;
-  const start = listWindowStart(lines.length, selected, count);
+  const focused = focusedPane(state) === "list" && !state.prompt && !state.confirmation;
   return [
-    listDetailHeading(theme, "Profiles", state.pane === "profiles"),
-    ...lines.slice(start, start + count),
+    listDetailHeading(
+      theme,
+      paneHeadingText("Profiles", listWindowPositionLabel(window, table.rows.length), width),
+      focused,
+    ),
+    ...header,
+    ...table.rows.slice(window.start, window.end),
   ];
 };
 
@@ -351,17 +386,22 @@ const fieldValue = (
   if (state.draft.kind === "invalid") return theme.fg("error", row.value);
   if (row.scope !== "candidate") return row.value;
   const candidate = state.draft.candidates[row.candidateIndex];
-  if (row.field === "model") return theme.fg(managerTone.value, row.value);
+  if (row.field === "model")
+    return theme.fg(candidate?.model === "parent" ? INHERITED_TONE : managerTone.value, row.value);
   if (row.field === "openaiFastMode" && candidate?.openaiFastMode)
     return theme.fg("warning", row.value);
   return theme.fg(
-    row.field === "effort" && candidate?.effort === "default" ? "muted" : "text",
+    row.field === "effort" && candidate?.effort === "default" ? INHERITED_TONE : "text",
     row.value,
   );
 };
 
 const EDITOR_GUTTER = "  ";
 
+/**
+ * The fields pane: the selected profile's settings under a heading per candidate, windowed around
+ * the field cursor, with the rows scrolled off named in the pane heading.
+ */
 const editorLines = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
@@ -378,65 +418,93 @@ const editorLines = (
       Arr.map((row) => visibleWidth(row.label)),
     ),
   );
+  const fieldsFocused = focusedPane(state) === "detail" && !state.prompt && !state.confirmation;
   const lines: string[] = [];
+  // The row each line draws, so the heading can count the rows scrolled off.
+  const lineRows: Array<number | undefined> = [];
   let selectedLine = 0;
-  let previousSection: string | undefined;
-  // Section headings align with the pane's heading, and their fields indent beneath them.
-  const headingWidth = Math.max(0, width - EDITOR_GUTTER.length);
-  const fieldWidth = Math.max(0, headingWidth - EDITOR_GUTTER.length);
+  let previousSection: number | undefined;
+  const fieldWidth = Math.max(0, width - EDITOR_GUTTER.length);
   Arr.forEach(rows, (row, index) => {
-    const section = row.scope === "candidate" ? `candidate:${row.candidateIndex}` : row.scope;
-    if (section !== previousSection) {
-      if (previousSection !== undefined) lines.push("");
-      lines.push(EDITOR_GUTTER + sectionHeading(state, theme, row, profile, headingWidth));
-      previousSection = section;
+    if (row.scope === "candidate" && row.candidateIndex !== previousSection) {
+      if (previousSection !== undefined) {
+        lines.push("");
+        lineRows.push(undefined);
+      }
+      lines.push(
+        EDITOR_GUTTER + theme.fg("muted", theme.bold(profileRouteOptionLabel(row.candidateIndex))),
+      );
+      // A heading draws no row, so the pane heading's position counts fields only.
+      lineRows.push(undefined);
+      previousSection = row.candidateIndex;
     }
     if (index === state.fieldIndex) selectedLine = lines.length;
-    const selected = index === state.fieldIndex && state.pane !== "profiles";
+    const selected = index === state.fieldIndex && state.shell.state.pane === "detail";
     lines.push(
-      EDITOR_GUTTER + fieldLine(state, theme, row, { selected, labelWidth, width: fieldWidth }),
+      EDITOR_GUTTER +
+        fieldLine(state, theme, row, {
+          selected,
+          focused: fieldsFocused,
+          labelWidth,
+          width: fieldWidth,
+        }),
     );
+    lineRows.push(index);
   });
-  const limit = Math.max(0, height - 1);
-  const start = listWindowStart(lines.length, selectedLine, limit);
-  return [
-    listDetailHeading(theme, profile, state.pane !== "profiles", managerTone.identity),
-    ...lines.slice(start, start + limit),
+  const sectionHeading = (line: number) => {
+    const row = rows[lineRows[line] ?? -1];
+    return row?.scope === "candidate"
+      ? EDITOR_GUTTER + theme.fg("muted", theme.bold(profileRouteOptionLabel(row.candidateIndex)))
+      : undefined;
+  };
+  const limit = Math.max(1, height - 1);
+  const window = (size: number) => {
+    const start = listWindowStart(lines.length, selectedLine, size);
+    return { start, end: start + size };
+  };
+  // A window that starts among a candidate's fields keeps that candidate's heading on top.
+  const plain = window(limit);
+  const narrower = window(limit - 1);
+  const sticky =
+    plain.start > 0 && limit > 1 && lineRows[plain.start] !== undefined
+      ? sectionHeading(narrower.start)
+      : undefined;
+  const shown = sticky === undefined ? plain : narrower;
+  const visible = [
+    ...(sticky === undefined ? [] : [sticky]),
+    ...lines.slice(shown.start, shown.end),
   ];
-};
-
-const sectionHeading = (
-  state: ProfileWorkspaceRenderState,
-  theme: Theme,
-  row: ProfileWorkspaceRow,
-  profile: ProfileId,
-  width: number,
-): string => {
-  if (row.scope !== "candidate")
-    return theme.fg("muted", "Profile: ") + theme.fg(managerTone.identity, theme.bold(profile));
-  const label = profileRouteOptionLabel(row.candidateIndex);
-  const candidate = state.draft.candidates[row.candidateIndex];
-  const summary =
-    candidate === undefined
-      ? ""
-      : workspaceCandidateSummary(
-          candidate,
-          profile,
-          state.parentEffort,
-          Math.max(0, width - visibleWidth(label) - 2),
-          state.parentModel,
-          theme,
-        );
-  return theme.fg("muted", theme.bold(`${label}  ${summary}`));
+  const shownRows = Arr.filter(lineRows.slice(shown.start, shown.end), Predicate.isNotUndefined);
+  const position =
+    lines.length > limit
+      ? listWindowPositionLabel(
+          { start: shownRows[0] ?? 0, end: (shownRows.at(-1) ?? -1) + 1 },
+          rows.length,
+        )
+      : undefined;
+  return [
+    listDetailHeading(
+      theme,
+      paneHeadingText(profile, position, width),
+      fieldsFocused,
+      managerTone.identity,
+    ),
+    ...visible,
+  ];
 };
 
 const fieldLine = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   row: ProfileWorkspaceRow,
-  layout: { readonly selected: boolean; readonly labelWidth: number; readonly width: number },
+  layout: {
+    readonly selected: boolean;
+    readonly focused: boolean;
+    readonly labelWidth: number;
+    readonly width: number;
+  },
 ): string => {
-  const { selected, labelWidth, width } = layout;
+  const { selected, focused, labelWidth, width } = layout;
   const gap = Math.max(0, labelWidth - visibleWidth(row.label)) + 2;
   const candidate =
     row.scope === "candidate" && row.field === "model"
@@ -453,27 +521,24 @@ const fieldLine = (
         ),
       }
     : row;
+  const highlighted = selected && focused && !row.fixed;
   const value = shown.value
-    ? `${Fn.pipe(" ", Str.repeat(gap))}${selected && !row.fixed ? shown.value : fieldValue(state, theme, shown)}`
+    ? `${Fn.pipe(" ", Str.repeat(gap))}${highlighted ? shown.value : fieldValue(state, theme, shown)}`
     : "";
   const text = clipToWidth(
     `${selected ? LIST_CURSOR : " "} ${row.label}${value}${row.scope === "candidate" && row.fixed ? " · fixed" : ""}`,
     width,
   );
-  if (selected && !row.fixed) return focusedField(theme, text);
+  if (highlighted) return focusedField(theme, text);
   return row.fixed ? theme.fg("muted", text) : text;
 };
 
+/** A body too short for panes shows the selected profile and field on one or two lines. */
 const compactLines = (
   state: ProfileWorkspaceRenderState,
   theme: Theme,
   width: number,
 ): ReadonlyArray<string> => {
-  if (state.pane === "profiles" && state.saveFocused)
-    return [
-      theme.fg(managerTone.session, "Current session"),
-      focusedField(theme, `${LIST_CURSOR} Save these profiles as a set…`),
-    ];
   const profile = selectedProfile(state);
   const candidate = state.draft.candidates[state.candidateIndex];
   const scope =
@@ -490,19 +555,14 @@ const compactLines = (
       )
     : theme.fg(state.draft.kind === "invalid" ? "error" : "muted", state.draft.kind);
   const selected = editorRows(state, profile)[state.fieldIndex];
+  const fields = state.shell.state.pane === "detail";
   const field = selected
-    ? `${selected.label}  ${state.pane !== "profiles" && !selected.fixed ? selected.value : fieldValue(state, theme, selected)}`
+    ? `${selected.label}  ${fields && !selected.fixed ? selected.value : fieldValue(state, theme, selected)}`
     : "";
   return [
     prefix + summary,
     ...(selected
-      ? [
-          selected.fixed
-            ? theme.fg("muted", field)
-            : state.pane !== "profiles"
-              ? focusedField(theme, field)
-              : field,
-        ]
+      ? [selected.fixed ? theme.fg("muted", field) : fields ? focusedField(theme, field) : field]
       : []),
   ];
 };
@@ -512,11 +572,8 @@ const fieldEnterVerb = (
   state: ProfileWorkspaceRenderState,
   row: ProfileWorkspaceRow | undefined,
 ): string | undefined => {
-  if (!row) return undefined;
-  if (row.field === "reset") return "Undo";
-  if (row.fixed) return undefined;
-  if (row.field === "add" || row.scope === "profile") return "Add";
-  if (row.field === "actions") return "Open";
+  if (!row || row.fixed) return undefined;
+  if (row.scope === "profile") return "Add";
   if (row.field === "advanced")
     return state.expandedCandidates.has(row.candidateIndex) ? "Collapse" : "Expand";
   return "Change";
@@ -532,37 +589,35 @@ const workspaceFooter = (
   keybindingLabel: ProfileWorkspaceRenderOptions["keybindingLabel"],
   inner: number,
 ): FramedKeyHints => {
-  const keys = profileWorkspaceKeys(
-    keybindingLabel,
-    Boolean(state.pendingConfirmation) || state.busy,
-  );
+  const keys = profileWorkspaceKeys(keybindingLabel, state.busy);
   // Aliases such as C-c belong in the expanded bar, not the default one.
   const { cancel, cancelAliases } = keys;
-  const border = (hint: string): FramedKeyHints => ({
-    border: borderKeyHint(hint, inner),
-    overflow: "",
-  });
-  if (state.pendingConfirmation)
-    return border(
-      joinKeyHints([keyHint(keys.confirm, "Confirm"), exitKeyHint("decision", [], cancel)]),
-    );
+  // Nothing but cancelling a model load answers keys while a change is being written.
   if (state.busy)
-    return border(state.cancellableBusy ? keyHint(cancel, "Cancel loading") : "Saving…");
-  const profiles = state.pane === "profiles";
+    return {
+      border: state.cancellableBusy ? borderKeyHint(keyHint(cancel, "Cancel loading"), inner) : "",
+      overflow: "",
+    };
+  const profiles = state.shell.state.pane === "list";
   const enter = profiles
-    ? state.saveFocused
-      ? "Save"
-      : "Open"
+    ? "Open"
     : fieldEnterVerb(state, editorRows(state, selectedProfile(state))[state.fieldIndex]);
-  const other = state.target.kind === "session" ? "Saved profiles" : "Current session";
+  const count = state.draft.candidates.length;
+  const hasCandidate = state.draft.candidates[state.candidateIndex] !== undefined;
+  const session = state.target.kind === "session";
+  const other = session ? "Saved profiles" : "Current session";
+  const save = session && keyHint("s", "Save as set");
   return framedKeyHintBar(
     {
       hints: [
         moveKeyHint(keys.move),
         enter && keyHint(keys.confirm, enter),
-        keyHint("Tab", other),
         keyHint("m", "Model"),
-        keyHint("a", "Manage"),
+        hasCandidate && keyHint("a", "Manage"),
+        count > 0 && count < MAX_PROFILE_CANDIDATES && keyHint("+", "Add fallback"),
+        state.canUndo && keyHint("u", "Undo"),
+        state.sessionChanged && save,
+        keyHint("Tab", other),
       ],
       // The expanded bar keeps every default pair and adds the rest of the editor's keys.
       more: [
@@ -570,13 +625,12 @@ const workspaceFooter = (
         keyHint("←→", "Pane"),
         keyHint("h/l", "Pane"),
         keyHint(formatKeyIds(["shift+tab"]), other),
-        keyHint("[ ]", "Candidate"),
-        keyHint("e", "Reasoning"),
-        keyHint("+", "Add fallback"),
-        keyHint("/", "Search"),
-        keyHint("s", "Save"),
+        count > 1 && keyHint("[ ]", "Candidate"),
+        hasCandidate && keyHint("e", "Reasoning"),
+        profiles && keyHint("/", "Search"),
+        !state.sessionChanged && save,
       ],
-      exit: profiles && state.target.kind === "session" ? "top" : "nested",
+      exit: profiles && session ? "top" : "nested",
       exitKey: cancel,
       exitAliases: [...cancelAliases, "q"],
     },
@@ -584,6 +638,24 @@ const workspaceFooter = (
     inner,
   );
 };
+
+/** The editor's own confirmation as a prompt band; the border names the decision keys. */
+const confirmationPrompt = (
+  confirmation: ProfileWorkspaceConfirmation,
+  theme: Theme,
+  keybindingLabel: ProfileWorkspaceRenderOptions["keybindingLabel"],
+): DashboardPrompt => {
+  const keys = profileWorkspaceKeys(keybindingLabel, true);
+  return {
+    text: `${theme.fg("warning", theme.bold(confirmation.title))}\n${theme.fg("warning", confirmation.detail)}`,
+    hint: joinKeyHints([
+      keyHint(keys.confirm, confirmation.verb),
+      exitKeyHint("decision", [], keys.cancel),
+    ]),
+  };
+};
+
+const horizontalRule = (width: number) => Fn.pipe("─", Str.repeat(Math.max(0, width)));
 
 export const renderProfileWorkspace = (
   state: ProfileWorkspaceRenderState,
@@ -595,58 +667,67 @@ export const renderProfileWorkspace = (
   if (width < 4) return Array.from({ length: height }, () => Fn.pipe(" ", Str.repeat(width)));
   const inner = width - 2;
   const { theme } = options;
-  const frame = listDetailFrame(theme, state.pane === "profiles" ? "list" : "detail");
-  const context =
-    state.target.kind === "session"
-      ? "Current session"
-      : qualifiedProfileSetLabel(state.target.set);
-  const footer = workspaceFooter(state, options.keybindingLabel, inner);
+  const arrangement = state.shell.syncArrangement(width, options.frameHeight);
+  const prompt =
+    state.prompt ??
+    (state.confirmation
+      ? confirmationPrompt(state.confirmation, theme, options.keybindingLabel)
+      : undefined);
+  // A pending decision holds the keys, so neither pane shows focus until it is made.
+  const frame = listDetailFrame(theme, prompt ? undefined : focusedPane(state));
+  const listWidth = arrangement === "columns" ? wideListWidth(state, theme, inner) : inner;
+  const columns =
+    arrangement === "columns" ? { listWidth, detailWidth: inner - listWidth - 1 } : undefined;
+  const footer: FramedKeyHints = prompt
+    ? { border: borderKeyHint(prompt.hint, inner), overflow: "" }
+    : state.choices
+      ? state.choices.keyHints(inner)
+      : workspaceFooter(state, options.keybindingLabel, inner);
   const hints = keyHintRows(footer.overflow, inner, (row) => theme.fg("dim", row));
+  const panes = (bodyHeight: number) =>
+    workspacePanes(state, theme, frame, { arrangement, inner, columns, bodyHeight });
   return framedScreen(frame, {
     width,
     height,
-    top: theme.fg(
-      state.target.kind === "session" ? managerTone.session : managerTone.saved,
-      clipToWidth(` ${targetHeading(state.target)} `, inner, ""),
-    ),
+    // The pane rule meets the top border, which a host may turn into a divider.
+    top: columns ? `${frame.outer(horizontalRule(columns.listWidth))}${frame.inner("┬")}` : "",
     bottom: footer.border,
     body: (fullHeight) =>
-      framedBodyWithHints(frame, { height: fullHeight, inner, hints }, (bodyHeight) =>
-        workspaceBody(state, options, frame, { inner, width, bodyHeight, context }),
-      ),
+      prompt
+        ? framedBodyWithPrompt(
+            frame,
+            { height: fullHeight, inner, prompt: prompt.text, columns },
+            panes,
+          )
+        : framedBodyWithHints(frame, { height: fullHeight, inner, hints, columns }, panes),
   });
 };
 
-const workspaceBody = (
+/** The fields pane, or the choice list open in its place. */
+const detailLines = (
   state: ProfileWorkspaceRenderState,
-  options: ProfileWorkspaceRenderOptions,
+  theme: Theme,
+  width: number,
+  height: number,
+): ReadonlyArray<string> =>
+  state.choices
+    ? state.choices.renderBody(width, height)
+    : editorLines(state, theme, width, height);
+
+const workspacePanes = (
+  state: ProfileWorkspaceRenderState,
+  theme: Theme,
   frame: ReturnType<typeof listDetailFrame>,
   layout: {
+    readonly arrangement: ManagerArrangement;
     readonly inner: number;
-    readonly width: number;
+    readonly columns: { readonly listWidth: number; readonly detailWidth: number } | undefined;
     readonly bodyHeight: number;
-    readonly context: string;
   },
 ): ReadonlyArray<string> => {
-  const { theme } = options;
-  const { inner, width, bodyHeight, context } = layout;
+  const { arrangement, inner, columns, bodyHeight } = layout;
   const text = textWidth(inner);
-  if (state.pendingConfirmation) {
-    const confirmation = state.pendingConfirmation;
-    return framedFill(
-      frame,
-      framedGutter(
-        Arr.flatMap([context, confirmation.title, confirmation.detail], (line) =>
-          wrapTextWithAnsi(theme.fg("warning", line), text),
-        ),
-        inner,
-      ),
-      bodyHeight,
-      inner,
-      "list",
-    );
-  }
-  if (bodyHeight <= 4)
+  if (bodyHeight <= 4 && !state.choices)
     return framedFill(
       frame,
       framedGutter(compactLines(state, theme, text), inner),
@@ -654,73 +735,41 @@ const workspaceBody = (
       inner,
       "list",
     );
-  const notices: string[] = [];
-  if (state.target.kind === "profile-set")
-    notices.push(theme.fg(managerTone.saved, SCOPE_LABELS[state.target.set.scope]));
-  if (state.message && state.message.kind !== "success")
-    notices.push(
-      ...wrapTextWithAnsi(
-        theme.fg(managerNoticeColor(state.message.kind), state.message.text),
-        text,
-      ).slice(0, 2),
-    );
-  const available = Math.max(0, bodyHeight - notices.length - 1);
-  let body: ReadonlyArray<string>;
-  if (managerLayoutTier(width) === "wide") {
-    const listWidth = wideListWidth(state, theme, inner);
-    const detailWidth = inner - listWidth - 1;
-    body = framedWideRows(frame, {
-      left: framedGutter(profileLines(state, theme, textWidth(listWidth), available), listWidth),
+  if (columns)
+    return framedWideRows(frame, {
+      left: framedGutter(
+        profileLines(state, theme, textWidth(columns.listWidth), bodyHeight),
+        columns.listWidth,
+      ),
       right: framedGutter(
-        editorLines(state, theme, textWidth(detailWidth), available),
-        detailWidth,
+        detailLines(state, theme, textWidth(columns.detailWidth), bodyHeight),
+        columns.detailWidth,
       ),
-      height: available,
-      listWidth,
-      detailWidth,
+      height: bodyHeight,
+      listWidth: columns.listWidth,
+      detailWidth: columns.detailWidth,
     });
-  } else if (managerLayoutTier(width) === "stacked" && available >= 6) {
-    const listHeight = Math.max(2, Math.floor(available * 0.4));
-    body = framedStackedRows(frame, {
+  if (arrangement === "stacked" && bodyHeight >= 6) {
+    const listHeight = stackedListHeight(bodyHeight, PROFILE_PANE_LINES);
+    return framedStackedRows(frame, {
       list: framedGutter(profileLines(state, theme, text, listHeight), inner),
-      detail: framedGutter(editorLines(state, theme, text, available - listHeight - 1), inner),
-      height: available,
+      detail: framedGutter(detailLines(state, theme, text, bodyHeight - listHeight - 1), inner),
+      height: bodyHeight,
       inner,
     });
-  } else {
-    body = framedFill(
-      frame,
-      framedGutter(
-        state.pane === "profiles"
-          ? profileLines(state, theme, text, available)
-          : editorLines(state, theme, text, available),
-        inner,
-      ),
-      available,
-      inner,
-      state.pane === "profiles" ? "list" : "detail",
-    );
   }
-  return [
-    ...framedFill(frame, framedGutter(notices, inner), notices.length, inner),
-    ...body,
-    ...framedFill(
-      frame,
-      framedGutter(
-        [
-          // Indented with the pane headings above it.
-          `  ${theme.fg(
-            "muted",
-            `${state.message?.kind === "success" ? "✓ Saved · " : ""}${destination(
-              state.target,
-              text - 2 - (state.message?.kind === "success" ? 10 : 0),
-            )}`,
-          )}`,
-        ],
-        inner,
-      ),
-      Math.min(1, bodyHeight),
+  // One pane at a time: the fields, or a choice list opened from either pane, replace the list.
+  const detail = state.shell.state.details || state.choices !== undefined;
+  return framedFill(
+    frame,
+    framedGutter(
+      detail
+        ? detailLines(state, theme, text, bodyHeight)
+        : profileLines(state, theme, text, bodyHeight),
       inner,
     ),
-  ];
+    bodyHeight,
+    inner,
+    detail ? "detail" : "list",
+  );
 };

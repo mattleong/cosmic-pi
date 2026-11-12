@@ -2,7 +2,6 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Data from "effect/Data";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import type { ManagerLayoutTier } from "./chrome.ts";
 import { type FullScreenAction, type PageSteps } from "./keymap.ts";
 import {
   isListMotion,
@@ -10,7 +9,7 @@ import {
   movementOffset,
   type ListMotion,
 } from "./list-navigation.ts";
-import { clipToWidth } from "./chrome.ts";
+import { clipToWidth, joinInline, type ManagerArrangement } from "./chrome.ts";
 
 export type ListDetailPane = "list" | "detail";
 
@@ -49,7 +48,7 @@ export interface ListDetailMotionState {
 }
 
 interface ListDetailMotionContext {
-  readonly layout: ManagerLayoutTier;
+  readonly arrangement: ManagerArrangement;
   readonly rowCount: number;
   readonly hasSelection: boolean;
   readonly detailMaxScroll: number;
@@ -127,7 +126,7 @@ const enterDetail = (
   context.hasSelection
     ? motionUpdate(
         state,
-        { pane: "detail", details: context.layout === "narrow" ? true : state.details },
+        { pane: "detail", details: context.arrangement === "single" ? true : state.details },
         { resetChord: true },
       )
     : ListDetailMotionResult.Ignored();
@@ -159,7 +158,8 @@ export const listDetailMotion = (
   motion: ListDetailMotion,
   context: ListDetailMotionContext,
 ): ListDetailMotionResult => {
-  const browsingDetail = state.pane === "detail" || (context.layout === "narrow" && state.details);
+  const browsingDetail =
+    state.pane === "detail" || (context.arrangement === "single" && state.details);
   if (isMovementMotion(motion)) {
     return browsingDetail
       ? scrollDetail(state, context, -movementOffset(motion, context.detailSteps))
@@ -246,8 +246,13 @@ export const wideListDetailGeometry = (
   return { inner, listWidth, detailWidth: inner - listWidth - 1 };
 };
 
-export const stackedListHeight = (height: number, rowCount: number): number =>
-  Math.max(3, Math.min(rowCount + 1, Math.floor(height * 0.4)));
+/**
+ * Lines a stacked list takes from a body `height` lines tall: what its content needs, up to two
+ * fifths of the body, and at least three. Pass `contentLines` as every line the list would draw,
+ * heading included, counting a row that wraps onto a continuation line as two.
+ */
+export const stackedListHeight = (height: number, contentLines: number): number =>
+  Math.max(3, Math.min(contentLines, Math.floor(height * 0.4)));
 
 /** Rows `start` up to, not including, `end`. */
 export interface ListWindow {
@@ -282,6 +287,20 @@ export const listWindowByHeight = (
   const bottom = (tops[start] ?? 0) + lines;
   while (end < heights.length && (tops[end] ?? 0) + Math.max(1, heights[end] ?? 1) <= bottom) end++;
   return { start, end: Math.max(end, Math.min(heights.length, index + 1)) };
+};
+
+/**
+ * Where a list window sits in `count` rows, as `2 more above · 7 more below`, or `undefined` when
+ * every row is on screen. Pane headings show it beside their title (`paneHeadingText`).
+ */
+export const listWindowPositionLabel = (window: ListWindow, count: number): string | undefined => {
+  const above = Math.max(0, window.start);
+  const below = Math.max(0, count - window.end);
+  const label = joinInline([
+    above ? `${above} more above` : undefined,
+    below ? `${below} more below` : undefined,
+  ]);
+  return label || undefined;
 };
 
 export const listWindowStart = (count: number, selected: number, limit: number): number => {

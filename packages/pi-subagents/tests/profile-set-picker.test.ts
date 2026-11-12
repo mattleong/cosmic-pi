@@ -65,11 +65,15 @@ describe("saved profile-set library", () => {
     const entries = profileSetPickerEntries(inspection(), false);
     expect(entries[0]).toMatchObject({ kind: "scope-note", key: "project:locked" });
 
+    // The locked Project note can't be selected, so the first row Enter can open is Global's.
     const picker = makePicker({ projectTrusted: false });
     picker.component.handleInput("g");
     picker.component.handleInput("g");
     picker.component.handleInput("\r");
-    expect(picker.close).not.toHaveBeenCalled();
+    expect(picker.close).toHaveBeenCalledWith({
+      action: "edit",
+      target: { scope: "global", name: "common" },
+    });
   });
 
   it("blocks Use for invalid sets without preventing repair", () => {

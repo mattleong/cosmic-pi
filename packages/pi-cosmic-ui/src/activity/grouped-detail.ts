@@ -7,13 +7,15 @@ import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/
 import { joinInline } from "../manager/chrome.ts";
 import type { ListDetailField } from "../manager/list-detail-shell.ts";
 import { managerTone } from "../manager/style.ts";
-import { activityActionKeys } from "./action-keys.ts";
+import { activityActionKeys, isSectionAction } from "./action-keys.ts";
 import { activityStatus } from "./attention.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
-import { workStateLabels, type GroupSummary } from "./group-summary.ts";
+import { summarizeGroup, workStateLabels, type GroupSummary } from "./group-summary.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
 import type { ActivityDetail, ActivityDetailField } from "./protocol.ts";
-import { activityAgentIdentity, activityElapsed, activitySpan } from "./row-line.ts";
+import { activityAgentIdentity, activityElapsed, activityMark, activitySpan } from "./row-line.ts";
+
+type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
 
 /**
  * Detail content before wrapping: verbatim text, agent-authored Markdown, or a muted line of
@@ -23,7 +25,9 @@ export type ActivityDetailBlock =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "fields"; readonly fields: ReadonlyArray<ListDetailField> }
   | { readonly kind: "facts"; readonly text: string }
-  | { readonly kind: "markdown"; readonly text: string };
+  | { readonly kind: "markdown"; readonly text: string }
+  /** One line, cut with `…` rather than wrapped, such as a child in a parent's rollup. */
+  | { readonly kind: "line"; readonly text: string };
 
 const text = (value: string): ActivityDetailBlock => ({ kind: "text", text: value });
 const spacer = text("");
@@ -52,6 +56,10 @@ interface GroupedDetailOptions {
   readonly loading: boolean;
   readonly actionPage: number;
   readonly technical: boolean;
+  /** The actions offered here: a row's own, or the section actions on a section heading. */
+  readonly actions: ReadonlyArray<ActivityAction>;
+  /** A member's direct children in tree order, for its rollup. */
+  readonly children: readonly ActivityRow[];
 }
 
 const heading = (theme: DetailTheme, value: string, focused: boolean): string =>
@@ -66,10 +74,47 @@ export function groupedDetail(options: GroupedDetailOptions): readonly ActivityD
   return [
     text(heading(theme, Arr.join(selected.breadcrumbs, " › "), options.focused)),
     { kind: "fields", fields: sectionFields(selected.summary) },
-    spacer,
-    text(theme.fg("dim", "Select an item to see its output and actions.")),
+    ...actionBlocks(theme, options.actions, options.actionPage, true),
   ];
 }
+
+/** Children shown by name in a parent's rollup before the rest are counted. */
+const ROLLUP_CHILDREN = 6;
+
+/**
+ * A parent's children at a glance: their states counted, then one line each with its glyph,
+ * title, and latest summary, the rest counted on an `… n more` line.
+ */
+const childRollup = (options: GroupedDetailOptions): readonly ActivityDetailBlock[] => {
+  const { children, theme } = options;
+  if (!children.length) return [];
+  const named = children.slice(0, ROLLUP_CHILDREN);
+  const rest = children.slice(ROLLUP_CHILDREN);
+  const childLine = (row: ActivityRow): ActivityDetailBlock => {
+    const mark = activityMark(row, options.now);
+    const summary = distinctSummary(row);
+    return {
+      kind: "line",
+      text: `${theme.fg(mark.color, mark.glyph)} ${row.title}${summary ? theme.fg("muted", ` · ${summary}`) : ""}`,
+    };
+  };
+  return [
+    spacer,
+    { kind: "facts", text: joinInline(workStateLabels(summarizeGroup(children))) },
+    ...Arr.map(named, childLine),
+    ...(rest.length
+      ? [
+          {
+            kind: "line" as const,
+            text: theme.fg(
+              "dim",
+              joinInline([`… ${rest.length} more`, ...workStateLabels(summarizeGroup(rest))]),
+            ),
+          },
+        ]
+      : []),
+  ];
+};
 
 const ageLabel = (row: ActivityRow, now: number | undefined): string => {
   if (now === undefined) return "";
@@ -97,17 +142,20 @@ const distinctSummary = (row: ActivityRow): string | undefined => {
     : undefined;
 };
 
+// An inspected item shows each section's fuller body where it has one.
 const providerSections = (
   theme: DetailTheme,
   detail: ActivityDetail,
+  inspected: boolean,
 ): readonly ActivityDetailBlock[] =>
-  Arr.flatMap(detail.sections, (section, index) => [
-    ...(index > 0 ? [spacer] : []),
-    ...(section.title ? [text(theme.fg("muted", theme.bold(section.title)))] : []),
-    section.format === "markdown"
-      ? { kind: "markdown" as const, text: section.body }
-      : text(section.body),
-  ]);
+  Arr.flatMap(detail.sections, (section, index) => {
+    const body = (inspected ? section.expandedBody : undefined) ?? section.body;
+    return [
+      ...(index > 0 ? [spacer] : []),
+      ...(section.title ? [text(theme.fg("muted", theme.bold(section.title)))] : []),
+      section.format === "markdown" ? { kind: "markdown" as const, text: body } : text(body),
+    ];
+  });
 
 const technicalFields = (
   row: ActivityRow,
@@ -168,7 +216,7 @@ function sourceDetail(
     ),
   );
   const body: ActivityDetailBlock[] = loaded
-    ? [...providerSections(theme, loaded)]
+    ? [...providerSections(theme, loaded, options.focused)]
     : options.loading
       ? [text(theme.fg("dim", "Loading output…"))]
       : [];
@@ -176,6 +224,7 @@ function sourceDetail(
     text(heading(theme, Arr.join(entry.breadcrumbs, " › "), options.focused)),
     { kind: "facts", text: statusLine(options, row) },
     ...(summary ? [text(summary)] : []),
+    ...childRollup(options),
     ...(body.length ? [spacer, ...body] : []),
     ...(row.omittedChildren
       ? [spacer, text(theme.fg("dim", `${row.omittedChildren}+ earlier finished items hidden`))]
@@ -190,21 +239,29 @@ function sourceDetail(
           },
         ]
       : []),
-    ...actionBlocks(theme, row, options.actionPage),
+    ...actionBlocks(theme, row.retained ? [] : options.actions, options.actionPage, false),
   ];
 }
 
+/**
+ * The actions offered here, each with the one key that runs it. A row leaves out its section's
+ * actions, which its section heading offers; their keys still work from the row.
+ */
 function actionBlocks(
   theme: DetailTheme,
-  row: ActivityRow,
+  actions: ReadonlyArray<ActivityAction>,
   page: number,
+  onHeading: boolean,
 ): readonly ActivityDetailBlock[] {
-  const keys = activityActionKeys(row.retained ? [] : row.actions, page);
-  if (!keys.shown.length) return [];
+  const keys = activityActionKeys(actions, page);
+  const shown = onHeading
+    ? keys.shown
+    : Arr.filter(keys.shown, ({ action }) => !isSectionAction(action));
+  if (!shown.length) return [];
   return [
     spacer,
     ...Arr.map(
-      keys.shown,
+      shown,
       // Each action shows the one key that runs it, the same key the hint bar names.
       ({ key, action }) => text(`${theme.fg("dim", `[${key}]`)} ${action.label}`),
     ),

@@ -7,6 +7,8 @@ import {
   type SelectItem,
 } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { keyHint } from "./key-labels.ts";
 import { managerTone } from "./style.ts";
@@ -28,6 +30,11 @@ export interface ModelPickerModel {
   readonly label?: string | undefined;
   readonly description?: string | undefined;
   readonly searchText?: string | undefined;
+  /**
+   * Listed first, outside the provider groups, under its whole label or selector: an inherit row,
+   * or a configured model that is no longer available.
+   */
+  readonly pinned?: boolean | undefined;
 }
 
 type ModelPickerScope = "scoped" | "all";
@@ -68,6 +75,15 @@ const labeledItem = (
   return description ? { ...base, description: sanitizeTerminalLine(description) } : base;
 };
 
+// Under its provider's heading a model reads as its id; the selector stays its value and search text.
+const groupedLabel = (model: ModelPickerModel, selector: string): string => {
+  if (model.pinned) return selector;
+  const prefix = `${sanitizeTerminalLine(model.provider)}/`;
+  return Fn.pipe(selector, Str.startsWith(prefix))
+    ? Fn.pipe(selector, Str.slice(prefix.length))
+    : selector;
+};
+
 // The picker marks the current model `(•)`, so the label doesn't repeat it.
 const modelItem = (model: ModelPickerModel): SelectItem => {
   const selector = sanitizeTerminalLine(modelSelector(model));
@@ -84,7 +100,7 @@ const modelItem = (model: ModelPickerModel): SelectItem => {
       : "";
   return {
     value: selector,
-    label: `${boundedMiddle(selector, 88)}${status}`,
+    label: `${boundedMiddle(groupedLabel(model, selector), 88)}${status}`,
     description:
       unavailableReason ??
       `${name}${model.reasoning ? "supports reasoning" : "no reasoning"} · reasoning levels: ${efforts}`,
@@ -104,6 +120,7 @@ export const createModelPickerChoices = <M extends ModelPickerModel>(
       tone: managerTone.value,
       enabled: model.available !== false,
       disabledReason: model.available === false ? (item.description ?? "") : undefined,
+      group: model.pinned ? undefined : sanitizeTerminalLine(model.provider),
     };
   });
 
