@@ -5,7 +5,6 @@ import {
   frameAgentMessage,
   type AgentMessageRecipientState,
 } from "pi-cosmic-core/host-agent-messages";
-import { safeTextPrefix } from "pi-cosmic-core/text";
 import {
   agentMessageRefusal,
   type AgentMessageRefusalCode,
@@ -30,7 +29,7 @@ import {
   unsavedReportNote,
 } from "./state.ts";
 import { isRunInSubtree } from "./tree.ts";
-import { formatCount } from "pi-cosmic-core/display";
+import { clipText, formatCount } from "pi-cosmic-core/display";
 
 /** Addresses the root session's main agent. */
 export const MAIN_AGENT_ID = "main";
@@ -321,7 +320,7 @@ export const runListEntry = (view: SubagentRunView, callerId: string): AgentList
   ...(view.depth !== undefined && { depth: view.depth }),
   ...(view.profile && { profile: view.profile }),
   ...(view.agent && { agent: view.agent }),
-  task: safeTextPrefix(view.task, MAX_LIST_TASK_CHARS),
+  task: clipText(view.task, MAX_LIST_TASK_CHARS),
   self: view.id === callerId,
   run: view,
 });

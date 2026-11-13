@@ -8,6 +8,8 @@ import { effectTest, step } from "../support/effect-test.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { captureSubagentTools, executeTool } from "./fixtures/tool-harness.ts";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
+import * as Str from "effect/String";
 
 const privateRun = view({
   id: "parent",
@@ -116,5 +118,15 @@ describe("discovery contracts", () => {
     );
     expect(decodeSubagentContract("agent_profiles")(contract)).toEqual(contract);
     expect(JSON.stringify(contract)).not.toContain("abcdefghijklmnopqrstuvwxyz");
+  });
+});
+
+describe("listed tasks", () => {
+  it("marks a task that was cut and leaves a short one as written", () => {
+    const listed =
+      runListEntry(view({ task: Fn.pipe("word ", Str.repeat(60)) }), MAIN_AGENT_ID).task ?? "";
+    expect(listed.length).toBeLessThanOrEqual(200);
+    expect(Fn.pipe(listed, Str.endsWith("…"))).toBe(true);
+    expect(runListEntry(view({ task: "Map the API" }), MAIN_AGENT_ID).task).toBe("Map the API");
   });
 });
