@@ -288,9 +288,13 @@ const breakWideWord = (word: string, firstWidth: number, restWidth: number): str
     const space = Math.max(0, limit() - visibleWidth(current));
     const head = space > 0 ? sliceByColumn(token, 0, space, true) : "";
     if (current || head || rows.length === 0) rows.push(`${current}${head}`);
-    const chunks = wrapTextWithAnsi(
-      sliceByColumn(token, visibleWidth(head), tokenWidth - visibleWidth(head)),
-      restWidth,
+    // A row narrower than a wide character gets an empty chunk before each one.
+    const chunks = Arr.filter(
+      wrapTextWithAnsi(
+        sliceByColumn(token, visibleWidth(head), tokenWidth - visibleWidth(head)),
+        restWidth,
+      ),
+      Str.isNonEmpty,
     );
     rows.push(...chunks.slice(0, -1));
     current = Option.getOrElse(Arr.last(chunks), () => "");

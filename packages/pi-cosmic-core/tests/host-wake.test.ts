@@ -233,6 +233,18 @@ describe("session wake", () => {
     }),
   );
 
+  it.effect("wakes once for each dialog that deferred a notice", () =>
+    Effect.gen(function* () {
+      const test = harness({ holdDuringDialogs: true });
+      for (let cycle = 0; cycle < 3; cycle += 1) {
+        yield* test.emit("ui_prompt_start", { type: "ui_prompt_start", ...dialog });
+        expect(test.deliver()).toBe("held");
+        yield* test.emit("ui_prompt_end", { type: "ui_prompt_end", ...dialog });
+      }
+      expect(test.wakes()).toHaveLength(3);
+    }),
+  );
+
   it.effect("reports a notice Pi refused without owing it a turn", () =>
     Effect.gen(function* () {
       const test = harness();

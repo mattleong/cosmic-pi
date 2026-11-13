@@ -3,7 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { wrapFacts } from "../src/manager/chrome.ts";
+import { wrapFacts, wrapWords } from "../src/manager/chrome.ts";
 
 describe("wrapFacts", () => {
   it("wraps between whole facts under a hanging indent, leading each new fact's row with ·", () => {
@@ -66,5 +66,9 @@ describe("wrapFacts", () => {
 
     expect(Arr.join(Arr.map(lines, Str.trim), "")).toBe(`Wrote out/${blob}`);
     for (const line of Arr.dropRight(lines, 1)) expect(visibleWidth(line)).toBe(30);
+  });
+
+  it("leaves no blank rows between wide characters on a row narrower than one", () => {
+    expect(wrapWords("日本語", 1, 1)).toEqual(["日", "本", "語"]);
   });
 });

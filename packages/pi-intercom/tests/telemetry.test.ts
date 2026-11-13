@@ -5,7 +5,7 @@ import * as Logger from "effect/Logger";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { nodeFilePlatformLayer, synchronousRandomHex } from "pi-cosmic-core";
 import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { listSessions, readSession, sendToSession } from "../src/tools/sessions.ts";
@@ -53,7 +53,11 @@ layer(nodeFilePlatformLayer)("intercom telemetry", (it) => {
       yield* fromA(readSession(b.record.sessionId));
       yield* TestClock.withLive(fromA(sendToSession("secret-missing-id", secretText)));
       // A record naming b's socket under another token: b refuses the caller's proof.
-      yield* writeForeignRecord(shared, "secret-foreign-id", { socket: b.record.socket });
+      const foreignToken = synchronousRandomHex(32);
+      yield* writeForeignRecord(shared, "secret-foreign-id", {
+        socket: b.record.socket,
+        token: foreignToken,
+      });
       yield* TestClock.withLive(fromA(sendToSession("secret-foreign-id", secretText)));
       b.delivery.setReceiving(false);
       yield* fromA(sendToSession(b.record.sessionId, secretText));
@@ -75,6 +79,7 @@ layer(nodeFilePlatformLayer)("intercom telemetry", (it) => {
         shared.base,
         a.record.token,
         b.record.token,
+        foreignToken,
         a.record.socket,
         b.record.socket,
       ])

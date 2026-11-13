@@ -239,6 +239,11 @@ describe("question notification ownership", () => {
         requestId: "q-1",
       });
       yield* yieldUntil(() => latestProjectedRun(projections, child.id)?.state === "running");
+      // A withdrawn question must not stay answerable or make the run look settled.
+      expect(yield* runView(service, child.id)).toMatchObject({
+        state: "running",
+        question: undefined,
+      });
       fake.controls[0]?.settle("Parent report.");
       yield* TestClock.adjust("30 seconds");
       yield* yieldTurns(50);
