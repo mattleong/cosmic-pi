@@ -15,12 +15,6 @@ import type {
   SubagentToolActivity,
   SubagentUsage,
 } from "../run/model.ts";
-import type {
-  AgentCaller,
-  AgentListResult,
-  AgentReadResult,
-  AgentSendResult,
-} from "../run/agent-messaging.ts";
 import type { OriginalTextSize } from "../run/state.ts";
 
 export type BackendResumeToken = object;
@@ -42,16 +36,6 @@ export interface BackendLaunchRequest {
   readonly parentLeafId?: string | undefined;
   readonly resumeToken?: BackendResumeToken | undefined;
   readonly systemPrompt: string;
-}
-
-/** `agent_*` operations the root has already bound to the launched run as their caller. */
-export interface BackendAgentMessaging {
-  /** The bound caller and its cwd, which decide what its status cards show. */
-  readonly caller: AgentCaller;
-  readonly cwd: string;
-  readonly list: (ids?: ReadonlyArray<string>) => Effect.Effect<AgentListResult, SubagentError>;
-  readonly send: (to: string, message: string) => Effect.Effect<AgentSendResult, SubagentError>;
-  readonly read: (ids: ReadonlyArray<string>) => Effect.Effect<AgentReadResult, SubagentError>;
 }
 
 export interface BackendStartupState {
@@ -102,7 +86,6 @@ export type BackendEvent =
       readonly originalSize?: OriginalTextSize | undefined;
       /** The model that produced the reply, when the child reports one per message. */
       readonly model?: string | undefined;
-      readonly usage: SubagentUsage;
       readonly terminal?: BackendAssistantTerminal | undefined;
     }
   | {
@@ -199,22 +182,12 @@ export interface BackendHandle {
   readonly cancelPending: (error: SubagentError) => void;
 }
 
-export interface BackendPreflightRequest {
-  readonly context: SubagentContextMode;
-  readonly writeIntent: SubagentWriteIntent;
-  readonly model: string;
-  readonly effort: SubagentEffort;
-  readonly cwd?: string | undefined;
-}
-
 export interface BackendDriver {
-  readonly supportsContext: (context: SubagentContextMode) => boolean;
   readonly preflight: (
-    request: BackendPreflightRequest,
+    model: string,
   ) => Effect.Effect<void, import("../run/errors.ts").InvalidSubagentRequestError>;
   readonly spawn: (
     request: BackendLaunchRequest,
-    agents?: BackendAgentMessaging,
   ) => Effect.Effect<BackendHandle, SubagentError, Scope.Scope>;
   readonly reclaimRunState?:
     | ((request: {

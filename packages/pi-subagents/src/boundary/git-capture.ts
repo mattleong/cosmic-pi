@@ -10,6 +10,7 @@ import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/
 import {
   git,
   gitFields,
+  type GitOptions,
   nulTerminated,
   oid,
   repositoryGit,
@@ -45,6 +46,27 @@ const unmergedRefusal = (name: string) =>
     rule: "unmerged index entries are unsupported",
     remedy: "Resolve the conflicts and stage the results.",
   });
+
+/** The paths with unmerged entries in the index of the tree at `root`, each once. */
+export const unmergedPaths = (root: string, options?: GitOptions) =>
+  gitFields(root, ["ls-files", "--unmerged", "-z"], options).pipe(
+    Effect.map((lines) => [
+      ...new Set(
+        Arr.map(lines, (line) =>
+          Fn.pipe(
+            line,
+            Str.slice(
+              Fn.pipe(
+                line,
+                Str.indexOf("\t"),
+                Option.getOrElse(() => -1),
+              ) + 1,
+            ),
+          ),
+        ),
+      ),
+    ]),
+  );
 
 /** Runs `use` with a temporary index in `scratch`, so Git never reads or writes a real one. */
 export const withScratchIndex = Effect.fn("GitCapture.withScratchIndex")(function* <A, E, R>(
@@ -88,22 +110,8 @@ export const captureTree = (
     Effect.gen(function* () {
       const real = yield* gitPath(root, "index");
       yield* copyIndex(real, environment.GIT_INDEX_FILE);
-      const [unmerged] = yield* gitFields(root, ["ls-files", "--unmerged", "-z"], {
-        environment,
-      });
-      if (unmerged !== undefined)
-        return yield* unmergedRefusal(
-          Fn.pipe(
-            unmerged,
-            Str.slice(
-              Fn.pipe(
-                unmerged,
-                Str.indexOf("\t"),
-                Option.getOrElse(() => -1),
-              ) + 1,
-            ),
-          ),
-        );
+      const [unmerged] = yield* unmergedPaths(root, { environment });
+      if (unmerged !== undefined) return yield* unmergedRefusal(unmerged);
       const omitted = new Set(included);
       if (omitted.size > 0)
         yield* git(root, ["update-index", "--force-remove", "-z", "--stdin"], {
@@ -174,7 +182,7 @@ export const deleteWorkspaceRefs = Effect.fn("GitCapture.deleteWorkspaceRefs")(f
       ]),
       "\n",
     ),
-    Boolean,
+    Str.isNonEmpty,
   );
   if (refs.length === 0) return;
   yield* repositoryGit(repository, ["update-ref", "--stdin"], {

@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export interface FooterGitStatus {
   staged: number;
@@ -18,9 +19,7 @@ const CONFLICT_CODES = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
 
 export function parseGitStatus(output: string): FooterGitStatus | undefined {
   const lines = Arr.filter(Str.split(output, /\r?\n/), Str.isNonEmpty);
-  const header = Option.getOrUndefined(
-    Arr.findFirst(lines, (line) => Fn.pipe(line, Str.startsWith("## "))),
-  );
+  const header = findOrUndefined(lines, (line) => Fn.pipe(line, Str.startsWith("## ")));
   if (header === undefined) return undefined;
 
   const status: FooterGitStatus = {

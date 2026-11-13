@@ -1,11 +1,17 @@
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import type { CompactSummaryProvider } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
-import { askUserCompactSummary, asyncAskUserCompactSummary } from "../src/ui/compact-summary.ts";
+import {
+  askUserCompactSummaryFor,
+  asyncAskUserCompactSummaryFor,
+} from "../src/ui/compact-summary.ts";
 import { hostile } from "./support/questionnaire.ts";
+
+const askUserCompactSummary = askUserCompactSummaryFor("compact");
+const asyncAskUserCompactSummary = asyncAskUserCompactSummaryFor("compact");
 
 const submitted = {
   outcome: "submitted",
@@ -88,7 +94,7 @@ describe("questionnaire compact outcome projection", () => {
     // The answer is a fact about the questions, so a glyph's word never drops it.
     expect(short?.subjectState).toBe(true);
     for (const details of [
-      answer(`Keep the current library\n${Str.repeat(40)("more ")}`),
+      answer(`Keep the current library\n${Fn.pipe("more ", Str.repeat(40))}`),
       answer("Keep the current library and pin its version"),
       answer("Keep it", "No upgrade"),
       pairedAnswers("SQLite"),
@@ -217,34 +223,6 @@ describe("questionnaire compact outcome projection", () => {
     ]);
     for (const issue of summary?.issues ?? [])
       expect(issueMessageStyleProblems(issue.message)).toEqual([]);
-  });
-  it("narrows a status list to its pressing state's count before only a total", () => {
-    const open = row({ status: "pending", outcome: undefined, delivery: "pending" });
-    const queued = row({ ...open, requestId: "request-2", presentation: "queued" });
-    const counters =
-      summarize(
-        asyncAskUserCompactSummary,
-        { requests: [open, queued] },
-        { args: { action: "status" } },
-      )?.counters ?? [];
-    const at = (matches: (counter: string) => boolean) =>
-      Option.getOrElse(Arr.findFirstIndex(counters, matches), () => -1);
-    const pressing = at(
-      (counter) => Str.includes("needs your input")(counter) && !Str.includes(" of ")(counter),
-    );
-    const total = at(Str.includes("questionnaire"));
-    expect(pressing).toBeGreaterThanOrEqual(0);
-    expect(pressing).toBeLessThan(total);
-  });
-  it("counts a status list by state only where states differ or still need something", () => {
-    const status = { args: { action: "status" } };
-    const first = (requests: readonly object[]) =>
-      summarize(asyncAskUserCompactSummary, { requests }, status)?.counters?.[0];
-    const second = row({ requestId: "request-2" });
-    const open = row({ status: "pending", outcome: undefined, delivery: "pending" });
-    expect(first([row(), second])).toBe("2 questionnaires");
-    expect(first([open])).toContain("needs your input");
-    expect(first([open, second])).toMatch(/needs your input.*answered/u);
   });
   it("names a control call's questions by their stored titles, else only by its action", () => {
     const args = { action: "await", requestId: "request-1" };

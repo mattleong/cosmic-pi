@@ -1,9 +1,14 @@
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
-import { MAX_RETAINED_REQUESTS } from "../questionnaire/async-model.ts";
+import {
+  AsyncDeliverySchema,
+  AsyncPresentationSchema,
+  AsyncStatusSchema,
+  MAX_RETAINED_REQUESTS,
+} from "../questionnaire/async-model.ts";
 import { QuestionnaireOutcomeSchema } from "../questionnaire/protocol.ts";
-import { MAX_WORK_DESCRIPTION_LENGTH } from "../questionnaire/schema.ts";
+import { ASYNC_CONTROL_ACTIONS, MAX_WORK_DESCRIPTION_LENGTH } from "../questionnaire/schema.ts";
 
 export const QUESTIONNAIRE_CONTRACT_ID = "pi-ask-user/questionnaire";
 export const QUESTIONNAIRE_CONTRACT_VERSION = 1;
@@ -19,13 +24,11 @@ const WorkDescription = text(MAX_WORK_DESCRIPTION_LENGTH).check(Schema.isPattern
 const AsyncSnapshotSchema = Schema.Struct({
   requestId: RequestId,
   deliveryId: text(120),
-  status: Schema.Literals(["pending", "submitted", "cancelled", "failed"]),
-  presentation: Schema.optionalKey(
-    Schema.Literals(["queued", "opening", "open", "hidden", "settled"]),
-  ),
+  status: AsyncStatusSchema,
+  presentation: Schema.optionalKey(AsyncPresentationSchema),
   independentWork: WorkDescription,
   blockedWork: WorkDescription,
-  delivery: Schema.Literals(["pending", "sending", "sent", "failed", "waiter", "none"]).annotate({
+  delivery: AsyncDeliverySchema.annotate({
     description: "sent means the host call returned, not model acknowledgement.",
   }),
   outcome: Schema.optionalKey(QuestionnaireOutcomeSchema),
@@ -53,7 +56,7 @@ export const AskUserAsyncContractSchema = Schema.Struct({
 export const AskUserAsyncControlContractSchema = Schema.Struct({
   ...envelope,
   tool: Schema.Literal("ask_user_async_control"),
-  action: Schema.Literals(["status", "await", "cancel"]).annotate({
+  action: Schema.Literals(ASYNC_CONTROL_ACTIONS).annotate({
     description: "Cancellation can return a submitted outcome when completion won the race.",
   }),
   requestId: Schema.optionalKey(RequestId),

@@ -1,4 +1,4 @@
-import { tmpdir } from "node:os";
+import { nodeTemporaryRoot } from "pi-cosmic-core/platform/node-builtins";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import {
   applyPresentationSettings,
@@ -23,7 +23,7 @@ import { nodePath } from "./support/node-builtins.ts";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const output: AgentToolResult<unknown> = {
   content: [{ type: "text", text: "COMPLETE_OUTPUT recovery /tmp/evidence.txt" }],
@@ -86,7 +86,7 @@ const replayApplication = (loadSettings: () => Promise<void> = () => Promise.res
   Effect.gen(function* () {
     const host = recordingExtensionHost();
     registerSubagentApplication(host.pi, {
-      getAgentDirectory: () => nodePath.join(tmpdir(), "pi-subagents-tool-replay-tests"),
+      getAgentDirectory: () => nodePath.join(nodeTemporaryRoot(), "pi-subagents-tool-replay-tests"),
       loadSettings,
     });
     const dispatch = <Name extends DefaultedEventName>(
@@ -182,9 +182,7 @@ describe("subagent tool history replay", () => {
       for (const { sample, row } of drawn) expect(frames(row, sample)).toEqual(first.get(sample));
       for (const { sample, row } of retired) {
         const raw = frames(row, sample);
-        expect(raw).toEqual(
-          Option.getOrUndefined(Arr.findFirst(drawn, (entry) => entry.sample === sample))?.cold,
-        );
+        expect(raw).toEqual(findOrUndefined(drawn, (entry) => entry.sample === sample)?.cold);
         expectEvidence(raw, sample);
       }
     },

@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { nodeErrorCode } from "./errors.ts";
 import { nodeFsConstants as constants, nodeFsPromises as fs, nodePath } from "./node-builtins.ts";
 
 /**
@@ -16,11 +16,8 @@ export class PrivateFileError extends Schema.TaggedError<
   reason: Schema.Literals(["missing", "exists", "unsafe", "failed"]),
 }) {}
 
-const errorCode = (cause: unknown): string | undefined =>
-  Predicate.hasProperty(cause, "code") && Predicate.isString(cause.code) ? cause.code : undefined;
-
 const classify = (cause: unknown): PrivateFileError => {
-  const code = errorCode(cause);
+  const code = nodeErrorCode(cause);
   return PrivateFileError.make({
     reason:
       code === "ENOENT"
@@ -142,27 +139,28 @@ const EXCLUSIVE_CREATE =
   constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW;
 
 /**
- * Exclusively creates `path` as a 0600 file, writes and syncs `source`, then runs `commit` without
- * interruption while the file is still held. Unless `commit` succeeded, the file this call created
- * is removed; an entry that was already at `path` is never this call's and stays.
+ * Writes `source` to `target` as a 0600 file through `temporary`, an exclusively created file in
+ * the same directory, replacing `target` only by the final rename. Nothing fallible follows that
+ * rename, and the temporary file this call created is removed unless the rename committed it; an
+ * entry that was already at `temporary` is never this call's and stays.
  */
-const withExclusiveFile = Effect.fnUntraced(function* (
-  path: string,
+export const replacePrivateFile = Effect.fnUntraced(function* (
+  target: string,
+  temporary: string,
   source: string,
-  commit: Effect.Effect<void, PrivateFileError>,
 ): Effect.fn.Return<void, PrivateFileError> {
   let committed = false;
   yield* Effect.scoped(
     Effect.gen(function* () {
       const handle = yield* Effect.acquireRelease(
-        tryPrivateFileOperation(() => fs.open(path, EXCLUSIVE_CREATE, 0o600)),
+        tryPrivateFileOperation(() => fs.open(temporary, EXCLUSIVE_CREATE, 0o600)),
         (opened) =>
           Effect.ignore(tryPrivateFileOperation(() => opened.close())).pipe(
             Effect.andThen(
               Effect.suspend(() =>
                 committed
                   ? Effect.void
-                  : Effect.ignore(tryPrivateFileOperation(() => fs.unlink(path))),
+                  : Effect.ignore(tryPrivateFileOperation(() => fs.unlink(temporary))),
               ),
             ),
           ),
@@ -171,8 +169,8 @@ const withExclusiveFile = Effect.fnUntraced(function* (
       yield* tryPrivateFileOperation(() => handle.sync());
       yield* tryPrivateFileOperation(() => handle.chmod(0o600));
       // Recording the commit in the same uninterruptible region keeps a late interruption from
-      // removing a file the commit already published.
-      yield* commit.pipe(
+      // removing a file the rename already published.
+      yield* tryPrivateFileOperation(() => fs.rename(temporary, target)).pipe(
         Effect.andThen(
           Effect.sync(() => {
             committed = true;
@@ -183,28 +181,6 @@ const withExclusiveFile = Effect.fnUntraced(function* (
     }),
   );
 });
-
-/** Creates `path` as a new 0600 file holding `source`; fails with `exists` when anything is there. */
-export const createPrivateFile = (
-  path: string,
-  source: string,
-): Effect.Effect<void, PrivateFileError> => withExclusiveFile(path, source, Effect.void);
-
-/**
- * Writes `source` to `target` as a 0600 file through `temporary`, an exclusively created file in
- * the same directory, replacing `target` only by the final rename. Nothing fallible follows that
- * rename, and the temporary file is removed unless the rename committed it.
- */
-export const replacePrivateFile = (
-  target: string,
-  temporary: string,
-  source: string,
-): Effect.Effect<void, PrivateFileError> =>
-  withExclusiveFile(
-    temporary,
-    source,
-    tryPrivateFileOperation(() => fs.rename(temporary, target)),
-  );
 
 /**
  * Removes a non-directory entry of this user without following a link; a missing entry is
@@ -253,14 +229,4 @@ const removeTree = (path: string) =>
 export const removePrivateTree = (path: string): Effect.Effect<void, PrivateFileError> =>
   removeTree(path).pipe(
     Effect.catch(() => restoreDirectoryAccess(path).pipe(Effect.andThen(removeTree(path)))),
-  );
-
-/** Removes a private tree whose root must be a real directory of this user, never a link. */
-export const removePrivateDirectory = (path: string): Effect.Effect<void, PrivateFileError> =>
-  tryPrivateFileOperation(() => fs.lstat(path)).pipe(
-    Effect.flatMap((info) =>
-      info.isDirectory() && !info.isSymbolicLink() && isOwnedByCurrentUser(info)
-        ? removePrivateTree(path)
-        : unsafe(),
-    ),
   );

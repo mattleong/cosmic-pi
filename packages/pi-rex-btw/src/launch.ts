@@ -30,19 +30,11 @@ const SessionFileSchema = Schema.String.check(
 );
 const ParentReferenceSchema = Schema.Struct({ id: SessionIdSchema, path: SessionFileSchema });
 const decodeParentReference = decodeUnknownOrUndefined(ParentReferenceSchema);
-const decodeRexLocation = decodeUnknownOrUndefined(
-  Schema.Struct({ sessionId: BoundedId, blockId: BoundedId }),
-);
+const RexLocationSchema = Schema.Struct({ sessionId: BoundedId, blockId: BoundedId });
+const decodeRexLocation = decodeUnknownOrUndefined(RexLocationSchema);
 
-export interface RexLocation {
-  readonly sessionId: string;
-  readonly blockId: string;
-}
-
-export interface ParentReference {
-  readonly id: string;
-  readonly path: string;
-}
+export type RexLocation = typeof RexLocationSchema.Type;
+export type ParentReference = typeof ParentReferenceSchema.Type;
 
 export interface ChildModel {
   readonly provider: string;
@@ -56,7 +48,7 @@ export interface ChildLaunch {
   readonly prompt: string | undefined;
   readonly model: ChildModel | undefined;
   readonly thinkingLevel: string | undefined;
-  readonly parent: ParentReference | undefined;
+  readonly parent: ParentReference;
 }
 
 export interface ChildCommand {
@@ -110,12 +102,8 @@ const piArguments = (launch: ChildLaunch): ReadonlyArray<string> => [
     ? []
     : ["--provider", launch.model.provider, "--model", launch.model.id]),
   ...(launch.thinkingLevel === undefined ? [] : ["--thinking", launch.thinkingLevel]),
-  ...(launch.parent === undefined
-    ? []
-    : [
-        `--${REX_BTW_PARENT_FLAG}=${launch.parent.id}`,
-        `--${REX_BTW_PARENT_FILE_FLAG}=${launch.parent.path}`,
-      ]),
+  `--${REX_BTW_PARENT_FLAG}=${launch.parent.id}`,
+  `--${REX_BTW_PARENT_FILE_FLAG}=${launch.parent.path}`,
   ...(launch.prompt === undefined ? [] : ["--", promptArgument(launch.prompt)]),
 ];
 

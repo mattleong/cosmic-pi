@@ -1,7 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
@@ -9,6 +8,7 @@ import { freezeSnapshot } from "pi-cosmic-core/projection";
 import {
   claimCompletion,
   completionClaimOwner,
+  currentOrNextGeneration,
   releaseCompletionClaim,
   type StartFailureHold,
 } from "./completion.ts";
@@ -40,6 +40,7 @@ import type {
   SubagentServiceContract,
 } from "./service.ts";
 import { runTreeView } from "./tree.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 interface RunCompletionObservationDependencies extends Pick<RunContext, "records" | "withLock"> {
   readonly withCompletionGate: WithRunLock;
@@ -74,15 +75,19 @@ const withoutCompletionReport = (view: SubagentRunView) => {
   return withoutReport;
 };
 
-const redactCompletionReport = (view: SubagentRunView): SubagentRunView => {
-  const withoutReport = withoutCompletionReport(view);
-  return freezeSnapshot({
-    ...withoutReport,
-    sessionEvents: Arr.map(withoutReport.sessionEvents, (event) =>
-      event.type === "assistant" ? Object.assign({}, event, { text: REDACTED_REPORT_TEXT }) : event,
-    ),
+/** The events with each assistant message's text redacted; the replaced events are frozen. */
+const redactedEvents = (events: SubagentRunView["sessionEvents"]) =>
+  Arr.map(events, (event) =>
+    event.type === "assistant"
+      ? Object.freeze(Object.assign({}, event, { text: REDACTED_REPORT_TEXT }))
+      : event,
+  );
+
+const redactCompletionReport = (view: SubagentRunView): SubagentRunView =>
+  freezeSnapshot({
+    ...withoutCompletionReport(view),
+    sessionEvents: redactedEvents(view.sessionEvents),
   });
-};
 
 type ReportStatus = NonNullable<SubagentRunView["reportStatus"]>;
 
@@ -106,13 +111,7 @@ const observedView = (
   const observed: SubagentRunView = redacted
     ? Object.freeze({
         ...withoutCompletionReport({ ...view, reportStatus }),
-        sessionEvents: Object.freeze(
-          Arr.map(view.sessionEvents, (event) =>
-            event.type === "assistant"
-              ? Object.freeze(Object.assign({}, event, { text: REDACTED_REPORT_TEXT }))
-              : event,
-          ),
-        ),
+        sessionEvents: Object.freeze(redactedEvents(view.sessionEvents)),
       })
     : Object.freeze({ ...view, reportStatus });
   variants.set(key, observed);
@@ -270,17 +269,15 @@ export function completionObservationOperations(
               );
             const claimToken = allocateClaimToken();
             const desired = Arr.flatMap(selected, (record) => {
-              const finished = isTerminalRunState(record.view.state);
-              const generation = record.completionGeneration + (finished ? 0 : 1);
-              return !finished || record.completionGenerations.has(generation)
+              const generation = currentOrNextGeneration(record);
+              return !isTerminalRunState(record.view.state) ||
+                record.completionGenerations.has(generation)
                 ? [{ record, generation }]
                 : [];
             });
-            const conflict = Option.getOrUndefined(
-              Arr.findFirst(
-                desired,
-                ({ record, generation }) => completionClaimOwner(record, generation) !== undefined,
-              ),
+            const conflict = findOrUndefined(
+              desired,
+              ({ record, generation }) => completionClaimOwner(record, generation) !== undefined,
             );
             if (conflict)
               return yield* invalidRequest(
@@ -341,49 +338,45 @@ export function completionObservationOperations(
     readonly messages: AgentMessageArrivals;
   }
 
-  const waitForTerminalObservations = (
-    claim: CompletionClaim,
-    until: SubagentAwaitUntil,
-    callerRunId: string | undefined,
-    onUpdate?: (
-      runs: ReadonlyArray<SubagentRunView>,
-      projection?: ReadonlyArray<SubagentRunView>,
-    ) => void,
-  ): Effect.Effect<TerminalObservations, SubagentRuntimeClosedError> => {
-    const emitUpdate = (runs: ReadonlyArray<SubagentRunView>) =>
-      Effect.sync(() =>
-        invokeHostCallback(() => onUpdate?.(runs, currentProjection().runs), undefined),
-      );
-    const waitLoop = (): Effect.Effect<TerminalObservations, SubagentRuntimeClosedError> =>
-      withLock(
-        Effect.sync(() => {
-          const observations = Arr.map(claim.selected, (record) =>
-            observeRecord(record, claim.claimToken),
-          );
-          const runs = Arr.map(observations, (observation) => observation.run);
-          const terminalCount = Arr.filter(runs, (run) => isTerminalRunState(run.state)).length;
-          const questions = questionsForCallerLocked(claim, callerRunId);
-          const messages = claim.messages.arrivals();
-          const parentActionRequired =
-            Arr.some(runs, isParentActionRequiredRun) || questions.length > 0;
-          const done =
-            parentActionRequired ||
-            messages.count > 0 ||
-            (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
-          if (done)
-            return { done: true as const, runs, result: { observations, questions, messages } };
-          return { done: false as const, runs, revision: currentProjection().revision };
-        }),
-      ).pipe(
-        Effect.tap(({ runs }) => emitUpdate(runs)),
-        Effect.flatMap((step) =>
-          step.done
-            ? Effect.succeed(step.result)
-            : waitForRevision(step.revision).pipe(Effect.andThen(waitLoop())),
-        ),
-      );
-    return waitLoop();
-  };
+  const waitForTerminalObservations = Effect.fn("SubagentService.waitForTerminalObservations")(
+    function* (
+      claim: CompletionClaim,
+      until: SubagentAwaitUntil,
+      callerRunId: string | undefined,
+      onUpdate?: (
+        runs: ReadonlyArray<SubagentRunView>,
+        projection?: ReadonlyArray<SubagentRunView>,
+      ) => void,
+    ): Effect.fn.Return<TerminalObservations, SubagentRuntimeClosedError> {
+      while (true) {
+        const step = yield* withLock(
+          Effect.sync(() => {
+            const observations = Arr.map(claim.selected, (record) =>
+              observeRecord(record, claim.claimToken),
+            );
+            const runs = Arr.map(observations, (observation) => observation.run);
+            const terminalCount = Arr.filter(runs, (run) => isTerminalRunState(run.state)).length;
+            const questions = questionsForCallerLocked(claim, callerRunId);
+            const messages = claim.messages.arrivals();
+            const parentActionRequired =
+              Arr.some(runs, isParentActionRequiredRun) || questions.length > 0;
+            const done =
+              parentActionRequired ||
+              messages.count > 0 ||
+              (until === "any_finished" ? terminalCount > 0 : terminalCount === runs.length);
+            if (done)
+              return { done: true as const, runs, result: { observations, questions, messages } };
+            return { done: false as const, runs, revision: currentProjection().revision };
+          }),
+        );
+        yield* Effect.sync(() =>
+          invokeHostCallback(() => onUpdate?.(step.runs, currentProjection().runs), undefined),
+        );
+        if (step.done) return step.result;
+        yield* waitForRevision(step.revision);
+      }
+    },
+  );
   const withAwaitTerminalObservations: SubagentServiceContract["withAwaitTerminalObservations"] =
     Effect.fn("SubagentService.await")(function* <A, E, R>(
       ids: ReadonlyArray<string>,

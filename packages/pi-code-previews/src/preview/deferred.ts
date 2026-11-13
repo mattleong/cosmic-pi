@@ -16,14 +16,14 @@ export class DeferredPreview implements Component {
   private cancelled = false;
   private cancellation: (() => void) | undefined;
   private compute: ((active: boolean) => Component) | undefined;
-  private readonly owner: CodePreviewSessionCapability | undefined;
+  private readonly owner: CodePreviewSessionCapability;
 
   constructor(
     message: string,
     theme: Theme,
     compute: (active: boolean) => Component,
     invalidate: () => void,
-    owner = captureCodePreviewSessionCapability(),
+    owner: CodePreviewSessionCapability,
   ) {
     this.owner = owner;
     this.component = new Text(theme.fg("muted", message), 0, 0);
@@ -41,7 +41,7 @@ export class DeferredPreview implements Component {
         );
       }
     };
-    this.cancellation = this.owner?.defer(() => {
+    this.cancellation = this.owner.defer(() => {
       if (this.cancelled || captureCodePreviewSessionCapability() !== this.owner) return;
       this.complete(true);
       this.cancellation = undefined;
@@ -65,11 +65,7 @@ export class DeferredPreview implements Component {
   }
 
   render(width: number): string[] {
-    if (
-      !this.cancelled &&
-      this.compute &&
-      (!this.owner || captureCodePreviewSessionCapability() !== this.owner)
-    ) {
+    if (!this.cancelled && this.compute && captureCodePreviewSessionCapability() !== this.owner) {
       this.cancellation?.();
       this.cancellation = undefined;
       this.complete(false);

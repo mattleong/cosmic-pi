@@ -1,4 +1,4 @@
-import type { ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
@@ -16,7 +16,6 @@ import { waitUntil } from "./helpers.ts";
 export interface SettingsHarnessOptions {
   readonly configDocument?: JsonObject;
   readonly updateSetting?: () => Promise<void>;
-  readonly hostCustom?: ExtensionUIContext["custom"];
   readonly captureAuthority?: () => () => boolean;
   readonly loadMenu?: () => PromiseLike<typeof import("../src/settings/menu.ts")>;
   readonly signal?: () => AbortSignal | undefined;
@@ -24,11 +23,7 @@ export interface SettingsHarnessOptions {
 }
 
 /** `/openai settings` against fake config and fast-mode services, on a fake custom surface. */
-export function settingsHarnessWith(
-  initialConfig: ResolvedConfig,
-  options: SettingsHarnessOptions = {},
-) {
-  let currentConfig = initialConfig;
+export function settingsHarnessWith(config: ResolvedConfig, options: SettingsHarnessOptions = {}) {
   const notify = vi.fn();
   const surface = fakeCustomSurfaceHost();
   const surfaceUi = surface.ctx.ui;
@@ -36,7 +31,7 @@ export function settingsHarnessWith(
     ...surface.ctx,
     cwd: "/tmp",
     signal: undefined,
-    ui: { custom: options.hostCustom ?? surfaceUi.custom.bind(surfaceUi), notify },
+    ui: { custom: surfaceUi.custom.bind(surfaceUi), notify },
   });
   const ctx = {
     ...baseContext,
@@ -47,7 +42,7 @@ export function settingsHarnessWith(
   const host = recordingExtensionHost();
   const services = Layer.mergeAll(
     Layer.succeed(OpenAIConfigService, {
-      get: Effect.sync(() => currentConfig),
+      get: Effect.succeed(config),
       observe: () => Effect.void,
       updateSetting: () =>
         options.updateSetting ? Effect.promise(options.updateSetting) : Effect.void,
@@ -65,7 +60,7 @@ export function settingsHarnessWith(
   registerSettingsController(
     registerExtensionCommand(host.pi, { name: "openai", description: "" }),
     {
-      config: () => currentConfig,
+      config: () => config,
       updateContext: vi.fn(),
       updateFooter: vi.fn(),
       diagnosticLines: options.diagnosticLines ?? (() => ["Current model: none"]),
@@ -91,18 +86,11 @@ export function settingsHarnessWith(
     if (!surface.editor) throw new Error("settings component has not opened");
     return surface.editor;
   };
-  const setRefreshInterval = (refreshIntervalMs: number) => {
-    currentConfig = {
-      ...currentConfig,
-      usage: { ...currentConfig.usage, refreshIntervalMs },
-    };
-  };
 
-  return { invoke, open, selectedComponent, setRefreshInterval, notify, surface };
+  return { invoke, open, selectedComponent, notify, surface };
 }
 
 export const input = {
-  up: "\u001b[A",
   down: "\u001b[B",
   enter: "\r",
   escape: "\u001b",

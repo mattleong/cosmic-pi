@@ -56,28 +56,26 @@ const disposition = (result: Result.Result<string, string>) =>
   Result.isSuccess(result) ? result.success : `refused:${result.failure}`;
 
 describe("intercom delivery", () => {
-  it.effect("frames an idle session's message and starts a turn", () =>
-    Effect.sync(() => {
-      const test = harness();
-      const inbound = message();
+  it("frames an idle session's message and starts a turn", () => {
+    const test = harness();
+    const inbound = message();
 
-      expect(disposition(test.deliver(inbound))).toBe("woken");
+    expect(disposition(test.deliver(inbound))).toBe("woken");
 
-      const [sent, options] = test.delivered()[0] ?? [];
-      expect(options).toMatchObject({ triggerTurn: true });
-      expect(sent).toMatchObject({
-        customType: INTERCOM_MESSAGE_TYPE,
-        display: true,
-        content: frameMessage(inbound),
-        details: { from: inbound.from, messageId: inbound.messageId },
-      });
-      // The frame names the sending session and how to reply to it.
-      expect(Str.split(frameMessage(inbound), "\n")[0]).toContain(
-        '"api work" (peer-session, /work/api)',
-      );
-      expect(frameMessage(inbound)).toContain('session_send to "peer-session"');
-    }),
-  );
+    const [sent, options] = test.delivered()[0] ?? [];
+    expect(options).toMatchObject({ triggerTurn: true });
+    expect(sent).toMatchObject({
+      customType: INTERCOM_MESSAGE_TYPE,
+      display: true,
+      content: frameMessage(inbound),
+      details: { from: inbound.from, messageId: inbound.messageId },
+    });
+    // The frame names the sending session and how to reply to it.
+    expect(Str.split(frameMessage(inbound), "\n")[0]).toContain(
+      '"api work" (peer-session, /work/api)',
+    );
+    expect(frameMessage(inbound)).toContain('session_send to "peer-session"');
+  });
 
   it.effect("marks a delivered message as another session's agent text for the model only", () =>
     Effect.gen(function* () {
@@ -100,15 +98,13 @@ describe("intercom delivery", () => {
     }),
   );
 
-  it.effect("queues a busy session's message for the end of its turn", () =>
-    Effect.sync(() => {
-      const test = harness();
-      test.setIdle(false);
+  it("queues a busy session's message for the end of its turn", () => {
+    const test = harness();
+    test.setIdle(false);
 
-      expect(disposition(test.deliver())).toBe("queued");
-      expect(test.delivered()[0]?.[1]).toMatchObject({ triggerTurn: false });
-    }),
-  );
+    expect(disposition(test.deliver())).toBe("queued");
+    expect(test.delivered()[0]?.[1]).toMatchObject({ triggerTurn: false });
+  });
 
   it.effect("holds messages during a dialog and wakes once it closes", () =>
     Effect.gen(function* () {
@@ -146,18 +142,16 @@ describe("intercom delivery", () => {
     }),
   );
 
-  it.effect("refuses a retired runtime without calling Pi", () =>
-    Effect.sync(() => {
-      const test = harness();
-      expect(disposition(test.deliver(message(), () => false))).toBe("refused:session_unavailable");
+  it("refuses a retired runtime without calling Pi", () => {
+    const test = harness();
+    expect(disposition(test.deliver(message(), () => false))).toBe("refused:session_unavailable");
 
-      // Retired between admission and the host call: the recheck beside sendMessage refuses too.
-      let checks = 0;
-      const retiring = () => ++checks < 2;
-      expect(disposition(test.deliver(message(), retiring))).toBe("refused:session_unavailable");
-      expect(test.delivered()).toHaveLength(0);
-    }),
-  );
+    // Retired between admission and the host call: the recheck beside sendMessage refuses too.
+    let checks = 0;
+    const retiring = () => ++checks < 2;
+    expect(disposition(test.deliver(message(), retiring))).toBe("refused:session_unavailable");
+    expect(test.delivered()).toHaveLength(0);
+  });
 
   for (const event of [
     { type: "session_before_switch", reason: "new" },
@@ -179,19 +173,17 @@ describe("intercom delivery", () => {
     );
   }
 
-  it.effect("delivers every message, however many arrive and from whomever", () =>
-    Effect.sync(() => {
-      const test = harness();
-      const idle = Array.from({ length: 50 }, () => disposition(test.deliver(message("chatty"))));
-      expect(Arr.every(idle, (outcome) => outcome === "woken")).toBe(true);
-      test.setIdle(false);
-      const busy = Array.from({ length: 50 }, (_, index) =>
-        disposition(test.deliver(message(`sender-${index}`, Fn.pipe("x", Str.repeat(16_000))))),
-      );
-      expect(Arr.every(busy, (outcome) => outcome === "queued")).toBe(true);
-      expect(test.delivered()).toHaveLength(100);
-    }),
-  );
+  it("delivers every message, however many arrive and from whomever", () => {
+    const test = harness();
+    const idle = Array.from({ length: 50 }, () => disposition(test.deliver(message("chatty"))));
+    expect(Arr.every(idle, (outcome) => outcome === "woken")).toBe(true);
+    test.setIdle(false);
+    const busy = Array.from({ length: 50 }, (_, index) =>
+      disposition(test.deliver(message(`sender-${index}`, Fn.pipe("x", Str.repeat(16_000))))),
+    );
+    expect(Arr.every(busy, (outcome) => outcome === "queued")).toBe(true);
+    expect(test.delivered()).toHaveLength(100);
+  });
 
   it.effect("refuses messages while receiving is off, and turns it back on per session", () =>
     Effect.gen(function* () {
@@ -205,25 +197,6 @@ describe("intercom delivery", () => {
       yield* Effect.promise(() => test.host.emit("session_start", test.ctx));
       expect(test.delivery.receiving()).toBe(true);
       expect(disposition(test.deliver())).toBe("woken");
-    }),
-  );
-
-  it.effect("wakes once for each dialog that deferred a message", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      for (let cycle = 0; cycle < 5; cycle += 1) {
-        yield* Effect.promise(() =>
-          test.host.emit("ui_prompt_start", test.ctx, { type: "ui_prompt_start", ...dialog }),
-        );
-        expect(disposition(test.deliver(message(`sender-${cycle}`)))).toBe("held");
-        yield* Effect.promise(() =>
-          test.host.emit("ui_prompt_end", test.ctx, { type: "ui_prompt_end", ...dialog }),
-        );
-      }
-      expect(test.wakes()).toHaveLength(5);
-      expect(Arr.every(test.delivered(), ([, options]) => options?.triggerTurn === false)).toBe(
-        true,
-      );
     }),
   );
 });

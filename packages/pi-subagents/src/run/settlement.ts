@@ -6,7 +6,12 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import type { BackendAssistantTerminal, BackendHandle } from "../backend/model.ts";
-import type { ReportArchive, ReportArchiveEntry } from "../boundary/report-archive.ts";
+import type {
+  ReportArchive,
+  ReportArchiveEntry,
+  ReportArchiveError,
+} from "../boundary/report-archive.ts";
+import { hasCompletionGenerationCapacity } from "./completion.ts";
 import {
   errorText,
   failureFields,
@@ -27,16 +32,13 @@ import {
   type StoredRunView,
 } from "./internal.ts";
 import type { SubagentReportArchive, SubagentRunView, SubagentUsage } from "./model.ts";
-import {
-  MAX_OUTCOME_PREVIEW_CHARS,
-  MAX_UNRESOLVED_REPORT_GENERATIONS,
-  REPORT_SAVE_DEADLINE_MILLIS,
-} from "./limits.ts";
+import { MAX_OUTCOME_PREVIEW_CHARS, REPORT_SAVE_DEADLINE_MILLIS } from "./limits.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import { addUsage, captureOutputText, sanitizeGuidedDiagnostic } from "./state.ts";
 import {
   settledAssignmentLocked,
+  settledErrorFields,
   settledFailureMessage,
   settlementBlocked,
   viewForSettlement,
@@ -80,25 +82,29 @@ interface SettlementCommit {
 
 /** The outcome's completion generation, or undefined when the run's outbox is full. */
 const allocateCompletionLocked = (record: RunRecord, state: SettlementState) =>
-  state === "stopped" || record.completionGenerations.size >= MAX_UNRESOLVED_REPORT_GENERATIONS
+  state === "stopped" || !hasCompletionGenerationCapacity(record)
     ? undefined
     : ++record.completionGeneration;
+
+/** Logs an archive failure or defect under `problem` and goes on without the file. */
+const warnArchiveFailure =
+  (problem: string) =>
+  <A>(effect: Effect.Effect<A, ReportArchiveError>): Effect.Effect<A | undefined> =>
+    effect.pipe(
+      Effect.catchTag("ReportArchiveError", (error) =>
+        Effect.logWarning(`${problem} (${error.reason}).`).pipe(Effect.as(undefined)),
+      ),
+      Effect.catchDefect(() =>
+        Effect.logWarning(`${problem} (archive defect).`).pipe(Effect.as(undefined)),
+      ),
+    );
 
 const saveArchive = (
   archive: ReportArchive,
   entry: ReportArchiveEntry,
 ): Effect.Effect<SubagentReportArchive | undefined> =>
   Effect.suspend(() => archive.save(entry)).pipe(
-    Effect.catchTag("ReportArchiveError", (error) =>
-      Effect.logWarning(`Subagent report file wasn't saved (${error.reason}).`).pipe(
-        Effect.as(undefined),
-      ),
-    ),
-    Effect.catchDefect(() =>
-      Effect.logWarning("Subagent report file wasn't saved (archive defect).").pipe(
-        Effect.as(undefined),
-      ),
-    ),
+    warnArchiveFailure("Subagent report file wasn't saved"),
   );
 
 export function settlementOperations(dependencies: RunSettlementDependencies) {
@@ -141,36 +147,22 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
         return snapshotRun(record);
       }),
     );
-  const mergeLateUsage = (record: RunRecord, assignmentEpoch: number, usage: SubagentUsage) =>
-    withLock(
-      Effect.gen(function* () {
-        if (
-          record.stoppedByParent ||
-          record.assignment.epoch !== assignmentEpoch ||
-          record.view.state !== "completed"
-        )
-          return;
-        yield* mergeUsageLocked(record, usage);
-      }),
-    );
   const mergeProcessUsage = (
     record: RunRecord,
     source: BackendHandle | undefined,
     usage: SubagentUsage,
   ) =>
     withLock(
-      Effect.gen(function* () {
-        if (
-          !source ||
-          record.process !== source ||
-          record.stoppedByParent ||
-          record.view.state === "stopping" ||
-          record.view.state === "stopped" ||
-          record.view.state === "failed"
-        )
-          return;
-        yield* mergeUsageLocked(record, usage);
-      }),
+      Effect.suspend(() =>
+        !source ||
+        record.process !== source ||
+        record.stoppedByParent ||
+        record.view.state === "stopping" ||
+        record.view.state === "stopped" ||
+        record.view.state === "failed"
+          ? Effect.void
+          : mergeUsageLocked(record, usage),
+      ),
     );
 
   const pauseFromEvent = (record: RunRecord, now: number, assignmentEpoch: number) =>
@@ -195,12 +187,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
   const discardArchive = (archive: SubagentReportArchive | undefined) =>
     archiveReport && archive
       ? Effect.suspend(() => archiveReport.discard(archive)).pipe(
-          Effect.catchTag("ReportArchiveError", (error) =>
-            Effect.logWarning(`Uncommitted subagent report file remains (${error.reason}).`),
-          ),
-          Effect.catchDefect(() =>
-            Effect.logWarning("Uncommitted subagent report file remains (archive defect)."),
-          ),
+          warnArchiveFailure("Uncommitted subagent report file remains"),
         )
       : Effect.void;
 
@@ -293,13 +280,8 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       outcome: state,
       ...(finalText && { finalText, ...report }),
       ...(state === "failed" &&
-        settledError && {
-          error: settledError.message,
-          ...(settledError.userMessage !== settledError.message && {
-            userError: settledError.userMessage,
-          }),
-          ...(report.errorArchive && { errorArchive: report.errorArchive }),
-        }),
+        settledError &&
+        settledErrorFields(settledError, report.errorArchive)),
       generation,
       ...(warning && { warning }),
       ...(userWarning && userWarning !== warning && { userWarning }),
@@ -349,7 +331,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     // never joins under the run lock; its session-owned work acquires it independently. A closing
     // session scope refuses both forks; shutdown then closes every run's scope leaf-first.
     if (completedScope)
-      yield* sendPeerNotices(record.view.id).pipe(
+      yield* sendPeerNotices.pipe(
         Effect.ensuring(closeRecordScope(record, completedScope)),
         Effect.forkIn(ownerScope),
       );
@@ -412,7 +394,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
     assignmentEpoch?: number,
   ) {
     const result = yield* withLock(settleLocked(record, state, error, assignmentEpoch));
-    if (result.notifyPeers) yield* sendPeerNotices(record.view.id);
+    if (result.notifyPeers) yield* sendPeerNotices;
     return result.view;
   });
 
@@ -575,14 +557,13 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       }
       if (outcome === "failed")
         yield* failRun(record, settledFailureMessage(terminal), undefined, assignmentEpoch);
-      else if (outcome !== "ignored" && outcome.notifyPeers) yield* sendPeerNotices(record.view.id);
+      else if (outcome !== "ignored" && outcome.notifyPeers) yield* sendPeerNotices;
       return;
     }
   });
 
   return {
     mutateEventView,
-    mergeLateUsage,
     mergeProcessUsage,
     settle,
     failRun,

@@ -5,6 +5,8 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
+import { contentText } from "pi-cosmic-core/message-text";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { safeTextPrefix } from "pi-cosmic-core/text";
 
 /** Messages a read returns when the agent doesn't say. */
@@ -57,11 +59,6 @@ export const ParentConversationSchema = Schema.Struct({
   compacted: Schema.Boolean,
 });
 export type ParentConversation = typeof ParentConversationSchema.Type;
-
-export const decodeParentConversation = Fn.flow(
-  Schema.decodeUnknownOption(ParentConversationSchema, { onExcessProperty: "ignore" }),
-  Option.getOrUndefined,
-);
 
 // Pi's session entries, decoded only as far as a reader needs. Anything else is skipped.
 const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
@@ -120,9 +117,8 @@ const Entry = Schema.Struct({
 type Entry = typeof Entry.Type;
 
 const decodeOptions = { onExcessProperty: "ignore" } as const;
-const decodeEntryLine = Schema.decodeUnknownOption(Schema.fromJsonString(Entry), decodeOptions);
-const decodeMessage = Schema.decodeUnknownOption(Message, decodeOptions);
-const isTextPart = Schema.is(TextPart);
+const decodeEntryLine = decodeUnknownOrUndefined(Schema.fromJsonString(Entry), decodeOptions);
+const decodeMessage = decodeUnknownOrUndefined(Message, decodeOptions);
 const isToolCallPart = Schema.is(ToolCallPart);
 
 const clip = (text: string, limit: number): string =>
@@ -134,14 +130,6 @@ const oneLine = (text: string, limit: number): string => {
   const flat = Fn.pipe(text, Str.replace(/\s+/gu, " "), Str.trim);
   return flat.length <= limit ? flat : `${safeTextPrefix(flat, limit)}…`;
 };
-
-const contentText = (content: typeof Content.Type): string =>
-  Predicate.isString(content)
-    ? content
-    : Arr.join(
-        Arr.map(Arr.filter(content, isTextPart), (part) => part.text),
-        "\n",
-      );
 
 const toolInput = (input: Schema.Json | undefined): string => {
   const encoded: string | undefined = Predicate.isString(input) ? input : JSON.stringify(input);
@@ -206,10 +194,13 @@ const entryItem = (
     return entry.display === true && entry.content !== undefined
       ? item("note", entry, contentText(entry.content), [], entry.customType)
       : undefined;
-  if (entry.type === "branch_summary" && entry.summary !== undefined)
+  if (
+    (entry.type === "branch_summary" || entry.type === "compaction") &&
+    entry.summary !== undefined
+  )
     return item("summary", entry, entry.summary);
   if (entry.type !== "message") return undefined;
-  const message = Option.getOrUndefined(decodeMessage(entry.message));
+  const message = decodeMessage(entry.message);
   if (message === undefined) return undefined;
   switch (message.role) {
     case "user":
@@ -249,7 +240,7 @@ const entryItem = (
 
 const toolResultOf = (entry: Entry): readonly [string, ToolResult] | undefined => {
   if (entry.type !== "message") return undefined;
-  const message = Option.getOrUndefined(decodeMessage(entry.message));
+  const message = decodeMessage(entry.message);
   return message?.role === "toolResult"
     ? [
         message.toolCallId,
@@ -269,12 +260,16 @@ const itemChars = (entry: ConversationItem): number =>
     (total, tool) => total + tool.input.length + tool.subject.length + tool.output.length,
   );
 
-const present = <A>(value: A | undefined): ReadonlyArray<A> => (value === undefined ? [] : [value]);
-
 const NO_RESULTS: ReadonlyMap<string, ToolResult> = new Map();
 
-/** Whether an entry is a message a read counts, as opposed to state or a tool's result. */
-const isCounted = (entry: Entry): boolean => entryItem(entry, NO_RESULTS) !== undefined;
+/**
+ * Whether an entry is a message a read counts, as opposed to state, a tool's result, or a summary,
+ * which stands in for many messages and comes along uncounted.
+ */
+const isCounted = (entry: Entry): boolean => {
+  const counted = entryItem(entry, NO_RESULTS);
+  return counted !== undefined && counted.role !== "summary";
+};
 
 /** The newest items whose text fits one result; at least the newest one is kept. */
 const fitting = (items: ReadonlyArray<ConversationItem>): ReadonlyArray<ConversationItem> => {
@@ -303,7 +298,7 @@ export const parentConversation = (
 ): ParentConversation => {
   const lines = Str.split(text, "\n");
   const entries = Arr.flatMap(truncated ? Arr.drop(lines, 1) : lines, (line) =>
-    present(Option.getOrUndefined(decodeEntryLine(line))),
+    Arr.fromNullishOr(decodeEntryLine(line)),
   );
   const byId = new Map(Arr.map(entries, (entry) => [entry.id, entry] as const));
   const branch: Entry[] = [];
@@ -332,14 +327,10 @@ export const parentConversation = (
     if (next === undefined) earlier = true;
   }
   const chronological = Arr.reverse(branch);
-  const results = new Map(Arr.flatMap(chronological, (entry) => present(toolResultOf(entry))));
-  const items = Arr.flatMap(chronological, (entry) =>
-    present(
-      entry.type === "compaction" && entry.summary !== undefined
-        ? item("summary", entry, entry.summary)
-        : entryItem(entry, results),
-    ),
+  const results = new Map(
+    Arr.flatMap(chronological, (entry) => Arr.fromNullishOr(toolResultOf(entry))),
   );
+  const items = Arr.flatMap(chronological, (entry) => Arr.fromNullishOr(entryItem(entry, results)));
   const kept = fitting(items);
   return {
     parentId,

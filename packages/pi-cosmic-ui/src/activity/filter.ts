@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { activityStatus } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
@@ -11,7 +12,7 @@ const KIND_WORDS = {
 
 // The words a row answers to: its title, identity, kind, and status in the words rows use, so
 // `failed` or `running` filters by state.
-const searchText = (row: ActivityRow): string =>
+const searchText = Fn.memoize((row: ActivityRow): string =>
   Str.toLowerCase(
     Arr.join(
       [
@@ -26,7 +27,8 @@ const searchText = (row: ActivityRow): string =>
       ],
       "\n",
     ),
-  );
+  ),
+);
 
 /**
  * A matcher for a typed filter: every whitespace-separated word must appear, in any case, among
@@ -37,14 +39,8 @@ export const activityFilterMatcher = (
 ): ((row: ActivityRow) => boolean) | undefined => {
   const words = Arr.filter(Str.split(Str.toLowerCase(Str.trim(query)), /\s+/), Str.isNonEmpty);
   if (!words.length) return undefined;
-  const texts = new WeakMap<ActivityRow, string>();
   return (row) => {
-    let text = texts.get(row);
-    if (text === undefined) {
-      text = searchText(row);
-      texts.set(row, text);
-    }
-    const haystack = text;
-    return Arr.every(words, (word) => Str.includes(word)(haystack));
+    const haystack = searchText(row);
+    return Arr.every(words, (word) => Fn.pipe(haystack, Str.includes(word)));
   };
 };

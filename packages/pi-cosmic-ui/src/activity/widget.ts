@@ -7,6 +7,7 @@ import {
   managerNoticeGlyph,
   clipToWidth,
   spinnerFrameAt,
+  type ManagerStatusColor,
 } from "../manager/chrome.ts";
 import { activityAttentionLabels, needsYou } from "./attention.ts";
 import { activityPath, isFinished, type ActivityRow } from "./model.ts";
@@ -122,6 +123,9 @@ const shownKeys = (sections: readonly ActivityWidgetSection[]): ReadonlySet<stri
     ),
   );
 
+const paint = (options: WidgetOptions, tone: ManagerStatusColor, text: string): string =>
+  options.theme?.fg(tone, text) ?? text;
+
 const needsYouLine = (
   rows: readonly ActivityRow[],
   waiting: readonly ActivityRow[],
@@ -133,11 +137,7 @@ const needsYouLine = (
   const glyph = managerNoticeGlyph("attention");
   const prefix = `Needs your input${waiting.length > 1 ? ` (${waiting.length})` : ""}: `;
   const label = activityOwnerLabel(rows, first, Math.max(0, width - prefix.length - 2));
-  const text = `${prefix}${label}`;
-  const theme = options.theme;
-  return theme
-    ? `${theme.fg(managerNoticeColor("attention"), glyph)} ${theme.fg("muted", text)}`
-    : `${glyph} ${text}`;
+  return `${paint(options, managerNoticeColor("attention"), glyph)} ${paint(options, "muted", `${prefix}${label}`)}`;
 };
 
 const failureLine = (
@@ -152,11 +152,7 @@ const failureLine = (
   const subject = only
     ? clipToWidth(only.title, Math.max(4, width - where.length - 4), "…")
     : `${failures.length} failed`;
-  const glyph = managerActivityGlyph("failed");
-  const theme = options.theme;
-  return theme
-    ? `${theme.fg("error", glyph)} ${theme.fg("muted", `${subject}${where}`)}`
-    : `${glyph} ${subject}${where}`;
+  return `${paint(options, "error", managerActivityGlyph("failed"))} ${paint(options, "muted", `${subject}${where}`)}`;
 };
 
 export function renderActivityWidget(
@@ -185,7 +181,7 @@ export function renderActivityWidget(
     sections = activityWidgetSections(rows, maxRows, { ...options, reserved: reserved + 1 });
     waiting = unseen();
   }
-  const style = (text: string) => options.theme?.fg("muted", text) ?? text;
+  const style = (text: string) => paint(options, "muted", text);
   const lines: string[] = [];
   const heading = needsYouLine(rows, waiting, width, options);
   if (heading) lines.push(heading);

@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 /**
  * Human wording for operating-system diagnostics. Raw text stays in expanded detail; these
@@ -27,8 +28,8 @@ const NODE_ERRNO = /^(?:[A-Za-z]*Error(?: \[[A-Z0-9_]+\])?:\s*)?(E[A-Z]+):(?:\s|
 
 /** `File not found` for Node filesystem errors such as `ENOENT: no such file or directory, …`. */
 export function errnoMessage(text: string): string | undefined {
-  const line = Option.getOrUndefined(
-    Arr.findFirst(Str.split(text, "\n"), (candidate) => Str.isNonEmpty(Str.trim(candidate))),
+  const line = findOrUndefined(Str.split(text, "\n"), (candidate) =>
+    Str.isNonEmpty(Str.trim(candidate)),
   );
   const code = line === undefined ? undefined : NODE_ERRNO.exec(Str.trim(line))?.[1];
   return code === undefined ? undefined : ERRNO_MESSAGES.get(code);

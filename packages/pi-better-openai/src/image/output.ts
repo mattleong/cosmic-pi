@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -7,25 +6,31 @@ import type * as FileSystem from "effect/FileSystem";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
-import * as Random from "effect/Random";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { isStrictlyInsidePathWith } from "pi-cosmic-core/platform/paths";
 import type { SharpAdapterContract } from "../boundary/sharp.ts";
 import { IMAGE_OUTPUT_FORMATS, type ImageOutputFormat } from "../config/schema.ts";
-import { fail, failWith, generationFailure, type ExtractedImageResult } from "./types.ts";
+import {
+  fail,
+  failWith,
+  generationFailure,
+  randomHex8,
+  type ExtractedImageResult,
+} from "./types.ts";
 
 const MAX_GENERATED_IMAGE_BYTES = 60 * 1024 * 1024;
 const imageVerificationLostMessage =
   "OpenAI image post-commit verification could not stat the destination; skipping identity check.";
 
 const outputFormats = {
-  png: { extension: "png", mimeType: "image/png", sharpFormat: "png" },
-  jpeg: { extension: "jpg", mimeType: "image/jpeg", sharpFormat: "jpeg" },
-  webp: { extension: "webp", mimeType: "image/webp", sharpFormat: "webp" },
+  png: { extension: "png", mimeType: "image/png" },
+  jpeg: { extension: "jpg", mimeType: "image/jpeg" },
+  webp: { extension: "webp", mimeType: "image/webp" },
 } as const satisfies Record<
   ImageOutputFormat,
-  { readonly extension: string; readonly mimeType: string; readonly sharpFormat: string }
+  { readonly extension: string; readonly mimeType: string }
 >;
 
 // Grouped repetition exhausts V8's regexp stack on ordinary multi-megabyte images.
@@ -65,9 +70,7 @@ export const imageOutput = (dependencies: {
         ),
       );
     const actual = metadata.format === "jpg" ? "jpeg" : metadata.format;
-    const actualFormat = Option.getOrUndefined(
-      Arr.findFirst(IMAGE_OUTPUT_FORMATS, (format) => format === actual),
-    );
+    const actualFormat = findOrUndefined(IMAGE_OUTPUT_FORMATS, (format) => format === actual);
     if (actualFormat === undefined)
       return yield* fail(
         "response",
@@ -132,16 +135,7 @@ export const imageOutput = (dependencies: {
     const stamp = Fn.pipe(DateTime.formatIso(DateTime.makeUnsafe(now)), Str.replace(/[:.]/g, "-"));
     const safeId =
       Fn.pipe(providerId, Str.replace(/[^a-zA-Z0-9_-]/g, "_"), Str.slice(0, 48)) || "image";
-    const nonce = Arr.join(
-      Arr.map(
-        [
-          yield* Random.nextIntBetween(0, 0xffff_ffff),
-          yield* Random.nextIntBetween(0, 0xffff_ffff),
-        ],
-        (value) => Fn.pipe(value.toString(16), Str.padStart(8, "0")),
-      ),
-      "",
-    );
+    const nonce = `${yield* randomHex8}${yield* randomHex8}`;
     const format = outputFormats[outputFormat];
     const destination = path.join(
       canonicalDirectory,

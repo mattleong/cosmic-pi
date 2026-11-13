@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { getTextContent } from "pi-code-previews";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
@@ -57,9 +56,16 @@ import {
 import { runRecordFixture } from "../run/fixtures/run-context.ts";
 import { effectTest, step } from "../support/effect-test.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
+import {
+  captureSubagentTools,
+  executeTool,
+  receiptFor,
+  resultText,
+  view,
+} from "./fixtures/tool-harness.ts";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const blocksNeeded = (count: number): number =>
   MAX_RESULT_HEADER_CHARS + count * (MAX_RUN_BLOCK_CHARS + RUN_BLOCK_SEPARATOR.length);
@@ -221,12 +227,9 @@ const worstObservations = (count: number): ReadonlyArray<SubagentRunObservation>
   Array.from({ length: count }, (_, index) => {
     const run = worstRun(index);
     return run.state === "completed" || run.state === "failed"
-      ? { run, completionReceipt: { id: run.id, generation: 1, claimToken: `claim-${run.id}` } }
+      ? { run, completionReceipt: receiptFor(run.id) }
       : { run };
   });
-
-const resultText = (result: { readonly content: Parameters<typeof getTextContent>[0] }) =>
-  getTextContent(result.content);
 
 /** Whole retained reports from 2 KiB up to the retained cap, each saved to its file. */
 const wholeReportRuns = (count: number): ReadonlyArray<SubagentRunView> =>
@@ -295,6 +298,7 @@ describe("worst-case model-facing output", () => {
         );
         if (run.reportArchive) expect(block).toContain(run.reportArchive.path);
         if (run.errorArchive) expect(block).toContain(run.errorArchive.path);
+        if (run.error) expect(block).toContain(Fn.pipe(run.error, Str.slice(0, 12)));
         // An outcome cut without a file points to agent_read for the rest.
         if (run.question || run.finalTextTruncation || (run.error && !run.errorArchive))
           expect(block).toContain("agent_read");
@@ -362,7 +366,7 @@ describe("worst-case model-facing output", () => {
                     message: longText("stop failed", MAX_ERROR_CHARS),
                   }),
                 )
-              : Effect.succeed(Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))!),
+              : Effect.succeed(findOrUndefined(runs, (run) => run.id === id)!),
         }),
       ).get("agent_lifecycle")!;
 
@@ -383,12 +387,7 @@ describe("worst-case model-facing output", () => {
     const tool = captureSubagentTools(
       subagentServiceDouble({
         withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
-          use(
-            Arr.map(runs, (run) => ({
-              run,
-              completionReceipt: { id: run.id, generation: 1, claimToken: `claim-${run.id}` },
-            })),
-          ),
+          use(Arr.map(runs, (run) => ({ run, completionReceipt: receiptFor(run.id) }))),
         consumeCompletions: () => Effect.void,
       }),
     ).get("agent_await")!;

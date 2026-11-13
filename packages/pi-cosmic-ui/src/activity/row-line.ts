@@ -19,9 +19,11 @@ import {
   activityAttentionColor,
   activityAttentionLabels,
   activityAttentionCounts,
+  activityAwaitingTurn,
   activityQueued,
   activityStatus,
   addAttention,
+  emptyAttention,
   type ActivityAttentionCounts,
 } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
@@ -47,8 +49,7 @@ export const activityMark = (row: ActivityRow, now = 0): ActivityMark => {
   if (row.status === "blocked")
     return { glyph: managerNoticeGlyph("warning"), color: "warning", meaning: undefined };
   // Queued work and questions waiting their turn share the suite's single queued glyph.
-  if (activityQueued(row) || (row.kind === "question" && row.status === "pending"))
-    return { glyph: "○", color: "muted", meaning: "queued" };
+  if (activityAwaitingTurn(row)) return { glyph: "○", color: "muted", meaning: "queued" };
   const kind = row.status === "cancelled" ? "stopped" : row.status;
   return {
     glyph: managerActivityGlyph(kind, spinnerFrameAt(now)),
@@ -130,8 +131,6 @@ const memberAttention = (
     ? (withoutStatusGlyphWords(activityStatus(row), meaning) ?? "")
     : "");
 
-const NO_ATTENTION: ActivityAttentionCounts = { user: 0, parent: 0, blocked: 0, failed: 0 };
-
 /**
  * A folded branch's attention, one part per kind. Input the user owes stays longest; parent waits
  * give way first, since the waiting agent's own row says so once the branch opens.
@@ -145,7 +144,7 @@ const warningParts = (counts: ActivityAttentionCounts): ActivityStatusPart[] =>
       ["failed", STATUS_DROP.state],
     ] as const,
     ([kind, drop]) =>
-      Arr.map(activityAttentionLabels({ ...NO_ATTENTION, [kind]: counts[kind] }), (text) => ({
+      Arr.map(activityAttentionLabels({ ...emptyAttention, [kind]: counts[kind] }), (text) => ({
         text,
         ...(drop !== undefined && { drop }),
       })),

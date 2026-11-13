@@ -45,7 +45,7 @@ const longName = "billing-and-invoicing-migration-review-follow-up-for-the-legac
 test("a name too wide for the room is cut after a `-`, `_`, or `.`, keeping whole segments", () => {
   for (const name of [
     longName,
-    Str.replaceAll("-", "_")(longName),
+    Fn.pipe(longName, Str.replaceAll("-", "_")),
     "api.v2.billing.invoices.ledger",
   ])
     for (const width of [24, 31, 44, 57]) {

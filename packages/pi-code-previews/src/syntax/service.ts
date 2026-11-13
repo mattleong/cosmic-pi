@@ -2,8 +2,8 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Semaphore from "effect/Semaphore";
-import * as SynchronizedRef from "effect/SynchronizedRef";
 import { acquireProjectionOwnership } from "../shared/projection-ownership";
 import { disposeShikiHighlighter, ShikiAdapter, type ShikiHighlighter } from "../boundary/shiki";
 import { acquireSyntaxIngress } from "./ingress";
@@ -104,7 +104,7 @@ export class CodePreviewSyntaxService extends Context.Service<
         statusVersion: 0,
         closed: false,
       };
-      const state = yield* SynchronizedRef.make(initial);
+      const state = yield* Ref.make(initial);
       const highlighterLifecycle = yield* Semaphore.make(1);
 
       const publish = (current: SyntaxState) =>
@@ -112,13 +112,13 @@ export class CodePreviewSyntaxService extends Context.Service<
       publish(initial);
 
       const modify = <A>(transition: (current: SyntaxState) => readonly [A, SyntaxState]) =>
-        SynchronizedRef.modify(state, (current) => {
+        Ref.modify(state, (current) => {
           const result = transition(current);
           if (result[1] !== current) publish(result[1]);
           return result;
         });
 
-      const dispose = highlighterLifecycle.withPermits(1)(
+      const dispose = highlighterLifecycle.withPermit(
         modify((current) => [
           current.highlighter,
           {
@@ -130,10 +130,13 @@ export class CodePreviewSyntaxService extends Context.Service<
         ]).pipe(Effect.flatMap(releaseHighlighter)),
       );
 
+      // Masked so a flight registered in state always reaches the handlers that settle its waiters,
+      // and a created highlighter is always committed or released. Waiting on another flight and
+      // creation stay interruptible; the commit is not, so it waits out a language load in flight.
       const initialize: (theme: string) => Effect.Effect<void> = Effect.fn(
         "CodePreviewShiki.initialize",
-      )(function* (theme: string) {
-        return yield* Effect.uninterruptibleMask((restore) =>
+      )((theme: string) =>
+        Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
             const flight: InitializationFlight = {
               theme,
@@ -202,7 +205,7 @@ export class CodePreviewSyntaxService extends Context.Service<
                     ),
                   ),
                 onSuccess: (next) =>
-                  highlighterLifecycle.withPermits(1)(
+                  highlighterLifecycle.withPermit(
                     modify((current) =>
                       current.initialization !== flight
                         ? [next, current]
@@ -231,14 +234,14 @@ export class CodePreviewSyntaxService extends Context.Service<
                   Effect.asVoid,
                 ),
               ),
-              Effect.ensuring(Deferred.succeed(flight.done, "Completed").pipe(Effect.asVoid)),
+              Effect.ensuring(Deferred.succeed(flight.done, "Completed")),
               Effect.withSpan("pi-code-previews.shiki.initialize", {
                 attributes: { operation: "initialize" },
               }),
             );
           }),
-        );
-      });
+        ),
+      );
 
       const requestLanguage = Effect.fn("CodePreviewShiki.requestLanguage")(function* (
         language: string,
@@ -255,7 +258,7 @@ export class CodePreviewSyntaxService extends Context.Service<
               ],
         );
         if (generation === undefined) return;
-        const succeeded = yield* SynchronizedRef.get(state).pipe(
+        const succeeded = yield* Ref.get(state).pipe(
           Effect.flatMap((current) =>
             current.generation === generation && current.highlighter
               ? adapter.loadLanguage(current.highlighter, language)
@@ -285,7 +288,7 @@ export class CodePreviewSyntaxService extends Context.Service<
       });
 
       const requestInitialize = (theme: string): Effect.Effect<void> =>
-        SynchronizedRef.get(state).pipe(
+        Ref.get(state).pipe(
           Effect.flatMap((current) =>
             current.failedThemes.has(theme) ? Effect.void : initialize(theme),
           ),

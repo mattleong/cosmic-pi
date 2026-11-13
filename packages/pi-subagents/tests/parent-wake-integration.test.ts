@@ -3,16 +3,10 @@ import {
   type FauxResponseFactory,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import { type AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { temporaryDirectory } from "pi-cosmic-core/testing";
-import {
-  fauxModels,
-  quietLoader,
-  quietSettings,
-  scopedPrintSession,
-} from "pi-cosmic-core/testing/sdk";
+import { fauxPrintSession } from "pi-cosmic-core/testing/sdk";
 import { hostNotifier, type SubagentNotifier } from "../src/boundary/host-notifier.ts";
 import { registerParentWake } from "../src/boundary/host-parent-wake.ts";
 import { projectionOf } from "./fixtures/run-view.ts";
@@ -27,37 +21,19 @@ interface ParentSessionSlot {
 const transcriptText = (context: TranscriptContext): string => JSON.stringify(context.messages);
 
 const parentSession = Effect.gen(function* () {
-  const directory = yield* temporaryDirectory("pi-parent-wake-");
-  const { fake, models } = yield* fauxModels("parent-wake-test");
-  const settings = quietSettings();
   const bound: ParentSessionSlot = {};
   let notify: SubagentNotifier | undefined;
-  const loader = yield* quietLoader({
-    cwd: directory,
-    agentDir: directory,
-    settingsManager: settings,
-    noExtensions: true,
-    extensionFactories: [
-      (pi) => {
-        const wake = registerParentWake(pi, {
-          projection: () => projectionOf([]),
-          drain: () => undefined,
-          isIdle: () => bound.session?.isIdle ?? false,
-          later: (check) => setImmediate(check),
-        });
-        notify = hostNotifier(pi, { delivery: wake });
-      },
-    ],
-  });
-  const session = yield* scopedPrintSession({
-    cwd: directory,
-    agentDir: directory,
-    model: fake.getModel(),
-    modelRuntime: models,
-    settingsManager: settings,
-    sessionManager: SessionManager.inMemory(directory),
-    resourceLoader: loader,
-  });
+  const { fake, session } = yield* fauxPrintSession("pi-parent-wake-", "parent-wake-test", [
+    (pi) => {
+      const wake = registerParentWake(pi, {
+        projection: () => projectionOf([]),
+        drain: () => undefined,
+        isIdle: () => bound.session?.isIdle ?? false,
+        later: (check) => setImmediate(check),
+      });
+      notify = hostNotifier(pi, { delivery: wake });
+    },
+  ]);
   bound.session = session;
   const parent = session;
   const deliverReport = () =>

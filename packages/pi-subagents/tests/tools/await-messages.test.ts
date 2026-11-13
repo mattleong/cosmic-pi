@@ -1,19 +1,15 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
 import * as Arr from "effect/Array";
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import { renderContextFixture } from "pi-code-previews/testing";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { expect } from "vitest";
 import { MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
-import { SubagentService } from "../../src/run/service.ts";
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { decodeStartAwaitCardDetails } from "../../src/tools/details-decode.ts";
-import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { fakeAgentMain } from "../run/fixtures/agent-main.ts";
 import {
   awaitObservations,
@@ -29,6 +25,8 @@ import {
   captureSubagentTools,
   executeTool,
   managedToolHost,
+  observedCall,
+  settledSummary,
   view,
 } from "./fixtures/tool-harness.ts";
 
@@ -37,35 +35,22 @@ const rootTools = Effect.gen(function* () {
   const fixture = eventBackendServiceFixture(fakeEventBackendLayer(), {
     agentMain: main.capabilities,
   });
-  const { pi, tools, runtime } = yield* managedToolHost(fixture);
-  const service = yield* step(() => runtime.run(SubagentService));
-  registerSubagentTools(pi, {
-    environment: { cwd: "/project", projectTrusted: true },
-    run: (effect, signal) => runtime.run(effect, signal),
-  });
+  const { tools, runtime, service } = yield* managedToolHost(fixture);
   const start = (name: string) =>
     step(() => runtime.run(service.startSessionOwned(eventBackendRequest({ name }))));
   const send = (from: SubagentRunView, text: string) =>
     step(() =>
       runtime.run(service.agentSend({ kind: "run", runId: from.id }, MAIN_AGENT_ID, text)),
     );
-  // Resolves once a progress update satisfies `ready`, so the wait is observing.
   const awaitTool = (
     runIds: ReadonlyArray<string>,
-    ready: (result: AgentToolResult<unknown>) => boolean = () => true,
-  ) => {
-    const observing = Deferred.makeUnsafe<void>();
-    const pending = executeTool(
+    ready?: (result: AgentToolResult<unknown>) => boolean,
+  ) =>
+    observedCall(
       tools.get("agent_await")!,
       { runIds: [...runIds], until: "all_finished" },
-      {
-        update: (result) => {
-          if (ready(result)) Deferred.doneUnsafe(observing, Effect.void);
-        },
-      },
+      { ...(ready && { ready }) },
     );
-    return { observing: Deferred.await(observing), result: step(() => pending) };
-  };
   return { fixture, main, runtime, service, start, send, awaitTool };
 });
 
@@ -165,16 +150,15 @@ it.live("summarizes a question that arrived beside a message as the reason the w
         ).get("agent_await")!;
         const args = { runIds: [target.id], until: "all_finished" };
         const result = yield* step(() => executeTool(tool, args));
-        const summary = createSubagentCompactSummary(SUBAGENT_TOOL_NAME.await)({
-          phase: "settled",
+        const summary = settledSummary(
+          createSubagentCompactSummary(SUBAGENT_TOOL_NAME.await),
           args,
-          result: { content: [...result.content], details: result.details },
-          context: renderContextFixture({}),
-        });
-        const note = Arr.findFirst(
+          { details: result.details },
+        );
+        const note = findOrUndefined(
           summary?.issues ?? [],
           (issue) => issue.code === "await-agent-message",
-        ).pipe(Option.getOrUndefined);
+        );
         return { result, summary, note };
       });
 

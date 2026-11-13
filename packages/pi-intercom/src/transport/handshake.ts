@@ -9,6 +9,10 @@ export const NONCE_BYTES = 32;
 /** Bytes in an HMAC-SHA-256 proof. */
 export const PROOF_BYTES = 32;
 
+/** A string of exactly `bytes` bytes in lowercase hex. */
+export const hex = (bytes: number) =>
+  Schema.String.check(Schema.isPattern(new RegExp(`^[0-9a-f]{${bytes * 2}}$`)));
+
 /**
  * Each side proves it holds the record's token by signing both challenges under its own role, so
  * a proof can't be replayed on another connection or reflected back as the other side's.

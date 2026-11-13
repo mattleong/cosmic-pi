@@ -8,10 +8,11 @@ import {
   type BoundedProcessResult,
 } from "pi-cosmic-core/platform/process";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
+import { pathList } from "../workspace/diffstat.ts";
 import { WorkspaceError } from "../workspace/model.ts";
 import { gitInstallation } from "./git-installation.ts";
 import { withoutGitLocalEnvironment } from "./git-local-environment.ts";
-import { nodeErrorCode } from "./harness-shared.ts";
+import { nodeErrorCode } from "pi-cosmic-core/platform/errors";
 import { homeDisplayPath } from "../ui/display-path.ts";
 
 export const workspaceFailure = (operation: string, message: string) =>
@@ -96,13 +97,16 @@ export const nulTerminated = (lines: ReadonlyArray<string>) =>
 
 export type GitResult = BoundedProcessResult;
 
-interface GitOptions {
+export interface GitOptions {
   readonly stdin?: Uint8Array;
   /** Extra variables, such as a temporary `GIT_INDEX_FILE` that keeps the real index untouched. */
   readonly environment?: Readonly<Record<string, string>>;
   /** Defaults to two minutes; checkouts of large trees may need longer. */
   readonly timeoutMillis?: number;
 }
+
+/** Checking out large trees or files runs every filter, such as Git LFS, so it may take a while. */
+export const CHECKOUT_TIMEOUT_MILLIS = 10 * 60 * 1000;
 
 // Workspaces run in the user's repository with the user's system and global configuration, so
 // filters such as Git LFS behave like a normal checkout. Only what could run user code
@@ -201,10 +205,10 @@ const MAX_LISTED_PATHS = 5;
 
 /** Names up to five paths, then how many more there are. */
 export const listedPaths = (paths: ReadonlyArray<string>) =>
-  `${Arr.join(
-    Arr.map(paths.slice(0, MAX_LISTED_PATHS), (name) => JSON.stringify(name)),
-    ", ",
-  )}${paths.length > MAX_LISTED_PATHS ? `, and ${paths.length - MAX_LISTED_PATHS} more` : ""}`;
+  pathList(
+    Arr.map(paths, (name) => JSON.stringify(name)),
+    MAX_LISTED_PATHS,
+  );
 
 /**
  * The changed paths `git apply --check` reported conflicts for. Git names each in an `error:`
@@ -259,7 +263,7 @@ export const git = (cwd: string, args: ReadonlyArray<string>, options?: GitOptio
 
 export const gitFields = (cwd: string, args: ReadonlyArray<string>, options?: GitOptions) =>
   git(cwd, args, options).pipe(
-    Effect.map((output) => Arr.filter(Str.split(output, "\0"), Boolean)),
+    Effect.map((output) => Arr.filter(Str.split(output, "\0"), Str.isNonEmpty)),
   );
 
 // As a bare repository, so a command that would touch a working tree fails instead of treating
@@ -286,10 +290,7 @@ export const repositoryGitFields = (
   repository: string,
   args: ReadonlyArray<string>,
   options?: GitOptions,
-) =>
-  repositoryGit(repository, args, options).pipe(
-    Effect.map((output) => Arr.filter(Str.split(output, "\0"), Boolean)),
-  );
+) => gitFields(repository, inRepository(repository, args), options);
 
 export const isSharedOrForeign = (stat: { readonly mode: number; readonly uid: number }) =>
   (stat.mode & 0o077) !== 0 || (process.getuid !== undefined && stat.uid !== process.getuid());
@@ -318,7 +319,7 @@ export const checkDirectory = Effect.fn("GitWorktreeProcess.checkDirectory")(fun
   const absolute = path.resolve(directory);
   const parts = Arr.filter(
     Str.split(Fn.pipe(absolute, Str.slice(path.parse(absolute).root.length)), path.sep),
-    Boolean,
+    Str.isNonEmpty,
   );
   let current = path.parse(absolute).root;
   for (const part of parts) {

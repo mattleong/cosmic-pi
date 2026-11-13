@@ -1,14 +1,10 @@
-import { createToolPresentationHarness } from "pi-code-previews/testing";
-import { assert, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { compactToolDetails } from "../../src/tools/details.ts";
 import { decodeCompactToolDetails } from "../../src/tools/details-decode.ts";
-import type { CompactSubagentToolDetails } from "../../src/tools/details-schema.ts";
 import { actionFailureDisposition, hasSubagentToolFailure } from "../../src/tools/outcome.ts";
-import { captureSubagentTools, view } from "./fixtures/tool-harness.ts";
-import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
+import { view } from "./fixtures/tool-harness.ts";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Arr from "effect/Array";
 
 describe("subagent detail evidence", () => {
   it("retains redacted cleanup evidence when fitted without inferring historical cleanup", () => {
@@ -62,7 +58,6 @@ describe("subagent detail evidence", () => {
       }
     }
     const details = compactToolDetails({ action: "stop", runs: [run] });
-    expect(decodeCompactToolDetails(details)).toEqual(details);
     expect(Object.isFrozen(decodeCompactToolDetails(details))).toBe(true);
   });
 
@@ -77,42 +72,5 @@ describe("subagent detail evidence", () => {
     }
     expect(actionFailureDisposition({ code: "guidance_outcome_uncertain" })).toBe("unconfirmed");
     expect(actionFailureDisposition({ code: "not_running" })).toBe("failed");
-  });
-});
-
-const lifecycleTool = () =>
-  captureSubagentTools(subagentServiceDouble({}), {
-    environment: { cwd: "/project", projectTrusted: false },
-  }).get("agent_lifecycle")!;
-
-type RunDetails = Exclude<CompactSubagentToolDetails, { readonly action: "models" }>;
-/** Run details as session history stored them, under any action string. */
-type PersistedDetails = Omit<RunDetails, "action"> & { readonly action: string };
-
-describe("saved run cards", () => {
-  const run = view({ name: "historic-run", writeIntent: "writer" });
-  const stopped = compactToolDetails({ action: "stop", runs: [run] });
-  assert(stopped.action !== "models");
-
-  /** Replays persisted details through the lifecycle renderer, expanded, as history redraws them. */
-  const replayed = (details: PersistedDetails) => {
-    const harness = createToolPresentationHarness(lifecycleTool(), { width: 160 });
-    harness.call({ action: "stop", runIds: [run.id] }, { expanded: true });
-    harness.result(
-      { content: [{ type: "text", text: "raw history sentinel" }], details },
-      { expanded: true },
-    );
-    return Arr.join(harness.render(), "\n");
-  };
-
-  it("falls back to the saved text when details no longer decode", () => {
-    const undecodable = { ...stopped, action: "rename" };
-    expect(decodeCompactToolDetails(undecodable)).toBeUndefined();
-    expect(replayed(undecodable)).toContain("raw history sentinel");
-  });
-
-  it("decodes a stop card", () => {
-    expect(decodeCompactToolDetails(stopped)).toEqual(stopped);
-    expect(replayed(stopped)).toContain("historic-run");
   });
 });

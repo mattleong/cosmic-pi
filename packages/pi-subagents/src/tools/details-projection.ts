@@ -95,7 +95,7 @@ const optionalText = (value: string | undefined, maximum: number): string | unde
 };
 const nonNegative = (value: number): number =>
   Number.isFinite(value) ? Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, value)) : 0;
-export const nonNegativeInteger = (value: number): number => Math.floor(nonNegative(value));
+const nonNegativeInteger = (value: number): number => Math.floor(nonNegative(value));
 
 /** The agent messages delivered during a wait: how many, their distinct senders, and whether they ended it. */
 export const projectAgentMessages = (

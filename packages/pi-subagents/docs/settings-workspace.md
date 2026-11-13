@@ -34,7 +34,7 @@ Keys:
 Behavior:
 
 - An unpinned value reads as the value it inherits on every surface: `inherit (anthropic/claude-opus-5-5)` for the parent's model (the profile table drops the provider) and `inherit (low)` for the profile's default reasoning, as a picker row too, ahead of the pinned levels. The profile table keeps `inherit (low)` unless its models would clip, then shows the bare level. Pickers keep unavailable configured models on cancellation, which is silent and changes nothing.
-- Edits auto-save serially. Conflicts refresh without retrying, and a failed refresh blocks edits until reopening. Catalog cancellation, disposal, and activation replacement suppress late continuations.
+- Edits auto-save serially. Conflicts refresh without retrying, and a failed refresh blocks edits until reopening. Disposal and activation replacement suppress late continuations.
 - On Current session, `●` marks a profile whose route differs from the set the session is based on, so no saved set holds it; the footer marks the same state with `*`. A saved set's editor writes each change to the set, so it shows no `●`.
 
 ### Undo during an editor visit

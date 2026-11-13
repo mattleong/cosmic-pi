@@ -1,8 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import { nodeErrorCode } from "./errors.ts";
 
 type ProcessSignalResult = "present" | "absent" | "permission" | "failed";
 
@@ -11,8 +11,7 @@ const send = (target: number, signal: NodeJS.Signals | 0): ProcessSignalResult =
     process.kill(target, signal);
     return "present";
   } catch (cause) {
-    const code = Predicate.hasProperty(cause, "code") ? cause.code : undefined;
-    return Match.value(code).pipe(
+    return Match.value(nodeErrorCode(cause)).pipe(
       Match.when("ESRCH", (): ProcessSignalResult => "absent"),
       Match.when("EPERM", (): ProcessSignalResult => "permission"),
       Match.orElse((): ProcessSignalResult => "failed"),

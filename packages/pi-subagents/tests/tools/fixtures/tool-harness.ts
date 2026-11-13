@@ -7,14 +7,15 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
+import { getTextContent, type CompactSummaryProvider } from "pi-code-previews";
+import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import type { BackendDriver } from "../../../src/backend/model.ts";
-import {
-  backendRegistryFor,
-  SubagentBackendRegistry,
-  type SubagentBackendRegistryContract,
-} from "../../../src/backend/service.ts";
+import type { SubagentNotification } from "../../../src/boundary/host-notifier.ts";
+import { SubagentBackendRegistry } from "../../../src/backend/service.ts";
 import { resolveSubagentConfig } from "../../../src/config/options.ts";
 import { decodeSubagentConfig, type SubagentNestingPolicy } from "../../../src/config/schema.ts";
 import {
@@ -26,6 +27,7 @@ import type { ProfileCandidate, ProfileId } from "../../../src/profiles/model.ts
 import type { SessionProfileOverrideSeed } from "../../../src/profiles/session-overrides.ts";
 import type { StartSubagentRequest } from "../../../src/run/model.ts";
 import { SubagentService, type SubagentServiceContract } from "../../../src/run/service.ts";
+import { SubagentStartDetailsSchema } from "../../../src/tools/details-schema.ts";
 import type { SubagentToolRuntime } from "../../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../../src/tools/subagent.ts";
 import { subagentServiceDouble } from "./subagent-service-double.ts";
@@ -37,6 +39,7 @@ import {
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 import { view } from "../../fixtures/run-view.ts";
+import { inertDriver } from "../../run/fixtures/run-context.ts";
 import type { eventBackendServiceFixture } from "../../run/fixtures/service-harness.ts";
 import { maybe, step } from "../../support/effect-test.ts";
 import * as Arr from "effect/Array";
@@ -96,17 +99,11 @@ export const profileServiceFor = (
   );
 
 export const fallbackProfileService = profileServiceFor(undefined);
-export const testBackendDriver = {
-  supportsContext: () => true,
-  preflight: () => Effect.void,
-  spawn: () => Effect.die("unused"),
-} satisfies BackendDriver;
-export const testBackendRegistry = backendRegistryFor(testBackendDriver);
 
 export type CaptureOptions = {
   readonly activeTools?: ReadonlyArray<string>;
   readonly profiles?: SubagentProfileServiceContract;
-  readonly registry?: SubagentBackendRegistryContract;
+  readonly registry?: BackendDriver;
   readonly environment?: SubagentToolRuntime["environment"];
   readonly thinkingLevel?: ReturnType<ExtensionAPI["getThinkingLevel"]>;
   readonly startUiTicker?: SubagentToolRuntime["startUiTicker"];
@@ -114,6 +111,27 @@ export type CaptureOptions = {
   /** The clock tool effects run on, such as the test's. */
   readonly clock?: Clock.Clock;
 };
+
+/** Provides a tool effect `service`, and by default the fallback profiles and the test backend. */
+export const provideToolServices =
+  (
+    service: SubagentServiceContract,
+    {
+      profiles = fallbackProfileService,
+      registry = inertDriver,
+    }: {
+      readonly profiles?: SubagentProfileServiceContract;
+      readonly registry?: BackendDriver;
+    } = {},
+  ) =>
+  <A, E>(
+    effect: Effect.Effect<A, E, SubagentService | SubagentProfileService | SubagentBackendRegistry>,
+  ): Effect.Effect<A, E> =>
+    effect.pipe(
+      Effect.provideService(SubagentService, service),
+      Effect.provideService(SubagentProfileService, profiles),
+      Effect.provideService(SubagentBackendRegistry, registry),
+    );
 
 const textResult = <Details>(result: AgentToolResult<Details>): CapturedToolResult => ({
   ...result,
@@ -131,7 +149,7 @@ export const captureSubagentTools = (
   {
     activeTools = ["read"],
     profiles = fallbackProfileService,
-    registry = testBackendRegistry,
+    registry = inertDriver,
     environment = { cwd: "/project", projectTrusted: true },
     thinkingLevel = "high",
     startUiTicker,
@@ -154,11 +172,8 @@ export const captureSubagentTools = (
     agents: Effect.runSync(profiles.capture).effectiveConfig.agents,
     run: (effect, signal) =>
       Effect.runPromise(
-        effect.pipe(
-          Effect.provideService(SubagentService, service),
-          Effect.provideService(SubagentProfileService, profiles),
-          Effect.provideService(SubagentBackendRegistry, registry),
-          (provided) => (clock ? Effect.provideService(provided, Clock.Clock, clock) : provided),
+        effect.pipe(provideToolServices(service, { profiles, registry }), (provided) =>
+          clock ? Effect.provideService(provided, Clock.Clock, clock) : provided,
         ),
         signal ? { signal } : undefined,
       ),
@@ -166,9 +181,37 @@ export const captureSubagentTools = (
   return tools;
 };
 
-/** A recording host whose managed runtime runs `fixture`'s service and backend until scope close. */
+/**
+ * A tool registered without a service behind it, for tests that only render. `panel` says whether
+ * the Activity panel draws a running wait's hierarchy.
+ */
+export const renderOnlyTool = (
+  name: string,
+  { panel }: { readonly panel?: boolean } = {},
+): CapturedTool =>
+  captureSubagentTools(subagentServiceDouble({}), {
+    environment: { cwd: "/project", projectTrusted: false },
+    ...(panel !== undefined && {
+      startUiTicker: () => () => undefined,
+      toolPresentation: {
+        beginStart: () => () => undefined,
+        beginAwait: () => () => undefined,
+        isLiveHierarchyAvailable: () => panel,
+      },
+    }),
+  }).get(name)!;
+
+/**
+ * A recording host with the subagent tools registered on a managed runtime that runs `fixture`'s
+ * service and backend until scope close. `overrides` replaces parts of the tools' runtime, given
+ * the default runner and the service.
+ */
 export const managedToolHost = (
   fixture: Pick<ReturnType<typeof eventBackendServiceFixture>, "layer" | "backend">,
+  overrides: (host: {
+    readonly run: SubagentToolRuntime["run"];
+    readonly service: SubagentServiceContract;
+  }) => Partial<SubagentToolRuntime> = () => ({}),
 ) =>
   Effect.gen(function* () {
     const { pi, tools } = recordingExtensionHost();
@@ -178,7 +221,14 @@ export const managedToolHost = (
       ),
       (owned) => step(() => owned.dispose()),
     );
-    return { pi, tools, runtime };
+    const service = yield* step(() => runtime.run(SubagentService));
+    const run: SubagentToolRuntime["run"] = (effect, signal) => runtime.run(effect, signal);
+    registerSubagentTools(pi, {
+      environment: { cwd: "/project", projectTrusted: true },
+      run,
+      ...overrides({ run, service }),
+    });
+    return { tools, runtime, service };
   });
 
 const parentModel = modelFixture({
@@ -251,6 +301,30 @@ export const executeTool = <Result>(
     options.context ?? context,
   );
 
+/**
+ * Starts a call whose `observing` resolves once a progress update satisfies `ready`, so a test can
+ * act while the call is still running.
+ */
+export const observedCall = <Result>(
+  tool: { readonly execute: (...args: Parameters<NativeExecute>) => Promise<Result> },
+  params: Parameters<NativeExecute>[1],
+  {
+    ready = () => true,
+    update,
+    ...options
+  }: InvocationOptions & { readonly ready?: (result: AgentToolResult<unknown>) => boolean } = {},
+) => {
+  const observing = Deferred.makeUnsafe<void>();
+  const pending = executeTool(tool, params, {
+    ...options,
+    update: (result) => {
+      update?.(result);
+      if (ready(result)) Deferred.doneUnsafe(observing, Effect.void);
+    },
+  });
+  return { observing: Deferred.await(observing), pending, result: step(() => pending) };
+};
+
 export const invokeOptionalTool = (
   tool: CapturedTool | undefined,
   params: Parameters<NativeExecute>[1],
@@ -277,3 +351,45 @@ export const startCapturingService = (requests: StartSubagentRequest[]) =>
         });
       }),
   });
+
+export const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
+
+/** The start tool over a service that records each request it launches. */
+export const startToolFor = (requests: StartSubagentRequest[], options?: CaptureOptions) =>
+  captureSubagentTools(startCapturingService(requests), options).get("agent_start");
+
+export const resultText = (result: { readonly content: Parameters<typeof getTextContent>[0] }) =>
+  getTextContent(result.content);
+
+/** A finished run's completion claim, as an await observes it. */
+export const receiptFor = (id: string) => ({ id, generation: 1, claimToken: `claim-${id}` });
+
+/** The runs completion notices delivered. */
+export const noticedRuns = (notifications: ReadonlyArray<SubagentNotification>) =>
+  Arr.flatMap(notifications, (notification) =>
+    notification.type === "completed" ? notification.runs : [],
+  );
+
+/** A settled result's compact summary, from the details its producer wrote. */
+export const settledSummary = (
+  provider: CompactSummaryProvider,
+  args: Parameters<CompactSummaryProvider>[0]["args"],
+  {
+    details,
+    isError = false,
+    text = "",
+  }: { readonly details: unknown; readonly isError?: boolean; readonly text?: string },
+) =>
+  provider({
+    phase: "settled",
+    args,
+    result: { content: [{ type: "text", text }], details },
+    context: renderContextFixture({ isError }),
+  });
+
+/** The style problems of every issue message a summary raises. */
+export const issueStyle = (
+  summary: ReturnType<typeof settledSummary>,
+  options?: Parameters<typeof issueMessageStyleProblems>[1],
+) =>
+  Arr.flatMap(summary?.issues ?? [], (issue) => issueMessageStyleProblems(issue.message, options));

@@ -101,8 +101,10 @@ export const AskUserAsyncParameters = Type.Object({
   }),
 });
 
+export const ASYNC_CONTROL_ACTIONS = ["status", "await", "cancel"] as const;
+
 export const AskUserAsyncControlParameters = Type.Object({
-  action: Type.Enum(["status", "await", "cancel"] as const),
+  action: Type.Enum(ASYNC_CONTROL_ACTIONS),
   requestId: Type.Optional(
     Type.String({
       minLength: 1,

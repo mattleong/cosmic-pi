@@ -4,8 +4,9 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { afterEach, vi } from "vitest";
 import { OpenAIImageService } from "../src/image/service.ts";
 import type { ToolParams } from "../src/image/types.ts";
-import { extensionHarness } from "./extension-harness.ts";
-import { beforeCompactEvent, testModel, waitUntil } from "./helpers.ts";
+import { extensionHarness, modelSelectEvent } from "./extension-harness.ts";
+import { beforeCompactEvent, waitUntil } from "./helpers.ts";
+import { imageDetailsFixture, pngPart } from "./image-fixtures.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -20,39 +21,16 @@ layer(nodeFilePlatformLayer)("optional implementation loading", (it) => {
         dependencies: { loadSettingsMenu },
       });
       yield* h.emit("session_start");
-      yield* Effect.promise(() =>
-        Promise.resolve(
-          h.handlers.get("model_select")[0]!(
-            { type: "model_select", model: testModel(), previousModel: undefined, source: "set" },
-            h.ctx,
-          ),
-        ),
-      );
+      yield* h.deliver("model_select", modelSelectEvent());
       yield* h.emit("session_tree");
       const command = h.commands.get("openai")!;
       yield* Effect.promise(() => Promise.resolve(command.handler("settings status", h.ctx)));
       yield* Effect.promise(() =>
         Promise.resolve(command.handler("settings image.enabled true", h.ctx)),
       );
-      yield* Effect.promise(() =>
-        Promise.resolve(h.handlers.get("session_before_compact")[0]!(beforeCompactEvent(), h.ctx)),
-      );
-      yield* Effect.promise(() =>
-        Promise.resolve(
-          h.handlers.get("context_with_system")[0]!(
-            { type: "context_with_system", messages: [] },
-            h.ctx,
-          ),
-        ),
-      );
-      yield* Effect.promise(() =>
-        Promise.resolve(
-          h.handlers.get("before_provider_request")[0]!(
-            { type: "before_provider_request", payload: {} },
-            h.ctx,
-          ),
-        ),
-      );
+      yield* h.deliver("session_before_compact", beforeCompactEvent());
+      yield* h.emit("context_with_system");
+      yield* h.deliver("before_provider_request", { type: "before_provider_request", payload: {} });
       expect(h.tools).toHaveLength(1);
       expect(loadSettingsMenu).not.toHaveBeenCalled();
       yield* h.emit("session_shutdown");
@@ -66,14 +44,8 @@ layer(nodeFilePlatformLayer)("optional implementation loading", (it) => {
         params.prompt === "old"
           ? Effect.never.pipe(Effect.ensuring(Effect.sync(finalized)))
           : Effect.succeed({
-              id: "image",
-              status: "completed",
-              prompt: params.prompt,
-              model: "test-image-model",
-              data: "aW1hZ2U=",
-              mimeType: "image/png",
-              action: "generate" as const,
-              outputFormat: "png" as const,
+              ...imageDetailsFixture({ prompt: params.prompt, model: "test-image-model" }),
+              data: pngPart.data,
             }),
       );
       vi.spyOn(OpenAIImageService, "make").mockReturnValue(Effect.succeed({ generate }));

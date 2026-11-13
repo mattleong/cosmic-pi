@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import { synchronousNow } from "pi-cosmic-core/platform/native-clock";
 import { formatSessionActivity, formatSessionAge } from "../ui/run-presentation.ts";
+import * as Str from "effect/String";
 
 export const runTiming = (run: {
   readonly endedAt?: number | undefined;
@@ -12,10 +13,5 @@ export const runTiming = (run: {
   const elapsed = formatSessionAge(run.endedAt ?? now, run.startedAt);
   const activeAge = run.endedAt === undefined ? formatSessionActivity(now, run.lastActivityAt) : "";
   const active = activeAge ? `active ${activeAge}` : "";
-  return Fn.pipe([elapsed, active], Arr.filter(Boolean), Arr.join(" · "));
+  return Fn.pipe([elapsed, active], Arr.filter(Str.isNonEmpty), Arr.join(" · "));
 };
-
-export interface RunHierarchy {
-  readonly awaitedRunIds?: ReadonlySet<string> | undefined;
-  readonly contextOmitted?: boolean | undefined;
-}

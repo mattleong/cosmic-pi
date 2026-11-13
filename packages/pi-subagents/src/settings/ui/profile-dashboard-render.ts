@@ -49,9 +49,7 @@ export const profileDashboardTextWidth = (width: number): number =>
 const fittedFacts = (facts: ReadonlyArray<string>, width: number): string =>
   Option.getOrElse(
     Arr.findFirst(
-      Arr.map(Arr.makeBy(facts.length, Fn.identity), (dropped) =>
-        joinInline(facts.slice(0, facts.length - dropped)),
-      ),
+      Arr.makeBy(facts.length, (dropped) => joinInline(facts.slice(0, facts.length - dropped))),
       (line) => visibleWidth(line) <= width,
     ),
     () => facts[0] ?? "",

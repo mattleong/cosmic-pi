@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import type { RunRecord } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
 import { countLabel } from "pi-cosmic-core/display";
@@ -30,12 +29,11 @@ const ownershipLabel = (record: RunRecord): string =>
     : "read-only";
 
 /** The run itself and the other active runs sharing its working directory, in record order. */
-const workspacePeers = (source: Iterable<RunRecord>, selfId: string) => {
-  const records = [...source];
-  const self = Option.getOrUndefined(Arr.findFirst(records, (record) => record.view.id === selfId));
+const workspacePeers = (records: ReadonlyMap<string, RunRecord>, selfId: string) => {
+  const self = records.get(selfId);
   const peers = self
     ? Arr.filter(
-        records,
+        [...records.values()],
         (record) =>
           record.view.cwd === self.view.cwd &&
           record.view.id !== selfId &&
@@ -45,8 +43,8 @@ const workspacePeers = (source: Iterable<RunRecord>, selfId: string) => {
   return { self, peers };
 };
 
-export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): string => {
-  const { self, peers } = workspacePeers(source, selfId);
+export const peerNoticeText = (records: ReadonlyMap<string, RunRecord>, selfId: string): string => {
+  const { self, peers } = workspacePeers(records, selfId);
   const selfLine = self
     ? `Your current ownership summary: ${ownershipSummary(self)}.`
     : "Your current ownership record is unavailable; contact the parent before modifying files.";
@@ -72,11 +70,11 @@ export const peerNoticeText = (source: Iterable<RunRecord>, selfId: string): str
 };
 
 /** The peer notice's display receipt: the run's own role and each peer sharing its directory. */
-export const peerNoticeDetails = (
-  source: Iterable<RunRecord>,
+const peerNoticeDetails = (
+  records: ReadonlyMap<string, RunRecord>,
   selfId: string,
 ): PeerNoticeDetails => {
-  const { self, peers } = workspacePeers(source, selfId);
+  const { self, peers } = workspacePeers(records, selfId);
   return {
     version: 1,
     kind: "peers",
@@ -94,22 +92,20 @@ export const peerNoticeDetails = (
   };
 };
 
-export const peerNotifier =
-  (records: ReadonlyMap<string, RunRecord>) =>
-  (changedRunId: string): Effect.Effect<void> =>
-    Effect.suspend(() =>
-      Effect.forEach(
-        Arr.flatMap([...records.values()], (record) => {
-          const process = record.process;
-          return process && isActiveRunState(record.view.state) ? [{ record, process }] : [];
-        }),
-        ({ record, process }) =>
-          process.controls
-            .notifyPeers(
-              peerNoticeText(records.values(), record.view.id),
-              peerNoticeDetails(records.values(), record.view.id),
-            )
-            .pipe(Effect.timeout("1 second"), Effect.ignore),
-        { concurrency: 8, discard: true },
-      ),
-    ).pipe(Effect.annotateLogs("changedRunId", changedRunId));
+export const peerNotifier = (records: ReadonlyMap<string, RunRecord>): Effect.Effect<void> =>
+  Effect.suspend(() =>
+    Effect.forEach(
+      Arr.flatMap([...records.values()], (record) => {
+        const process = record.process;
+        return process && isActiveRunState(record.view.state) ? [{ record, process }] : [];
+      }),
+      ({ record, process }) =>
+        process.controls
+          .notifyPeers(
+            peerNoticeText(records, record.view.id),
+            peerNoticeDetails(records, record.view.id),
+          )
+          .pipe(Effect.timeout("1 second"), Effect.ignore),
+      { concurrency: 8, discard: true },
+    ),
+  );

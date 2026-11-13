@@ -8,11 +8,10 @@ import * as Schema from "effect/Schema";
 import * as Queue from "effect/Queue";
 import type * as Cause from "effect/Cause";
 import { decodeRpcEnvelope, type RpcResponse } from "../src/backend/local-pi-protocol.ts";
-import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { ProcessExit } from "../src/boundary/process-transport.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
-import { backendLaunch } from "./fixtures/backend-launch.ts";
+import { piChild, spawnPi } from "./fixtures/backend-launch.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { indexOfFrom } from "pi-cosmic-core";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
@@ -158,14 +157,11 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
       });
     const count = (type: string) =>
       Arr.filter(eventTypes, (eventType) => eventType === type).length;
-    const driver = localPiBackendDriver({
-      reclaimRunState: () => Effect.void,
-      spawn: () =>
-        Effect.succeed({
+    const spawnBackend = spawnPi(
+      Effect.succeed(
+        piChild(backendEvents, {
           pid: child.pid ?? 0,
-          events: backendEvents,
           awaitExit: Deferred.await(exitReceipt),
-          acknowledge: () => {},
           send: (command) =>
             Effect.callback<void, SubagentProcessError>((resume) => {
               child.stdin.write(`${encodeJson(command)}\n`, (error) =>
@@ -181,16 +177,11 @@ const rpcFixture = (extension: string, extraArgs: ReadonlyArray<string> = []) =>
                 ),
               );
             }),
-          sendContactControl: () => Effect.void,
           terminate: () => Effect.sync(() => void child.kill("SIGKILL")),
         }),
-    });
-    return {
-      request,
-      count,
-      exited,
-      spawnBackend: driver.spawn(backendLaunch()),
-    };
+      ),
+    );
+    return { request, count, exited, spawnBackend };
   });
 
 describe("installed Pi RPC input hooks", () => {

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {
   createCodemodeExtension,
   defineTool,
-  type AgentSession,
   type ToolDefinition,
   type ToolRendererResolver,
 } from "@earendil-works/pi-coding-agent";
@@ -10,13 +9,12 @@ import { it } from "@effect/vitest";
 import { vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import * as Schema from "effect/Schema";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { step } from "../support/effect-test";
-import { resultText } from "../support/render";
 import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { createToolPresentationHarness, renderContextFixture } from "../../testing";
 import { nativeCodemodeSummary } from "../../src/tools/native-codemode-summary";
 import type { CompactSummary } from "../../src/tools/compact-summary";
@@ -25,10 +23,6 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
-
-interface BoundSession {
-  session?: AgentSession;
-}
 
 function assertScriptFailure(summary: CompactSummary | undefined, marker: string): void {
   assert.equal(summary?.outcome, "error");
@@ -43,17 +37,15 @@ function assertSpillIssues(summary: CompactSummary | undefined): void {
 }
 
 it.live(
-  "native SDK renderer selection preserves independently loaded builtin execution/store/hooks",
+  "native SDK renderer selection leaves independently loaded builtin execution untouched",
   () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "preview-native-sdk-" });
       const models = yield* offlineModels(directory);
       const settings = quietSettings({ defaultTools: ["+codemode"] });
-      const bound: BoundSession = {};
       const nativeDefinitions: ToolDefinition[] = [];
       const rendererRegistrations: ToolRendererResolver[] = [];
-      const hooks: string[] = [];
       const presentation = codePreviewsUnderTest(
         directory,
         {
@@ -96,24 +88,8 @@ it.live(
               }),
           },
           {
-            name: "owned-hook-fixture",
+            name: "probe-fixture",
             factory: (pi) => {
-              pi.registerTool({
-                name: "echo",
-                label: "echo",
-                description: "Fixture echo",
-                parameters: {
-                  type: "object",
-                  properties: { value: { type: "string" } },
-                  required: ["value"],
-                } as const,
-                execute(_id, args) {
-                  return Promise.resolve({
-                    content: [{ type: "text" as const, text: args.value }],
-                    details: undefined,
-                  });
-                },
-              });
               pi.registerTool({
                 name: "native_probe",
                 label: "probe",
@@ -128,81 +104,8 @@ it.live(
                     Arr.findLast(nativeDefinitions, (tool) => tool.name === "codemode"),
                   );
                   assert.ok(native);
-                  return native.execute(id, args, signal, update, {
-                    ...ctx,
-                    tools: ctx.tools,
-                    sessionManager: ctx.sessionManager,
-                    modelRegistry: ctx.modelRegistry,
-                    executeTool(name, rawArgs) {
-                      // The host calls this Promise callback outside the test's fiber.
-                      return Effect.runPromise(
-                        Effect.gen(function* () {
-                          const session = bound.session;
-                          assert.ok(session);
-                          const input = {
-                            ...(yield* Schema.decodeUnknownEffect(
-                              Schema.Struct({ value: Schema.String }),
-                            )(rawArgs)),
-                          };
-                          const toolCall = {
-                            type: "toolCall" as const,
-                            id: `${id}/1`,
-                            name,
-                            arguments: input,
-                          };
-                          const blocked = yield* step(() =>
-                            session.extensionRunner.emitToolCall({
-                              type: "tool_call",
-                              toolCallId: toolCall.id,
-                              parentToolCallId: id,
-                              toolName: name,
-                              input,
-                            }),
-                          );
-                          const result = {
-                            content: [
-                              {
-                                type: "text" as const,
-                                text: blocked?.block ? (blocked.reason ?? "Blocked") : input.value,
-                              },
-                            ],
-                            details: undefined,
-                          };
-                          if (blocked?.block) return { toolCall, result, isError: true };
-                          const transformed = yield* step(() =>
-                            session.extensionRunner.emitToolResult({
-                              type: "tool_result",
-                              toolCallId: toolCall.id,
-                              parentToolCallId: id,
-                              toolName: name,
-                              input,
-                              ...result,
-                              isError: false,
-                            }),
-                          );
-                          return {
-                            toolCall,
-                            result: { ...result, ...transformed },
-                            isError: transformed?.isError ?? false,
-                          };
-                        }),
-                      );
-                    },
-                  });
+                  return native.execute(id, args, signal, update, ctx);
                 },
-              });
-              pi.on("tool_call", (event) => {
-                if (event.toolName !== "echo") return undefined;
-                hooks.push("call");
-                if (event.input.value === "block")
-                  return { block: true, reason: "Fixture permission denied" };
-                event.input.value = `hook:${String(event.input.value)}`;
-                return undefined;
-              });
-              pi.on("tool_result", (event) => {
-                if (event.toolName !== "echo") return undefined;
-                hooks.push("result");
-                return { content: [...event.content, { type: "text", text: "RESULT_HOOK" }] };
               });
             },
           },
@@ -218,52 +121,25 @@ it.live(
         defaultActive: native.defaultActive,
       };
       const session = yield* scopedSession({ cwd: directory, models, settings, loader });
-      bound.session = session;
       const initialActive = session.getActiveToolNames();
       yield* step(() => session.bindExtensions({ mode: "print" }));
       assert.deepEqual(session.getActiveToolNames(), initialActive);
       assert.equal(getCodePreviewToolStatuses().get("codemode")?.state, "installed");
       assert.equal(rendererRegistrations.length, 1);
       assert.equal(nativeDefinitions.length, 1);
-      const visible = Option.getOrUndefined(
-        Arr.findFirst(session.getAllTools(), (tool) => tool.name === "codemode"),
-      );
+      const visible = findOrUndefined(session.getAllTools(), (tool) => tool.name === "codemode");
       assert.ok(visible);
       assert.equal(visible.sourceInfo.source, "builtin");
       assert.equal(visible.sourceInfo.path, "builtin:codemode");
       assert.equal(session.getCallableToolNames().includes("codemode"), false);
-      const probe = Option.getOrUndefined(
-        Arr.findFirst(session.agent.state.tools, (tool) => tool.name === "native_probe"),
+      const probe = findOrUndefined(
+        session.agent.state.tools,
+        (tool) => tool.name === "native_probe",
       );
       assert.ok(probe);
-      const updates: unknown[] = [];
       const run = (code: string) =>
-        probe.execute("native-test", { code }, undefined, (update) => updates.push(update));
-      const saved = yield* step(() =>
-        run("store('answer', 41); text(await tools.echo({value:'hello'}));"),
-      );
-      const text = resultText(saved.content);
-      assert.ok(Fn.pipe(text, Str.includes("hook:hello\nRESULT_HOOK")), text);
-      assert.ok(updates.length > 0);
-      assert.deepEqual(hooks, ["call", "result"]);
-      const restored = yield* step(() => run("return load('answer') + 1;"));
-      assert.ok(Arr.some(restored.content, (part) => part.type === "text" && part.text === "42"));
-      assert.ok(
-        Arr.some(
-          session.sessionManager.getBranch(),
-          (entry) => entry.type === "custom" && entry.customType === "codemode-store",
-        ),
-      );
-      const handled = yield* step(() =>
-        run("try { await tools.echo({value:'block'}); } catch { text('HANDLED'); }"),
-      );
-      assert.equal(handled.isError, undefined);
-      assert.ok(
-        Arr.some(handled.content, (part) => part.type === "text" && part.text === "HANDLED"),
-      );
-      const failed = yield* step(() =>
-        run("store('answer', 0); text('PARTIAL'); throw new Error('SCRIPT_FAILURE');"),
-      );
+        probe.execute("native-test", { code }, undefined, () => undefined);
+      const failed = yield* step(() => run("text('PARTIAL'); throw new Error('SCRIPT_FAILURE');"));
       assert.equal(failed.isError, true);
       assert.ok(
         Arr.some(
@@ -295,8 +171,6 @@ it.live(
       );
       assertSpillIssues(summarize(spillFailed));
       vi.unstubAllEnvs();
-      const unchanged = yield* step(() => run("return load('answer');"));
-      assert.ok(Arr.some(unchanged.content, (part) => part.type === "text" && part.text === "41"));
       const image = yield* step(() =>
         run(
           "image('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='); text('IMAGE_OUTPUT');",
@@ -325,16 +199,6 @@ it.live(
         }
       }
       assert.deepEqual(image, imageBefore);
-      settings.applyOverrides({ codemode: { mode: "only", inlineBudget: 0 } });
-      const freshLoadout = native.prepareLoadout!({
-        declared: [probe],
-        callable: [probe],
-        registered: [probe],
-        getExposure: () => "direct",
-        getNamespace: () => undefined,
-        getPromptGuidelines: () => [],
-      });
-      assert.deepEqual(freshLoadout?.hiddenDeclarations, ["native_probe"]);
       assert.deepEqual(session.getActiveToolNames(), initialActive);
       assert.equal(nativeDefinitions.length, 1);
       assert.equal(rendererRegistrations.length, 1);

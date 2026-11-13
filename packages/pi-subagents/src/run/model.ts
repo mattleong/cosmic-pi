@@ -385,7 +385,7 @@ export interface RouteFallbackRequest {
   readonly failed: SkippedProfileCandidate;
 }
 
-export interface RouteFallbackStep {
+interface RouteFallbackStep {
   /** Every candidate passed over so far in route order, the failed one included. */
   readonly skippedCandidates: ReadonlyArray<SkippedProfileCandidate>;
   /** The next candidate that passed planning and preflight; absent once the route is exhausted. */
@@ -410,16 +410,6 @@ export const isParentActionRequiredRun = (
   (run.state === "waiting_for_parent" && run.question !== undefined) ||
   run.state === "paused";
 
-const ACTIVE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
-  "starting",
-  "running",
-  "waiting_for_parent",
-  "paused",
-  "stopping",
-]);
-
-export const isActiveRunState = (state: SubagentRunState): boolean => ACTIVE_RUN_STATES.has(state);
-
 const TERMINAL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
   "completed",
   "failed",
@@ -429,16 +419,11 @@ const TERMINAL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
 export const isTerminalRunState = (state: SubagentRunState): boolean =>
   TERMINAL_RUN_STATES.has(state);
 
-/** A run in one of these states may resume when its backend kept continuation state. */
-const RESUMABLE_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
-  "paused",
-  "completed",
-  "failed",
-  "stopped",
-]);
+export const isActiveRunState = (state: SubagentRunState): boolean => !isTerminalRunState(state);
 
+/** A run in one of these states may resume when its backend kept continuation state. */
 export const isResumableRunState = (state: SubagentRunState): boolean =>
-  RESUMABLE_RUN_STATES.has(state);
+  state === "paused" || isTerminalRunState(state);
 
 export const emptyUsage = (): SubagentUsage => ({
   input: 0,

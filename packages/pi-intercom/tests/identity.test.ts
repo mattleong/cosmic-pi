@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import {
   addresseeSubject,
   distinctSessionLabels,
@@ -34,8 +35,8 @@ describe("session identity", () => {
     expect(sessionSubject({ ...long, name })).toBe(name);
     expect(overlongSessionName({ name })).toBeUndefined();
     const cut = sessionSubject(long);
-    expect(Str.endsWith("…")(cut)).toBe(true);
-    expect(Str.startsWith(`${Str.slice(0, -1)(cut)} `)(long.name)).toBe(true);
+    expect(Fn.pipe(cut, Str.endsWith("…"))).toBe(true);
+    expect(Fn.pipe(long.name, Str.startsWith(`${Fn.pipe(cut, Str.slice(0, -1))} `))).toBe(true);
     expect(overlongSessionName(long)).toBe(long.name);
   });
 
@@ -48,7 +49,7 @@ describe("session identity", () => {
     expect(labels[1]).toBe("dotfiles");
     expect(labels[0]).not.toBe(labels[2]);
     for (const label of [labels[0], labels[2]]) {
-      expect(Str.startsWith("cosmic-pi ")(label ?? "")).toBe(true);
+      expect(Fn.pipe(label ?? "", Str.startsWith("cosmic-pi "))).toBe(true);
       expect(label?.length).toBeLessThan("cosmic-pi ".length + 12);
     }
   });

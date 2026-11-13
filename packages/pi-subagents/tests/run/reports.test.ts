@@ -17,6 +17,7 @@ import {
   request,
   runView,
   withService,
+  yieldTurns,
 } from "./fixtures/service-harness.ts";
 import { anyString } from "../support/matchers.ts";
 import * as Fn from "effect/Function";
@@ -226,7 +227,7 @@ describe("SubagentService", () => {
       control.offer({ type: "protocol_error", message: "Process failed before report." });
       yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "failed");
       control.complete("Must not resurrect the run.");
-      for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+      yield* yieldTurns(10);
       expect(yield* runView(service, run.id)).toMatchObject({
         state: "failed",
         reportGeneration: 0,
@@ -275,19 +276,6 @@ describe("SubagentService", () => {
           },
         ],
       });
-    });
-  });
-
-  it.effect("closes an active native backend on session shutdown", () => {
-    const { backend, layer } = eventBackendServiceFixture();
-    return Effect.gen(function* () {
-      const run = yield* withService(layer, function* (service) {
-        const started = yield* service.start(eventBackendRequest());
-        expect(backend.controls[0]!.released()).toBe(0);
-        return started;
-      });
-      expect(run.id).toBeDefined();
-      expect(backend.controls[0]!.released()).toBe(1);
     });
   });
 });

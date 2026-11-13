@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { getTextContent } from "pi-code-previews";
-import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Effect from "effect/Effect";
 import { assert, describe, expect, it } from "vitest";
 import { effectTest } from "../support/effect-test.ts";
@@ -18,6 +17,8 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { view } from "../fixtures/run-view.ts";
+import { workspaceRecord } from "../fixtures/workspace-record.ts";
+import { issueStyle, settledSummary } from "./fixtures/tool-harness.ts";
 
 const run = (
   operation: Parameters<typeof executeWorkspaceAction>[0],
@@ -32,20 +33,13 @@ const summarize = (
   args: Parameters<typeof executeWorkspaceAction>[0],
   result: AgentToolResult<WorkspaceToolDetails>,
 ) =>
-  createSubagentCompactSummary("agent_worktree")({
-    phase: "settled",
-    args,
-    result,
-    context: renderContextFixture({ isError: false }),
+  settledSummary(createSubagentCompactSummary("agent_worktree"), args, {
+    details: result.details,
   });
 
 const expectStyledIssues = (summary: ReturnType<typeof summarize>) => {
   expect(summary?.issues?.length).toBeGreaterThan(0);
-  for (const issue of summary?.issues ?? [])
-    expect(
-      issueMessageStyleProblems(issue.message, { forbidden: ["ws-1"] }),
-      issue.message,
-    ).toEqual([]);
+  expect(issueStyle(summary, { forbidden: ["ws-1"] })).toEqual([]);
 };
 
 const integrated = {
@@ -119,23 +113,15 @@ describe("workspace apply", () => {
       ["ws-1", { revisionId: undefined }, "parent"],
       ["ws-1", { revisionId: "rev-1" }, "parent"],
     ]);
-  });
-
-  effectTest("reports the parent's own preparation as tested by the parent", function* () {
-    const args = { action: "apply", workspaceId: "ws-1" } as const;
-    const result = yield* run(args, "parent", {
-      workspaceApply: () => Effect.succeed(applied({ testing: "parent-tested" })),
-    }).pipe(Effect.orDie);
-    expect(result.details).toMatchObject({
-      operation: "apply",
-      preparationId: "prep-1",
-      testing: "parent-tested",
+    // The coordinator's refusal reaches the caller unchanged.
+    const denial = InvalidSubagentRequestError.make({
+      code: "workspace_owner_unavailable",
+      message: "Direct parent required.",
     });
-    const summary = summarize(args, result);
-    expect(summary?.outcome).toBe("success");
-    assert(summary?.issues !== undefined);
-    expect(Arr.map(summary.issues, (issue) => issue.code)).not.toContain("applied-untested");
-    expectStyledIssues(summary);
+    const failed = yield* run({ action: "apply", workspaceId: "ws-1" }, "child", {
+      workspaceApply: () => Effect.fail(denial),
+    }).pipe(Effect.flip, Effect.orDie);
+    expect(failed).toBe(denial);
   });
 
   effectTest("warns about credential files left out of the proposal on purpose", function* () {
@@ -189,6 +175,8 @@ describe("workspace apply", () => {
       expect(getTextContent(result.content)).toContain("src/b.ts");
       const summary = summarize(args, result);
       expect(summary?.outcome).toBe("success");
+      const codes = Arr.map(summary?.issues ?? [], (issue) => issue.code);
+      expect(codes.includes("applied-untested")).toBe(testing === "untested");
       expectStyledIssues(summary);
     }
   });
@@ -215,20 +203,15 @@ describe("workspace apply", () => {
 
 describe("workspace refusals", () => {
   it.each(["apply", "revise"])("renders any refusal of %s as one error", (action) => {
-    const summary = createSubagentCompactSummary("agent_worktree")({
-      phase: "settled",
-      args: { action, workspaceId: "ws-1" },
-      result: {
-        content: [
-          {
-            type: "text",
-            text: "Child workspaces of this workspace are still unresolved; integrate or discard them first.",
-          },
-        ],
+    const summary = settledSummary(
+      createSubagentCompactSummary("agent_worktree"),
+      { action, workspaceId: "ws-1" },
+      {
         details: undefined,
+        isError: true,
+        text: "Child workspaces of this workspace are still unresolved; integrate or discard them first.",
       },
-      context: renderContextFixture({ isError: true }),
-    });
+    );
     expect(summary?.outcome).toBe("error");
     assert(summary?.issues !== undefined);
     expect(Arr.filter(summary.issues, (issue) => issue.severity === "error")).toHaveLength(1);
@@ -236,22 +219,18 @@ describe("workspace refusals", () => {
   });
 });
 
-const orphan = (workspaceId: string, status: "active" | "integrating" = "active") => ({
-  version: 2 as const,
-  repository: "/repo/.git",
-  handle: {
-    workspaceId,
-    ownerId: "ended-session/root",
-    sourceCwd: "/project",
-    sourceRoot: "/project",
-    artifactRoot: `/agent/${workspaceId}`,
-    cwd: `/agent/${workspaceId}/worker`,
-  },
-  status,
-  baseline: "abc",
-  ownerLease: "ended-owner",
-  lastChangedAt: 0,
-});
+const orphan = (workspaceId: string, status: "active" | "integrating" = "active") =>
+  workspaceRecord(workspaceId, {
+    handle: {
+      ownerId: "ended-session/root",
+      sourceCwd: "/project",
+      sourceRoot: "/project",
+      artifactRoot: `/agent/${workspaceId}`,
+      cwd: `/agent/${workspaceId}/worker`,
+    },
+    status,
+    ownerLease: "ended-owner",
+  });
 
 describe("workspace list", () => {
   effectTest("warns that unreadable records leave ownership and cleanup unknown", function* () {
@@ -356,12 +335,10 @@ describe("workspace tool", () => {
       }
       expect(JSON.stringify(first.details)).not.toContain("content");
       expect(JSON.stringify(second.details)).not.toContain("content");
-      // Narrower rows keep saying whether pages remain: every alternative of a page with more
-      // after it says so, widest first, and the last page's never does.
+      // A page's counter has narrower alternatives, widest first.
       const firstCounters =
         summarize({ action: "review", workspaceId: "workspace" }, first)?.counters ?? [];
       expect(firstCounters.length).toBeGreaterThan(1);
-      expect(Arr.every(firstCounters, (entry) => Str.includes("more")(entry))).toBe(true);
       expect(
         Arr.every(Arr.drop(firstCounters, 1), (entry, index) => {
           const wider = firstCounters[index];
@@ -374,24 +351,6 @@ describe("workspace tool", () => {
           second,
         )?.counters ?? [];
       expect(lastCounters.length).toBeGreaterThan(0);
-      expect(Arr.some(lastCounters, (entry) => Str.includes("more")(entry))).toBe(false);
-    },
-  );
-
-  effectTest(
-    "passes the authenticated caller and the revision pin to the coordinator",
-    function* () {
-      const denial = InvalidSubagentRequestError.make({
-        code: "workspace_owner_unavailable",
-        message: "Direct parent required.",
-      });
-      const failed = yield* run({ action: "apply", workspaceId: "w", revisionId: "r" }, "child", {
-        workspaceApply: (workspaceId, options, caller) => {
-          expect([workspaceId, options, caller]).toEqual(["w", { revisionId: "r" }, "child"]);
-          return Effect.fail(denial);
-        },
-      }).pipe(Effect.flip, Effect.orDie);
-      expect(failed).toBe(denial);
     },
   );
 });

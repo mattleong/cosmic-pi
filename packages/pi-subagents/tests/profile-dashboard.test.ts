@@ -1,19 +1,15 @@
-import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
 import {
   runProfileSetAction,
   type ProfileSetActionHost,
 } from "../src/settings/profile-set-actions.ts";
-import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
-import {
-  ProfileWorkspaceComponent,
-  type ProfileWorkspaceOptions,
-} from "../src/settings/profile-workspace.ts";
+import { ProfileWorkspaceComponent } from "../src/settings/profile-workspace.ts";
 import {
   subagentCommandActionsFixture,
   profileSettingsInspection,
 } from "./fixtures/profile-settings-inspection.ts";
-import { deferredPromise, extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
+import { deferredPromise } from "pi-cosmic-core/testing";
+import { dashboardHarness } from "./fixtures/profile-workspace.ts";
 import { effectTest, eventLoopTurn, step } from "./support/effect-test.ts";
 
 const inspection = () =>
@@ -180,50 +176,15 @@ describe("profile dashboard actions", () => {
 
 const dashboard = () => {
   const f = fixture();
-  const close = vi.fn();
-  const saveDraft = vi.fn<ProfileWorkspaceOptions["saveDraft"]>(() =>
-    Promise.resolve({ inspection: f.value }),
-  );
-  let height = 35;
-  const component = new ProfileDashboardComponent({
-    ctx: extensionContextFixture({ isProjectTrusted: f.host.trusted }),
-    actions: f.host.actions,
-    isCurrent: f.host.isCurrent,
-    onInspection: vi.fn(),
-    awaitDialog: (register) =>
-      Effect.runPromise(
-        Effect.callback((resume) => {
-          const cleanup = register((value) => resume(Effect.succeed(value)));
-          return Effect.sync(cleanup);
-        }),
-      ),
-    workspace: {
-      theme: plainTheme,
-      inspection: f.value,
-      target: { kind: "session" },
-      initialProfile: "worker",
-      initialFocus: "fields",
-      parentEffort: "high",
-      getHeight: () => height,
-      requestRender: vi.fn(),
-      close,
-      saveDraft,
-      loadModelPicker: () => Promise.reject(new Error("unused")),
-      supportedPiEfforts: () => undefined,
-    },
-  });
-  component.focused = true;
   return {
     ...f,
-    component,
-    press: (...keys: string[]) => {
-      for (const key of keys) component.handleInput(key);
-    },
-    close,
-    saveDraft,
-    setHeight: (next: number) => {
-      height = next;
-    },
+    ...dashboardHarness({
+      inspection: f.value,
+      actions: f.host.actions,
+      trusted: f.host.trusted,
+      isCurrent: f.host.isCurrent,
+      workspace: { initialProfile: "worker", initialFocus: "fields", getHeight: () => 35 },
+    }),
   };
 };
 

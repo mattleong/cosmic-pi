@@ -1,3 +1,4 @@
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
@@ -32,7 +33,7 @@ const CAUSES = {
 
 const folderOf = (shown: string) => {
   const slash = lastIndexOfFrom(shown, "/", shown.length - 1);
-  return slash > 0 ? Str.slice(0, slash + 1)(shown) : shown;
+  return slash > 0 ? Fn.pipe(shown, Str.slice(0, slash + 1)) : shown;
 };
 
 const nextStep = (code: CommonCode | undefined, shown: string | undefined) => {

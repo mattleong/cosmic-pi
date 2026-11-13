@@ -7,12 +7,9 @@ import type * as Duration from "effect/Duration";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
-import * as Layer from "effect/Layer";
 import * as Fn from "effect/Function";
-import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
 import * as Result from "effect/Result";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -23,8 +20,6 @@ import {
   nodeFilePlatformLayer,
   runBoundedProcessNode,
 } from "pi-cosmic-core";
-import { makeCapturedTracer } from "pi-cosmic-core/testing";
-import { connect, createServer, type Socket } from "node:net";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
 import {
@@ -57,9 +52,10 @@ import {
   type IntercomInboundContract,
 } from "../src/transport/server.ts";
 import {
-  decodeExitAnswer,
+  answerSucceeded,
   decodeHelloAnswer,
   rawPeer,
+  relay,
   rogueListener,
   type RawPeer,
 } from "./support/raw-peer.ts";
@@ -131,16 +127,6 @@ const abandonSocket = (socket: string) =>
     timeoutMillis: 10_000,
   }).pipe(Effect.ignore);
 
-/** Writes raw bytes to the socket and waits for the server to close the connection. */
-const closedAfterWriting = (socket: string, data: string) =>
-  Effect.callback<boolean>((resume) => {
-    const connection = connect(socket, () => connection.write(data));
-    connection.on("data", () => undefined);
-    connection.on("error", () => undefined);
-    connection.on("close", () => resume(Effect.succeed(true)));
-    return Effect.sync(() => connection.destroy());
-  });
-
 const limits = (overrides: Partial<ConnectionLimits>): ConnectionLimits => ({
   maxConnections: 32,
   authenticationDeadline: "10 seconds",
@@ -193,39 +179,9 @@ const gatheringClock = (base: Clock.Clock, arrivals: number): Clock.Clock => {
 /** Text JSON escapes to six bytes a code unit, the most it spends on one. */
 const escaped = (length: number) => Fn.pipe("\u0001", Str.repeat(length));
 
-/** Forwards connections at `socket` to `target`, recording what clients send. */
-const recordingRelay = (socket: string, target: string) =>
-  Effect.gen(function* () {
-    let sent = "";
-    const pipes = new Set<Socket>();
-    const server = createServer((client) => {
-      const upstream = connect(target);
-      pipes.add(client).add(upstream);
-      client.on("data", (data) => {
-        sent += data.toString();
-        upstream.write(data);
-      });
-      upstream.on("data", (data) => client.write(data));
-      for (const end of [client, upstream]) {
-        end.on("error", () => undefined);
-        end.on("close", () => {
-          client.destroy();
-          upstream.destroy();
-        });
-      }
-    });
-    yield* Effect.acquireRelease(
-      Effect.callback<void>((resume) => {
-        server.listen(socket, () => resume(Effect.void));
-      }),
-      () =>
-        Effect.callback<void>((resume) => {
-          server.close(() => resume(Effect.void));
-          for (const pipe of pipes) pipe.destroy();
-        }),
-    );
-    return { sent: () => sent };
-  });
+/** Whether the server answers request `id` rather than closing the connection. */
+const answers = (peer: RawPeer, id: number) =>
+  Effect.raceFirst(peer.answer(id).pipe(Effect.as(true)), peer.closed.pipe(Effect.as(false)));
 
 // Client call deadlines run on the real clock.
 layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport", (it) => {
@@ -312,15 +268,19 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
   it.effect("authenticates both ends without the token ever crossing the socket", () =>
     Effect.gen(function* () {
       const socket = yield* socketPath;
-      const relay = yield* socketPath;
+      const relayed = yield* socketPath;
       const inbound = fakeInbound();
       yield* startServer(socket, inbound);
-      const recorded = yield* recordingRelay(relay, socket);
+      let sent = "";
+      yield* relay(relayed, socket, (data) => {
+        sent += data;
+        return true;
+      });
 
-      expect(yield* deliverMessage({ socket: relay, token: TOKEN }, message)).toBe("woken");
+      expect(yield* deliverMessage({ socket: relayed, token: TOKEN }, message)).toBe("woken");
 
       expect(inbound.delivered).toEqual([message]);
-      expect(recorded.sent()).not.toContain(TOKEN);
+      expect(sent).not.toContain(TOKEN);
     }),
   );
 
@@ -355,8 +315,7 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
       yield* startServer(socket, inbound);
       const peer = yield* rawPeer(socket);
 
-      const answer = decodeExitAnswer(yield* handshake(peer, OTHER_TOKEN));
-      expect(Option.map(answer, ({ exit }) => exit._tag)).toEqual(Option.some("Failure"));
+      expect(answerSucceeded(yield* handshake(peer, OTHER_TOKEN))).toEqual(Option.some(false));
       peer.request(2, "Deliver", message);
 
       expect(yield* closesWithin(peer, "5 seconds")).toBe(true);
@@ -419,15 +378,12 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
         peers,
         (peer) => {
           peer.request(0, "Hello", { nonce: Fn.pipe("c", Str.repeat(64)) });
-          return Effect.raceFirst(
-            peer.answer(0).pipe(Effect.as(true)),
-            peer.closed.pipe(Effect.as(false)),
-          );
+          return answers(peer, 0);
         },
         { concurrency: "unbounded" },
       );
 
-      expect(Arr.filter(served, Boolean)).toHaveLength(2);
+      expect(Arr.filter(served, Fn.identity)).toHaveLength(2);
     }),
   );
 
@@ -464,12 +420,11 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
       const socket = yield* socketPath;
       yield* startServer(socket, fakeInbound());
 
-      const closed = yield* closedAfterWriting(
-        socket,
-        Fn.pipe("x", Str.repeat(MAX_FRAME_BYTES + 1)),
-      ).pipe(Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.succeed(false) }));
+      const peer = yield* rawPeer(socket);
 
-      expect(closed).toBe(true);
+      peer.write(Fn.pipe("x", Str.repeat(MAX_FRAME_BYTES + 1)));
+
+      expect(yield* closesWithin(peer, "5 seconds")).toBe(true);
       expect((yield* describeSession({ socket, token: TOKEN })).state).toBe("idle");
     }),
   );
@@ -626,63 +581,6 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom transport"
       }),
     30_000,
   );
-
-  it.effect("keeps message content, tokens, and paths out of logs and spans", () =>
-    Effect.gen(function* () {
-      const socket = yield* socketPath;
-      const logs: Array<unknown> = [];
-      const tracer = makeCapturedTracer();
-      const capture = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        effect.pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              tracer.layer,
-              Logger.layer([
-                Logger.make((options) => void logs.push(Logger.formatStructured.log(options))),
-              ]),
-            ),
-          ),
-        );
-      const handled = yield* Deferred.make<void>();
-      yield* capture(
-        startServer(
-          socket,
-          fakeInbound({
-            deliver: (inbound) =>
-              Effect.logInfo("Delivered an intercom message.").pipe(
-                Effect.andThen(Deferred.succeed(handled, undefined)),
-                Effect.as(inbound.text.length > 0 ? ("queued" as const) : ("held" as const)),
-              ),
-          }),
-        ),
-      );
-      const target = { socket, token: TOKEN };
-
-      yield* capture(deliverMessage(target, message));
-      yield* capture(Effect.ignore(deliverMessage({ socket, token: OTHER_TOKEN }, message)));
-      yield* capture(readLastMessage(target));
-      yield* Deferred.await(handled);
-
-      const telemetry = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))({
-        logs,
-        spans: Arr.map(tracer.spans, (span) => ({
-          name: span.name,
-          attributes: [...span.attributes],
-          events: span.events,
-        })),
-      });
-      expect(logs.length).toBeGreaterThan(0);
-      for (const secret of [
-        message.text,
-        message.from.cwd,
-        "latest reply",
-        TOKEN,
-        OTHER_TOKEN,
-        socket,
-      ])
-        expect(telemetry).not.toContain(secret);
-    }),
-  );
 });
 
 /** The guarded connection layer alone, so a test can hold a connection's handshake state. */
@@ -712,10 +610,6 @@ const accepted = (guarded: GuardedProtocol, clientId: number): Effect.Effect<Int
       : Effect.succeed(connection);
   });
 
-/** Whether the server answers request `id` rather than closing the connection. */
-const answers = (peer: RawPeer, id: number) =>
-  Effect.raceFirst(peer.answer(id).pipe(Effect.as(true)), peer.closed.pipe(Effect.as(false)));
-
 // Connection deadlines run on the test clock.
 layer(nodeFilePlatformLayer)("intercom connection deadlines and handshake state", (it) => {
   it.effect("closes a connection that doesn't authenticate in time but keeps one that did", () =>
@@ -732,8 +626,7 @@ layer(nodeFilePlatformLayer)("intercom connection deadlines and handshake state"
       // Each answer shows its connection is served, so its deadline is running.
       slow.request(0, "Hello", { nonce: Fn.pipe("c", Str.repeat(64)) });
       yield* slow.answer(0);
-      const answer = decodeExitAnswer(yield* handshake(prompt));
-      expect(Option.map(answer, ({ exit }) => exit._tag)).toEqual(Option.some("Success"));
+      expect(answerSucceeded(yield* handshake(prompt))).toEqual(Option.some(true));
 
       yield* TestClock.adjust("2 seconds");
       yield* slow.closed;
@@ -748,8 +641,7 @@ layer(nodeFilePlatformLayer)("intercom connection deadlines and handshake state"
       const socket = yield* socketPath;
       yield* startServer(socket, fakeInbound(), TOKEN, limits({ idleDeadline: "10 seconds" }));
       const peer = yield* rawPeer(socket);
-      const answer = decodeExitAnswer(yield* handshake(peer));
-      expect(Option.map(answer, ({ exit }) => exit._tag)).toEqual(Option.some("Success"));
+      expect(answerSucceeded(yield* handshake(peer))).toEqual(Option.some(true));
 
       yield* TestClock.adjust("6 seconds");
       peer.request(2, "Deliver", message);

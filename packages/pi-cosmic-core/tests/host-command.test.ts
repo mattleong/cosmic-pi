@@ -2,7 +2,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { vi } from "vitest";
@@ -131,12 +130,11 @@ describe("registered extension command", () => {
 
 const PHONE_COLUMNS = 55;
 const lines = (text: string) => Str.split(text, "\n");
-const indentOf = (line: string) => line.length - Str.trimStart(line).length;
-const fitsPhone = (text: string) => Arr.every(lines(text), (line) => line.length <= PHONE_COLUMNS);
+const words = (text: string) => Arr.join(Str.split(Str.trim(text), /\s+/u), " ");
 
 describe("bare command overview", () => {
-  it("aligns descriptions in one column and keeps trailing notes", () => {
-    const text = extensionCommandOverview(
+  const overviews: ReadonlyArray<Parameters<typeof extensionCommandOverview>> = [
+    [
       "demo",
       "Demo extension",
       [
@@ -144,51 +142,46 @@ describe("bare command overview", () => {
         { name: "receive", arguments: "[on|off]", description: "Allow or block" },
       ],
       ["An example follows:", '  "Ask the demo"'],
-    );
-    const [, first = "", second = ""] = lines(text);
-    expect(Str.indexOf("List things")(first)).toEqual(Str.indexOf("Allow or block")(second));
-    expect(Fn.pipe(text, Str.endsWith('An example follows:\n  "Ask the demo"'))).toBe(true);
-    expect(fitsPhone(text)).toBe(true);
-  });
-
-  it("moves descriptions beneath their commands when a line wouldn't fit a phone", () => {
-    const text = extensionCommandOverview(
+    ],
+    [
       "a-rather-long-command",
       "An extension whose description alone runs well past the width of a phone client",
       [
         { name: "settings", description: "Configure every last aspect of how this behaves" },
         { name: "health", description: "Short" },
       ],
-    );
-    const body = lines(text).slice(1);
-    expect(fitsPhone(text)).toBe(true);
-    // Nothing wraps back to the left edge: every continuation is indented.
-    expect(Arr.every(body, Str.startsWith("  "))).toBe(true);
-    expect(body).toContain("  /a-rather-long-command health");
-    expect(body).toContain("    Short");
-  });
+    ],
+    [
+      "subagents",
+      "Manage subagents",
+      [
+        {
+          name: "settings",
+          arguments: "[session|global|project] <id> <value>",
+          description: "Change one setting",
+        },
+      ],
+    ],
+  ];
 
-  it("wraps a stacked command too wide for a row past its description's column", () => {
-    const text = extensionCommandOverview("subagents", "Manage subagents", [
-      {
-        name: "settings",
-        arguments: "[session|global|project] <id> <value>",
-        description: "Change one setting",
-      },
-    ]);
-    const body = lines(text).slice(1);
-    const description = Arr.findFirstIndex(body, (line) => Str.trim(line) === "Change one setting");
-    const usage = Option.match(description, {
-      onNone: () => [],
-      onSome: (at) => body.slice(0, at),
+  for (const [name, description, subcommands, notes = []] of overviews)
+    it(`fits /${name} on a phone without losing a usage, description, or note`, () => {
+      const text = extensionCommandOverview(name, description, subcommands, notes);
+      expect(Arr.every(lines(text), (line) => line.length <= PHONE_COLUMNS)).toBe(true);
+      expect(words(text)).toBe(
+        words(
+          Arr.join(
+            [
+              `/${name}: ${description}`,
+              ...Arr.flatMap(subcommands, (entry) => [
+                `/${name} ${entry.name} ${entry.arguments ?? ""}`,
+                entry.description,
+              ]),
+              ...notes,
+            ],
+            " ",
+          ),
+        ),
+      );
     });
-
-    expect(fitsPhone(text)).toBe(true);
-    expect(usage.length).toBeGreaterThan(1);
-    expect(Arr.join(Arr.map(usage, Str.trim), " ")).toBe(
-      "/subagents settings [session|global|project] <id> <value>",
-    );
-    // Every continuation sits deeper than the description's four columns.
-    expect(Arr.every(usage.slice(1), (line) => indentOf(line) > 4)).toBe(true);
-  });
 });

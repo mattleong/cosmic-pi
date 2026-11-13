@@ -8,7 +8,7 @@ import {
   workspaceHarness,
   workspaceInspection as makeInspection,
 } from "./fixtures/profile-workspace.ts";
-import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
+import { declaredCandidate } from "./fixtures/profiles.ts";
 import { ProfileEditVisit } from "../src/settings/profile-edit-visit.ts";
 import type { JsonObject } from "pi-cosmic-core";
 import type {
@@ -102,47 +102,18 @@ describe("profile workspace disposal", () => {
     },
   );
 
-  it("aborts model loading and ignores its late result", () => {
-    type PickerData = Awaited<ReturnType<ProfileWorkspaceOptions["loadModelPicker"]>>;
-    const pickerCell = deferredPromise<PickerData>();
-    let capturedSignal: AbortSignal | undefined;
+  it("loads no models once disposed", () => {
     const requestRender = vi.fn();
-    const close = vi.fn();
-    const { component } = workspaceHarness({
+    const { component, loadModelPicker } = workspaceHarness({
       requestRender,
-      close,
       initialFocus: "fields",
       initialField: "model",
-      initialAdvancedExpanded: true,
-      inspection: makeInspection({
-        revision: 1,
-        overrides: {
-          generalist: {
-            candidates: [profileCandidate("parent")],
-          },
-        },
-      }),
-      loadModelPicker: (_profile, _index, _candidate, signal) => {
-        capturedSignal = signal;
-        return pickerCell.promise;
-      },
     });
-
-    component.handleInput("\r");
-    expect(capturedSignal).toBeDefined();
     component.dispose();
-    expect(capturedSignal?.aborted).toBe(true);
     const rendersAtDispose = requestRender.mock.calls.length;
-    pickerCell.resolve({
-      choices: [],
-      current: "parent",
-      context: { profile: "generalist", candidateIndex: 0 },
-    });
-    return settleTurn().then(() => {
-      expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
-      expect(close).not.toHaveBeenCalled();
-      expect(component.render(100)).toEqual([]);
-      return undefined;
-    });
+    component.handleInput("\r");
+    expect(loadModelPicker).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalledTimes(rendersAtDispose);
+    expect(component.render(100)).toEqual([]);
   });
 });

@@ -6,7 +6,9 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import {
+  SUBAGENT_CONTEXT_MODES,
   SUBAGENT_EFFORTS,
+  SUBAGENT_WRITE_INTENTS,
   type SubagentContextMode,
   type SubagentEffort,
   type SubagentWriteIntent,
@@ -39,8 +41,8 @@ export const isProfileId = Schema.is(Schema.Literals(PROFILE_IDS));
 
 export const MAX_PROFILE_CANDIDATES = 32;
 export const MAX_PROFILE_MODEL_SELECTOR_CHARS = 256;
-export const PROFILE_CANDIDATE_CONTEXTS = ["fresh", "fork"] as const;
-export const PROFILE_CANDIDATE_WRITE_INTENTS = ["read-only", "writer"] as const;
+export const PROFILE_CANDIDATE_CONTEXTS = SUBAGENT_CONTEXT_MODES;
+export const PROFILE_CANDIDATE_WRITE_INTENTS = SUBAGENT_WRITE_INTENTS;
 export const PROFILE_CANDIDATE_EFFORTS = ["default", ...SUBAGENT_EFFORTS] as const;
 type ProfileCandidateEffort = (typeof PROFILE_CANDIDATE_EFFORTS)[number];
 

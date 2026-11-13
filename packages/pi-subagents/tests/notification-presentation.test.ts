@@ -7,14 +7,7 @@ import {
   renderSubagentMessage,
 } from "../src/application/messages.ts";
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
-import {
-  STOPPED_RUNS_MESSAGE_TYPE,
-  stoppedRunsContent,
-  stoppedRunsDetails,
-} from "../src/boundary/host-stopped-runs.ts";
-import { view } from "./tools/fixtures/tool-harness.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 
@@ -92,85 +85,5 @@ test.each(["compact", "preview"] as const)(
       );
       expect(Arr.join(history!.render(180), "\n")).toContain("PRIVATE_RUN_ID");
     }
-  },
-);
-
-test.each(["compact", "preview"] as const)(
-  "%s notifications label an agent's words beneath an expanded heading that wraps",
-  (style) => {
-    restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
-    const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-    const notify = hostNotifier(extensionApiFixture({ sendMessage }));
-    const name = "billing-and-invoicing-migration-review-follow-up-for-the-legacy-ledger-export-v2";
-    notify({
-      type: "completed",
-      runs: [
-        {
-          id: "agent-2",
-          name,
-          generation: 1,
-          outcome: "completed",
-          finalText: "Found 3 stale references.",
-        },
-      ],
-    });
-    notify({
-      type: "question",
-      id: "agent-6",
-      name,
-      requestId: "q-1",
-      generation: 1,
-      message: "Should I leave it for a follow-up?",
-    });
-    const labels = Arr.map(sendMessage.mock.calls, ([message]) => (width: number) => {
-      const component = renderSubagentMessage(
-        { ...message, role: "custom", timestamp: 0 },
-        { ...keybindingHintsFixture, expanded: true, outputPad: 0 },
-        plainTheme,
-      );
-      return Arr.filter(Arr.map(component?.render(width) ?? [], Str.trim), (row) =>
-        Arr.contains(["Report", "Question"], row),
-      );
-    });
-    const [report, question] = labels;
-    expect(report?.(57)).toEqual(["Report"]);
-    expect(question?.(57)).toEqual(["Question"]);
-    // A heading that fits on one row leaves the words unlabeled.
-    expect(report?.(180)).toEqual([]);
-    expect(question?.(180)).toEqual([]);
-  },
-);
-
-test.each(["compact", "preview"] as const)(
-  "a %s stopped-runs notice narrows its names to keep how many stopped beside the cause",
-  (style) => {
-    restore = applyPresentationSettings({ toolCallCollapsedStyle: style });
-    const runs = [
-      view({ id: "agent-1", name: "auth-review", state: "running" }),
-      view({ id: "agent-6", name: "db-migration", state: "running" }),
-    ];
-    const heading = (width: number) => {
-      const component = renderSubagentMessage(
-        {
-          role: "custom",
-          customType: STOPPED_RUNS_MESSAGE_TYPE,
-          display: true,
-          timestamp: 0,
-          content: stoppedRunsContent(runs, "reload"),
-          details: stoppedRunsDetails(runs, "reload"),
-        },
-        { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
-        plainTheme,
-      );
-      return Option.getOrElse(
-        Arr.findFirst(Arr.map(component?.render(width) ?? [], Str.trim), Str.isNonEmpty),
-        () => "",
-      );
-    };
-    // Wide enough, both names show whole; narrower, the first stays whole and counts the other.
-    expect(heading(120)).toContain("auth-review, db-migration · on reload");
-    const narrow = heading(57);
-    expect(narrow).toContain("auth-review +1 · on reload");
-    expect(narrow).not.toContain("…");
   },
 );

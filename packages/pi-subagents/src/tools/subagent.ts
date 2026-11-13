@@ -17,7 +17,8 @@ import {
 } from "pi-code-previews";
 import { Container, type Component } from "@earendil-works/pi-tui";
 import { createSubagentCompactSummary } from "./compact-summary.ts";
-import { isTypedReceipt, requestedRunIds, type SummaryArguments } from "./compact-heading.ts";
+import { requestedRunIds, type SummaryArguments } from "./compact-heading.ts";
+import { decodeWorkspaceToolDetails } from "./compact-workspace-summary.ts";
 import { startHostUiTicker } from "pi-cosmic-ui/boundary/host-status";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import type { SubagentErrorReceiptOwner } from "../boundary/host-tool-result.ts";
@@ -27,13 +28,8 @@ import {
   SUBAGENT_TOOL_NAMES,
   type SubagentToolName,
 } from "../run/tool-policy.ts";
-import {
-  decodeCompactToolDetails,
-  decodeOutcomeDetails,
-  decodeStartAwaitCardDetails,
-} from "./details-decode.ts";
+import { decodeOutcomeDetails, decodeStartAwaitCardDetails } from "./details-decode.ts";
 import { executeSubagentAction, type SubagentToolRuntime } from "./execute.ts";
-import { hasReturnedFailureEvidence } from "./outcome.ts";
 import {
   awaitLiveChildren,
   syncAwaitProgressTicker,
@@ -128,20 +124,6 @@ type SubagentToolParameterSet = {
   readonly [N in SubagentToolName]: SubagentToolParameters<N>;
 };
 
-type SubagentArgumentPreparers = {
-  readonly [N in SubagentToolName]: NonNullable<
-    ToolDefinition<SubagentToolParameters<N>>["prepareArguments"]
-  >;
-};
-
-const ARGUMENT_PREPARERS: SubagentArgumentPreparers = {
-  [SUBAGENT_TOOL_NAME.models]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.models),
-  [SUBAGENT_TOOL_NAME.start]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.start),
-  [SUBAGENT_TOOL_NAME.await]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.await),
-  [SUBAGENT_TOOL_NAME.lifecycle]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.lifecycle),
-  [SUBAGENT_TOOL_NAME.workspace]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.workspace),
-};
-
 const SCRIPTED_SUBAGENT_GUIDELINE =
   "Native codemode can script read-only delegation with agent_start, agent_await, agent_list, agent_read, agent_profiles, and agent_lifecycle stop, which return structured results. Print run IDs as soon as you have them, await every call, and keep steps bounded. Don't rerun a failed script unless Pi reports it did not start, and don't loop on parent attention. Leave questions, retries, writers, and integration to the main agent.";
 
@@ -201,13 +183,7 @@ const TOOL_SPECS: SubagentToolSpecs = {
     ],
     renderCall: (args, theme, context) =>
       renderSubagentCall(
-        context.isPartial
-          ? awaitUntil(args) === "all_finished"
-            ? "Waiting for subagents"
-            : "Waiting for first subagent"
-          : awaitUntil(args) === "all_finished"
-            ? "Waited for subagents"
-            : "Waited for first subagent",
+        `${context.isPartial ? "Waiting" : "Waited"} for ${awaitUntil(args) === "all_finished" ? "subagents" : "first subagent"}`,
         "",
         theme,
       ),
@@ -285,7 +261,7 @@ export function registerSubagentTools(
     const details = decodeStartAwaitCardDetails(input.result?.details);
     if (details?.action !== "await" || details.cancelled === true) return summary;
     if (runtime.toolPresentation?.isLiveHierarchyAvailable() === true) return summary;
-    const awaited = new Set(details.awaitedRunIds ?? Arr.map(details.cards, (card) => card.id));
+    const awaited = new Set(details.awaitedRunIds);
     return { ...summary, children: awaitLiveChildren(details.cards, awaited) };
   };
 
@@ -298,10 +274,6 @@ export function registerSubagentTools(
     [SUBAGENT_TOOL_NAME.await]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.await].parameters,
     [SUBAGENT_TOOL_NAME.lifecycle]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.lifecycle].parameters,
     [SUBAGENT_TOOL_NAME.workspace]: SUBAGENT_TOOL_SCHEMAS[SUBAGENT_TOOL_NAME.workspace].parameters,
-  };
-  const argumentPreparers: SubagentArgumentPreparers = {
-    ...ARGUMENT_PREPARERS,
-    [SUBAGENT_TOOL_NAME.start]: subagentArgumentPreparer(SUBAGENT_TOOL_NAME.start, startParameters),
   };
   const buildTool = <N extends SubagentToolName>(name: N) => {
     const { lease, renderCall, ...spec }: SubagentToolSpec<N> = TOOL_SPECS[name];
@@ -382,7 +354,7 @@ export function registerSubagentTools(
         namespace: ROOT_SCRIPT_NAMESPACE,
       }),
       parameters: toolParameters[name],
-      prepareArguments: argumentPreparers[name],
+      prepareArguments: subagentArgumentPreparer(name, toolParameters[name]),
       renderCall: rejectionAwareCall(spec.label, (args, theme, context) => {
         const heading = renderCall(args, theme, context);
         const body = context.expanded ? expandedCallContent(args, theme, context.state) : undefined;
@@ -465,16 +437,14 @@ export function registerSubagentTools(
             result,
             context,
           });
+          const carried =
+            summary !== undefined && issueCarriesFailure(result, options.isPartial, context);
           // The requested line beside this result draws later and names its runs from here.
           rememberRunNames(
             context.state,
             decodeOutcomeDetails(result.details),
             summary !== undefined &&
-              bodyNamesRuns(
-                options.isPartial,
-                issueCarriesFailure(result, options.isPartial, context),
-                panelOwnsLiveHierarchy,
-              ),
+              bodyNamesRuns(options.isPartial, carried, panelOwnsLiveHierarchy),
           );
           rememberWorkspaceIds(context.state, result, summary !== undefined && !context.isError);
           if (!summary)
@@ -484,7 +454,7 @@ export function registerSubagentTools(
               true,
               theme,
             );
-          if (issueCarriesFailure(result, options.isPartial, context)) return new Container();
+          if (carried) return new Container();
           const content = renderSubagentExpandedContent(result, options.isPartial, theme, {
             panelOwnsLiveHierarchy,
             // A compact heading draws its counter only where its width fits one.
@@ -495,14 +465,10 @@ export function registerSubagentTools(
             isError: context.isError,
             args: context.args,
           });
-          if (!isTypedReceipt(result)) return content;
-          // A decoded receipt's issues carry each failure; its text is the agent's own copy.
-          if (
-            decodeStartAwaitCardDetails(result.details) !== undefined ||
-            decodeCompactToolDetails(result.details) !== undefined
-          )
+          // A run receipt's issues carry each failure and its text is the agent's own copy; only a
+          // failed worktree receipt keeps its output.
+          if (!context.isError || decodeWorkspaceToolDetails(result.details) === undefined)
             return content;
-          if (!context.isError && !hasReturnedFailureEvidence(result.details)) return content;
           const container = new Container();
           container.addChild(content);
           const output = rawResultSection(result.content, theme, "Output");

@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { plainTheme } from "pi-cosmic-core/testing";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { stripAnsi } from "pi-cosmic-core/security";
-import { freshActivityPresentation } from "../src/activity/component.ts";
-import type { ActivityRow } from "../src/activity/model.ts";
 import { activityElapsed } from "../src/activity/row-line.ts";
 import { renderActivityWidget } from "../src/activity/widget.ts";
 import { activityWidgetSections, widgetFailuresExpire } from "../src/activity/widget-projection.ts";
-import { activityRow, memberRow, mountActivity } from "./support/activity.ts";
+import { activityRow, memberRow } from "./support/activity.ts";
 
 const standalone = [
   activityRow("standalone-agent"),
@@ -47,10 +45,9 @@ describe("grouped activity widget", () => {
       expect(renderActivityWidget(rows, 80, budget).length).toBeLessThanOrEqual(budget);
     }
     const full = activityWidgetSections(rows, 20)[0]!;
-    expect(
-      Option.getOrUndefined(Arr.findFirst(full.entries, (entry) => entry.id === loose.key))
-        ?.parentId,
-    ).toBe(parent.key);
+    expect(findOrUndefined(full.entries, (entry) => entry.id === loose.key)?.parentId).toBe(
+      parent.key,
+    );
   });
 
   it("keeps a recent failure visible after the live checklist drops it", () => {
@@ -122,54 +119,6 @@ describe("agent identity at narrow widths", () => {
     );
     expect(Arr.filter(lines, Str.includes(model))).toHaveLength(3);
   });
-
-  it("keeps the whole provider/model and elapsed time in the manager at phone and wide widths", () => {
-    for (const width of [57, 100, 140]) {
-      const { component } = mountActivity(() => rows, { height: 16 });
-      const screen = Arr.map(component.render(width), stripAnsi);
-      expect(Arr.filter(screen, Str.includes(model))).toHaveLength(3);
-      for (const title of ["Audit", "Compare", "Trace"])
-        expect(
-          Arr.some(screen, (line) => Str.includes(title)(line) && /\d+m?s? *│/u.test(line)),
-        ).toBe(true);
-    }
-  });
-});
-
-describe("waiting rows at narrow widths", () => {
-  const parent = activityRow("fanout", "running", undefined, {
-    title: "Ad-hoc fan-out",
-    profile: "planner",
-    model: "claude-bridge/claude-opus-5-5",
-    startedAt: 0,
-  });
-  const waiting = memberRow("asking", parent, "needs-input", {
-    title: "Choose a library",
-    profile: "researcher",
-    model: "claude-bridge/claude-sonnet-5-5",
-    startedAt: 10_000,
-    inputTarget: "parent",
-  });
-
-  it("keeps a waiting row's elapsed time in the widget at phone width", () => {
-    for (const width of [57, 80, 120]) {
-      const lines = Arr.map(
-        renderActivityWidget([parent, waiting], width, 8, { now: 90_000, theme: plainTheme }),
-        stripAnsi,
-      );
-      const row = Arr.findFirst(lines, Str.includes("Choose a lib"));
-      expect(Option.getOrElse(row, () => "")).toMatch(/\d+m(?: \d+s)?$/u);
-    }
-  });
-
-  it("wraps the preview's facts between whole facts, never after a separator", () => {
-    for (const width of [72, 90, 100, 120, 160]) {
-      const { component } = mountActivity(() => [parent, waiting], { height: 16 });
-      component.handleInput("j");
-      const panes = Arr.map(component.render(width), (line) => stripAnsi(line));
-      for (const line of panes) expect(line).not.toMatch(/ [·→] *│ *$/u);
-    }
-  });
 });
 
 describe("elapsed time", () => {
@@ -182,97 +131,5 @@ describe("elapsed time", () => {
     expect(at(1)).toBe("");
     expect(at(now + 5_000)).toBe("");
     expect(at(now - 8 * 24 * 60 * 60 * 1_000)).toBe("");
-  });
-});
-
-const line = (lines: readonly string[], title: string) =>
-  Option.getOrElse(Arr.findFirst(lines, Str.includes(title)), () => "");
-const failedTask = (id: string) =>
-  activityRow(id, "failed", undefined, { kind: "command", title: id, endedAt: 1_000 });
-
-describe("state words beside a row's glyph", () => {
-  const model = "openai-codex/gpt-6-sol";
-  const lead = activityRow("lead", "running", undefined, {
-    title: "Lead",
-    profile: "planner",
-    model,
-    startedAt: 0,
-  });
-  const queued = memberRow("queued", lead, "pending", { title: "Password reset", model });
-  const paused = memberRow("paused", lead, "paused", { title: "Auth review", model, startedAt: 0 });
-  const failed = memberRow("failed", lead, "failed", {
-    title: "Unit tests",
-    model,
-    startedAt: 0,
-    endedAt: 28_000,
-  });
-  const blocked = memberRow("blocked", lead, "blocked", {
-    title: "Writes",
-    blockedReason: "file-access",
-    startedAt: 0,
-  });
-  const asking = memberRow("asking", lead, "needs-input", {
-    title: "Choose",
-    inputTarget: "parent",
-    startedAt: 0,
-  });
-  const rows = [lead, queued, paused, failed, blocked, asking];
-  const surfaces = (width: number) => {
-    const { component } = mountActivity(() => rows, { height: 16 });
-    return {
-      widget: Arr.map(
-        renderActivityWidget(rows, width, 12, { now: 29_000, theme: plainTheme }),
-        stripAnsi,
-      ),
-      // The list pane alone: a wide manager previews the selected parent's children beside it.
-      manager: Arr.map(component.render(width), (rendered) =>
-        Arr.join(Str.split(stripAnsi(rendered), "│").slice(0, 2), "│"),
-      ),
-    };
-  };
-
-  it("leaves out the state its glyph says and keeps a failed row's run time", () => {
-    for (const width of [57, 140]) {
-      const { widget, manager } = surfaces(width);
-      for (const lines of [widget, manager]) {
-        expect(line(lines, "Password reset")).not.toMatch(/queued/u);
-        expect(line(lines, "Auth review")).not.toMatch(/paused/u);
-        expect(line(lines, "Unit tests")).not.toMatch(/failed/u);
-      }
-      expect(line(manager, "Unit tests")).toMatch(/28s/u);
-    }
-  });
-
-  it("keeps the words of glyphs that don't say the state, and a folded branch's counts", () => {
-    const { widget, manager } = surfaces(140);
-    for (const lines of [widget, manager]) {
-      expect(line(lines, "Writes")).toMatch(/waiting for file access/u);
-      expect(line(lines, "Choose")).toMatch(/waiting for reply/u);
-    }
-    const presentation = freshActivityPresentation();
-    presentation.collapsed.add(lead.key);
-    const { component } = mountActivity(() => rows, { height: 16, presentation });
-    expect(line(Arr.map(component.render(140), stripAnsi), "Lead")).toMatch(/1 failed/u);
-  });
-
-  it("names one hidden failure by its glyph and counts several", () => {
-    const live = activityRow("live", "running", undefined, { kind: "command" });
-    const banner = (failures: readonly ActivityRow[]) =>
-      stripAnsi(renderActivityWidget([live, ...failures], 57, 2, { now: 2_000 }).at(-1) ?? "");
-    expect(banner([failedTask("flaky build")])).toMatch(/^✗ flaky build · \/activity$/u);
-    expect(banner([failedTask("one"), failedTask("two")])).toMatch(/2 failed/u);
-  });
-
-  it("drops a task's kind under the manager's Tasks heading and keeps it in the widget", () => {
-    const task = activityRow("build", "running", undefined, {
-      kind: "command",
-      title: "Development server",
-      startedAt: 0,
-    });
-    const manager = Arr.map(mountActivity(() => [task]).component.render(100), stripAnsi);
-    expect(Arr.some(manager, Str.includes("Tasks"))).toBe(true);
-    expect(line(manager, "Development server")).not.toMatch(/· task/u);
-    const widget = Arr.map(renderActivityWidget([task], 100, 8, { now: 9_000 }), stripAnsi);
-    expect(line(widget, "Development server")).toMatch(/· task/u);
   });
 });

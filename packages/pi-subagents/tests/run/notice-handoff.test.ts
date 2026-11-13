@@ -23,12 +23,13 @@ import {
   yieldTurns,
   reportsAtRoot,
 } from "./fixtures/service-harness.ts";
+import * as Fn from "effect/Function";
 
 const deliverNotification = () => Effect.void;
 
 const reportKeys = (control: FakeChildControl | undefined, runId: string) =>
   Arr.flatMap(control?.ipc ?? [], (message) =>
-    message.type === "proxy_notification" && Str.startsWith(`${runId}:`)(message.key)
+    message.type === "proxy_notification" && Fn.pipe(message.key, Str.startsWith(`${runId}:`))
       ? [message.key]
       : [],
   );

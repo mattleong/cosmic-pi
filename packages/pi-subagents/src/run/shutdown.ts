@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
-import { SubagentRuntimeClosedError } from "./errors.ts";
 import { beginCleanup, isCleanupOwed, type RunContext } from "./internal.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
+import { sessionClosed } from "./session-owned.ts";
 import { leafFirst } from "./tree.ts";
 
 interface RunShutdownDependencies extends Pick<RunContext, "records" | "withLock"> {
@@ -17,9 +17,7 @@ export const closeRunsLeafFirst = (dependencies: RunShutdownDependencies): Effec
       withLock(
         Effect.sync(() => {
           record.stoppedByParent = true;
-          record.process?.cancelPending(
-            SubagentRuntimeClosedError.make({ message: "Parent session shut down." }),
-          );
+          record.process?.cancelPending(sessionClosed());
           if (record.closingScope !== record.scope) beginCleanup(record);
         }),
       ).pipe(

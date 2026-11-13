@@ -9,23 +9,17 @@ import { plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { createOpenAIImageMessageRenderer, OPENAI_IMAGE_TOOL } from "../src/image/register.ts";
 import { extensionHarness, ownerSource } from "./extension-harness.ts";
-import { pngPart as image, textPart as text } from "./image-fixtures.ts";
+import { imageDetailsFixture, pngPart as image, textPart as text } from "./image-fixtures.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
 const PROVIDER_TEXT = "PROVIDER_EVIDENCE recovery notes";
-const details = {
-  id: "image-identity",
-  status: "completed",
+const details = imageDetailsFixture({
   prompt: "A watercolor otter PROMPT_END",
   revisedPrompt: "REVISED_EVIDENCE soft watercolor otter",
-  mimeType: image.mimeType,
-  model: "model",
-  action: "generate" as const,
-  outputFormat: "png" as const,
-};
+});
 const harness = (
   toolSource = ownerSource,
   imageMessageRenderer = createOpenAIImageMessageRenderer(),

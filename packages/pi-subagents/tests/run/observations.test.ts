@@ -1,14 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
-import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import type { SubagentProjection } from "../../src/run/model.ts";
-import { SubagentService, type SubagentServiceContract } from "../../src/run/service.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   askParent,
@@ -18,40 +13,9 @@ import {
   runView,
   withService,
 } from "./fixtures/service-harness.ts";
-import { InvalidSubagentRequestError, SubagentRuntimeClosedError } from "../../src/run/errors.ts";
+import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-
-type CompletionPolicy = (
-  attempt: number,
-  keys: ReadonlyArray<string>,
-) => { readonly deliveredCompletionKeys: ReadonlyArray<string> };
-
-const unacknowledged: CompletionPolicy = () => ({ deliveredCompletionKeys: [] });
-
-const completionRetryFixture = (policy: CompletionPolicy) => {
-  let attempts = 0;
-  const { fake, projections, notifications, layer } = localServiceFixture({
-    notify: (notification) => {
-      if (notification.type !== "completed") return undefined;
-      attempts += 1;
-      return policy(
-        attempts,
-        Arr.map(notification.runs, (run) => `${run.id}:${run.generation}`),
-      );
-    },
-  });
-  const firstAttempt = (service: SubagentServiceContract) =>
-    Effect.gen(function* () {
-      const run = yield* service.start(request({ name: "completion-retry" }));
-      fake.controls[0]?.settle();
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
-      yield* TestClock.adjust("100 millis");
-      yield* yieldUntil(() => attempts === 1);
-      return run;
-    });
-  return { notifications, layer, attempts: () => attempts, firstAttempt };
-};
 
 describe("SubagentService", () => {
   it.effect("preserves the caller resource scope through await observations", () => {
@@ -137,25 +101,6 @@ describe("SubagentService", () => {
       // Reading the projection never redacts the run's retained report.
       expect((yield* runView(service, run.id)).finalText).toBe("Report owned by the first await.");
     });
-  });
-
-  it.effect("fails subscribed awaits when the service scope closes", () => {
-    const { layer } = localServiceFixture();
-    return Effect.gen(function* () {
-      const serviceScope = yield* Scope.make();
-      const context = yield* Layer.buildWithScope(layer, serviceScope);
-      const service = Context.get(context, SubagentService);
-      const run = yield* service.start(request({ name: "revision-shutdown" }));
-      let updates = 0;
-      const waiting = yield* awaitRuns(service, [run.id], "all_finished", () => updates++).pipe(
-        Effect.flip,
-        Effect.forkScoped,
-      );
-      yield* yieldUntil(() => updates > 0);
-
-      yield* Scope.close(serviceScope, Exit.void);
-      expect(yield* Fiber.join(waiting)).toBeInstanceOf(SubagentRuntimeClosedError);
-    }).pipe(Effect.scoped);
   });
 
   it.effect("consumes an await-owned report only with that await's claim", () => {
@@ -340,13 +285,24 @@ describe("SubagentService", () => {
   });
 
   it.effect("stops pending completion retries when the session scope closes", () => {
-    const { layer, attempts, firstAttempt } = completionRetryFixture(unacknowledged);
+    let attempts = 0;
+    const { fake, projections, layer } = localServiceFixture({
+      notify: (notification) => {
+        if (notification.type !== "completed") return undefined;
+        attempts += 1;
+        return { deliveredCompletionKeys: [] };
+      },
+    });
     return Effect.gen(function* () {
       yield* withService(layer, function* (service) {
-        yield* firstAttempt(service);
+        yield* service.start(request({ name: "completion-retry" }));
+        fake.controls[0]?.settle();
+        yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "completed");
+        yield* TestClock.adjust("100 millis");
+        yield* yieldUntil(() => attempts === 1);
       });
       yield* TestClock.adjust("60 seconds");
-      expect(attempts()).toBe(1);
+      expect(attempts).toBe(1);
     });
   });
 

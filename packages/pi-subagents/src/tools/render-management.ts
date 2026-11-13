@@ -20,6 +20,7 @@ import type {
 } from "./details-schema.ts";
 import { COLLAPSED_AGENT_TEXT_ROWS, expandedRowsBody, factRowLines } from "../ui/agent-text.ts";
 import { cardFactLines, stateGroupLines } from "./render-run-cards.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 type ModelsToolDetails = Extract<CompactSubagentToolDetails, { readonly action: "models" }>;
 type RunToolDetails = Exclude<CompactSubagentToolDetails, ModelsToolDetails>;
@@ -156,7 +157,7 @@ const routeRowLines = (row: RouteRow, width: number, theme: Theme, expanded: boo
   );
 
 const eligibleCount = (candidates: ReadonlyArray<SubagentProfileCandidateCard>): string =>
-  `${Arr.filter(candidates, (candidate) => candidate.status === "eligible").length}/${candidates.length} eligible`;
+  `${Arr.countBy(candidates, (candidate) => candidate.status === "eligible")}/${candidates.length} eligible`;
 
 /** The context and write intent a profile's or agent's line states, which its candidates needn't. */
 interface CandidateDefaults {
@@ -194,8 +195,7 @@ const agentDefaultEffort = (
   details: ModelsToolDetails,
 ): string | undefined =>
   agent.effort ??
-  Option.getOrUndefined(Arr.findFirst(details.profiles, (profile) => profile.id === agent.profile))
-    ?.defaultEffort;
+  findOrUndefined(details.profiles, (profile) => profile.id === agent.profile)?.defaultEffort;
 
 const profileFacts =
   (details: ModelsToolDetails) =>

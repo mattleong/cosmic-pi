@@ -1,13 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { detachActivityItem } from "./detach.ts";
 import { ACTIVITY_LIMITS } from "./limits.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 export { ACTIVITY_LIMITS } from "./limits.ts";
 
 const ACTIVITY_VERSION = 1 as const;
@@ -285,11 +285,9 @@ export function registerRevisionedActivityProvider(
   const current = () => live && options.isCurrent();
   const lookup = (id: string, revision: string, signal: AbortSignal) => {
     if (!current() || signal.aborted) throw new Error("Activity provider is unavailable.");
-    const item = Option.getOrUndefined(
-      Arr.findFirst(
-        options.items(),
-        (candidate) => candidate.id === id && candidate.revision === revision,
-      ),
+    const item = findOrUndefined(
+      options.items(),
+      (candidate) => candidate.id === id && candidate.revision === revision,
     );
     if (!item) throw new Error("Activity item changed.");
     return item;

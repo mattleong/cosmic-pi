@@ -1,15 +1,11 @@
 import { toolOutputPreview } from "./tool-output-preview.ts";
-import {
-  agentToolActivity,
-  decodeAgentToolResult,
-  isOwnedAgentTool,
-} from "../tools/activity-preview.ts";
+import { agentToolActivity, decodeAgentToolResult } from "../tools/activity-preview.ts";
+import { isCoordinationTool } from "../run/tool-policy.ts";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
 import type { ChildProcessHandle } from "../boundary/child-process.ts";
-import { SubagentProcessError, type SubagentError } from "../run/errors.ts";
-import { emptyUsage } from "../run/model.ts";
+import { processError, type SubagentError } from "../run/errors.ts";
 import { boundOutputText, MAX_ERROR_CHARS, sanitizeDiagnosticText } from "../run/state.ts";
 import {
   assistantModel,
@@ -49,7 +45,6 @@ export const normalizeRpcEvent = (
             assignmentEpoch,
             ...(text && { text, ...(originalSize && { originalSize }) }),
             ...(model && { model }),
-            usage: emptyUsage(),
             terminal: {
               stopReason: message.stopReason,
               text,
@@ -83,7 +78,7 @@ export const normalizeRpcEvent = (
         toolCallId: envelope.toolCallId,
         toolName: envelope.toolName,
         isError: envelope.isError,
-        ...(isOwnedAgentTool(envelope.toolName)
+        ...(isCoordinationTool(envelope.toolName)
           ? activity && { activity }
           : { outputPreview: toolOutputPreview(envelope.result) }),
       });
@@ -109,20 +104,17 @@ export const parentContactAckOutcome = (
   contact.type === "turn_input_barrier_ack" || contact.ok
     ? Effect.void
     : Effect.fail(
-        SubagentProcessError.make(
-          contact.type === "parent_reply_ack"
-            ? {
-                operation: "deliver parent reply to",
-                code: "question_ownership_mismatch",
-                message:
-                  "Subagent no longer owns the parent question, so the reply was not applied.",
-              }
-            : {
-                operation: "deliver descendant notification to",
-                code: "transport_not_sent",
-                message: "Subagent rejected a descendant notification before queueing it.",
-              },
-        ),
+        contact.type === "parent_reply_ack"
+          ? processError(
+              "deliver parent reply to",
+              "question_ownership_mismatch",
+              "Subagent no longer owns the parent question, so the reply was not applied.",
+            )
+          : processError(
+              "deliver descendant notification to",
+              "transport_not_sent",
+              "Subagent rejected a descendant notification before queueing it.",
+            ),
       );
 
 export const normalizeParentContact = (

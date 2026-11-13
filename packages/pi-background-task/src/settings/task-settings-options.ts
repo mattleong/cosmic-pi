@@ -15,17 +15,11 @@ export const SCOPES = [
 
 export const INHERIT = "inherit";
 
-/** A stored or effective value as settings show it, such as `on`, `256 KB`, or `2s`. */
-export const settingDisplayValue = (
-  setting: Pick<BackgroundTaskSetting, "kind">,
-  value: BackgroundTaskConfig[BackgroundTaskSettingId],
-) => formatSettingValue(setting.kind, value);
-
 /** A value as settings show it; an empty shell names the shell that applies, Pi's own. */
 export const effectiveDisplayValue = (
   setting: Pick<BackgroundTaskSetting, "kind">,
   value: BackgroundTaskConfig[BackgroundTaskSettingId],
-) => settingDisplayValue(setting, value) || "Pi's shell";
+) => formatSettingValue(setting.kind, value) || "Pi's shell";
 
 /** The value this session started with. */
 export const sessionValue = (

@@ -57,12 +57,12 @@ import { projectReportFile } from "./details-projection.ts";
 import {
   boundToolOutput,
   formatRunCard,
-  formatRunModel,
   proposalGuidance,
   runStallFact,
   type RunFormatOptions,
 } from "./format.ts";
 import type { AgentToolInput } from "./schema.ts";
+import { projectRunRoutePresentation } from "../ui/run-presentation.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
 const agentLabel = (entry: { readonly id: string; readonly name: string }): string =>
@@ -99,7 +99,7 @@ const listLine = (entry: AgentListEntry, now: number): string => {
   if (entry.kind === "main")
     return `- ${MAIN_AGENT_ID}: ${entry.state}${entry.self ? " (you)" : ""}`;
   const role = entry.agent ?? entry.profile;
-  const model = entry.run && formatRunModel(entry.run);
+  const model = entry.run && projectRunRoutePresentation(entry.run).model;
   const facts = Arr.filter(
     [
       entry.state,
@@ -131,7 +131,7 @@ const listText = (result: AgentListResult, now: number): string =>
           )}`,
       missingText(result.missingIds),
     ],
-    Arr.filter(Boolean),
+    Arr.filter(Str.isNonEmpty),
     Arr.join("\n\n"),
   );
 
@@ -148,7 +148,7 @@ const listContract = (result: AgentListResult, now: number): AgentListContract =
     const profile = knownProfile(entry.profile);
     const task = metadata(entry.task, MAX_CONTRACT_TASK_CHARS);
     const { run } = entry;
-    const model = run && metadata(formatRunModel(run), MAX_CONTRACT_MODEL_CHARS);
+    const model = run && metadata(projectRunRoutePresentation(run).model, MAX_CONTRACT_MODEL_CHARS);
     const attention = run && projectAttention(run);
     const stall = run && projectStall(run, now);
     const outcome = run?.workspaceOutcome;

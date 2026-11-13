@@ -5,7 +5,11 @@ import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import { gatedReportArchive } from "./fixtures/run-context.ts";
+import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
+import type { SubagentRunView } from "../../src/run/model.ts";
+import type { SubagentServiceContract } from "../../src/run/service.ts";
 import {
+  type FakeChildControl,
   localServiceFixture,
   request,
   runView,
@@ -14,6 +18,41 @@ import {
   reportsAtRoot,
 } from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
+
+interface SavingReport {
+  readonly gate: Effect.Success<typeof gatedReportArchive>;
+  readonly service: SubagentServiceContract;
+  readonly run: SubagentRunView;
+  readonly control: FakeChildControl;
+  readonly notifications: ReadonlyArray<SubagentNotification>;
+}
+
+/** Runs `body` while a run named `name` saves its report's file, until `gate.release`. */
+const whileReportSaves = <E, R>(
+  name: string,
+  body: (saving: SavingReport) => Effect.Effect<void, E, R>,
+) =>
+  Effect.gen(function* () {
+    const gate = yield* gatedReportArchive;
+    const { fake, notifications, layer } = localServiceFixture({ archiveReport: gate.archive });
+    return yield* withService(layer, function* (service) {
+      const run = yield* service.start(request({ name }));
+      const control = fake.controls[0]!;
+      control.settle("Old report.");
+      yield* Deferred.await(gate.entered);
+      yield* body({ gate, service, run, control, notifications });
+    });
+  });
+
+const expectOldReportKept = ({ gate, service, run }: SavingReport) =>
+  Effect.gen(function* () {
+    expect(yield* runView(service, run.id)).toMatchObject({
+      state: "completed",
+      finalText: "Old report.",
+      reportArchive: { path: "/archive/1.md" },
+    });
+    expect(gate.discarded).toEqual([]);
+  });
 
 describe("guidance that reaches a finishing local Pi child", () => {
   it.effect("starts a new child turn when guidance arrives while settlement is pending", () => {
@@ -85,14 +124,9 @@ describe("guidance that reaches a finishing local Pi child", () => {
   // A report's file is saved inside its settlement's locked transition, so input arriving
   // meanwhile waits for the settlement instead of racing it.
   it.effect("refuses guidance sent while the report file is saved once the report settles", () =>
-    Effect.gen(function* () {
-      const gate = yield* gatedReportArchive;
-      const { fake, notifications, layer } = localServiceFixture({ archiveReport: gate.archive });
-      return yield* withService(layer, function* (service) {
-        const run = yield* service.start(request({ name: "archiving-child" }));
-        const control = fake.controls[0]!;
-        control.settle("Old report.");
-        yield* Deferred.await(gate.entered);
+    whileReportSaves("archiving-child", (saving) =>
+      Effect.gen(function* () {
+        const { gate, service, run, control, notifications } = saving;
         const prompts = control.commandTypes("prompt").length;
 
         control.answerNextGuidance("started");
@@ -105,28 +139,18 @@ describe("guidance that reaches a finishing local Pi child", () => {
         // No restarted turn exists for the old report to abandon.
         expect(yield* Fiber.join(sending)).toMatchObject({ code: "agent_unavailable" });
         expect(control.commandTypes("prompt")).toHaveLength(prompts);
-        expect(yield* runView(service, run.id)).toMatchObject({
-          state: "completed",
-          finalText: "Old report.",
-          reportArchive: { path: "/archive/1.md" },
-        });
-        expect(gate.discarded).toEqual([]);
+        yield* expectOldReportKept(saving);
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(() => notifications.length === 1);
         expect(reportsAtRoot(notifications)).toEqual(["Old report."]);
-      });
-    }),
+      }),
+    ),
   );
 
   it.effect("doesn't acknowledge a pause requested while the report file is saved", () =>
-    Effect.gen(function* () {
-      const gate = yield* gatedReportArchive;
-      const { fake, layer } = localServiceFixture({ archiveReport: gate.archive });
-      return yield* withService(layer, function* (service) {
-        const run = yield* service.start(request({ name: "paused-while-archiving" }));
-        fake.controls[0]!.settle("Old report.");
-        yield* Deferred.await(gate.entered);
-
+    whileReportSaves("paused-while-archiving", (saving) =>
+      Effect.gen(function* () {
+        const { gate, service, run } = saving;
         const pausing = yield* service
           .interrupt(run.id)
           .pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
@@ -134,26 +158,15 @@ describe("guidance that reaches a finishing local Pi child", () => {
         yield* Deferred.succeed(gate.release, undefined);
 
         expect(yield* Fiber.join(pausing)).toMatchObject({ code: "interrupt_state_invalid" });
-        expect(yield* runView(service, run.id)).toMatchObject({
-          state: "completed",
-          finalText: "Old report.",
-          reportArchive: { path: "/archive/1.md" },
-        });
-        expect(gate.discarded).toEqual([]);
-      });
-    }),
+        yield* expectOldReportKept(saving);
+      }),
+    ),
   );
 
   it.effect("keeps the report when handled guidance and a backend failure meet its file save", () =>
-    Effect.gen(function* () {
-      const gate = yield* gatedReportArchive;
-      const { fake, notifications, layer } = localServiceFixture({ archiveReport: gate.archive });
-      return yield* withService(layer, function* (service) {
-        const run = yield* service.start(request({ name: "failing-while-archiving" }));
-        const control = fake.controls[0]!;
-        control.settle("Old report.");
-        yield* Deferred.await(gate.entered);
-
+    whileReportSaves("failing-while-archiving", (saving) =>
+      Effect.gen(function* () {
+        const { gate, service, run, control, notifications } = saving;
         control.answerNextGuidance("handled");
         const sending = yield* service
           .send(run.id, "/compact")
@@ -165,17 +178,12 @@ describe("guidance that reaches a finishing local Pi child", () => {
 
         expect(yield* Fiber.join(sending)).toMatchObject({ code: "agent_unavailable" });
         yield* yieldTurns(25);
-        expect(yield* runView(service, run.id)).toMatchObject({
-          state: "completed",
-          finalText: "Old report.",
-          reportArchive: { path: "/archive/1.md" },
-        });
-        expect(gate.discarded).toEqual([]);
+        yield* expectOldReportKept(saving);
         yield* TestClock.adjust("100 millis");
         yield* yieldUntil(() => notifications.length === 1);
         expect(reportsAtRoot(notifications)).toEqual(["Old report."]);
-      });
-    }),
+      }),
+    ),
   );
 
   it.effect("fails guidance that the child handled before it reached the model", () => {

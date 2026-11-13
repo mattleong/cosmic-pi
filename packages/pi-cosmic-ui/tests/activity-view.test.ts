@@ -1,77 +1,29 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Predicate from "effect/Predicate";
-import {
-  deferredPromise,
-  extensionApiFixture,
-  extensionContextFixture,
-  piKeybindingsFixture,
-  plainTheme,
-  tuiFixture,
-} from "pi-cosmic-core/testing";
+import { yieldUntil } from "pi-cosmic-core/testing";
 import { discoverActivityView } from "../src/activity/view-protocol.ts";
-import { createActivityHost } from "../src/boundary/host-activity.ts";
-import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
-import { connectedActivityService } from "./support/activity.ts";
-import { eventBus } from "./support/host.ts";
+import { activityHostHarness } from "./support/activity.ts";
 
 const fixture = (mode: "tui" | "rpc" = "tui") =>
   Effect.gen(function* () {
-    const { events } = eventBus();
     const run = Effect.runPromiseWith(yield* Effect.context());
-    const surface = fakeCustomSurfaceHost({
-      columns: 80,
-      rows: 24,
-      theme: plainTheme,
-      keybindings: piKeybindingsFixture(),
-    });
-    const host = createActivityHost(
-      extensionApiFixture({ events }),
-      () => undefined,
-      (effect, signal) => run(effect, signal ? { signal } : undefined),
-    );
-    let dispose: (() => void) | undefined;
-    const opened = deferredPromise();
-    const custom: ExtensionContext["ui"]["custom"] = (factory, options) => {
-      const result = surface.ctx.ui.custom(factory, options);
-      opened.resolve();
-      return result;
-    };
-    const ctx = extensionContextFixture({
+    const harness = activityHostHarness({
       mode,
-      sessionManager: { getSessionId: () => "session" },
-      ui: {
-        custom,
-        notify() {},
-        setWidget(
-          _key: string,
-          value: string[] | Parameters<ExtensionContext["ui"]["setWidget"]>[1],
-        ) {
-          if (!value) {
-            dispose?.();
-            return;
-          }
-          if (Predicate.isFunction(value)) {
-            const component = value(tuiFixture(), plainTheme);
-            dispose = () => component.dispose?.();
-          }
-        },
-      },
+      run: (effect, signal) => run(effect, signal ? { signal } : undefined),
     });
-    host.activate(ctx, yield* connectedActivityService(host.serviceOptions()));
-    return { events, surface, host, opened };
+    harness.host.activate(harness.ctx, yield* harness.service());
+    return harness;
   });
 
 describe("activity view capability", () => {
   it.effect("is unavailable without an installed TUI host and is session-bound", () =>
     Effect.gen(function* () {
       const rpc = yield* fixture("rpc");
-      expect(discoverActivityView(rpc.events, "session")).toBeUndefined();
+      expect(discoverActivityView(rpc.bus, "session")).toBeUndefined();
       const tui = yield* fixture();
-      expect(discoverActivityView(tui.events, "other")).toBeUndefined();
-      expect(discoverActivityView(tui.events, "session")).toBeDefined();
+      expect(discoverActivityView(tui.bus, "other")).toBeUndefined();
+      expect(discoverActivityView(tui.bus, "session")).toBeDefined();
     }),
   );
   it.effect(
@@ -79,7 +31,7 @@ describe("activity view capability", () => {
     () =>
       Effect.gen(function* () {
         const f = yield* fixture();
-        const view = discoverActivityView(f.events, "session")!;
+        const view = discoverActivityView(f.bus, "session")!;
         let settled = false;
         const opening = yield* Effect.tryPromise((signal) => view.open("tasks", signal)).pipe(
           Effect.tap(() =>
@@ -89,7 +41,7 @@ describe("activity view capability", () => {
           ),
           Effect.forkScoped({ startImmediately: true }),
         );
-        yield* Effect.promise(() => f.opened.promise);
+        yield* yieldUntil(() => f.surface.pendingMounts > 0);
         f.surface.mount();
         expect(settled).toBe(false);
         yield* Effect.flip(Effect.tryPromise(() => view.open("subagents")));
@@ -106,7 +58,7 @@ describe("activity view capability", () => {
       const owned = yield* Effect.scoped(
         Effect.gen(function* () {
           const f = yield* fixture();
-          const view = discoverActivityView(f.events, "session")!;
+          const view = discoverActivityView(f.bus, "session")!;
           const controller = new AbortController();
           controller.abort();
           yield* Effect.flip(Effect.tryPromise(() => view.open("tasks", controller.signal)));
@@ -115,7 +67,7 @@ describe("activity view capability", () => {
         }),
       );
       yield* Effect.flip(Effect.tryPromise(() => owned.view.open("tasks")));
-      expect(discoverActivityView(owned.f.events, "session")).toBeUndefined();
+      expect(discoverActivityView(owned.f.bus, "session")).toBeUndefined();
     }),
   );
 });

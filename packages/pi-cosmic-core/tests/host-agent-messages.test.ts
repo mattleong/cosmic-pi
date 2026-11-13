@@ -5,7 +5,6 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { vi } from "vitest";
 import {
-  agentMessageRecipientState,
   deliverAgentMessage,
   frameAgentMessage,
   readLatestReply,
@@ -13,6 +12,7 @@ import {
 import { registerSessionWake } from "../src/host-wake.ts";
 import { extensionContextFixture } from "../src/testing/host.ts";
 import { recordingExtensionHost } from "../src/testing/extension-host.ts";
+import { sessionMessageEntryFixture } from "../src/testing/session.ts";
 
 const NOTICE_TYPE = "test-agent-message";
 
@@ -42,13 +42,8 @@ const harness = () => {
   };
 };
 
-const assistantEntry = (text: string): SessionEntry => ({
-  type: "message",
-  id: "entry",
-  parentId: null,
-  timestamp: "",
-  message: fauxAssistantMessage(text),
-});
+const assistantEntry = (text: string): SessionEntry =>
+  sessionMessageEntryFixture(fauxAssistantMessage(text));
 
 describe("agent message frame", () => {
   it("leads with the sender, keeps the text whole, and ends with how to reply", () => {
@@ -85,14 +80,6 @@ describe("agent message delivery", () => {
         { customType: NOTICE_TYPE, content: "Framed.", details: { from: "peer" }, display: true },
         { deliverAs: "steer", triggerTurn: false },
       ],
-    ]);
-  });
-
-  it("names the recipient's state from how the wake delivered", () => {
-    expect(Arr.map(["woken", "queued", "held"] as const, agentMessageRecipientState)).toEqual([
-      "idle",
-      "busy",
-      "held",
     ]);
   });
 

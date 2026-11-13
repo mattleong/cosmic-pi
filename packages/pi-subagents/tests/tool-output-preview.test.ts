@@ -2,13 +2,14 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import { toolOutputPreview } from "../src/backend/tool-output-preview.ts";
+import * as Fn from "effect/Function";
 
 const lines = (count: number): string =>
   Arr.join(
     Arr.makeBy(count, (index) => `line ${index + 1}`),
     "\n",
   );
-const xs = (count: number): string => Str.repeat(count)("x");
+const xs = (count: number): string => Fn.pipe("x", Str.repeat(count));
 
 describe("tool output previews", () => {
   it("keeps up to seven lines whole and marks longer output as cut", () => {

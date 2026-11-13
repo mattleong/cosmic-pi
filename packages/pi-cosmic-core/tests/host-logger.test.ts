@@ -62,9 +62,8 @@ it.live("absorbs an uncreatable log directory and writes nothing", () =>
     const blocked = nodePath.join(directory, "logs");
     yield* Effect.promise(() => fs.writeFile(blocked, ""));
 
-    const exit = yield* Effect.exit(logThrough(() => directory, "must not escape as a failure"));
+    yield* logThrough(() => directory, "must not escape as a failure");
 
-    expect(exit._tag).toBe("Success");
     expect(yield* Effect.promise(() => fs.readFile(blocked, "utf8"))).toBe("");
   }),
 );

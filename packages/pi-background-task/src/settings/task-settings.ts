@@ -4,16 +4,17 @@ import {
   inheritChoice,
   SCOPES,
   sessionValue,
-  settingDisplayValue,
   TASK_SETTING_DESCRIPTORS,
   TASK_SETTINGS_COMMAND,
 } from "./task-settings-options.ts";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -32,6 +33,7 @@ import {
   type BackgroundTaskSettingValue,
 } from "../config/schema.ts";
 import {
+  inheritChoiceValues,
   settingInherited,
   settingOnOff,
   type SettingsSurfaceItem,
@@ -104,7 +106,7 @@ const sessionValueSentence = (setting: BackgroundTaskSetting, value: string) =>
   setting.kind === "switch"
     ? `${Str.capitalize(value)} in this session.`
     : // A no-break space keeps a value such as `1 MB` on one line when the description wraps.
-      `This session uses ${Str.replaceAll(" ", "\u00a0")(value)}.`;
+      `This session uses ${Fn.pipe(value, Str.replaceAll(" ", "\u00a0"))}.`;
 
 const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): SettingItem => ({
   id: rowKey(scope, "file"),
@@ -114,7 +116,7 @@ const unavailableScopeRow = (scope: TaskSettingsScope, problem: string): Setting
 });
 
 const settingDescriptor = (id: string) =>
-  Option.getOrUndefined(Arr.findFirst(BACKGROUND_TASK_SETTINGS, (entry) => entry.id === id));
+  findOrUndefined(BACKGROUND_TASK_SETTINGS, (entry) => entry.id === id);
 
 /**
  * Writes a checked value, or removes the scope's own value for `inherit`. Resolves to the value as
@@ -172,15 +174,14 @@ function createTaskSettingsSubcommand(
     config: BackgroundTaskConfig,
     files: ReadonlyArray<ScopeFile>,
   ): SettingsSurfaceItem[] => {
-    const listed = BACKGROUND_TASK_SETTINGS;
     scopesRead = true;
     for (const file of files) {
       if (!("own" in file)) continue;
-      for (const setting of listed) {
+      for (const setting of BACKGROUND_TASK_SETTINGS) {
         const stored = file.own[setting.id];
         known.set(
           rowKey(file.scope, setting.id),
-          stored === undefined ? INHERIT : settingDisplayValue(setting, stored),
+          stored === undefined ? INHERIT : formatSettingValue(setting.kind, stored),
         );
       }
     }
@@ -208,25 +209,20 @@ function createTaskSettingsSubcommand(
         label: setting.label,
         description,
         currentValue,
-        values: [
-          inherited,
-          ...(currentValue === inherited || setting.values.includes(currentValue)
-            ? []
-            : [currentValue]),
-          ...setting.values,
-        ],
+        values: inheritChoiceValues(inherited, setting.values, currentValue),
       };
     };
-    const ownsValue = (scope: TaskSettingsScope, setting: BackgroundTaskSetting) =>
-      ownValue(scope, setting) !== undefined;
     // A scope's value: the values in effect that matter most, then the others it sets itself, such
     // as `on · 16 running · 1 MB per task · 5s grace`.
     const summary = (scope: TaskSettingsScope) => () => {
       // Descriptor order matches the lead's order, so the lead values come first.
       const leads = (setting: BackgroundTaskSetting) => Arr.contains(SUMMARY_LEAD, setting.id);
       const shown = [
-        ...Arr.filter(listed, leads),
-        ...Arr.filter(listed, (setting) => !leads(setting) && ownsValue(scope, setting)),
+        ...Arr.filter(BACKGROUND_TASK_SETTINGS, leads),
+        ...Arr.filter(
+          BACKGROUND_TASK_SETTINGS,
+          (setting) => !leads(setting) && ownValue(scope, setting) !== undefined,
+        ),
       ];
       const values = Arr.map(shown, (setting) => ({
         id: setting.id,
@@ -243,7 +239,8 @@ function createTaskSettingsSubcommand(
     // Each scope is one group row, so the list reads by scope instead of repeating it.
     return Arr.map(files, (file): SettingsSurfaceItem => {
       if ("problem" in file) return unavailableScopeRow(file.scope, file.problem);
-      const children = () => Arr.map(listed, (setting) => settingRow(file.scope, setting));
+      const children = () =>
+        Arr.map(BACKGROUND_TASK_SETTINGS, (setting) => settingRow(file.scope, setting));
       const scopeSummary = summary(file.scope);
       return {
         id: `group:${file.scope}`,

@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
-import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -14,13 +13,6 @@ import {
   boundedCleanupDiagnostic,
   cleanupFailureDiagnostic as failureDiagnostic,
 } from "./cleanup-diagnostic.ts";
-
-type ExitedScopeOwnership = Data.TaggedEnum<{
-  Stale: Record<never, never>;
-  Close: Record<never, never>;
-  Wait: { readonly settled: Deferred.Deferred<void> };
-}>;
-const ExitedScopeOwnership = Data.taggedEnum<ExitedScopeOwnership>();
 
 const reclaimWithinBound = (
   record: RunRecord,
@@ -463,26 +455,24 @@ export function recordCleanup(
         );
       }),
     );
-  const closeExitedScope = (record: RunRecord, scope: Scope.Closeable): Effect.Effect<void> =>
-    withLock(
-      Effect.sync(() => {
-        if (record.scope !== scope || record.closingScope === scope)
-          return ExitedScopeOwnership.Stale();
-        return record.initialization
-          ? ExitedScopeOwnership.Wait({ settled: record.initialization.settled })
-          : ExitedScopeOwnership.Close();
-      }),
-    ).pipe(
-      Effect.flatMap(
-        ExitedScopeOwnership.$match({
-          Stale: () => Effect.void,
-          Close: () => closeRecordScope(record, scope),
-          Wait: ({ settled }) =>
-            Deferred.await(settled).pipe(Effect.flatMap(() => closeExitedScope(record, scope))),
-        }),
-      ),
-      Effect.asVoid,
-    );
+  const closeExitedScope = Effect.fn("SubagentRecordCleanup.closeExitedScope")(function* (
+    record: RunRecord,
+    scope: Scope.Closeable,
+  ) {
+    while (true) {
+      const initializing = yield* withLock(
+        Effect.sync(() =>
+          record.scope !== scope || record.closingScope === scope
+            ? ("stale" as const)
+            : record.initialization?.settled,
+        ),
+      );
+      if (initializing === "stale") return;
+      if (!initializing) break;
+      yield* Deferred.await(initializing);
+    }
+    yield* closeRecordScope(record, scope);
+  });
 
   return {
     reclaimRecordRunState,

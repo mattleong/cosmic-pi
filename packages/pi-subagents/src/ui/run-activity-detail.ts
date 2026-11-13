@@ -16,9 +16,8 @@ import {
   cleanupRecoveryText,
   workspaceOutcomeLabel,
 } from "../tools/format.ts";
-import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
-import { isOwnedAgentTool } from "../tools/activity-preview.ts";
-import { type RunNameLookup, waitingOn } from "./run-live-activity.ts";
+import { isCoordinationTool, SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
+import { type RunNameLookup, type ToolEvent, waitingOn } from "./run-live-activity.ts";
 import { isTextFragment } from "../tools/text-fragments.ts";
 import { WRITER_WORKSPACE_LABELS } from "./run-facts.ts";
 import { homeDisplayPath } from "./display-path.ts";
@@ -59,8 +58,6 @@ const problems = (run: SubagentRunView): ActivityDetailSection[] => {
   ];
 };
 
-type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
-
 // A finished call leads with the glyph that says how it ended. Details don't redraw, so a call
 // still running is marked neutral and keeps its word, as snapshot rows do.
 const TOOL_EVENT_GLYPHS = {
@@ -94,7 +91,7 @@ const toolLines = (event: ToolEvent, nameOf: RunNameLookup): ToolLines => {
       " · ",
     )}`,
     output:
-      activity || event.outputPreview === undefined || isOwnedAgentTool(event.toolName)
+      activity || event.outputPreview === undefined || isCoordinationTool(event.toolName)
         ? []
         : Arr.map(Str.split(event.outputPreview, "\n"), (line) => `  ${line}`),
   };
@@ -160,7 +157,7 @@ const usageLine = (run: SubagentRunView): string =>
         ? ""
         : `context ${Math.round(run.usage.contextPercent)}% full`,
     ],
-    Arr.filter(Boolean),
+    Arr.filter(Str.isNonEmpty),
     Arr.join(" · "),
   );
 

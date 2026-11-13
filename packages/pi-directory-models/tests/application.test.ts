@@ -46,6 +46,18 @@ type ThinkingLevel = ThinkingLevelSelectEvent["level"];
 const model = (provider: string, id: string): Model =>
   modelFixture({ provider, id, reasoning: true });
 
+const preferenceOf = (selected: Model, thinkingLevel: "low" | "medium" | "high") => ({
+  provider: selected.provider,
+  model: selected.id,
+  thinkingLevel,
+});
+
+const settled = (emitted: Promise<unknown>) =>
+  emitted.then(
+    () => Effect.void,
+    (cause: unknown) => Effect.die(cause),
+  );
+
 const entryBase = (id: string) => ({
   id,
   parentId: null,
@@ -87,7 +99,6 @@ const writePreference = (
   agentDirectory: string,
   cwd: string,
   preference: Omit<DirectoryModelPreference, "cwd" | "version">,
-  documentCwd?: string,
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -96,7 +107,7 @@ const writePreference = (
     yield* fs.makeDirectory(path.join(agentDirectory, "pi-directory-models"), { recursive: true });
     const serialized = yield* Schema.encodeUnknownEffect(PreferenceFromJson)(
       directoryModelPreference(
-        documentCwd ?? (yield* fs.realPath(cwd)),
+        yield* fs.realPath(cwd),
         preference.provider,
         preference.model,
         preference.thinkingLevel,
@@ -115,6 +126,7 @@ const harness = (
     readonly cwd?: string;
     readonly delayThinkingEvents?: boolean;
     readonly modelReadFailure?: boolean;
+    readonly thinkingReadFailure?: boolean;
     readonly setModelDenied?: boolean;
     readonly setModelSettlement?: Promise<void>;
     readonly onSetModel?: () => void;
@@ -132,11 +144,7 @@ const harness = (
 
     const initial = model("anthropic", "claude-sonnet");
     const remembered = model("openai-codex", "gpt-5.6-sol");
-    const rememberedPreference = {
-      provider: remembered.provider,
-      model: remembered.id,
-      thinkingLevel: "high" as const,
-    };
+    const rememberedPreference = preferenceOf(remembered, "high");
     const alternate = model("xai", "grok-code");
     const available = new Map(
       Arr.map(
@@ -172,12 +180,7 @@ const harness = (
     const setThinkingLevel = vi.fn((level: typeof thinkingLevel) => {
       if (options.retireDuringThinkingRestore) {
         // The shutdown handler retires the session synchronously; runtime disposal follows later.
-        thinkingEvents.push(
-          host.emit("session_shutdown", ctx).then(
-            () => Effect.void,
-            (cause: unknown) => Effect.die(cause),
-          ),
-        );
+        thinkingEvents.push(settled(host.emit("session_shutdown", ctx)));
         throw new Error("thinking level failed after retirement");
       }
       const previousLevel = thinkingLevel;
@@ -188,31 +191,26 @@ const harness = (
         previousLevel,
       };
       if (options.delayThinkingEvents) delayedThinkingEvents.push(event);
-      else
-        thinkingEvents.push(
-          host.emit("thinking_level_select", ctx, event).then(
-            () => Effect.void,
-            (cause: unknown) => Effect.die(cause),
-          ),
-        );
+      else thinkingEvents.push(settled(host.emit("thinking_level_select", ctx, event)));
     });
-    const host = recordingExtensionHost(
-      {},
-      { setModel, getThinkingLevel: () => thinkingLevel, setThinkingLevel },
-    );
-    const getEntries = vi.fn(() => {
+    const getThinkingLevel = () => {
+      if (options.thinkingReadFailure) throw new Error("thinking level read failed");
+      return thinkingLevel;
+    };
+    const host = recordingExtensionHost({}, { setModel, getThinkingLevel, setThinkingLevel });
+    const getEntries = () => {
       if (options.sessionReadFailure === "entries" || options.sessionReadFailure === "both") {
         throw new Error("entries read failed");
       }
       return [...(options.entries ?? [])];
-    });
-    const getLeafId = vi.fn(() => {
+    };
+    const getLeafId = () => {
       if (options.sessionReadFailure === "leaf" || options.sessionReadFailure === "both") {
         throw new Error("leaf read failed");
       }
       if (options.leafId !== undefined) return options.leafId;
       return options.entries?.at(-1)?.id ?? null;
-    });
+    };
     const ctx = extensionContextFixture({
       cwd,
       get model() {
@@ -265,8 +263,6 @@ const harness = (
       /** Notices at one level: the info notice after a restore is separate from any warning. */
       notices: (level: "info" | "warning") =>
         Arr.filter(notify.mock.calls, ([, shown]) => shown === level),
-      getEntries,
-      getLeafId,
       setModel,
       setThinkingLevel,
       start,
@@ -314,9 +310,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
 
       expect(yield* h.readPreference()).toMatchObject({
         cwd: yield* fs.realPath(h.cwd),
-        provider: h.initial.provider,
-        model: h.initial.id,
-        thinkingLevel: "low",
+        ...preferenceOf(h.initial, "low"),
       });
     }),
   );
@@ -325,10 +319,13 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     Effect.gen(function* () {
       const h = yield* harness();
       yield* h.seedRememberedPreference();
+      yield* h.stampPreference();
 
       yield* h.start();
       expect(h.setModel).toHaveBeenCalledWith(h.remembered);
       expect(h.thinking()).toBe("high");
+      // Restoring what is already saved rewrites nothing.
+      expect(yield* h.preferenceModifiedAt()).toBe(UNCHANGED_STAMP_SECONDS);
       // One info notice names what the restore put in use.
       expect(h.notices("info")).toEqual([
         [expect.stringContaining(`${h.remembered.provider}/${h.remembered.id}`), "info"],
@@ -345,29 +342,11 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
   it.effect("restores silently when the session already uses the saved preference", () =>
     Effect.gen(function* () {
       const h = yield* harness();
-      yield* writePreference(h.agentDirectory, h.cwd, {
-        provider: h.initial.provider,
-        model: h.initial.id,
-        thinkingLevel: "low",
-      });
+      yield* writePreference(h.agentDirectory, h.cwd, preferenceOf(h.initial, "low"));
 
       yield* h.start();
       expect(h.setModel).not.toHaveBeenCalled();
       expect(h.notify).not.toHaveBeenCalled();
-    }),
-  );
-
-  it.effect("does not rewrite a restored preference that is already saved", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      yield* h.seedRememberedPreference();
-      yield* h.stampPreference();
-
-      yield* h.start();
-      expect(h.setModel).toHaveBeenCalledWith(h.remembered);
-      expect(h.thinking()).toBe("high");
-      expect(yield* h.preferenceModifiedAt()).toBe(UNCHANGED_STAMP_SECONDS);
-      expect(h.notices("warning")).toEqual([]);
     }),
   );
 
@@ -472,67 +451,41 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
         expect(h.model()).toEqual(h.initial);
         expect(h.thinking()).toBe("low");
         expect(yield* h.readPreference()).toEqual(saved);
-        expect(h.getEntries).not.toHaveBeenCalled();
-        expect(h.getLeafId).not.toHaveBeenCalled();
         expect(h.setModel).not.toHaveBeenCalled();
 
         h.select(h.alternate, "medium");
         yield* h.emitModel(h.alternate, h.initial);
-        expect(yield* h.readPreference()).toMatchObject({
-          provider: h.alternate.provider,
-          model: h.alternate.id,
-          thinkingLevel: "medium",
-        });
+        expect(yield* h.readPreference()).toMatchObject(preferenceOf(h.alternate, "medium"));
         expect(h.notify).not.toHaveBeenCalled();
         yield* h.shutdown();
       }
     }),
   );
 
-  it.effect("persists interactive model and thinking changes but ignores restore events", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      yield* h.start();
+  it.effect(
+    "persists interactive model and thinking changes once per final state and ignores restore events",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* harness();
+        yield* h.start();
 
-      h.select(h.remembered, "medium");
-      yield* h.emitModel(h.remembered, h.initial);
-      expect(yield* h.readPreference()).toMatchObject({
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "medium",
-      });
+        h.select(h.remembered, "medium");
+        yield* h.emitModel(h.remembered, h.initial);
+        expect(yield* h.readPreference()).toMatchObject(preferenceOf(h.remembered, "medium"));
+        // A second event for the same final selection writes nothing.
+        yield* h.stampPreference();
+        yield* h.emitThinking("medium", "low");
+        expect(yield* h.preferenceModifiedAt()).toBe(UNCHANGED_STAMP_SECONDS);
 
-      h.select(h.remembered, "high");
-      yield* h.emitThinking("high", "medium");
-      expect((yield* h.readPreference()).thinkingLevel).toBe("high");
+        h.select(h.remembered, "high");
+        yield* h.emitThinking("high", "medium");
+        expect((yield* h.readPreference()).thinkingLevel).toBe("high");
 
-      h.select(h.alternate, "low");
-      yield* h.emitModel(h.alternate, h.remembered, "restore");
-      expect(yield* h.readPreference()).toMatchObject(h.rememberedPreference);
-    }),
-  );
-
-  it.effect("writes once for model and thinking events that reach one final state", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      yield* h.start();
-
-      h.select(h.remembered, "medium");
-      yield* h.emitModel(h.remembered, h.initial);
-      expect(yield* h.readPreference()).toMatchObject({
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "medium",
-      });
-      yield* h.stampPreference();
-      yield* h.emitThinking("medium", "low");
-      expect(yield* h.preferenceModifiedAt()).toBe(UNCHANGED_STAMP_SECONDS);
-
-      h.select(h.remembered, "high");
-      yield* h.emitThinking("high", "medium");
-      expect((yield* h.readPreference()).thinkingLevel).toBe("high");
-      expect(h.notify).not.toHaveBeenCalled();
-    }),
+        h.select(h.alternate, "low");
+        yield* h.emitModel(h.alternate, h.remembered, "restore");
+        expect(yield* h.readPreference()).toMatchObject(h.rememberedPreference);
+        expect(h.notify).not.toHaveBeenCalled();
+      }),
   );
 
   it.effect(
@@ -544,20 +497,29 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
 
         h.select(h.remembered, "medium");
         yield* h.emitModel(h.remembered, h.initial);
-        yield* writePreference(h.agentDirectory, h.cwd, {
-          provider: h.alternate.provider,
-          model: h.alternate.id,
-          thinkingLevel: "low",
-        });
+        yield* writePreference(h.agentDirectory, h.cwd, preferenceOf(h.alternate, "low"));
 
         yield* h.emitThinking("medium", "low");
-        expect(yield* h.readPreference()).toMatchObject({
-          provider: h.remembered.provider,
-          model: h.remembered.id,
-          thinkingLevel: "medium",
-        });
+        expect(yield* h.readPreference()).toMatchObject(preferenceOf(h.remembered, "medium"));
         expect(h.notify).not.toHaveBeenCalled();
       }),
+  );
+
+  it.effect("warns once and saves nothing when Pi's thinking level cannot be read", () =>
+    Effect.gen(function* () {
+      const h = yield* harness({ thinkingReadFailure: true });
+      // A resumed session restores nothing, so only the saves below read the thinking level.
+      yield* h.start("resume");
+      expect(h.notify).not.toHaveBeenCalled();
+
+      h.select(h.remembered);
+      yield* h.emitModel(h.remembered, h.initial);
+      h.select(h.alternate);
+      yield* h.emitModel(h.alternate, h.remembered);
+
+      expect(h.notify.mock.calls).toEqual([[expect.stringContaining("/thinking"), "warning"]]);
+      expect(yield* h.preferenceExists()).toBe(false);
+    }),
   );
 
   it.effect("keeps thinking events delayed past restoration idempotent", () =>
@@ -570,11 +532,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       yield* h.emitModel(h.alternate, h.remembered);
       yield* h.flushThinkingEvents();
 
-      expect(yield* h.readPreference()).toMatchObject({
-        provider: h.alternate.provider,
-        model: h.alternate.id,
-        thinkingLevel: "medium",
-      });
+      expect(yield* h.readPreference()).toMatchObject(preferenceOf(h.alternate, "medium"));
     }),
   );
 
@@ -639,11 +597,7 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
       expect(h.setThinkingLevel).not.toHaveBeenCalled();
       expect(h.thinking()).toBe("low");
       expect(h.notices("warning")).toEqual([[expect.any(String), "warning"]]);
-      expect(yield* h.readPreference()).toMatchObject({
-        provider: h.remembered.provider,
-        model: h.remembered.id,
-        thinkingLevel: "low",
-      });
+      expect(yield* h.readPreference()).toMatchObject(preferenceOf(h.remembered, "low"));
     }),
   );
 
@@ -670,48 +624,29 @@ layer(nodeFilePlatformLayer)("directory models application", (it) => {
     }),
   );
 
-  it.effect("fails open and preserves malformed or foreign-cwd preference documents", () =>
+  it.effect("fails open and preserves malformed, incomplete, or foreign-cwd documents", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
+      type Saved = ReturnType<typeof preferenceOf>;
+      const documents = [
+        () => Effect.succeed("{ not json"),
+        ({ provider, thinkingLevel }: Saved, cwd: string) =>
+          encodeJsonDocument({ version: 1, cwd, provider, thinkingLevel }),
+        (saved: Saved) => encodeJsonDocument({ version: 1, ...saved, cwd: "/somewhere/else" }),
+      ];
+      for (const document of documents) {
+        const h = yield* harness();
+        const target = yield* h.seedRememberedPreference();
+        const saved = yield* document(h.rememberedPreference, yield* fs.realPath(h.cwd));
+        yield* fs.writeFileString(target, saved);
 
-      const malformed = yield* harness();
-      const malformedTarget = yield* preferencePath(malformed.agentDirectory, malformed.cwd);
-      yield* fs.makeDirectory(path.dirname(malformedTarget), { recursive: true });
-      yield* fs.writeFileString(malformedTarget, "{ not json");
-      yield* malformed.start();
-      expect(malformed.setModel).not.toHaveBeenCalled();
-      expect(yield* fs.readFileString(malformedTarget)).toBe("{ not json");
-      yield* malformed.shutdown();
-
-      const incomplete = yield* harness();
-      const incompleteTarget = yield* incomplete.seedRememberedPreference();
-      const withoutModel = yield* encodeJsonDocument({
-        version: 1,
-        cwd: yield* fs.realPath(incomplete.cwd),
-        provider: incomplete.remembered.provider,
-        thinkingLevel: "high",
-      });
-      yield* fs.writeFileString(incompleteTarget, withoutModel);
-      yield* incomplete.start();
-      expect(incomplete.setModel).not.toHaveBeenCalled();
-      expect(incomplete.thinking()).toBe("low");
-      expect(incomplete.notify.mock.calls).toEqual([[expect.any(String), "warning"]]);
-      expect(yield* fs.readFileString(incompleteTarget)).toBe(withoutModel);
-      yield* incomplete.shutdown();
-
-      const foreign = yield* harness();
-      const foreignTarget = yield* writePreference(
-        foreign.agentDirectory,
-        foreign.cwd,
-        foreign.rememberedPreference,
-        "/somewhere/else",
-      );
-      const document = yield* fs.readFileString(foreignTarget);
-      yield* foreign.start();
-      expect(foreign.setModel).not.toHaveBeenCalled();
-      expect(yield* fs.readFileString(foreignTarget)).toBe(document);
-      yield* foreign.shutdown();
+        yield* h.start();
+        expect(h.setModel).not.toHaveBeenCalled();
+        expect(h.thinking()).toBe("low");
+        expect(h.notify.mock.calls).toEqual([[expect.any(String), "warning"]]);
+        expect(yield* fs.readFileString(target)).toBe(saved);
+        yield* h.shutdown();
+      }
     }),
   );
 

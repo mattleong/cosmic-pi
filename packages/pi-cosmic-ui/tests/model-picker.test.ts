@@ -33,23 +33,23 @@ describe("model picker projection", () => {
   });
 });
 
-describe("ModelPickerPage", () => {
-  const picker = (overrides: Partial<ModelPickerPageOptions<ModelPickerModel>> = {}) => {
-    const select = vi.fn();
-    const cancel = vi.fn();
-    const page = new ModelPickerPage({
-      theme: plainTheme,
-      scopedModels: scoped,
-      allModels: all,
-      getHeight: () => 12,
-      requestRender: vi.fn(),
-      select,
-      cancel,
-      ...overrides,
-    });
-    return { page, select, cancel };
-  };
+const picker = (overrides: Partial<ModelPickerPageOptions<ModelPickerModel>> = {}) => {
+  const select = vi.fn();
+  const cancel = vi.fn();
+  const page = new ModelPickerPage({
+    theme: plainTheme,
+    scopedModels: scoped,
+    allModels: all,
+    getHeight: () => 12,
+    requestRender: vi.fn(),
+    select,
+    cancel,
+    ...overrides,
+  });
+  return { page, select, cancel };
+};
 
+describe("ModelPickerPage", () => {
   it("keeps a hidden stable identity across filtering and scope changes", () => {
     const { page, select } = picker({ current: "anthropic/claude-opus" });
     page.handleInput("/");
@@ -96,14 +96,10 @@ describe("model picker groups", () => {
       "openai-codex",
     ]);
     expect(choices[1]?.item.label).not.toContain("openai-codex");
-    const select = vi.fn();
-    const page = new ModelPickerPage({
-      theme: plainTheme,
+    const { page, select } = picker({
       scopedModels: models,
+      allModels: undefined,
       getHeight: () => 20,
-      requestRender: vi.fn(),
-      select,
-      cancel: vi.fn(),
     });
     page.handleInput("j");
     page.handleInput("j");
@@ -112,15 +108,11 @@ describe("model picker groups", () => {
   });
 
   it("still finds a model by its whole provider/model selector", () => {
-    const select = vi.fn();
-    const page = new ModelPickerPage({
-      theme: plainTheme,
+    const { page, select } = picker({
       scopedModels: models,
+      allModels: undefined,
       initialSearchMode: true,
       getHeight: () => 20,
-      requestRender: vi.fn(),
-      select,
-      cancel: vi.fn(),
     });
     for (const key of "anthropic/claude") page.handleInput(key);
     page.handleInput("\r");

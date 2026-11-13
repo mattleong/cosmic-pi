@@ -1,7 +1,6 @@
-import { createEventBus, initTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import type { CodePreviewSettings } from "pi-code-previews";
 import {
   applyPresentationSettings,
@@ -10,14 +9,10 @@ import {
   toolRowFrames,
 } from "pi-code-previews/testing";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import {
-  deferredPromise,
-  extensionContextFixture,
-  recordingExtensionHost,
-  type DefaultedEventName,
-} from "pi-cosmic-core/testing";
+import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach, beforeAll, vi } from "vitest";
-import { registerBackgroundTaskApplication } from "../src/application.ts";
+import { applicationHost, sessionContext } from "./support/application-host.ts";
+import { taskStatus } from "./support/task-service-double.ts";
 
 beforeAll(() => initTheme("dark", false));
 
@@ -31,7 +26,7 @@ const args = { action: "status", id: "task-0000000001" };
 const text = "task-0000000001 failed (exit 2)\ncause: FULL_CAUSE recovery /tmp/task-0000000001.log";
 const details = {
   action: "status",
-  snapshot: {
+  snapshot: taskStatus({
     id: "task-0000000001",
     name: "replay-task",
     command: "run",
@@ -39,21 +34,12 @@ const details = {
     pid: 87654,
     state: "failed",
     exitCode: 2,
-    startedAt: 1,
     endedAt: 2,
     logCursor: 10,
-    droppedLogBytes: 0,
-  },
+  }),
 };
 
-const context = (signal?: AbortSignal) =>
-  extensionContextFixture({
-    cwd: process.cwd(),
-    signal,
-    isProjectTrusted: () => false,
-    hasUI: false,
-    mode: "rpc",
-  });
+const context = (signal?: AbortSignal) => sessionContext({ signal });
 
 const loads = (settings: Partial<CodePreviewSettings>) => () => {
   applyPresentationSettings(settings);
@@ -61,23 +47,14 @@ const loads = (settings: Partial<CodePreviewSettings>) => () => {
 };
 
 const host = (load: () => Promise<void>) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const agentDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "pi-background-replay-" });
-    yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDirectory));
-    const extension = recordingExtensionHost({}, { events: createEventBus() });
-    registerBackgroundTaskApplication(extension.pi, { loadSettings: load });
-    const row = () =>
-      hostToolRow("background_task", args, extension.resolve("background_task"), {
+  Effect.map(applicationHost(load), (app) => ({
+    ...app,
+    row: () =>
+      hostToolRow("background_task", args, app.resolve("background_task"), {
         id: "background-task-call",
         result: { content: [{ type: "text", text }], details, isError: false },
-      });
-    return {
-      registered: extension.tools,
-      row,
-      emit: (name: DefaultedEventName, ctx: ExtensionContext) => extension.emit(name, ctx),
-    };
-  });
+      }),
+  }));
 
 layer(nodeFilePlatformLayer)("background task history replay", (it) => {
   it.effect("history from before startup adopts the registered tool", () =>

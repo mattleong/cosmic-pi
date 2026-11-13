@@ -30,16 +30,13 @@ const acquire = CrossProcessLock.use((lock) =>
     }
   }),
 );
-const program =
-  mode === "exit"
-    ? Effect.void
-    : Effect.gen(function* () {
-        const lease = yield* acquire;
-        if (mode === "pending") lease.mutationStarted();
-        process.send?.("acquired");
-        if (mode !== "once") yield* hold;
-        yield* Effect.try(() => lease.release());
-      }).pipe(Effect.provide(CrossProcessLock.layer({ directory: directory! })));
+const program = Effect.gen(function* () {
+  const lease = yield* acquire;
+  if (mode === "pending") lease.mutationStarted();
+  process.send?.("acquired");
+  if (mode !== "once") yield* hold;
+  yield* Effect.try(() => lease.release());
+}).pipe(Effect.provide(CrossProcessLock.layer({ directory: directory! })));
 process.send?.("attempting");
 Effect.runFork(
   Effect.exit(program).pipe(

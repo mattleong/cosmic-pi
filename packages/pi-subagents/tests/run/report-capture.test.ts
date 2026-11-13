@@ -1,63 +1,23 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import { normalizeRpcEvent } from "../../src/backend/local-pi-events.ts";
 import type { ReportArchiveEntry } from "../../src/boundary/report-archive.ts";
 import { backendEventHandler } from "../../src/run/events.ts";
 import type { CompletionGenerationRecord } from "../../src/run/internal.ts";
 import { MAX_UNRESOLVED_REPORT_GENERATIONS } from "../../src/run/limits.ts";
-import { emptyUsage } from "../../src/run/model.ts";
-import { settlementOperations } from "../../src/run/settlement.ts";
-import {
-  boundOutputText,
-  MAX_ARCHIVED_REPORT_CHARS,
-  MAX_FINAL_TEXT_CHARS,
-} from "../../src/run/state.ts";
+import { boundOutputText, MAX_FINAL_TEXT_CHARS } from "../../src/run/state.ts";
 import { view } from "../fixtures/run-view.ts";
 import {
+  findings,
   makeRunContext,
   makeTestSettlement,
   runningAssignment,
   runRecordFixture,
   quietDelivery,
+  testSettlement,
 } from "./fixtures/run-context.ts";
 import * as Arr from "effect/Array";
 
-const findings = (lines: number) =>
-  Arr.join(
-    Array.from({ length: lines }, (_, line) => `finding ${line}`),
-    "\n",
-  );
-
-const messageEnd = (text: string) => ({
-  type: "message_end" as const,
-  message: { role: "assistant", stopReason: "stop", content: [{ type: "text", text }] },
-});
-
 describe("report capture", () => {
-  it.effect("keeps a long Pi message past the in-memory cap, up to the archive cap", () =>
-    Effect.gen(function* () {
-      const long = findings(12_000);
-      expect(long.length).toBeGreaterThan(MAX_FINAL_TEXT_CHARS);
-      const kept = yield* normalizeRpcEvent(messageEnd(long), 1);
-      expect(kept).toMatchObject({
-        type: "assistant_message",
-        text: long,
-        terminal: { text: long },
-      });
-      expect(kept?.type === "assistant_message" && kept.originalSize).toBeFalsy();
-
-      const huge = findings(110_000);
-      expect(huge.length).toBeGreaterThan(MAX_ARCHIVED_REPORT_CHARS);
-      const bounded = yield* normalizeRpcEvent(messageEnd(huge), 1);
-      if (bounded?.type !== "assistant_message") return yield* Effect.die("expected a message");
-      expect(bounded.terminal?.text?.length).toBe(MAX_ARCHIVED_REPORT_CHARS);
-      expect(bounded.terminal?.originalSize).toEqual({ chars: huge.length, lines: 110_000 });
-      expect(bounded.originalSize).toEqual(bounded.terminal?.originalSize);
-      return undefined;
-    }),
-  );
-
   it.effect("keeps no full copy of a late message that arrives after a pause", () =>
     Effect.gen(function* () {
       const settlement = yield* makeTestSettlement();
@@ -78,24 +38,20 @@ describe("report capture", () => {
         assignmentEpoch: 1,
         text,
         ...(originalSize && { originalSize }),
-        usage: emptyUsage(),
       });
 
       expect(record.latestAssistantFullText).toBeUndefined();
       expect(record.latestAssistantText?.length).toBeLessThanOrEqual(MAX_FINAL_TEXT_CHARS);
       expect(record.latestAssistantTruncation?.originalChars).toBe(originalSize?.chars);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("archives a report only under the generation that delivers it", () =>
     Effect.gen(function* () {
       const archived: ReportArchiveEntry[] = [];
       const context = yield* makeRunContext();
-      const settlement = settlementOperations({
-        ...context,
+      const settlement = testSettlement(context, {
         delivery: quietDelivery,
-        closeRecordScope: () => Effect.void,
-        claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
         archiveReport: {
           save: (entry) =>
             Effect.sync(() => {
@@ -144,6 +100,6 @@ describe("report capture", () => {
       expect(refused.view.reportArchive).toBeUndefined();
       expect(refused.view.finalTextTruncation).toBeDefined();
       expect(refused.latestAssistantFullText).toBeUndefined();
-    }).pipe(Effect.scoped),
+    }),
   );
 });

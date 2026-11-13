@@ -55,7 +55,7 @@ export function latestOwnedCheckpoint(branch: readonly SessionEntry[]) {
   return entry && details ? { entry, checkpoint: details.checkpoint } : undefined;
 }
 
-export function isRetryOmittable(entry: SessionEntry): boolean {
+function isRetryOmittable(entry: SessionEntry): boolean {
   return (
     entry.type === "message" &&
     entry.message.role === "assistant" &&
@@ -63,12 +63,16 @@ export function isRetryOmittable(entry: SessionEntry): boolean {
   );
 }
 
+/**
+ * `owned` is the branch's {@link latestOwnedCheckpoint}; callers that already found it pass it so
+ * the checkpoint isn't decoded again.
+ */
 export function retryOmissions(
   branch: readonly SessionEntry[],
   observed: readonly string[] = [],
   willRetry = false,
+  owned = latestOwnedCheckpoint(branch),
 ): string[] {
-  const owned = latestOwnedCheckpoint(branch);
   const checkpointIndex = owned ? branch.indexOf(owned.entry) : -1;
   const persisted = new Set(owned?.checkpoint.omittedEntryIds);
   const requested = new Set(observed);
@@ -108,8 +112,9 @@ export function projectContextEntries(branch: readonly SessionEntry[]): SessionE
 export function reconstructOpenAIContext(
   branch: readonly SessionEntry[],
   observedOmissions: readonly string[] = [],
+  owned = latestOwnedCheckpoint(branch),
 ) {
-  const checkpoint = latestOwnedCheckpoint(branch)?.entry;
+  const checkpoint = owned?.entry;
   if (!checkpoint) return undefined;
   const checkpointIndex = branch.indexOf(checkpoint);
   if (
@@ -131,9 +136,9 @@ export function reconstructOpenAIContext(
   );
   const visible = projectContextEntries(unwrapped);
   const coveredIds = new Set(Arr.map(branch.slice(0, checkpointIndex + 1), (entry) => entry.id));
-  const omittedEntryIds = retryOmissions(branch, observedOmissions);
+  const omittedEntryIds = retryOmissions(branch, observedOmissions, false, owned);
   const omitted = new Set(omittedEntryIds);
-  const persistedOmissions = new Set(retryOmissions(branch));
+  const persistedOmissions = new Set(retryOmissions(branch, [], false, owned));
   const coverageChanged =
     Arr.some(omittedEntryIds, (id) => coveredIds.has(id) && !persistedOmissions.has(id)) ||
     Arr.some(
@@ -204,7 +209,10 @@ export function repairOpenAIContext(
     ),
   );
   const omitted = new Set(
-    Arr.filter(retryOmissions(branch, observedOmissions), (id) => !visibleIds.has(id)),
+    Arr.filter(
+      retryOmissions(branch, observedOmissions, false, owned),
+      (id) => !visibleIds.has(id),
+    ),
   );
   let cursor = 0;
   for (const { sourceEntry: entry, messages: projected } of nativeEntries) {
@@ -218,7 +226,7 @@ export function repairOpenAIContext(
     }
   }
   const omittedEntryIds = [...omitted];
-  const restored = reconstructOpenAIContext(branch, omittedEntryIds);
+  const restored = reconstructOpenAIContext(branch, omittedEntryIds, owned);
   return {
     omittedEntryIds,
     messages: restored ? [...restored.messages, ...messages.slice(cursor)] : undefined,

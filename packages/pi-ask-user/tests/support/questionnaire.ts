@@ -15,6 +15,10 @@ export const acquireService = (...args: Parameters<typeof AskUserService.layer>)
     return Context.get(context, AskUserService);
   });
 
+/** Forks `effect` and runs it to its first suspension before returning the fiber. */
+export const forkNow = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.forkChild(effect, { startImmediately: true });
+
 export const defaultQuestion: AskUserChoiceQuestion = {
   key: "choice",
   title: "Choice",
@@ -25,6 +29,11 @@ export const defaultQuestion: AskUserChoiceQuestion = {
     { value: "b", label: "B", description: "Choose B." },
   ],
 };
+
+/** A one-question request whose question answers under `key`. */
+export const keyedRequest = (key: string): AskUserRequest => ({
+  questions: [{ ...defaultQuestion, key }],
+});
 
 const ordinalChoices = [
   { value: "a", label: "A", description: "First" },

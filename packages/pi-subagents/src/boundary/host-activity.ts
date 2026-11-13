@@ -6,7 +6,6 @@ import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 import {
   captureSubagentControlExpectation,
   type SubagentControlExpectation,
@@ -23,6 +22,7 @@ import {
   subagentActivityDetail,
   subagentActivityItems,
 } from "../ui/run-activity.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const SubagentActivityInputSchema = Schema.Literals(["resume", "message", "reply", "rename"]);
 type SubagentActivityInput = typeof SubagentActivityInputSchema.Type;
@@ -141,9 +141,7 @@ export function registerSubagentActivity(options: {
       ),
     detail: (item) => subagentActivityDetail(options.bridge.get(), item.id) ?? item.title,
     act: (item, action, signal, invocationCurrent) => {
-      const before = Option.getOrUndefined(
-        Arr.findFirst(options.bridge.get().runs, (run) => run.id === item.id),
-      );
+      const before = findOrUndefined(options.bridge.get().runs, (run) => run.id === item.id);
       if (!before) throw new Error("Subagent action is unavailable");
       const expected = captureSubagentControlExpectation(before);
       if (action === "stop" || action === "interrupt")
@@ -152,9 +150,7 @@ export function registerSubagentActivity(options: {
       if (!options.input) throw new Error("Subagent input isn't available");
       return options.input(before, action, signal).then((input) => {
         if (input === undefined) return undefined;
-        const after = Option.getOrUndefined(
-          Arr.findFirst(options.bridge.get().runs, (run) => run.id === item.id),
-        );
+        const after = findOrUndefined(options.bridge.get().runs, (run) => run.id === item.id);
         if (
           disposed ||
           !invocationCurrent() ||

@@ -86,7 +86,8 @@ const statLine = (file: WorkspaceDiffStatFile) => {
 
 const MAX_SUMMARY_LEFT_OUT_PATHS = 20;
 
-const pathList = (paths: ReadonlyArray<string>, limit = paths.length) =>
+/** The first `limit` paths, then how many more there are. */
+export const pathList = (paths: ReadonlyArray<string>, limit: number) =>
   `${Arr.join(paths.slice(0, limit), ", ")}${paths.length > limit ? `, and ${paths.length - limit} more` : ""}`;
 
 /**

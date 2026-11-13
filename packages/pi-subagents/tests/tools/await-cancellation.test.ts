@@ -13,9 +13,7 @@ import * as Clock from "effect/Clock";
 import * as TestClock from "effect/testing/TestClock";
 import { describe, expect } from "vitest";
 import { SubagentService } from "../../src/run/service.ts";
-import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { awaitWithinTimeout } from "../../src/tools/execute-await.ts";
-import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import {
   awaitObservations,
   awaitRuns,
@@ -24,31 +22,32 @@ import {
   runView,
 } from "../run/fixtures/service-harness.ts";
 import { eventLoopTurn, step } from "../support/effect-test.ts";
-import { executeTool, managedToolHost } from "./fixtures/tool-harness.ts";
+import { managedToolHost, observedCall } from "./fixtures/tool-harness.ts";
 import { stringContaining } from "../support/matchers.ts";
 
-const managedTools = Effect.gen(function* () {
-  const fixture = eventBackendServiceFixture();
-  const { pi, tools, runtime } = yield* managedToolHost(fixture);
-  const service = yield* step(() => runtime.run(SubagentService));
-  return { fixture, tools, pi, runtime, service };
-});
+const managedTools = (overrides?: Parameters<typeof managedToolHost>[1]) =>
+  Effect.gen(function* () {
+    const fixture = eventBackendServiceFixture();
+    return { fixture, ...(yield* managedToolHost(fixture, overrides)) };
+  });
+
+/** Runs the tools' effects on `clock`, so the test's clock drives a wait's timeout. */
+const onClock =
+  (clock: Clock.Clock): NonNullable<Parameters<typeof managedToolHost>[1]> =>
+  ({ run }) => ({
+    run: (effect, signal) => run(effect.pipe(Effect.provideService(Clock.Clock, clock)), signal),
+  });
 
 it.live("returns a question's preview in the await result while its notice delivers it once", () =>
   Effect.gen(function* () {
-    const { fixture, tools, pi, runtime, service } = yield* managedTools;
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: true },
-      run: (effect, signal) => runtime.run(effect, signal),
-    });
+    const { fixture, tools, runtime, service } = yield* managedTools();
     const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
-    const progress = Deferred.makeUnsafe<void>();
-    const pending = executeTool(
+    const call = observedCall(
       tools.get("agent_await")!,
       { runIds: [child.id], until: "all_finished" },
-      { callID: "question-await", update: () => Deferred.doneUnsafe(progress, Effect.void) },
+      { callID: "question-await" },
     );
-    yield* Deferred.await(progress);
+    yield* call.observing;
     fixture.backend.controls[0]!.offer({
       type: "supervisor_contact",
       assignmentEpoch: 1,
@@ -56,7 +55,7 @@ it.live("returns a question's preview in the await result while its notice deliv
       kind: "question",
       message: "Which change should I make?",
     });
-    const result = yield* step(() => pending);
+    const result = yield* call.result;
     expect(result.details).toMatchObject({
       action: "await",
       cards: [{ id: child.id, state: "waiting_for_parent" }],
@@ -75,43 +74,38 @@ it.live("returns a question's preview in the await result while its notice deliv
 
 it.live("keeps late-abort delivery uncertain and recoverable after consumption", () =>
   Effect.gen(function* () {
-    const { fixture, tools, pi, runtime, service } = yield* managedTools;
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
-    const intercepted = {
-      ...service,
-      withAwaitTerminalObservations: ((...args) =>
-        service
-          .withAwaitTerminalObservations(...args)
-          .pipe(
-            Effect.ensuring(
-              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
-            ),
-          )) satisfies typeof service.withAwaitTerminalObservations,
-    };
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: true },
-      run: (effect, signal) =>
-        runtime.run(effect.pipe(Effect.provideService(SubagentService, intercepted)), signal),
+    const { fixture, tools, runtime, service } = yield* managedTools(({ run, service: real }) => {
+      const intercepted = {
+        ...real,
+        withAwaitTerminalObservations: ((...args) =>
+          real
+            .withAwaitTerminalObservations(...args)
+            .pipe(
+              Effect.ensuring(
+                Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+              ),
+            )) satisfies typeof real.withAwaitTerminalObservations,
+      };
+      return {
+        run: (effect, signal) =>
+          run(effect.pipe(Effect.provideService(SubagentService, intercepted)), signal),
+      };
     });
     const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
-    const progress = yield* Deferred.make<void>();
     const controller = new AbortController();
-    const pending = executeTool(
+    const call = observedCall(
       tools.get("agent_await")!,
       { runIds: [child.id], until: "all_finished" },
-      {
-        callID: "late-cancel",
-        signal: controller.signal,
-        update: () => Deferred.doneUnsafe(progress, Effect.void),
-      },
+      { callID: "late-cancel", signal: controller.signal },
     );
-    yield* Deferred.await(progress);
+    yield* call.observing;
     fixture.backend.controls[0]!.complete("Recover after late abort");
     yield* Deferred.await(entered);
     controller.abort();
     yield* Deferred.succeed(release, undefined);
-    const result = yield* step(() => pending);
+    const result = yield* call.result;
     expect(result.structuredContent).toMatchObject({
       outcome: "cancelled",
       cleanup: "confirmed",
@@ -132,24 +126,19 @@ it.live(
   "cancels a registered root await on the real revision stream without stopping its child",
   () =>
     Effect.gen(function* () {
-      const { fixture, tools, pi, runtime, service } = yield* managedTools;
       const exits: Exit.Exit<unknown, unknown>[] = [];
       const rejections: unknown[] = [];
-      const run: SubagentToolRuntime["run"] = (effect, signal) =>
-        runtime
-          .run(
-            effect.pipe(Effect.onExit((exit) => Effect.sync(() => void exits.push(exit)))),
-            signal,
-          )
-          .catch((cause: unknown) => {
-            rejections.push(cause);
-            throw cause;
-          });
       let activePresentations = 0;
       const awaitLeases: unknown[] = [];
-      registerSubagentTools(pi, {
-        environment: { cwd: "/project", projectTrusted: true },
-        run,
+      const { fixture, tools, runtime, service } = yield* managedTools(({ run }) => ({
+        run: (effect, signal) =>
+          run(
+            effect.pipe(Effect.onExit((exit) => Effect.sync(() => void exits.push(exit)))),
+            signal,
+          ).catch((cause: unknown) => {
+            rejections.push(cause);
+            throw cause;
+          }),
         toolPresentation: {
           beginStart: () => () => undefined,
           beginAwait: (ids, until) => {
@@ -161,28 +150,24 @@ it.live(
           },
           isLiveHierarchyAvailable: () => true,
         },
-      });
+      }));
       const child = yield* step(() =>
         runtime.run(service.startSessionOwned(eventBackendRequest())),
       );
       expect(child.state).toBe("running");
       const tool = tools.get("agent_await")!;
-      const progress = Deferred.makeUnsafe<void>();
       const updates: AgentToolResult<unknown>[] = [];
       const controller = new AbortController();
-      const pending = executeTool(
+      const call = observedCall(
         tool,
         { runIds: [child.id], until: "all_finished" },
         {
           callID: "cancelled-await",
           signal: controller.signal,
-          update: (result) => {
-            updates.push(result);
-            Deferred.doneUnsafe(progress, Effect.void);
-          },
+          update: (result) => void updates.push(result),
         },
       );
-      yield* Deferred.await(progress);
+      yield* call.observing;
       expect(activePresentations).toBe(1);
       expect(awaitLeases).toEqual([[[child.id], "all_finished"]]);
       const conflict = yield* step(() =>
@@ -190,7 +175,7 @@ it.live(
       );
       expect(conflict).toMatchObject({ code: "completion_claim_conflict" });
       controller.abort();
-      const result = yield* step(() => pending);
+      const result = yield* call.result;
       expect(exits).toHaveLength(1);
       const exit = exits[0]!;
       expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
@@ -208,18 +193,14 @@ it.live(
       expect(fixture.backend.controls[0]!.terminations).toEqual([]);
       expect((yield* step(() => runtime.run(runView(service, child.id)))).state).toBe("running");
 
-      const replacementProgress = Deferred.makeUnsafe<void>();
-      const replacement = executeTool(
+      const replacement = observedCall(
         tool,
         { runIds: [child.id], until: "all_finished" },
-        {
-          callID: "replacement-await",
-          update: () => Deferred.doneUnsafe(replacementProgress, Effect.void),
-        },
+        { callID: "replacement-await" },
       );
-      yield* Deferred.await(replacementProgress);
+      yield* replacement.observing;
       fixture.backend.controls[0]!.complete("Child finished normally.");
-      const completed = yield* step(() => replacement);
+      const completed = yield* replacement.result;
       expect(completed.details).toMatchObject({
         action: "await",
         cards: [{ id: child.id, state: "completed", finalText: "Child finished normally." }],
@@ -235,25 +216,18 @@ it.live(
 
 it.effect("ends a wait at its timeout without stopping the child", () =>
   Effect.gen(function* () {
-    const { tools, pi, runtime, service } = yield* managedTools;
-    // The wait runs on the managed runtime; the test's clock drives its timeout.
-    const clock = yield* Clock.Clock;
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: true },
-      run: (effect, signal) =>
-        runtime.run(effect.pipe(Effect.provideService(Clock.Clock, clock)), signal),
-    });
+    const { tools, runtime, service } = yield* managedTools(onClock(yield* Clock.Clock));
     const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
-    const progress = Deferred.makeUnsafe<void>();
     let settled = false;
-    const pending = executeTool(
+    const call = observedCall(
       tools.get("agent_await")!,
       { runIds: [child.id], until: "all_finished", timeoutSeconds: 30 },
-      { callID: "timed-await", update: () => Deferred.doneUnsafe(progress, Effect.void) },
-    ).finally(() => {
+      { callID: "timed-await" },
+    );
+    const pending = call.pending.finally(() => {
       settled = true;
     });
-    yield* Deferred.await(progress);
+    yield* call.observing;
     yield* TestClock.adjust(Duration.seconds(29));
     yield* step(eventLoopTurn);
     expect(settled).toBe(false);
@@ -268,28 +242,22 @@ it.effect("ends a wait at its timeout without stopping the child", () =>
 
 it.effect("waits for every run by default and clamps an out-of-range timeout", () =>
   Effect.gen(function* () {
-    const { tools, pi, runtime, service } = yield* managedTools;
-    const clock = yield* Clock.Clock;
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: true },
-      run: (effect, signal) =>
-        runtime.run(effect.pipe(Effect.provideService(Clock.Clock, clock)), signal),
-    });
+    const { tools, runtime, service } = yield* managedTools(onClock(yield* Clock.Clock));
     const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
     for (const [timeoutSeconds, clamped] of [
       [0.25, 1],
       [86_400, 3_600],
     ] as const) {
-      const progress = Deferred.makeUnsafe<void>();
       let settled = false;
-      const pending = executeTool(
+      const call = observedCall(
         tools.get("agent_await")!,
         { runIds: [child.id], timeoutSeconds },
-        { callID: `clamped-${clamped}`, update: () => Deferred.doneUnsafe(progress, Effect.void) },
-      ).finally(() => {
+        { callID: `clamped-${clamped}` },
+      );
+      const pending = call.pending.finally(() => {
         settled = true;
       });
-      yield* Deferred.await(progress);
+      yield* call.observing;
       yield* TestClock.adjust(Duration.millis(clamped * 1_000 - 1));
       yield* step(eventLoopTurn);
       expect(settled).toBe(false);
@@ -306,23 +274,19 @@ it.effect("waits for every run by default and clamps an out-of-range timeout", (
 
 it.live("ends a wait for the user's next message without stopping the child", () =>
   Effect.gen(function* () {
-    const { tools, pi, runtime, service } = yield* managedTools;
     const userInput = new AbortController();
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: true },
-      run: (effect, signal) => runtime.run(effect, signal),
+    const { tools, runtime, service } = yield* managedTools(() => ({
       userInput: () => userInput.signal,
-    });
+    }));
     const child = yield* step(() => runtime.run(service.startSessionOwned(eventBackendRequest())));
-    const progress = Deferred.makeUnsafe<void>();
-    const pending = executeTool(
+    const call = observedCall(
       tools.get("agent_await")!,
       { runIds: [child.id], until: "all_finished" },
-      { callID: "user-input-await", update: () => Deferred.doneUnsafe(progress, Effect.void) },
+      { callID: "user-input-await" },
     );
-    yield* Deferred.await(progress);
+    yield* call.observing;
     userInput.abort();
-    const result = yield* step(() => pending);
+    const result = yield* call.result;
     expect(result.structuredContent).toMatchObject({ outcome: "user_input" });
     expect(result.details).toMatchObject({ cancelled: true, endedByUserInput: true });
     expect(result.content[0]).toMatchObject({ text: stringContaining("user sent a message") });

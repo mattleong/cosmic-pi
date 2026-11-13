@@ -1,7 +1,5 @@
 import type { NodeChildProcess } from "./support/node-builtins.ts";
 import * as Fn from "effect/Function";
-import * as Layer from "effect/Layer";
-import * as Context from "effect/Context";
 import { describe, expect, it } from "@effect/vitest";
 import { beforeEach, vi } from "vitest";
 import * as Effect from "effect/Effect";
@@ -15,6 +13,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { signalProcessGroup } from "pi-cosmic-core";
 import { temporaryDirectory, yieldUntil } from "pi-cosmic-core/testing";
 import { localPiBackendDriver } from "../src/backend/local-pi.ts";
+import type { BackendCleanupVerifier } from "../src/backend/model.ts";
 import { ChildProcess } from "../src/boundary/child-process.ts";
 import { SubagentProcessError } from "../src/run/errors.ts";
 import {
@@ -28,7 +27,7 @@ import { stringMatching } from "./support/matchers.ts";
 import { processAlive } from "./support/process-liveness.ts";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const boundary = {
   spawn: vi.fn<ProcessTransportRuntime["spawn"]>(),
@@ -93,6 +92,22 @@ const finishTimed = <A, E>(effect: Effect.Effect<A, E>) =>
     return yield* Fiber.join(fiber);
   });
 const closeScope = (scope: Scope.Closeable) => finishTimed(Scope.close(scope, Exit.void));
+const releaseCause = (scope: Scope.Closeable) =>
+  finishTimed(Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip));
+const releaseFailure = (scope: Scope.Closeable) =>
+  releaseCause(scope).pipe(Effect.map(Cause.squash));
+/** The cleanup evidence the transport attached to a release failure. */
+const diagnosticIn = (cause: Cause.Cause<unknown>, verifier: BackendCleanupVerifier) =>
+  findOrUndefined(
+    Arr.map(cause.reasons, verifier.diagnostic),
+    (diagnostic) => diagnostic !== undefined,
+  );
+const piChildren = Effect.gen(function* () {
+  const agentDirectory = yield* temporaryDirectory("pi-transport-test-");
+  return yield* Effect.service(ChildProcess).pipe(
+    Effect.provide(ChildProcess.layer({ agentDirectory, transportRuntime: boundary })),
+  );
+});
 const openNative = (f: ReturnType<typeof fixture>, writer = false) =>
   Effect.gen(function* () {
     const scope = yield* Scope.make();
@@ -232,10 +247,6 @@ describe("shared process transport", () => {
         Effect.succeed(!survives || pid !== DETACHED_GROUP),
       );
     };
-    const releaseFailure = (scope: Scope.Closeable) =>
-      finishTimed(Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip)).pipe(
-        Effect.map(Cause.squash),
-      );
 
     it.effect("keeps a writer's cleanup unconfirmed while a detached command survives", () =>
       Effect.gen(function* () {
@@ -364,10 +375,7 @@ describe("shared process transport", () => {
       const f = fixture();
       boundary.terminate.mockImplementation(() => Effect.void);
       const { scope } = yield* openNative(f);
-      const cause = yield* finishTimed(
-        Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip),
-      );
-      expect(Cause.squash(cause)).toMatchObject({ code: "cleanup_unconfirmed" });
+      expect(yield* releaseFailure(scope)).toMatchObject({ code: "cleanup_unconfirmed" });
       expect(f.stdin.destroyed).toBe(true);
       yield* Scope.close(scope, Exit.void);
       expect(Arr.map(boundary.terminate.mock.calls, (call) => call[1])).toEqual([
@@ -385,20 +393,11 @@ describe("shared process transport", () => {
         boundary.detachedGroups.mockReturnValue(Effect.succeed([8888]));
         boundary.confirmGroupExit.mockReturnValue(Effect.succeed(false));
         const { handle, scope } = yield* openNative(f, true);
-        const cause = yield* finishTimed(
-          Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip),
-        );
+        const cause = yield* releaseCause(scope);
         const verifier = handle.cleanupVerifier;
         if (!verifier) return yield* Effect.die("Missing cleanup verifier");
         expect(verifier.canVerify()).toBe(true);
-        expect(
-          Option.getOrUndefined(
-            Arr.findFirst(
-              Arr.map(cause.reasons, verifier.diagnostic),
-              (diagnostic) => diagnostic !== undefined,
-            ),
-          ),
-        ).toMatchObject({ phase: "process-group" });
+        expect(diagnosticIn(cause, verifier)).toMatchObject({ phase: "process-group" });
         expect(
           Arr.map(Cause.die(new Error("unrelated finalizer")).reasons, verifier.diagnostic),
         ).toEqual([undefined]);
@@ -431,20 +430,13 @@ describe("shared process transport", () => {
           ),
         );
         const { handle, scope } = yield* openNative(f, true);
-        const cause = yield* finishTimed(
-          Scope.close(scope, Exit.void).pipe(Effect.sandbox, Effect.flip),
-        );
+        const cause = yield* releaseCause(scope);
         const verifier = handle.cleanupVerifier;
         if (!verifier) return yield* Effect.die("Missing cleanup verifier");
         expect(f.child.exitCode).toBe(0);
         expect(boundary.terminate).toHaveBeenCalled();
         expect(verifier.canVerify()).toBe(false);
-        const diagnostic = Option.getOrUndefined(
-          Arr.findFirst(
-            Arr.map(cause.reasons, verifier.diagnostic),
-            (evidence) => evidence !== undefined,
-          ),
-        );
+        const diagnostic = diagnosticIn(cause, verifier);
         expect(diagnostic).toMatchObject({
           phase: "descendant-snapshot",
           code: "snapshot_incomplete",
@@ -488,14 +480,7 @@ process.stderr.write(String(command.pid));`;
         expect(Cause.squash(cause)).toMatchObject({ code: "cleanup_unconfirmed" });
         const verifier = handle.cleanupVerifier;
         if (!verifier) return yield* Effect.die("Missing cleanup verifier");
-        expect(
-          Option.getOrUndefined(
-            Arr.findFirst(
-              Arr.map(cause.reasons, verifier.diagnostic),
-              (diagnostic) => diagnostic !== undefined,
-            ),
-          ),
-        ).toMatchObject({ phase: "descendant-snapshot" });
+        expect(diagnosticIn(cause, verifier)).toMatchObject({ phase: "descendant-snapshot" });
         expect(verifier.canVerify()).toBe(false);
         expect(processAlive(commandPid)).toBe(true);
         return undefined;
@@ -508,12 +493,8 @@ describe("Pi transport policy", () => {
     Effect.gen(function* () {
       const f = fixture();
       const scope = yield* Scope.make();
-      const agentDirectory = yield* temporaryDirectory("pi-transport-test-");
-      const context = yield* Layer.build(
-        ChildProcess.layer({ agentDirectory, transportRuntime: boundary }),
-      );
       const pending = yield* Effect.forkChild(
-        localPiBackendDriver(Context.get(context, ChildProcess))
+        localPiBackendDriver(yield* piChildren)
           .spawn(backendLaunch())
           .pipe(Effect.provideService(Scope.Scope, scope)),
       );
@@ -548,11 +529,7 @@ describe("Pi transport policy", () => {
     Effect.gen(function* () {
       const f = fixture();
       const scope = yield* Scope.make();
-      const agentDirectory = yield* temporaryDirectory("pi-transport-test-");
-      const context = yield* Layer.build(
-        ChildProcess.layer({ agentDirectory, transportRuntime: boundary }),
-      );
-      const service = Context.get(context, ChildProcess);
+      const service = yield* piChildren;
       const handle = yield* start(
         f.child,
         service.spawn(backendLaunch()).pipe(Scope.provide(scope)),
@@ -585,11 +562,7 @@ describe("Pi transport policy", () => {
         const f = fixture();
         f.child.on("message", foreignListener);
         const scope = yield* Scope.make();
-        const agentDirectory = yield* temporaryDirectory("pi-transport-test-");
-        const context = yield* Layer.build(
-          ChildProcess.layer({ agentDirectory, transportRuntime: boundary }),
-        );
-        const service = Context.get(context, ChildProcess);
+        const service = yield* piChildren;
         const pending = yield* Effect.forkChild(
           service.spawn(backendLaunch()).pipe(Effect.provideService(Scope.Scope, scope)),
         );

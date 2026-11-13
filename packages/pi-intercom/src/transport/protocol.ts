@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
-import { NONCE_BYTES, PROOF_BYTES } from "./handshake.ts";
+import { hex, NONCE_BYTES, PROOF_BYTES } from "./handshake.ts";
 
 /** Longest message text a session accepts, in UTF-16 code units. */
 export const MAX_MESSAGE_CHARS = 32_768;
@@ -19,11 +19,9 @@ export const MAX_IDENTITY_CHARS = 1_024;
 export const MAX_CWD_CHARS = 4_096;
 const MAX_MESSAGE_ID_CHARS = 128;
 
-const boundedString = (min: number, max: number) =>
+export const boundedString = (min: number, max: number) =>
   Schema.String.check(Schema.isMinLength(min), Schema.isMaxLength(max));
 
-const hex = (bytes: number) =>
-  Schema.String.check(Schema.isPattern(new RegExp(`^[0-9a-f]{${bytes * 2}}$`)));
 const NonceSchema = hex(NONCE_BYTES);
 const ProofSchema = hex(PROOF_BYTES);
 

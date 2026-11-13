@@ -3,7 +3,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import type { DelegationMode } from "../config/schema.ts";
 import {
   DELEGATION_PROMPT_SECTION,
-  delegationPrompt,
+  DELEGATION_PROMPTS,
   NORMAL_START_GUIDELINE,
 } from "../delegation/prompt.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
@@ -26,7 +26,7 @@ export const registerDelegationPrompt = (
       !options.selectedTools.includes(SUBAGENT_TOOL_NAME.start)
     )
       return undefined;
-    const prompt = delegationPrompt(mode);
+    const prompt = DELEGATION_PROMPTS[mode];
     const guidelines = options.toolGuidelines[SUBAGENT_TOOL_NAME.start];
     if (guidelines)
       options.toolGuidelines[SUBAGENT_TOOL_NAME.start] = Arr.map(guidelines, (guideline) =>

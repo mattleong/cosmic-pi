@@ -4,10 +4,10 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { nodeFilePlatformLayer, registerExtensionCommand } from "pi-cosmic-core";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { fauxCodemodeSession } from "pi-cosmic-core/testing/sdk";
 import { registerOpenAIImage } from "../src/image/register.ts";
 import { imageResultText } from "../src/image/result-text.ts";
@@ -19,23 +19,21 @@ import {
   type OpenAIImageError,
   type ToolParams,
 } from "../src/image/types.ts";
+import { imageDetailsFixture } from "./image-fixtures.ts";
 
 const png =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 const block = { type: "image", data: png, mimeType: "image/png" };
 const prompt = "  Draw a comet.\nKeep the label ‘hello’.  ";
-const generated = (params: ToolParams, savedPath?: string): CodexImageResult => ({
-  id: "image-1",
-  status: "completed",
-  prompt: params.prompt,
-  revisedPrompt: "A comet with a label.",
+const generated = (params: ToolParams): CodexImageResult => ({
+  ...imageDetailsFixture({
+    prompt: params.prompt,
+    revisedPrompt: "A comet with a label.",
+    model: "fixture-model",
+    imageModel: "fixture-image-model",
+    action: params.action ?? "auto",
+  }),
   data: png,
-  mimeType: "image/png",
-  ...(savedPath !== undefined && { savedPath }),
-  model: "fixture-model",
-  imageModel: "fixture-image-model",
-  action: params.action ?? "auto",
-  outputFormat: "png",
 });
 const envelope = { contract: "pi-better-openai/image", version: 1, tool: "openai_image" };
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
@@ -43,10 +41,8 @@ const literal = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const print = (expression: string) => `text('IMAGE_RESULT ' + JSON.stringify(${expression}));`;
 const output = (text: string) => {
-  const line = Option.getOrUndefined(
-    Arr.findFirst(Str.split(text, "\n"), (candidate) =>
-      Fn.pipe(candidate, Str.startsWith("IMAGE_RESULT ")),
-    ),
+  const line = findOrUndefined(Str.split(text, "\n"), (candidate) =>
+    Fn.pipe(candidate, Str.startsWith("IMAGE_RESULT ")),
   );
   expect(line, text).toBeDefined();
   return decodeOutput(Fn.pipe(line!, Str.slice("IMAGE_RESULT ".length)));

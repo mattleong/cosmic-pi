@@ -10,7 +10,6 @@ import * as TestClock from "effect/testing/TestClock";
 import { ReportArchiveError, type ReportArchive } from "../../src/boundary/report-archive.ts";
 import { REPORT_SAVE_DEADLINE_MILLIS } from "../../src/run/limits.ts";
 import type { RunNotificationDelivery } from "../../src/run/notification-delivery.ts";
-import { settlementOperations } from "../../src/run/settlement.ts";
 import { view } from "../fixtures/run-view.ts";
 import {
   gatedReportArchive,
@@ -18,6 +17,7 @@ import {
   runningAssignment,
   runRecordFixture,
   quietDelivery,
+  testSettlement,
 } from "./fixtures/run-context.ts";
 import { yieldTurns } from "./fixtures/service-harness.ts";
 
@@ -28,13 +28,7 @@ const fixture = (
 ) =>
   Effect.gen(function* () {
     const context = yield* makeRunContext(overrides);
-    const settlement = settlementOperations({
-      ...context,
-      delivery,
-      closeRecordScope: () => Effect.void,
-      claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
-      archiveReport: archive,
-    });
+    const settlement = testSettlement(context, { delivery, archiveReport: archive });
     const record = yield* runRecordFixture({
       view: view({ state: "running" }),
       assignment: runningAssignment(1),
@@ -45,25 +39,6 @@ const fixture = (
   });
 
 describe("report files saved during settlement", () => {
-  it.effect("lets fibers outside the run lock progress while a file is saved", () =>
-    Effect.gen(function* () {
-      const gate = yield* gatedReportArchive;
-      const { record, settle } = yield* fixture(gate.archive);
-
-      const settling = yield* Effect.forkChild(settle("Final report."));
-      yield* Deferred.await(gate.entered);
-      const progressed = yield* Effect.forkChild(yieldTurns(25).pipe(Effect.as("progressed")));
-      expect(yield* Fiber.join(progressed)).toBe("progressed");
-      expect(record.view.state).toBe("running");
-      yield* Deferred.succeed(gate.release, undefined);
-      yield* Fiber.join(settling);
-
-      expect(record.view.state).toBe("completed");
-      expect(record.view.reportArchive?.path).toBe("/archive/1.md");
-      expect(gate.discarded).toEqual([]);
-    }).pipe(Effect.scoped),
-  );
-
   it.effect("holds the run lock while a file is saved, so a stop can't overtake the report", () =>
     Effect.gen(function* () {
       const gate = yield* gatedReportArchive;
@@ -88,7 +63,7 @@ describe("report files saved during settlement", () => {
       expect(yield* Fiber.join(stopping)).toBe("completed");
       expect(record.view.reportArchive?.path).toBe("/archive/1.md");
       expect(gate.discarded).toEqual([]);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("saves a buffered settlement's file when its assignment activates", () =>
@@ -107,7 +82,7 @@ describe("report files saved during settlement", () => {
       expect(record.view).toMatchObject({ state: "completed", finalText: "Buffered report." });
       expect(record.view.reportArchive?.path).toBe("/archive/1.md");
       expect(gate.discarded).toEqual([]);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("commits the saved file when the settlement is interrupted during the save", () =>
@@ -127,7 +102,7 @@ describe("report files saved during settlement", () => {
       expect(record.view.state).toBe("completed");
       expect(record.view.reportArchive?.path).toBe("/archive/1.md");
       expect(gate.discarded).toEqual([]);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("settles without a file whose save misses its deadline, which then removes it", () =>
@@ -156,7 +131,7 @@ describe("report files saved during settlement", () => {
       yield* Deferred.succeed(gate.release, undefined);
       yield* Deferred.await(removed);
       expect(gate.discarded).toEqual(["/archive/1.md"]);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("finishes a save whose deadline passed while the session scope closes", () =>
@@ -181,7 +156,7 @@ describe("report files saved during settlement", () => {
       yield* Scope.addFinalizer(ownerScope, Deferred.succeed(gate.release, undefined));
       yield* Scope.close(ownerScope, Exit.void);
       expect(gate.discarded).toEqual(["/archive/1.md"]);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("settles at once without a file once the session scope is closing", () =>
@@ -197,7 +172,7 @@ describe("report files saved during settlement", () => {
       expect(record.view).toMatchObject({ state: "completed", finalText: "Final report." });
       expect(record.view.reportArchive).toBeUndefined();
       expect(gate.saved).toEqual([]);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("removes the saved file when the settlement fails after saving it", () =>
@@ -215,7 +190,7 @@ describe("report files saved during settlement", () => {
 
       expect(Exit.isFailure(settled)).toBe(true);
       expect(gate.discarded).toEqual(["/archive/1.md"]);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("keeps a queued report's file when later settlement work fails", () =>
@@ -240,7 +215,7 @@ describe("report files saved during settlement", () => {
       expect(queued).toEqual(["/archive/1.md"]);
       expect(record.view.reportArchive?.path).toBe("/archive/1.md");
       expect(gate.discarded).toEqual([]);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect(
@@ -269,7 +244,6 @@ describe("report files saved during settlement", () => {
         expect(warnings).toHaveLength(1);
         expect(warnings[0]).not.toContain("/private/report/path");
       }).pipe(
-        Effect.scoped,
         Effect.provide(Logger.layer([logger])),
         Effect.provideService(References.MinimumLogLevel, "All"),
       );

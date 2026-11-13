@@ -98,6 +98,8 @@ export class OpenAICompactionError extends Schema.TaggedError<
 
 const compactionError = (operation: OpenAICompactionError["operation"], message: string) =>
   OpenAICompactionError.make({ operation, message });
+const projectionFailed = () =>
+  compactionError("projection", "Unable to project the OpenAI compaction input.");
 
 interface OpenAICompactionServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
@@ -125,8 +127,9 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             try: () => {
               const ctx = MutableRef.get(options.context);
               const branch = ctx.sessionManager.getBranch();
-              const omittedEntryIds = retryOmissions(branch, observed, willRetry);
-              const restored = reconstructOpenAIContext(branch, omittedEntryIds);
+              const owned = latestOwnedCheckpoint(branch);
+              const omittedEntryIds = retryOmissions(branch, observed, willRetry, owned);
+              const restored = reconstructOpenAIContext(branch, omittedEntryIds, owned);
               const current = {
                 omittedEntryIds,
                 model: ctx.model,
@@ -165,15 +168,10 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             input: projectOpenAIResponseInput(model, current.contextEntries),
             covered: projectOpenAIResponseInput(model, current.restored?.coveredEntries ?? []),
           }),
-          catch: () =>
-            compactionError("projection", "Unable to project the OpenAI compaction input."),
+          catch: projectionFailed,
         });
         const rawInput = projected.input;
-        if (!rawInput)
-          return yield* compactionError(
-            "projection",
-            "Unable to project the OpenAI compaction input.",
-          );
+        if (!rawInput) return yield* projectionFailed();
         const instructions = compactionInstructions(current.systemPrompt, event.customInstructions);
         const result = yield* client.compact({
           model,
@@ -205,10 +203,13 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
           details: { type: OPENAI_COMPACTION_DETAILS_TYPE, checkpoint },
         } satisfies CompactionResult;
       });
-      const readBranch = Effect.try({
-        try: () => MutableRef.get(options.context).sessionManager.getBranch(),
-        catch: () => compactionError("context", "Unable to read the current Pi session branch."),
-      });
+      // A retired host context throws from its getters, so every read of it is a typed failure.
+      const readHost = <A>(read: (ctx: ExtensionContext) => A) =>
+        Effect.try({
+          try: () => read(MutableRef.get(options.context)),
+          catch: () => compactionError("context", "Unable to read the current Pi session branch."),
+        });
+      const readBranch = readHost((ctx) => ctx.sessionManager.getBranch());
       const filterContext = Effect.fn("OpenAICompaction.filterContext")(function* (
         messages: ContextWithSystemEvent["messages"],
       ) {
@@ -228,13 +229,10 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
       const inject = Effect.fn("OpenAICompaction.inject")(function* <Payload>(payload: Payload) {
         const config = options.config();
         if (!config?.compaction.enabled) return undefined;
-        const current = yield* Effect.try({
-          try: () => {
-            const ctx = MutableRef.get(options.context);
-            return { model: ctx.model, branch: ctx.sessionManager.getBranch() };
-          },
-          catch: () => compactionError("context", "Unable to read the current Pi session branch."),
-        });
+        const current = yield* readHost((ctx) => ({
+          model: ctx.model,
+          branch: ctx.sessionManager.getBranch(),
+        }));
         if (!isEligibleOpenAICompactionModel(current.model)) return undefined;
         const active = findActiveOpenAICompactionCheckpoint(current.branch, current.model);
         if (!active) return undefined;
@@ -261,7 +259,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
           return yield* compactionError("context", "Compaction cancelled.");
         const branch = yield* readBranch;
         if (!latestOwnedCheckpoint(branch)) return yield* compactOpenAI(event);
-        const ctx = MutableRef.get(options.context);
+        const model = yield* readHost((ctx) => ctx.model);
         const fallback = Effect.fn("OpenAICompaction.fallback")(function* () {
           if (event.signal?.aborted)
             return yield* compactionError("context", "Compaction cancelled.");
@@ -286,8 +284,8 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
           );
         });
         if (
-          !isEligibleOpenAICompactionModel(ctx.model) ||
-          !findActiveOpenAICompactionCheckpoint(branch, ctx.model)
+          !isEligibleOpenAICompactionModel(model) ||
+          !findActiveOpenAICompactionCheckpoint(branch, model)
         )
           return yield* fallback();
         const result = yield* compactOpenAI(event).pipe(Effect.catch(() => fallback()));

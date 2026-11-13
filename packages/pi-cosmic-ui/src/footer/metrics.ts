@@ -1,7 +1,5 @@
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
-import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import type { CosmicFooterTextContribution, CosmicFooterTheme } from "../protocol/protocol.ts";
 import {
   alignSides,
@@ -12,9 +10,10 @@ import {
   tone,
 } from "./contributions.ts";
 import { INLINE_SEPARATOR } from "../manager/chrome.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
-type MetricPartKind = "input" | "output" | "cache" | "other";
-type MetricPart = { readonly text: string; readonly kind: MetricPartKind };
+/** A rendered metric and the contribution it came from; the cache pair shares `metrics.cache`. */
+type MetricPart = { readonly text: string; readonly id: string };
 
 const CACHE_IDS: readonly string[] = ["metrics.cacheRead", "metrics.cacheWrite"];
 
@@ -24,7 +23,7 @@ function metricCacheGroup(
   theme: CosmicFooterTheme,
 ): string {
   const values = Arr.flatMap(CACHE_IDS, (id) => {
-    const entry = Option.getOrUndefined(Arr.findFirst(entries, (candidate) => candidate.id === id));
+    const entry = findOrUndefined(entries, (candidate) => candidate.id === id);
     return entry ? [theme.fg("syntaxType", contributionText(entry, compact))] : [];
   });
   return `${theme.fg("dim", "cache")} ${Arr.join(values, " ")}`;
@@ -40,18 +39,11 @@ function metricParts(
   for (const entry of ranked(entries)) {
     if (CACHE_IDS.includes(entry.id)) {
       if (!cacheAdded)
-        parts.push({ text: metricCacheGroup(entries, compact, theme), kind: "cache" });
+        parts.push({ text: metricCacheGroup(entries, compact, theme), id: "metrics.cache" });
       cacheAdded = true;
       continue;
     }
-    parts.push({
-      text: tone(theme, entry, contributionText(entry, compact)),
-      kind: Match.value(entry.id).pipe(
-        Match.when("metrics.input", (): MetricPartKind => "input"),
-        Match.when("metrics.output", (): MetricPartKind => "output"),
-        Match.orElse((): MetricPartKind => "other"),
-      ),
-    });
+    parts.push({ text: tone(theme, entry, contributionText(entry, compact)), id: entry.id });
   }
   return parts;
 }
@@ -61,7 +53,7 @@ function metricSeparator(
   current: MetricPart,
   theme: CosmicFooterTheme,
 ): string {
-  if (previous.kind === "input" && current.kind === "output") return " ";
+  if (previous.id === "metrics.input" && current.id === "metrics.output") return " ";
   return theme.fg("dim", INLINE_SEPARATOR);
 }
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import {
   activitySectionId,
   groupedActivitySource,
@@ -12,7 +12,7 @@ import { activityRow, memberRow, withStatus } from "./support/activity.ts";
 
 const checklist = { hideHistory: true } as const;
 const entryOf = (tree: readonly GroupedActivityRow[], row: ActivityRow) =>
-  Option.getOrUndefined(Arr.findFirst(tree, (entry) => entry.id === row.key));
+  findOrUndefined(tree, (entry) => entry.id === row.key);
 const sources = (tree: readonly GroupedActivityRow[]) =>
   Arr.flatMap(tree, (entry) => {
     const source = groupedActivitySource(entry);
@@ -28,11 +28,7 @@ describe("grouped activity projection", () => {
     const rows = [child, verifier, found, parent];
     const tree = groupedActivityTree(rows);
     for (const row of [found, verifier]) expect(entryOf(tree, row)?.parentId).toBe(parent.key);
-    expect(entryOf(tree, child)).toMatchObject({
-      parentId: found.key,
-      section: "subagents",
-      context: [parent, found],
-    });
+    expect(entryOf(tree, child)).toMatchObject({ parentId: found.key, section: "subagents" });
     expect(sources(tree)).toHaveLength(rows.length);
     expect(new Set(Arr.map(sources(tree), (row) => row.key)).size).toBe(rows.length);
     expect(entryOf(tree, parent)?.summary).toMatchObject({

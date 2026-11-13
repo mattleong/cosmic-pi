@@ -20,7 +20,7 @@ export {
 } from "./src/coordination/subscription-refresh.ts";
 export type { RefreshRequest } from "./src/coordination/refresh-coordinator.ts";
 export { mergeHeaders } from "./src/http/headers.ts";
-export { JsonDocumentError, StreamingHttpError } from "./src/platform/errors.ts";
+export { JsonDocumentError, nodeErrorCode, StreamingHttpError } from "./src/platform/errors.ts";
 export { AgentDirectory } from "./src/platform/agent-directory.ts";
 export { SafeFile, type SafeFileContract } from "./src/platform/safe-file.ts";
 export {
@@ -33,14 +33,12 @@ export {
 } from "./src/platform/node-builtins.ts";
 export {
   createPrivateDirectory,
-  createPrivateFile,
   currentUserId,
   ensurePrivateDirectory,
   isOwnedByCurrentUser,
   PrivateFileError,
   readPrivateFile,
   removeOwnEntry,
-  removePrivateDirectory,
   removePrivateTree,
   replacePrivateFile,
   tryPrivateFileOperation,
@@ -81,6 +79,7 @@ export {
   type ScopedConfigMetadata,
 } from "./src/config/scoped-config-store.ts";
 export {
+  capturedHostSignal,
   captureHostSignal,
   CapturedHostSignal,
   captureSessionHost,
@@ -88,7 +87,6 @@ export {
   invokeBestEffort,
   invokeHostCallback,
   isProjectTrusted,
-  isUsingOAuthAtHostBoundary,
   notifyAtHostBoundary,
   type HostNotificationLevel,
 } from "./src/host-session.ts";
@@ -96,7 +94,6 @@ export { withCapturedHostSignal } from "./src/host-invocation.ts";
 export {
   extensionCommandOverview,
   registerExtensionCommand,
-  unknownSubcommandText,
   type ExtensionCommand,
   type ExtensionSubcommand,
   type ExtensionSubcommandHelp,
@@ -124,7 +121,6 @@ export {
   type SessionLatestReply,
 } from "./src/host-agent-messages.ts";
 export {
-  markMessageOrigins,
   MESSAGE_ORIGIN_TAG,
   originFromDetails,
   registerMessageOrigins,
@@ -143,6 +139,7 @@ export {
   utf8Suffix,
 } from "./src/text.ts";
 export { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "./src/text-scan.ts";
+export { findOrUndefined } from "./src/array.ts";
 export {
   clampPercent,
   clipProse,
@@ -158,6 +155,7 @@ export {
   formatTokens,
 } from "./src/display.ts";
 export {
+  contentText,
   failureMessage,
   firstLineMessage,
   isAgentGuidance,
@@ -176,7 +174,6 @@ export { nodeFilePlatformLayer } from "./src/platform/node-file.ts";
 export { nodePlatformLayer } from "./src/platform/node.ts";
 export {
   BoundedProcessError,
-  confirmEffectProcessClose,
   acquireBoundedProcessRunner,
   nodeProcessLayer,
   provideNodeProcess,
@@ -225,10 +222,8 @@ export {
   stripTerminalControls,
 } from "./src/security.ts";
 export {
-  BooleanFromJsonSchema,
   completeSettingsArguments,
   decodeSettingUpdate,
-  FiniteNumberFromJsonSchema,
   InvalidSettingError,
   oneOfRule,
   type SettingsOptionDescriptor,

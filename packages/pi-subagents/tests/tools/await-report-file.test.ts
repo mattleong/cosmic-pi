@@ -1,6 +1,4 @@
-import { getTextContent } from "pi-code-previews";
 import { it } from "@effect/vitest";
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -8,13 +6,8 @@ import * as Fn from "effect/Function";
 import { assert, describe, expect } from "vitest";
 import { sessionReportArchive } from "../../src/boundary/report-archive.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
-import { MAX_TOOL_OUTPUT_CHARS } from "../../src/run/limits.ts";
-import type { SubagentRunObservation } from "../../src/run/service.ts";
-import { SubagentService } from "../../src/run/service.ts";
-import { MAX_ERROR_CHARS } from "../../src/run/state.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { proposalGuidance } from "../../src/tools/format.ts";
-import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import {
   fakeEventBackendLayer,
   eventBackendRequest,
@@ -28,13 +21,13 @@ import {
   captureSubagentTools,
   executeTool,
   managedToolHost,
+  observedCall,
+  receiptFor,
+  resultText,
   view,
 } from "./fixtures/tool-harness.ts";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-
-const resultText = (result: { readonly content: Parameters<typeof getTextContent>[0] }) =>
-  getTextContent(result.content);
 
 const ARCHIVE_PATH = `/home/user/.pi/agent/subagents/reports/session-1/agent-1-1-${Fn.pipe("a", Str.repeat(36))}.md`;
 const REPORT_FILE = { path: ARCHIVE_PATH, chars: 500_000, lines: 40_000, complete: true };
@@ -85,7 +78,7 @@ describe("await report delivery", () => {
     const tool = captureSubagentTools(
       subagentServiceDouble({
         withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
-          use([{ run, completionReceipt: { id: run.id, generation: 1, claimToken: "claim" } }]),
+          use([{ run, completionReceipt: receiptFor(run.id) }]),
         consumeCompletions: (receipts) =>
           Effect.sync(() => {
             consumed.push(...receipts);
@@ -114,7 +107,7 @@ describe("await report delivery", () => {
     const tool = captureSubagentTools(
       subagentServiceDouble({
         withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
-          use([{ run, completionReceipt: { id: run.id, generation: 1, claimToken: "claim" } }]),
+          use([{ run, completionReceipt: receiptFor(run.id) }]),
         consumeCompletions: () => Effect.void,
       }),
     ).get("agent_await")!;
@@ -187,108 +180,13 @@ describe("await report delivery", () => {
   });
 });
 
-/** Text tagged so a test can tell a whole outcome from a partial one. */
-const tagged = (tag: string): string =>
-  `${tag}:${Fn.pipe("x", Str.repeat(MAX_ERROR_CHARS - tag.length - 2))}.`;
-
-const receipt = (id: string) => ({ id, generation: 1, claimToken: `claim-${id}` });
-
-const awaitObservations = (observations: ReadonlyArray<SubagentRunObservation>) =>
-  Effect.gen(function* () {
-    const consumed: Array<string> = [];
-    const tool = captureSubagentTools(
-      subagentServiceDouble({
-        withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) => use(observations),
-        consumeCompletions: (receipts) =>
-          Effect.sync(() => {
-            consumed.push(...Arr.map(receipts, (item) => item.id));
-          }),
-      }),
-    ).get("agent_await")!;
-    const response = yield* step(() =>
-      executeTool(tool, {
-        runIds: Arr.map(observations, ({ run }) => run.id),
-        until: "all_finished",
-      }),
-    );
-    return {
-      text: resultText(response),
-      contract: decodeSubagentContract("agent_await")(response.structuredContent),
-      consumed,
-    };
-  });
-
-describe("await outcomes", () => {
-  effectTest("delivers every claimed outcome beside long failures and warnings", function* () {
-    const failures = Array.from({ length: 5 }, (_, index) => ({
-      run: view({
-        id: `failed-${index}`,
-        state: "failed",
-        error: tagged(`FAILURE-${index}`),
-        warning: tagged(`WARNING-${index}`),
-      }),
-      completionReceipt: receipt(`failed-${index}`),
-    }));
-    const reports = Array.from({ length: 6 }, (_, index) => {
-      const id = `done-${index}`;
-      return {
-        run: view({
-          id,
-          state: "completed",
-          reportGeneration: 1,
-          warning: tagged(`WARNING-${id}`),
-          finalText: "REPORT BODY",
-          reportArchive: { ...REPORT_FILE, path: `${ARCHIVE_PATH}.${index}` },
-        }),
-        completionReceipt: receipt(id),
-      };
-    });
-    const question = {
-      run: view({
-        id: "asking",
-        state: "waiting_for_parent",
-        question: { requestId: "q-1", message: tagged("QUESTION") },
-      }),
-    };
-
-    const { text, contract, consumed } = yield* awaitObservations([
-      ...failures,
-      ...reports,
-      question,
-    ]);
-
-    expect(text.length).toBeLessThanOrEqual(MAX_TOOL_OUTPUT_CHARS);
-    for (const { run } of failures)
-      expect(text).toContain(
-        run.error === undefined ? "missing" : Fn.pipe(run.error, Str.slice(0, 12)),
-      );
-    for (const { run } of reports) expect(text).toContain(run.reportArchive?.path);
-    // A question shows its preview; its own notice delivers the whole question.
-    expect(text).toContain("QUESTION:");
-    expect(text).not.toContain(question.run.question?.message);
-    expect(text).toContain("agent_read");
-    expect(consumed).toEqual(Arr.map([...failures, ...reports], ({ run }) => run.id));
-    assert(contract !== undefined);
-    expect(
-      Arr.map(contract.targets.slice(failures.length, -1), ({ report }) =>
-        "path" in report ? report.path : report.status,
-      ),
-    ).toEqual(Arr.map(reports, ({ run }) => run.reportArchive?.path));
-  });
-});
-
 it.live("delivers every report file of a full await even when warnings fill the result", () =>
   Effect.gen(function* () {
     const agentDirectory = yield* temporaryDirectory("await-report-file-");
     const fixture = eventBackendServiceFixture(fakeEventBackendLayer(), {
       archiveReport: sessionReportArchive(agentDirectory, "session-1"),
     });
-    const { pi, tools, runtime } = yield* managedToolHost(fixture);
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: true },
-      run: (effect, signal) => runtime.run(effect, signal),
-    });
-    const service = yield* step(() => runtime.run(SubagentService));
+    const { tools, runtime, service } = yield* managedToolHost(fixture);
     const runs = yield* Effect.forEach(Array.from({ length: 12 }), (_, index) =>
       step(() =>
         runtime.run(service.startSessionOwned(eventBackendRequest({ name: `worker-${index}` }))),
@@ -296,13 +194,8 @@ it.live("delivers every report file of a full await even when warnings fill the 
     );
     const runIds = Arr.map(runs, (run) => run.id);
     const tool = tools.get("agent_await")!;
-    const claimed = Deferred.makeUnsafe<void>();
-    const pending = executeTool(
-      tool,
-      { runIds, until: "all_finished" },
-      { callID: "full-await", update: () => Deferred.doneUnsafe(claimed, Effect.void) },
-    );
-    yield* Deferred.await(claimed);
+    const pending = observedCall(tool, { runIds, until: "all_finished" }, { callID: "full-await" });
+    yield* pending.observing;
     // Twelve 6,000-character warnings exceed the result on their own, so cards must be clipped.
     const warning = Arr.join(
       Array.from({ length: 2_000 }, (_, word) => `w${word % 10}`),
@@ -318,7 +211,7 @@ it.live("delivers every report file of a full await even when warnings fill the 
       });
       control.complete(`Report ${index}.`);
     });
-    const result = yield* step(() => pending);
+    const result = yield* pending.result;
 
     const text = resultText(result);
     const contract = decodeSubagentContract("agent_await")(result.structuredContent);

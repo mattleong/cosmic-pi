@@ -7,11 +7,7 @@ import { clipProse, countLabel } from "pi-cosmic-core/display";
 import { layoutTaggedCompactRow, compactSingleLine, type CompactRowInput } from "./compact-row";
 import { renderCompactChildren, selectCompactChildren } from "./compact-children";
 import { renderCompactIssues, repeatsIssueMessage } from "./compact-issues";
-import {
-  COMPACT_SIGNAL_SEVERITIES,
-  mergeCompactIssues,
-  type CompactIssue,
-} from "../tools/compact-issues";
+import { mergeCompactIssues, type CompactIssue } from "../tools/compact-issues";
 import type { CompactChild, CompactSummary } from "../tools/compact-summary";
 
 // A lifted problem names its call in at most this many characters of the call's subject.
@@ -21,15 +17,9 @@ const MAX_CHILD_PROBLEMS = 5;
 
 const CHILD_FAILED = "child-failed";
 
-// Errors, warnings, and questions: the issues a collapsed row shows.
-const PROBLEM_SEVERITIES: ReadonlySet<CompactIssue["severity"]> = new Set(
-  COMPACT_SIGNAL_SEVERITIES,
-);
-
 const problemsOf = (child: CompactChild): readonly CompactIssue[] => {
-  const problems = Arr.filter(child.issues ?? [], (issue) =>
-    PROBLEM_SEVERITIES.has(issue.severity),
-  );
+  // Errors, warnings, and questions: the issues a collapsed row shows.
+  const problems = Arr.filter(child.issues ?? [], (issue) => issue.severity !== "info");
   if (problems.length > 0 || child.status !== "error") return problems;
   return [{ severity: "error", code: CHILD_FAILED, message: "failed" }];
 };

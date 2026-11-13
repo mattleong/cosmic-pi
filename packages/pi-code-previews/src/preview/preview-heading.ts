@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderToolHeader } from "pi-cosmic-ui/tool";
@@ -17,45 +18,7 @@ import {
 import type { TaggableHeading } from "./heading-tag";
 import { previewHeadingText, takeHeadingRoom, wrapPreviewHeading } from "./heading-wrap";
 import { drawsExpandedHeading } from "./preview-issues";
-import { compactSingleLine } from "./compact-row";
-
-/**
- * A drawn heading and whether it shows the whole subject, which a body may then leave out. The
- * heading is never cut, so it shows the whole subject wherever its rows wrap rather than clip.
- */
-export interface PreviewHeadingLayout {
-  readonly text: string;
-  readonly subjectComplete: boolean;
-}
-
-const headingFacts = (summary: CompactSummary): string[] =>
-  Arr.filter(
-    Arr.map([...(summary.counters ?? []).slice(0, 1), ...(summary.metadata ?? [])], (fact) =>
-      compactSingleLine(fact),
-    ),
-    Str.isNonEmpty,
-  );
-
-export function layoutPreviewHeading(
-  title: string,
-  summary: CompactSummary,
-  expanded: boolean,
-  theme: Pick<Theme, "fg" | "bold">,
-): PreviewHeadingLayout {
-  const subject = expanded ? summary.subject : (summary.compactSubject ?? summary.subject);
-  const lead = Arr.join(
-    Arr.filter(
-      [compactSingleLine(summary.action ?? ""), compactSingleLine(subject)],
-      Str.isNonEmpty,
-    ),
-    " ",
-  );
-  const subtitle = Arr.join(Arr.filter([lead, ...headingFacts(summary)], Str.isNonEmpty), " · ");
-  return {
-    text: renderToolHeader({ title, subtitle }, theme),
-    subjectComplete: true,
-  };
-}
+import { compactSingleLine, showsWholeSubject } from "./compact-row";
 
 const factTail = (facts: readonly string[], count: number): string =>
   count === 0 ? "" : ` · ${Arr.join(Arr.take(facts, count), " · ")}`;
@@ -68,57 +31,31 @@ const headingSubtitle = (
 ): string =>
   `${Arr.join(Arr.filter([action, subject], Str.isNonEmpty), " ")}${factTail(facts, count)}`;
 
-/** A heading drawn on as many rows as it needs, and whether it shows the whole subject. */
-export interface WrappedPreviewHeading {
-  readonly rows: string[];
-  readonly subjectComplete: boolean;
-}
+const singleLineFacts = (values: readonly string[] | undefined): string[] =>
+  Arr.filter(Arr.map(values ?? [], compactSingleLine), Str.isNonEmpty);
 
 /**
- * An expanded message's preview heading: the collapsed row's title, action, subject, first counter,
- * and metadata, wrapped rather than cut, and whether it shows the whole subject.
+ * An expanded preview heading: the collapsed row's title, action, subject, first counter, and
+ * metadata. It wraps rather than cuts, so it always shows the whole subject, which a body may then
+ * leave out.
  */
 export function wrappedPreviewHeading(
   title: string,
   summary: CompactSummary,
   theme: Pick<Theme, "fg" | "bold">,
   width: number,
-): WrappedPreviewHeading {
-  const facts = headingFacts(summary);
+): string[] {
+  const facts = singleLineFacts([
+    ...(summary.counters ?? []).slice(0, 1),
+    ...(summary.metadata ?? []),
+  ]);
   const subtitle = headingSubtitle(
     compactSingleLine(summary.action ?? ""),
     compactSingleLine(summary.subject),
     facts,
     facts.length,
   );
-  return {
-    rows: wrapPreviewHeading(renderToolHeader({ title, subtitle }, theme), width),
-    subjectComplete: true,
-  };
-}
-
-const singleLineFacts = (values: readonly string[] | undefined): string[] =>
-  Arr.filter(Arr.map(values ?? [], compactSingleLine), Str.isNonEmpty);
-
-/**
- * A preview heading on one row, as tool rows draw theirs: the title, then the action, subject, a
- * counter, and metadata dimmed. Counters are alternatives, widest first, as on compact rows: the
- * first that fits beside the whole subject shows, with as much metadata after it as fits. A subject
- * that fits beside none shows the first of its narrower whole forms (`subjectAlternatives`) that
- * does. Otherwise the first counter alternative that leaves the subject its minimum room stays, or
- * without counters the first metadata when the cut keeps whole words or a path's file name, so the
- * row keeps its outcome, and the subject is cut the way compact headings cut it (prose at the end
- * on a word boundary, a path in the middle); only a row left with no fact shows a narrower whole
- * form alone instead.
- */
-export function previewHeadingRow(
-  title: string,
-  summary: CompactSummary,
-  expanded: boolean,
-  theme: Pick<Theme, "fg" | "bold">,
-  width: number,
-): string {
-  return layoutPreviewHeadingRow(title, summary, expanded, theme, width).row;
+  return wrapPreviewHeading(renderToolHeader({ title, subtitle }, theme), width);
 }
 
 /** A one-row preview heading, and whether it shows its whole subject. */
@@ -127,8 +64,15 @@ export interface PreviewHeadingRowLayout extends TaggableHeading {
 }
 
 /**
- * {@link previewHeadingRow} with the fact it keeps, its subject keeping `subjectMinimum` columns
- * beside a counter, as compact headings keep.
+ * A preview heading on one row, as tool rows draw theirs, with the fact it keeps: the title, then
+ * the action, subject, a counter, and metadata dimmed. Counters are alternatives, widest first, as
+ * on compact rows: the first that fits beside the whole subject shows, with as much metadata after
+ * it as fits. A subject that fits beside none shows the first of its narrower whole forms
+ * (`subjectAlternatives`) that does. Otherwise the first counter alternative that leaves the
+ * subject `subjectMinimum` columns, as compact headings keep, stays, or without counters the first
+ * metadata when the cut keeps whole words or a path's file name, so the row keeps its outcome, and
+ * the subject is cut the way compact headings cut it (prose at the end on a word boundary, a path
+ * in the middle); only a row left with no fact shows a narrower whole form alone instead.
  */
 export function layoutPreviewHeadingRow(
   title: string,
@@ -150,8 +94,7 @@ export function layoutPreviewHeadingRow(
   // The title and action show whole beside a subject cut to its first column and `…`.
   const identityComplete = room >= (subject ? 2 : -1);
   // A collapsed row's short subject is never the whole one.
-  const whole =
-    expanded || summary.compactSubject === undefined || summary.compactSubject === summary.subject;
+  const whole = expanded || showsWholeSubject(summary);
   const draw = (
     shown: string,
     shownFacts: readonly string[],
@@ -171,12 +114,9 @@ export function layoutPreviewHeadingRow(
   const fits = (shown: string, shownFacts: readonly string[], count: number) =>
     visibleWidth(shown) + visibleWidth(factTail(shownFacts, count)) <= room;
   const kind = summary.pathSubject ? "path" : "prose";
-  const counter = Option.getOrUndefined(
-    Arr.findFirst(
-      counters.length > 0 ? counters : Arr.take(metadata, 1),
-      (value) =>
-        room - visibleWidth(factTail([value], 1)) >= Math.min(subjectMinimum, subjectWidth),
-    ),
+  const counter = findOrUndefined(
+    counters.length > 0 ? counters : Arr.take(metadata, 1),
+    (value) => room - visibleWidth(factTail([value], 1)) >= Math.min(subjectMinimum, subjectWidth),
   );
   const factSets =
     counters.length > 0

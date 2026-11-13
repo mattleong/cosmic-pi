@@ -2,7 +2,6 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -27,11 +26,19 @@ import {
   elideSubject,
   FACT_CUT_SLACK,
   layoutCompactHeader,
+  promotedFact,
   SUBJECT_MINIMUM,
 } from "./compact-header";
 import { wrapPreviewHeading } from "./heading-wrap";
 import { layoutTaggedHeading, type TaggableHeading } from "./heading-tag";
 import { TIMING_VISIBLE_MS } from "./tool-timing";
+
+/** Whether a summary's collapsed subject is its whole subject rather than a shorter form. */
+export const showsWholeSubject = ({
+  compactSubject,
+  subject,
+}: Pick<CompactSummary, "compactSubject" | "subject">): boolean =>
+  compactSubject === undefined || compactSubject === subject;
 
 export function compactSingleLine(value: string): string {
   return Fn.pipe(value, escapeControlChars, Str.replace(/\s+/gu, " "), Str.trim);
@@ -257,14 +264,12 @@ export function layoutCompactRow(
     subjectMinimum,
     input.expanded ? [] : Arr.map(input.summary.subjectAlternatives ?? [], compactSingleLine),
   );
-  const { compactSubject, subject } = input.summary;
-  // A collapsed row's short subject is never the whole one, as a preview heading's isn't.
-  const whole =
-    input.expanded === true || compactSubject === undefined || compactSubject === subject;
   return {
     row,
     issueShown: input.issueLabel !== undefined && counter === input.issueLabel,
-    subjectComplete: subjectComplete && whole,
+    // A collapsed row's short subject is never the whole one, as a preview heading's isn't.
+    subjectComplete:
+      subjectComplete && (input.expanded === true || showsWholeSubject(input.summary)),
     counter,
     fact,
     identityComplete,
@@ -282,8 +287,7 @@ export function layoutTaggedCompactRow(
   width: number,
   label: string | undefined,
 ): CompactRowLayout {
-  const { compactSubject, expandsSubjectOnly, subject } = input.summary;
-  if (expandsSubjectOnly === true && (compactSubject === undefined || compactSubject === subject)) {
+  if (input.summary.expandsSubjectOnly === true && showsWholeSubject(input.summary)) {
     const untagged = layoutCompactRow(input, theme, width);
     if (untagged.subjectComplete) return untagged;
   }
@@ -323,19 +327,12 @@ export function layoutExpandedCompactHeading(
           input.collapsedWidth,
           input.collapsedExpandLabel,
         ).counter;
-  const extra = counters.length
-    ? undefined
-    : Option.getOrUndefined(
-        Arr.findFirst(optional, (value) => value !== undefined && Str.isNonEmpty(Str.trim(value))),
-      );
+  const extra = promotedFact(counters, optional);
   const subject = compactSingleLine(input.summary.subject);
   const prefix = compactRowPrefix(input, theme);
   const parts = Arr.filter(
-    Arr.filter(
-      [counter, extra, !counters.length || counter !== undefined ? timing : undefined],
-      Predicate.isNotUndefined,
-    ),
-    Str.isNonEmpty,
+    [counter, extra, !counters.length || counter !== undefined ? timing : undefined],
+    (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
   );
   const wrap = (shown: string) =>
     wrapPreviewHeading(

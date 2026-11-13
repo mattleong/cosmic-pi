@@ -4,7 +4,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Rec from "effect/Record";
 
-export const HostObjectSchema = Schema.declare(Predicate.isObject);
+const HostObjectSchema = Schema.declare(Predicate.isObject);
 export type HostObject = typeof HostObjectSchema.Type;
 
 export const hostObject = Fn.flow(
@@ -29,7 +29,7 @@ export const hostContainer = Fn.flow(
   Option.getOrUndefined,
 );
 
-export const HostValueSchema = Schema.Union([
+const HostValueSchema = Schema.Union([
   HostContainerSchema,
   Schema.String,
   // @effect-diagnostics-next-line schemaNumber:off -- raw host values are classified as they are; non-finite numbers are still numbers here.

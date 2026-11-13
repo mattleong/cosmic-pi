@@ -1,7 +1,7 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { endElide } from "pi-code-previews";
 import { countLabel } from "pi-cosmic-core/display";
-import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { notifyAtHostBoundary as notify } from "pi-cosmic-core/host-session";
 import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import { wrapNoticeText } from "pi-cosmic-ui/boundary/host-settings-command";
 import * as Arr from "effect/Array";
@@ -82,7 +82,7 @@ const exampleLabel = (sessions: ReadonlyArray<ListedSession>): string | undefine
     best === undefined || label.length < best.length ? label : best,
   );
   return shortest === undefined ||
-    Str.includes("…")(shortest) ||
+    Fn.pipe(shortest, Str.includes("…")) ||
     endElide(shortest, NOTICE_LABEL_CHARS) !== shortest
     ? undefined
     : shortest;
@@ -115,13 +115,10 @@ const receivingReport = (receiving: boolean): string =>
 
 const RECEIVE_CHOICES = ["on", "off"] as const;
 
-/** `/intercom list` and `/intercom receive [on|off]`; receiving resets to on with each session. */
-const notify = (ctx: ExtensionCommandContext, message: string, level: "info" | "warning") =>
-  notifyAtHostBoundary(ctx, message, level);
-
 // Help has no list to point at, so its example names a sample session.
 const HOW_TO_MESSAGE = howToMessage("web", 0);
 
+/** `/intercom list` and `/intercom receive [on|off]`; receiving resets to on with each session. */
 export function registerIntercomCommand(pi: ExtensionAPI, host: IntercomCommandHost): void {
   registerExtensionCommand(pi, {
     name: INTERCOM_COMMAND,

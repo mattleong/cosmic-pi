@@ -29,7 +29,6 @@ export type GroupedActivityRow = PresentationBase &
     | {
         readonly type: "member";
         readonly row: ActivityRow;
-        readonly context: readonly ActivityRow[];
         /** The row sits under a visible section heading that names its kind, such as `Tasks`. */
         readonly kindSection: boolean;
       }
@@ -95,23 +94,6 @@ interface GroupedActivityTreeOptions {
    */
   readonly matches?: (row: ActivityRow) => boolean;
 }
-
-const rowContext = (
-  byKey: ReadonlyMap<string, ActivityRow>,
-  parents: ReadonlyMap<string, string>,
-): ((row: ActivityRow) => readonly ActivityRow[]) => {
-  const contexts = new Map<string, readonly ActivityRow[]>();
-  const context = (row: ActivityRow): readonly ActivityRow[] => {
-    const cached = contexts.get(row.key);
-    if (cached) return cached;
-    const parent = parents.get(row.key);
-    const owner = parent ? byKey.get(parent) : undefined;
-    const value = owner ? [...context(owner), owner] : [];
-    contexts.set(row.key, value);
-    return value;
-  };
-  return context;
-};
 
 function buildNodes(rows: readonly ActivityRow[], parents: ReadonlyMap<string, string>) {
   const { byName, ordered } = makeSections();
@@ -179,7 +161,6 @@ export function groupedActivityTree(
 ): readonly GroupedActivityRow[] {
   const byKey = new Map(Arr.map(rows, (row) => [row.key, row] as const));
   const { parents } = resolveActivityOwnership(byKey);
-  const context = rowContext(byKey, parents);
   const { sections, nodes } = buildNodes(rows, parents);
   for (const section of sections)
     completeNode(section, section.section, options.hideHistory === true);
@@ -226,13 +207,7 @@ export function groupedActivityTree(
     result.push(
       node.type === "section"
         ? { ...base, type: "section" }
-        : {
-            ...base,
-            type: "member",
-            row: node.row,
-            context: context(node.row),
-            kindSection: kindSection(node),
-          },
+        : { ...base, type: "member", row: node.row, kindSection: kindSection(node) },
     );
     if (!expanded) return;
     const ordered = Arr.sort(

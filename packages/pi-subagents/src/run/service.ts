@@ -26,7 +26,7 @@ import {
   runNotFound,
   type SubagentError,
   type SubagentNotFoundError,
-  SubagentRuntimeClosedError,
+  type SubagentRuntimeClosedError,
 } from "./errors.ts";
 import { agentMessageOperations } from "./agent-messages.ts";
 import type {
@@ -37,6 +37,7 @@ import type {
   AgentSendResult,
 } from "./agent-messaging.ts";
 import { assignmentOperations } from "./assignment.ts";
+import type { StartFailureHold } from "./completion.ts";
 import { completionObservationOperations } from "./completion-observations.ts";
 import { peerNotifier } from "./coordination.ts";
 import { controlOperations } from "./control.ts";
@@ -71,6 +72,7 @@ import {
   takeUnrecordedUsageLocked,
 } from "./session-usage.ts";
 import { sessionStartOperations } from "./session-starts.ts";
+import { sessionClosed } from "./session-owned.ts";
 import { subtreeStopper } from "./subtree-stop.ts";
 import { turnInputGates } from "./turn-input.ts";
 import { visibilityOperations } from "./visibility.ts";
@@ -249,7 +251,7 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
 }
 
 const makeService = Effect.fn("SubagentService.make")(function* (options: SubagentServiceOptions) {
-  const backendRegistry = yield* SubagentBackendRegistry;
+  const driver = yield* SubagentBackendRegistry;
   const profileService = yield* SubagentProfileService;
   const writerLeases = yield* WriterLeaseService;
   const workspaceEngine = yield* Effect.serviceOption(WorkspaceService);
@@ -262,20 +264,14 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const records = new Map<string, RunRecord>();
   const sessionUsage = emptySessionUsageLedger(options.restoredSessionUsage);
   const recordSessionUsage = (includeActive: boolean) =>
-    Effect.sync(() =>
-      takeUnrecordedUsageLocked(sessionUsage, records.values(), includeActive),
-    ).pipe(
-      Effect.flatMap((usage) =>
-        Effect.forEach(
-          usage,
-          (settled) =>
-            Effect.sync(() =>
-              invokeHostCallback(() => options.recordSessionUsage?.(settled), undefined),
-            ),
-          { discard: true },
-        ),
-      ),
-    );
+    Effect.sync(() => {
+      for (const settled of takeUnrecordedUsageLocked(
+        sessionUsage,
+        records.values(),
+        includeActive,
+      ))
+        invokeHostCallback(() => options.recordSessionUsage?.(settled), undefined);
+    });
   const writerPools = new WriterPools();
   const frozenProjection = (revision: number): SubagentProjection =>
     Object.freeze({
@@ -334,8 +330,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     ).pipe(
       Effect.catchCauseIf(
         (cause) => closed && Cause.hasInterruptsOnly(cause),
-        () =>
-          Effect.fail(SubagentRuntimeClosedError.make({ message: "Parent session shut down." })),
+        () => Effect.fail(sessionClosed()),
       ),
     );
   const requireRecord = (id: string): Effect.Effect<RunRecord, SubagentNotFoundError> =>
@@ -442,7 +437,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
       executeProxy: (callerRunId, request) =>
         proxyHandler(service, callerRunId, request).pipe(
           Effect.provideService(SubagentProfileService, profileService),
-          Effect.provideService(SubagentBackendRegistry, backendRegistry),
+          Effect.provideService(SubagentBackendRegistry, driver),
         ),
     }),
     ...(questionnaireHandler && {
@@ -467,22 +462,11 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     markCleanupPending: cleanup.markCleanupPending,
     closeExitedScope: cleanup.closeExitedScope,
     failRun: settlement.failRun,
-    // Bound to the spawned run, so a child's channel can never name another caller.
-    agentMessagingFor: (runId, cwd) => {
-      const caller = { kind: "run", runId } as const;
-      return {
-        caller,
-        cwd,
-        list: (ids) => Effect.suspend(() => agentMessages.list(caller, ids)),
-        send: (to, message) => Effect.suspend(() => agentMessages.send(caller, to, message)),
-        read: (ids) => Effect.suspend(() => agentMessages.read(caller, ids)),
-      };
-    },
   });
 
   const launch = launchOperations({
     ...runContext,
-    backendRegistry,
+    driver,
     records,
     delivery,
     isClosed: () => closed,
@@ -530,51 +514,35 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   });
 
   const { holdStartFailures, ...observationOperations } = observations;
+  const heldStarts = (hold?: StartFailureHold): SubagentHeldStarts => ({
+    startSessionOwned: Effect.fn("SubagentService.startSessionOwned")(
+      (request: StartSubagentRequest) => starts.startSessionOwned(request, hold),
+    ),
+    startScriptSessionOwned: Effect.fn("SubagentService.startScriptSessionOwned")(
+      (request: StartSubagentRequest) => starts.startScriptSessionOwned(request, hold),
+    ),
+    startSessionOwnedFrom: Effect.fn("SubagentService.startSessionOwnedFrom")(
+      (callerRunId: string, request: StartSubagentRequest) =>
+        starts.startSessionOwnedFrom(callerRunId, request, hold),
+    ),
+    workspaceRevise: Effect.fn("SubagentService.workspaceRevise")(
+      workspaces.revise((request: StartSubagentRequest) => launch.start(request, false, hold)),
+    ),
+  });
   const service: SubagentServiceContract = {
     ...observationOperations,
     start: Effect.fn("SubagentService.start")(starts.start),
-    startSessionOwned: Effect.fn("SubagentService.startSessionOwned")(
-      (request: StartSubagentRequest) => starts.startSessionOwned(request),
-    ),
-    startScriptSessionOwned: Effect.fn("SubagentService.startScriptSessionOwned")(
-      (request: StartSubagentRequest) => starts.startScriptSessionOwned(request),
-    ),
+    ...heldStarts(),
     // The hold never leaves the service: `use` gets only starts bound to it.
-    withStartFailureHold: (use) =>
-      holdStartFailures((hold) =>
-        use({
-          startSessionOwned: Effect.fn("SubagentService.startSessionOwned")(
-            (request: StartSubagentRequest) => starts.startSessionOwned(request, hold),
-          ),
-          startScriptSessionOwned: Effect.fn("SubagentService.startScriptSessionOwned")(
-            (request: StartSubagentRequest) => starts.startScriptSessionOwned(request, hold),
-          ),
-          startSessionOwnedFrom: Effect.fn("SubagentService.startSessionOwnedFrom")(
-            (callerRunId: string, request: StartSubagentRequest) =>
-              starts.startSessionOwnedFrom(callerRunId, request, hold),
-          ),
-          workspaceRevise: Effect.fn("SubagentService.workspaceRevise")(
-            workspaces.revise((request: StartSubagentRequest) =>
-              launch.start(request, false, hold),
-            ),
-          ),
-        }),
-      ),
+    withStartFailureHold: (use) => holdStartFailures((hold) => use(heldStarts(hold))),
     workspaceList: Effect.fn("SubagentService.workspaceList")(workspaces.workspaceList),
     workspaceReview: Effect.fn("SubagentService.workspaceReview")(workspaces.workspaceReview),
     workspacePrepare: Effect.fn("SubagentService.workspacePrepare")(workspaces.workspacePrepare),
     workspaceDiscard: Effect.fn("SubagentService.workspaceDiscard")(workspaces.workspaceDiscard),
     workspaceApply: Effect.fn("SubagentService.workspaceApply")(workspaces.workspaceApply),
-    workspaceRevise: Effect.fn("SubagentService.workspaceRevise")(
-      workspaces.revise((request: StartSubagentRequest) => launch.start(request)),
-    ),
     inspectWriterWorkspace: workspaces.inspectWriterWorkspace,
     sweepOrphanedWorkspaces: workspaces.sweepOrphanedWorkspaces,
     setWriterWorkspaceMode: workspaces.setWriterWorkspaceMode,
-    startSessionOwnedFrom: Effect.fn("SubagentService.startSessionOwnedFrom")(
-      (callerRunId: string, request: StartSubagentRequest) =>
-        starts.startSessionOwnedFrom(callerRunId, request),
-    ),
     captureLaunchParent: starts.captureLaunchParent,
     ...visibilityOperations(runContext),
     send: Effect.fn("SubagentService.send")(agentMessages.sendFromUser),

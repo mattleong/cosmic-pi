@@ -2,15 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createInputDock } from "../src/boundary/host-input-dock.ts";
 import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
 
-const harness = () => {
-  const host = fakeCustomSurfaceHost();
-  return {
-    tui: host.tui,
-    ui: host.ctx.ui,
-    widgets: host.widgets,
-    overlay: () => host.showUnrelated(),
-  };
-};
 const component = () => ({
   focused: false,
   render: () => ["panel"],
@@ -20,8 +11,8 @@ const component = () => ({
 
 describe("input dock ownership", () => {
   it("forwards keyboard focus while drawing only in the widget", () => {
-    const h = harness();
-    const dock = createInputDock(h.ui);
+    const h = fakeCustomSurfaceHost();
+    const dock = createInputDock(h.ctx.ui);
     const dialog = component();
     dock.mount(h.tui, dialog);
     const widget = [...h.widgets.values()][0]!;
@@ -31,7 +22,7 @@ describe("input dock ownership", () => {
     expect(dialog.handleInput).toHaveBeenCalledWith("x");
     expect(dock.input.render(80)).toEqual([]);
     expect(widget.render(80)).toEqual(dialog.render());
-    const handle = dock.handle(h.overlay());
+    const handle = dock.handle(h.showUnrelated());
     handle.setHidden(true);
     expect(widget.render(80)).toEqual([]);
     dialog.handleInput.mockClear();
@@ -47,10 +38,10 @@ describe("input dock ownership", () => {
   });
 
   it("old disposal and late mounting cannot erase a successor widget", () => {
-    const h = harness();
-    const old = createInputDock(h.ui);
+    const h = fakeCustomSurfaceHost();
+    const old = createInputDock(h.ctx.ui);
     old.mount(h.tui, component());
-    const current = createInputDock(h.ui);
+    const current = createInputDock(h.ctx.ui);
     const dialog = component();
     current.mount(h.tui, dialog);
     expect(h.widgets.size).toBe(2);
@@ -64,11 +55,11 @@ describe("input dock ownership", () => {
   });
 
   it("removes the widget even when overlay closure fails", () => {
-    const h = harness();
-    const dock = createInputDock(h.ui);
+    const h = fakeCustomSurfaceHost();
+    const dock = createInputDock(h.ctx.ui);
     dock.mount(h.tui, component());
     const handle = dock.handle({
-      ...h.overlay(),
+      ...h.showUnrelated(),
       hide: () => {
         throw new Error("host failure");
       },

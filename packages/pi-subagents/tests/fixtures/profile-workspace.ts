@@ -1,8 +1,11 @@
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
-import { plainTheme } from "pi-cosmic-core/testing";
+import { extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
 import type { ProfileCandidate } from "../../src/profiles/model.ts";
 import type { SessionProfileOverrideSeed } from "../../src/profiles/session-overrides.ts";
+import type { SubagentCommandActions } from "../../src/settings/controller.ts";
+import { ProfileDashboardComponent } from "../../src/settings/profile-dashboard-component.ts";
+import type { ProfileSettingsInspection } from "../../src/settings/profile-route-editor.ts";
 import {
   ProfileWorkspaceComponent,
   type ProfileWorkspaceOptions,
@@ -51,19 +54,14 @@ export const workspaceHarness = (
     candidates = draft.candidates;
     return Promise.resolve({ inspection: inspection() });
   });
-  const loadModelPicker = vi.fn<ProfileWorkspaceOptions["loadModelPicker"]>(
-    (profile, candidateIndex, candidate) =>
-      Promise.resolve({
-        choices: Arr.map(["test/first", "test/second", "test/changed"], (selector) => ({
-          provider: "test",
-          id: selector,
-          selector,
-          fastModeAvailable: false,
-        })),
-        current: candidate.model,
-        context: { profile, candidateIndex },
-      }),
-  );
+  const loadModelPicker = vi.fn<ProfileWorkspaceOptions["loadModelPicker"]>(() => ({
+    choices: Arr.map(["test/first", "test/second", "test/changed"], (selector) => ({
+      provider: "test",
+      id: selector,
+      selector,
+      fastModeAvailable: false,
+    })),
+  }));
   const component = new ProfileWorkspaceComponent({
     theme: plainTheme,
     inspection: inspection(),
@@ -87,5 +85,54 @@ export const workspaceHarness = (
     loadModelPicker,
     candidates: () => candidates,
     inspection,
+  };
+};
+
+/** A focused profile dashboard over `inspection`, with its editor opened on the current session. */
+export const dashboardHarness = (options: {
+  readonly inspection: ProfileSettingsInspection;
+  readonly actions: SubagentCommandActions;
+  readonly trusted?: () => boolean;
+  readonly isCurrent?: () => boolean;
+  readonly workspace?: Partial<ProfileWorkspaceOptions>;
+}) => {
+  const close = vi.fn();
+  const saveDraft = vi.fn<ProfileWorkspaceOptions["saveDraft"]>(() =>
+    Promise.resolve({ inspection: options.inspection }),
+  );
+  const component = new ProfileDashboardComponent({
+    ctx: extensionContextFixture({ isProjectTrusted: options.trusted ?? (() => true) }),
+    actions: options.actions,
+    isCurrent: options.isCurrent ?? (() => true),
+    onInspection: vi.fn(),
+    awaitDialog: (register) =>
+      Effect.runPromise(
+        Effect.callback((resume) => {
+          const cleanup = register((result) => resume(Effect.succeed(result)));
+          return Effect.sync(cleanup);
+        }),
+      ),
+    workspace: {
+      theme: plainTheme,
+      inspection: options.inspection,
+      target: { kind: "session" },
+      parentEffort: "high",
+      getHeight: () => 40,
+      requestRender: vi.fn(),
+      close,
+      saveDraft,
+      loadModelPicker: () => ({ choices: [] }),
+      supportedPiEfforts: () => undefined,
+      ...options.workspace,
+    },
+  });
+  component.focused = true;
+  return {
+    component,
+    close,
+    saveDraft,
+    press: (...keys: string[]) => {
+      for (const key of keys) component.handleInput(key);
+    },
   };
 };

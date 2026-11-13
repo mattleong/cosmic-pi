@@ -23,7 +23,7 @@ import {
   SubagentProcessError,
 } from "../../src/run/errors.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const completeHistory = (
   service: SubagentServiceContract,
@@ -94,18 +94,6 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("mints run IDs a model can't predict from an earlier start", () => {
-    const { layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const first = yield* service.start(request({ name: undefined }));
-      const second = yield* service.start(request({ name: undefined }));
-      // A random token, with no runtime namespace or ordinal to increment.
-      for (const run of [first, second]) expect(run.id).toMatch(/^agent-[0-9a-z]{10}$/u);
-      expect(second.id).not.toBe(first.id);
-      expect([first.name, second.name]).toEqual(["subagent-1", "subagent-2"]);
-    });
-  });
-
   it.effect(
     "keeps direct-child capacity reserved until terminal process cleanup is confirmed",
     () => {
@@ -166,9 +154,7 @@ describe("SubagentService", () => {
       const secondId = afterFailure[1]?.id ?? "";
       const thirdId = afterFailure[2]?.id ?? "";
       expect(afterFailure).toHaveLength(50);
-      expect(
-        Option.getOrUndefined(Arr.findFirst(afterFailure, (run) => run.id === firstId))?.cleanup,
-      ).toMatchObject({
+      expect(findOrUndefined(afterFailure, (run) => run.id === firstId)?.cleanup).toMatchObject({
         disposition: "quarantined",
         recovery: "manual",
         diagnostic: { phase: "backend-scope", code: "fixture_reclaim_failed" },

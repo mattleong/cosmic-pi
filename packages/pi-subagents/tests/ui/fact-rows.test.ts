@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import { factRowLines, type FactSpan } from "../../src/ui/agent-text.ts";
+import * as Fn from "effect/Function";
 
 // Marks each colored part so the test can tell which span every visible character came from.
 const theme = {
@@ -24,7 +25,7 @@ const COLORED = /<(\w+)>(.*?)<\/\1>/gu;
 const textByColor = (rows: ReadonlyArray<string>) => {
   const colored = new Map<string, string>();
   for (const row of rows)
-    for (const [, color = "", text = ""] of Str.matchAll(COLORED)(row))
+    for (const [, color = "", text = ""] of Fn.pipe(row, Str.matchAll(COLORED)))
       colored.set(color, `${colored.get(color) ?? ""}${text}`);
   const uncolored = Arr.join(Arr.map(rows, Str.replace(COLORED, "")), "");
   return { colored, uncolored };
@@ -44,7 +45,7 @@ describe("wrapped fact rows", () => {
       expected.set(color, `${expected.get(color) ?? ""}${text}`);
     for (const [color, text] of expected)
       expect(withoutSpaces(colored.get(color) ?? "")).toBe(withoutSpaces(text));
-    expect(Arr.every(rows, (row) => !Str.endsWith("·</dim>")(row))).toBe(true);
+    expect(Arr.every(rows, (row) => !Fn.pipe(row, Str.endsWith("·</dim>")))).toBe(true);
   });
 });
 
@@ -53,18 +54,19 @@ describe("collapsed fact rows", () => {
     ["db-migration", "accent"],
     [" · shared checkout writer · running · Implement the 0007 migration for orders", "muted"],
   ];
-  const plain = (row: string) => Str.replace(COLORED, "$2")(row);
+  const plain = (row: string) => Fn.pipe(row, Str.replace(COLORED, "$2"));
 
   it.each([60, 70, 80])("cut a trailing task at a word boundary at %i columns", (width) => {
     const [row = ""] = factRowLines(peer, width, theme, false);
     const shown = plain(row);
     expect(shown.length).toBeLessThanOrEqual(width);
     expect(shown).toMatch(/…$/u);
-    const kept = Str.slice(0, -1)(shown);
+    const kept = Fn.pipe(shown, Str.slice(0, -1));
     // The cut never lands inside a word of the task.
-    expect(`${Str.replace(/\s+$/u, "")(kept)} `).toSatisfy((text: string) =>
-      Str.includes(text)(
+    expect(`${Fn.pipe(kept, Str.replace(/\s+$/u, ""))} `).toSatisfy((text: string) =>
+      Fn.pipe(
         "db-migration · shared checkout writer · running · Implement the 0007 migration for orders ",
+        Str.includes(text),
       ),
     );
   });

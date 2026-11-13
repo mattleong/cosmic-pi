@@ -1,11 +1,12 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { expect, test } from "vitest";
 import { expansionTag } from "../../testing";
 import { layoutCompactRow, layoutExpandedCompactHeading } from "../../src/preview/compact-row";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
-import { previewHeadingRow } from "../../src/preview/preview-heading";
+import { layoutPreviewHeadingRow } from "../../src/preview/preview-heading";
 import type { CompactSummary } from "../../src/tools/compact-summary";
 import { plainTheme as theme, stripAnsi } from "../support/render";
 
@@ -97,7 +98,7 @@ test("the tag's label never costs the subject its whole form", () => {
 
 test("a collapsed message heading shows a narrower whole form before cutting its subject", () => {
   const heading = (width: number) =>
-    stripAnsi(previewHeadingRow("Subagents stopped", stopped, false, theme, width));
+    stripAnsi(layoutPreviewHeadingRow("Subagents stopped", stopped, false, theme, width).row);
   expect(heading(80)).toContain("auth-review, db-migration · on reload");
   const narrow = heading(
     visibleWidth("Subagents stopped auth-review, db-migration · on reload") - 1,
@@ -105,9 +106,9 @@ test("a collapsed message heading shows a narrower whole form before cutting its
   expect(narrow).toContain("auth-review +1 · on reload");
   expect(narrow).not.toContain("…");
   // Expanded, a one-row heading shows the subject itself.
-  expect(stripAnsi(previewHeadingRow("Subagents stopped", stopped, true, theme, 40))).not.toContain(
-    "+1",
-  );
+  expect(
+    stripAnsi(layoutPreviewHeadingRow("Subagents stopped", stopped, true, theme, 40).row),
+  ).not.toContain("+1");
 });
 
 const failedStop: CompactSummary = {
@@ -119,7 +120,7 @@ const failedStop: CompactSummary = {
 test("a message heading keeps a whole subject rather than trading it for a narrower form", () => {
   const width = visibleWidth("Subagents stopped auth-review, db-migration") + 1;
   const heading = stripAnsi(
-    previewHeadingRow("Subagents stopped", failedStop, false, theme, width),
+    layoutPreviewHeadingRow("Subagents stopped", failedStop, false, theme, width).row,
   );
   expect(heading).toContain("auth-review, db-migration");
 });
@@ -128,11 +129,11 @@ test("a narrower form never costs a message heading the counter its cut subject 
   const { subjectAlternatives: _, ...withoutForms } = failedStop;
   for (const width of Arr.range(30, 80)) {
     const cutRow = stripAnsi(
-      previewHeadingRow("Subagents stopped", withoutForms, false, theme, width),
+      layoutPreviewHeadingRow("Subagents stopped", withoutForms, false, theme, width).row,
     );
     const formRow = stripAnsi(
-      previewHeadingRow("Subagents stopped", failedStop, false, theme, width),
+      layoutPreviewHeadingRow("Subagents stopped", failedStop, false, theme, width).row,
     );
-    if (Str.includes("1 failed")(cutRow)) expect(formRow).toContain("1 failed");
+    if (Fn.pipe(cutRow, Str.includes("1 failed"))) expect(formRow).toContain("1 failed");
   }
 });

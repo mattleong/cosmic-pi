@@ -1,4 +1,4 @@
-import { expect, layer } from "@effect/vitest";
+import { describe, expect, it as effectIt, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -94,22 +94,6 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
     }),
   );
 
-  it.effect("replaces the record when the session is replaced", () =>
-    Effect.gen(function* () {
-      const h = yield* harness();
-      yield* h.start();
-      const [first] = yield* h.records;
-
-      yield* h.replace("session-2");
-      const records = yield* h.records;
-
-      expect(records).toHaveLength(1);
-      expect(records[0]?.sessionId).toBe("session-2");
-      expect(records[0]?.instance).not.toBe(first?.instance);
-      expect(records[0]?.token).not.toBe(first?.token);
-    }),
-  );
-
   it.effect("uses a private fallback socket directory for long paths and removes it", () =>
     Effect.gen(function* () {
       const h = yield* harness({ longAgentDirectory: true });
@@ -180,7 +164,7 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
     }),
   );
 
-  it.effect("moves to a new socket and token when the session is replaced", () =>
+  it.effect("moves to a new record, socket, and token when the session is replaced", () =>
     Effect.gen(function* () {
       const h = yield* harness();
       yield* h.start();
@@ -189,6 +173,9 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
       yield* h.replace("session-2");
       const next = yield* onlyRecord(h.records);
 
+      expect(next.sessionId).toBe("session-2");
+      expect(next.instance).not.toBe(first.instance);
+      expect(next.token).not.toBe(first.token);
       expect(yield* h.fs.exists(first.socket)).toBe(false);
       expect((yield* describeSession(next)).sessionId).toBe("session-2");
       expect(
@@ -202,7 +189,6 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const paths = yield* Path.Path;
       const shared = yield* sharedAgentDirectory();
-      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
       yield* fs.makeDirectory(shared.sessions, { recursive: true, mode: 0o700 });
       const socket = paths.join(shared.base, "stuck.sock");
       const stuck = yield* hangingListener(socket);
@@ -213,7 +199,7 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
       const started = yield* startSessionRuntime(
         { sessionId: "session-1", name: undefined, cwd: "/project" },
         "",
-        shared.fallbackRoot,
+        shared,
       );
       yield* stuck.arrived(1);
       yield* TestClock.adjust(DESCRIBE_DEADLINE);
@@ -246,8 +232,8 @@ layer(nodeFilePlatformLayer)("intercom application", (it) => {
   );
 });
 
-layer(nodeFilePlatformLayer)("intercom host inbound", (it) => {
-  it.effect("refuses every request once its runtime is retired", () =>
+describe("intercom host inbound", () => {
+  effectIt.effect("refuses every request once its runtime is retired", () =>
     Effect.gen(function* () {
       let current = true;
       const inbound = hostIntercomInbound(

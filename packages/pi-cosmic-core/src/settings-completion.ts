@@ -8,6 +8,7 @@ import { clipText } from "./display.ts";
 import { isJsonObject, type JsonObject, type JsonValue } from "./platform/json-document.ts";
 import { safeTextPrefix } from "./text.ts";
 import { lastIndexOfFrom } from "./text-scan.ts";
+import { findOrUndefined } from "./array.ts";
 
 interface SettingsCompletionDescriptor {
   readonly id: string;
@@ -69,9 +70,7 @@ const completeSettingValues = (
   descriptors: ReadonlyArray<SettingsCompletionDescriptor>,
 ): SettingsCompletionChoice[] | null => {
   const headId = Str.toLowerCase(head);
-  const descriptor = Option.getOrUndefined(
-    Arr.findFirst(descriptors, (entry) => Str.toLowerCase(entry.id) === headId),
-  );
+  const descriptor = findOrUndefined(descriptors, (entry) => Str.toLowerCase(entry.id) === headId);
   if (!descriptor) return null;
   const query = Str.toLowerCase(valuePrefix);
   return nonEmpty(
@@ -95,8 +94,7 @@ export const completeSettingsArguments = (
 ): SettingsCompletionChoice[] | null => {
   const normalized = Fn.pipe(prefix, Str.replace(/^\s+/, ""));
   const scoped = /^(\S+)\s+([\s\S]*)$/u.exec(normalized);
-  const scope =
-    scoped && Option.getOrUndefined(Arr.findFirst(scopes, (choice) => choice.value === scoped[1]));
+  const scope = scoped && findOrUndefined(scopes, (choice) => choice.value === scoped[1]);
   if (scoped && scope) {
     const inner = completeSettingsArguments(scoped[2] ?? "", descriptors);
     return inner === null
@@ -114,7 +112,7 @@ export const completeSettingsArguments = (
     : completeSettingValues(head, rest[0] ?? "", descriptors);
 };
 
-export const sectionSettingValue =
+const sectionSettingValue =
   (section: string, key: string, value: JsonValue): ((current: JsonObject) => JsonObject) =>
   (current) => {
     const existing = current[section];
@@ -154,16 +152,11 @@ export const oneOfRule = (values: ReadonlyArray<string>): string => {
   return `must be ${Arr.join(Arr.reverse(rest), ", ")}${rest.length > 1 ? "," : ""} or ${last}`;
 };
 
-export const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
-export const FiniteNumberFromJsonSchema = Schema.fromJsonString(Schema.Finite);
-
 export const decodeSettingUpdate = <Config>(
   descriptors: ReadonlyArray<Pick<SettingsOptionDescriptor<Config>, "id" | "decoder" | "rule">>,
 ) =>
   Effect.fn("Settings.decodeSettingUpdate")(function* (id: string, rawValue: string) {
-    const descriptor = Option.getOrUndefined(
-      Arr.findFirst(descriptors, (entry) => entry.id === id),
-    );
+    const descriptor = findOrUndefined(descriptors, (entry) => entry.id === id);
     if (!descriptor)
       return yield* InvalidSettingError.make({ id, message: `Unknown setting: ${id}` });
     // Leads with the id so the settings shell can name the setting: `Label (id) <rule>`.

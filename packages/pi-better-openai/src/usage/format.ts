@@ -36,7 +36,7 @@ const RateLimitBucketSchema = Schema.Struct({
 const CodexUsageSchema = Schema.Struct({
   rate_limit: Schema.optional(Schema.NullOr(RateLimitBucketSchema)),
 });
-export type CodexUsageResponse = typeof CodexUsageSchema.Type;
+type CodexUsageResponse = typeof CodexUsageSchema.Type;
 type UsageWindow = typeof UsageWindowSchema.Type;
 
 export class CodexUsageError extends Schema.TaggedError<
@@ -48,9 +48,7 @@ export class CodexUsageError extends Schema.TaggedError<
 }) {}
 
 const boundedResetSeconds = (value: number | null | undefined): number | null =>
-  Predicate.isNumber(value) && Number.isFinite(value) && value >= 0 && value <= MAX_RESET_SECONDS
-    ? value
-    : null;
+  Predicate.isNumber(value) && value >= 0 && value <= MAX_RESET_SECONDS ? value : null;
 
 function resetSeconds(window: UsageWindow | null | undefined, now: number): number | null {
   const resetAfter = boundedResetSeconds(window?.reset_after_seconds);
@@ -69,7 +67,7 @@ function resetSeconds(window: UsageWindow | null | undefined, now: number): numb
   return boundedResetSeconds(Math.max(0, resetAt - now / 1000));
 }
 
-export function parseUsageSnapshot(data: CodexUsageResponse, now: number): UsageSnapshot {
+function parseUsageSnapshot(data: CodexUsageResponse, now: number): UsageSnapshot {
   const primary = data.rate_limit?.primary_window ?? null;
   const secondary = data.rate_limit?.secondary_window ?? null;
   const fiveHour = secondary ? primary : null;
@@ -131,21 +129,12 @@ function formatPercent(value: number | null): string {
     : "--";
 }
 
-function remainingResetSeconds(
+/** Seconds left until a reset; {@link resetMoment} rejects every non-finite result. */
+const remainingResetSeconds = (
   seconds: number | null,
   capturedAt: number,
   now: number,
-): number | null {
-  if (
-    seconds === null ||
-    !Number.isFinite(seconds) ||
-    !Number.isFinite(capturedAt) ||
-    !Number.isFinite(now)
-  )
-    return null;
-  const remaining = seconds - (now - capturedAt) / 1000;
-  return Number.isFinite(remaining) ? remaining : null;
-}
+): number | null => (seconds === null ? null : seconds - (now - capturedAt) / 1000);
 
 interface UsageWindowView {
   /** The compact label the footer protocol and status line use. */

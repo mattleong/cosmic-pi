@@ -18,9 +18,8 @@ import {
   context,
   fallbackProfileService,
   profileServiceFor,
-  testBackendDriver,
-  testBackendRegistry,
 } from "./tools/fixtures/tool-harness.ts";
+import { inertDriver } from "./run/fixtures/run-context.ts";
 
 const parentContext: SubagentParentContext = {
   sessionId: "parent-session",
@@ -68,10 +67,10 @@ describe("profile start on a retired session", () => {
       const session = retirableSession();
       let probes = 0;
       const registry = {
-        ...testBackendRegistry,
+        ...inertDriver,
         preflight: () => {
           probes += 1;
-          if (probes > 1) return Effect.succeed(testBackendDriver);
+          if (probes > 1) return Effect.void;
           session.retire();
           return Effect.fail(
             InvalidSubagentRequestError.make({ code: "probe_failed", message: "Probe failed." }),
@@ -118,7 +117,7 @@ describe("profile start on a retired session", () => {
             ...(parent && { parentContext: parent }),
           }).pipe(
             Effect.provideService(SubagentProfileService, profileServiceFor(undefined)),
-            Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+            Effect.provideService(SubagentBackendRegistry, inertDriver),
             Effect.flip,
           );
           expect(error).toBeInstanceOf(InvalidSubagentRequestError);
@@ -133,7 +132,7 @@ describe("tool and doctor host reads on a retired session", () => {
     executeSubagentActionEffect(session.pi, environment, input, undefined, session.ctx).pipe(
       Effect.provideService(SubagentService, subagentServiceDouble({})),
       Effect.provideService(SubagentProfileService, fallbackProfileService),
-      Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+      Effect.provideService(SubagentBackendRegistry, inertDriver),
       Effect.flip,
     );
 
@@ -171,7 +170,7 @@ describe("tool and doctor host reads on a retired session", () => {
         projectTrusted: true,
       }).pipe(
         Effect.provideService(SubagentProfileService, fallbackProfileService),
-        Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+        Effect.provideService(SubagentBackendRegistry, inertDriver),
         Effect.provide(SafeFile.layer.pipe(Layer.provideMerge(nodeFilePlatformLayer))),
         Effect.flip,
       );

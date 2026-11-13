@@ -3,7 +3,6 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as HttpClient from "effect/http/HttpClient";
@@ -86,23 +85,19 @@ it.effect("maps transport failure without exposing its URL or cause", () =>
         }),
       ),
     );
-    const result = yield* JsonHttpClient.use((http) =>
-      Effect.result(http.request({ ...okRequest, url: "https://secret.invalid/private" })),
+    const failure = yield* JsonHttpClient.use((http) =>
+      Effect.flip(http.request({ ...okRequest, url: "https://secret.invalid/private" })),
     ).pipe(json(client));
-    expect(result._tag).toBe("Failure");
-    if (Result.isFailure(result)) {
-      expect(String(result.failure)).not.toContain("secret.invalid");
-      expect(String(result.failure)).not.toContain("transport cause");
-    }
+    expect(String(failure)).not.toContain("secret.invalid");
+    expect(String(failure)).not.toContain("transport cause");
   }),
 );
 
 it.effect("bounds JSON response buffering before decoding", () =>
   Effect.gen(function* () {
     const http = yield* JsonHttpClient;
-    const result = yield* Effect.result(http.request({ ...okRequest, maxResponseBytes: 4 }));
-    expect(result._tag).toBe("Failure");
-    if (Result.isFailure(result)) expect(result.failure.operation).toBe("response");
+    const failure = yield* Effect.flip(http.request({ ...okRequest, maxResponseBytes: 4 }));
+    expect(failure.operation).toBe("response");
   }).pipe(json('{"ok":true}')),
 );
 

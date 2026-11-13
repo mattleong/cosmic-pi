@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 
 const ESC = "\u001b";
@@ -15,8 +16,12 @@ const STYLED_AFFORDANCE = new RegExp(`^(?:\\s|${STYLING})*${STYLING}▸${STYLING
  */
 export function isAffordanceRow(row: string): boolean {
   const text = Str.trim(stripTerminalControls(row));
-  if (!Str.startsWith("▸ ")(text) || !Str.isNonEmpty(Str.trim(Str.slice(2)(text)))) return false;
-  return !Str.includes(ESC)(row) || STYLED_AFFORDANCE.test(row);
+  if (
+    !Fn.pipe(text, Str.startsWith("▸ ")) ||
+    !Fn.pipe(text, Str.slice(2), Str.trim, Str.isNonEmpty)
+  )
+    return false;
+  return !Fn.pipe(row, Str.includes(ESC)) || STYLED_AFFORDANCE.test(row);
 }
 
 /** Whether drawn rows already offer expansion, so the shell doesn't add a second affordance. */

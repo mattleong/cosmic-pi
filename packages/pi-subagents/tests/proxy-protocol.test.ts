@@ -25,6 +25,11 @@ const request = (count: number) => ({
   }),
 });
 
+const decodeResultText = (chars: number) =>
+  decodeSubagentProxyResult(
+    JSON.stringify({ content: [{ type: "text", text: Fn.pipe("x", Str.repeat(chars)) }] }),
+  );
+
 describe("nested Pi proxy protocol", () => {
   const parentContext = {
     sessionId: "child-session",
@@ -132,6 +137,8 @@ describe("nested Pi proxy protocol", () => {
       requestedRunIds: [run.id],
       until: "all_finished",
       cleanup: "confirmed",
+      deliveryAttemptedIds: new Set(),
+      ending: "cancelled",
       now: 0,
     });
     expect(
@@ -164,26 +171,9 @@ describe("nested Pi proxy protocol", () => {
       ),
     ).toBeInstanceOf(InvalidSubagentRequestError);
   });
-  it.each([
-    {
-      label: "accepts the text bound",
-      source: JSON.stringify({
-        content: [{ type: "text", text: Fn.pipe("x", Str.repeat(MAX_TOOL_OUTPUT_CHARS)) }],
-      }),
-      accepted: true,
-      expectedDetails: {},
-    },
-    {
-      label: "rejects text beyond the bound",
-      source: JSON.stringify({
-        content: [{ type: "text", text: Fn.pipe("x", Str.repeat(MAX_TOOL_OUTPUT_CHARS + 1)) }],
-      }),
-      accepted: false,
-    },
-  ])("$label", ({ source, accepted, expectedDetails }) => {
-    const decoded = decodeSubagentProxyResult(source);
-    expect(decoded !== undefined).toBe(accepted);
-    if (accepted) expect(decoded?.details).toEqual(expectedDetails);
+  it("accepts result text at the bound and rejects it beyond", () => {
+    expect(decodeResultText(MAX_TOOL_OUTPUT_CHARS)?.details).toEqual({});
+    expect(decodeResultText(MAX_TOOL_OUTPUT_CHARS + 1)).toBeUndefined();
   });
 
   it("accepts the hard 32-item start bound and rejects a larger batch", () => {
@@ -193,11 +183,14 @@ describe("nested Pi proxy protocol", () => {
     );
   });
 
-  it.each([
-    ["spoofed ancestry", "agent_start", { agents: [{ task: "spoof", parentRunId: "sibling" }] }],
-  ])("rejects %s", (_label, tool, args) => {
+  it("rejects spoofed ancestry", () => {
     expect(
-      rejection(decodeSubagentProxyRequest({ tool, argumentsJson: JSON.stringify(args) })),
+      rejection(
+        decodeSubagentProxyRequest({
+          tool: "agent_start",
+          argumentsJson: JSON.stringify({ agents: [{ task: "spoof", parentRunId: "sibling" }] }),
+        }),
+      ),
     ).toMatchObject({ code: "proxy_request_invalid" });
   });
 

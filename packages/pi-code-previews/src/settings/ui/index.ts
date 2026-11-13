@@ -1,9 +1,8 @@
 import * as Arr from "effect/Array";
-import { getSettingsListTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { type Theme } from "@earendil-works/pi-coding-agent";
 import { type SettingItem } from "@earendil-works/pi-tui";
 import {
   createSettingsGroupSubmenu,
-  managerSettingsTheme,
   type SettingsSurfaceItem,
 } from "pi-cosmic-ui/manager/settings-surface";
 import { getSettingsPath } from "../../config/store";
@@ -19,6 +18,7 @@ import {
   createToolPreviewSettingsSubmenu,
   enabledToolsSummary,
   ENABLED_TOOLS_LABEL,
+  settingsListTheme,
 } from "./submenus";
 import {
   SETTING_ITEM_DEFINITIONS,
@@ -182,7 +182,7 @@ function createSettingsGroupItemFromDefinition(
         onChange: onSettingChange,
         done,
         summary: () => definition.summarize(getCurrent()),
-        listTheme: theme ? managerSettingsTheme(theme) : getSettingsListTheme(),
+        listTheme: settingsListTheme(theme),
       }),
   };
 }

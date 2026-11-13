@@ -7,6 +7,7 @@ import { bundledLanguages, type BundledLanguage } from "shiki/langs";
 import type { SpecialLanguage } from "shiki/types";
 import { nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { indexOfFrom } from "pi-cosmic-core/text-scan";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { codePreviewPerformanceConfig } from "../config/state";
 
 const SPECIAL_LANGUAGES = [
@@ -127,11 +128,9 @@ function languageFromShebang(content: string | undefined): string | undefined {
   );
   const envIndex = Arr.findFirstIndex(parts, (part) => nodePath.basename(part) === "env");
   const command = Option.isSome(envIndex)
-    ? Option.getOrUndefined(
-        Arr.findFirst(
-          parts.slice(envIndex.value + 1),
-          (part) => !Fn.pipe(part, Str.startsWith("-")),
-        ),
+    ? findOrUndefined(
+        parts.slice(envIndex.value + 1),
+        (part) => !Fn.pipe(part, Str.startsWith("-")),
       )
     : parts[0];
   if (!command) return undefined;

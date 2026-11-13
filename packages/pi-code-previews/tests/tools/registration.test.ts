@@ -29,14 +29,9 @@ import {
 } from "../../src/tools/renderers/registration";
 import { getEnabledCodePreviewTools } from "../../src/tools/selection";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
+import { builtinToolInfo, inertCapability } from "../support/renderer-host";
 import * as Match from "effect/Match";
 
-const builtinSource: SourceInfo = {
-  path: "builtin:write",
-  source: "builtin",
-  scope: "temporary",
-  origin: "top-level",
-};
 const extensionSource: SourceInfo = {
   path: "/extensions/code-previews.ts",
   source: "code-previews",
@@ -48,18 +43,13 @@ const anchor = { name: "code-previews", source: "extension" as const, sourceInfo
 
 afterEach(() => setCodePreviewSettings(defaultCodePreviewSettings));
 
-function toolInfo(name: string, sourceInfo: SourceInfo = builtinSource): ToolInfo {
-  return {
-    name,
-    description: `${name} tool`,
-    parameters: {},
-    exposure: "direct",
-    sourceInfo,
-  };
-}
+const writeFrom = (sourceInfo: SourceInfo): ToolInfo => ({
+  ...builtinToolInfo("write"),
+  sourceInfo,
+});
 function piFixture(options: Partial<ExtensionAPI> = {}): ExtensionAPI {
   return extensionApiFixture({
-    getAllTools: () => [toolInfo("write")],
+    getAllTools: () => [builtinToolInfo("write")],
     getCommands: () => [anchor],
     getActiveTools: () => [...CORE_CODE_PREVIEW_TOOLS],
     registerTool: () => undefined,
@@ -108,12 +98,7 @@ it.effect.each([
     );
     const [hook] = hooks;
     assert.ok(hook);
-    if (session)
-      installCodePreviewSessionCapability({
-        run: () => Promise.reject(new Error("no preview work expected")),
-        defer: () => () => undefined,
-        schedule: () => () => undefined,
-      });
+    if (session) installCodePreviewSessionCapability(inertCapability());
     yield* Effect.addFinalizer(() => Effect.sync(() => clearCodePreviewSessionCapability()));
     const result = yield* Effect.tryPromise(() =>
       hook.execute(
@@ -145,9 +130,9 @@ test.each([false, true])("write registration preserves active selection: %s", (a
 
 test.each([
   ["absent", []],
-  ["foreign", [toolInfo("write", foreignSource)]],
-  ["wrong builtin source", [toolInfo("write", { ...builtinSource, path: "builtin:other" })]],
-  ["ambiguous", [toolInfo("write"), toolInfo("write", foreignSource)]],
+  ["foreign", [writeFrom(foreignSource)]],
+  ["wrong builtin source", [builtinToolInfo("write", "builtin:other")]],
+  ["ambiguous", [builtinToolInfo("write"), writeFrom(foreignSource)]],
 ] as const)("%s write stays unchanged", (_, tools) => {
   enableOnly("write");
   const ownedTools = new Set<CodePreviewToolName>();
@@ -176,7 +161,7 @@ test.each(["discovery", "active selection", "registration"])(
     const pi = piFixture({
       getAllTools: () => {
         if (boundary === "discovery") fail();
-        return [toolInfo("write")];
+        return [builtinToolInfo("write")];
       },
       getActiveTools: () => {
         if (boundary === "active selection") fail();
@@ -204,7 +189,7 @@ test.each(["foreign replacement", "missing anchor", "ambiguous anchor", "metadat
     registerWritePreviewTool(
       piFixture({
         getAllTools: () => [
-          toolInfo("write", scenario === "foreign replacement" ? foreignSource : extensionSource),
+          writeFrom(scenario === "foreign replacement" ? foreignSource : extensionSource),
         ],
         getCommands: () => {
           if (scenario === "metadata failure") throw new Error("metadata unavailable");

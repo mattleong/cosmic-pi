@@ -215,8 +215,11 @@ export type TaskOutcome = Extract<
   "success" | "error" | "cancelled" | "uncertain" | "returned"
 >;
 
-// Only a cleanly exited command is a success; work still starting or running stays neutral.
-function taskOutcome(value: BackgroundTaskSnapshot): TaskOutcome {
+/**
+ * A task's outcome, which a listed row marks with the suite's status glyph. Only a cleanly exited
+ * command is a success; work still starting or running stays neutral.
+ */
+export function taskOutcome(value: BackgroundTaskSnapshot): TaskOutcome {
   if (value.state === "failed" || value.state === "timed_out" || value.error) return "error";
   if (value.state === "stopped") return "cancelled";
   if (failingExitCode(value) !== undefined || value.signal) return "error";
@@ -320,9 +323,6 @@ function taskSummary(value: BackgroundTaskSnapshot): TaskSummary {
 export const listedTaskIssues = (value: BackgroundTaskSnapshot): ReadonlyArray<CompactIssue> =>
   taskSummary(value).issues;
 
-/** A listed task's outcome, which its row marks with the suite's status glyph. */
-export const listedTaskOutcome = (value: BackgroundTaskSnapshot): TaskOutcome => taskOutcome(value);
-
 /**
  * A finished task's notice: its outcome and issues as a status row has them, and its run time,
  * unless its timeout issue already states it. The run time joins the state as one fact,
@@ -411,9 +411,8 @@ export interface BackgroundTaskCompactSummaryInput {
   readonly isError: boolean;
 }
 
-type DecodedTaskDetails = typeof BackgroundTaskDetailsSchema.Type;
-type DetailsFor<Action extends DecodedTaskDetails["action"]> = Extract<
-  DecodedTaskDetails,
+type DetailsFor<Action extends BackgroundTaskToolDetails["action"]> = Extract<
+  BackgroundTaskToolDetails,
   { readonly action: Action }
 >;
 
@@ -460,11 +459,9 @@ function aggregateCounters(tasks: ReadonlyArray<BackgroundTaskSnapshot>): string
         : total;
   const { active, failed } = countTaskStates(tasks);
   const failures = failed ? `${failed} failed` : "";
-  const brief = joinInline(
-    Arr.filter([total, active ? `${active} active` : "", failures], Boolean),
-  );
+  const brief = joinInline([total, active ? `${active} active` : "", failures]);
   // Narrower, the failures outlast the active count: a row never loses failure evidence first.
-  const failedOnly = joinInline(Arr.filter([total, failures], Boolean));
+  const failedOnly = joinInline([total, failures]);
   return narrowing([widest, brief, failedOnly, total]);
 }
 
@@ -692,7 +689,7 @@ export const taskExpandLabel = (task: Pick<BackgroundTaskSnapshot, "name" | "com
  * What expanding a settled row reveals that its heading and collapsed body don't: a task's output,
  * else its command, or every listed task. A summary may set its own label first.
  */
-function settledExpandLabel(details: DecodedTaskDetails): string | false {
+function settledExpandLabel(details: BackgroundTaskToolDetails): string | false {
   switch (details.action) {
     case "start":
     case "status":
@@ -734,7 +731,7 @@ function failureSummary(
 }
 
 function settledSummary(
-  details: DecodedTaskDetails,
+  details: BackgroundTaskToolDetails,
   args: Partial<BackgroundTaskToolInput>,
   action: string,
   subject: string,

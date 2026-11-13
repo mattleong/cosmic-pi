@@ -16,7 +16,11 @@ export interface GuidedText {
 export const guidedText = (text: string | GuidedText): GuidedText =>
   Predicate.isString(text) ? { message: text, userMessage: text } : text;
 
-const guided = guidedText;
+/** An error's text: the model's copy, and the user's where it differs. */
+interface FailureText {
+  readonly message: string;
+  readonly userMessage?: string | undefined;
+}
 
 /**
  * `text`, followed in the model's copy only by `guidance`: a sentence after a space by default, or
@@ -27,7 +31,7 @@ export const withGuidance = (
   guidance: string,
   separator: " " | "\n" | "\n\n" = " ",
 ): GuidedText => {
-  const { message, userMessage } = guided(text);
+  const { message, userMessage } = guidedText(text);
   return { message: `${message}${separator}${guidance}`, userMessage };
 };
 
@@ -39,16 +43,13 @@ export const withGuidanceClause = (clause: string, guidance: string): GuidedText
 
 /** Appends `tail`, such as a cause, to both copies. */
 export const appendShared = (text: string | GuidedText, tail: string): GuidedText => {
-  const { message, userMessage } = guided(text);
+  const { message, userMessage } = guidedText(text);
   return { message: `${message}${tail}`, userMessage: `${userMessage}${tail}` };
 };
 
 /** `text`, then the error that caused it in parentheses, each copy with the cause's own copy. */
-export const withCause = (
-  text: string | GuidedText,
-  cause: { readonly message: string; readonly userMessage?: string | undefined },
-): GuidedText => {
-  const { message, userMessage } = guided(text);
+export const withCause = (text: string | GuidedText, cause: FailureText): GuidedText => {
+  const { message, userMessage } = guidedText(text);
   return {
     message: `${message} (${cause.message})`,
     userMessage: `${userMessage} (${cause.userMessage ?? cause.message})`,
@@ -56,30 +57,25 @@ export const withCause = (
 };
 
 /** What the user reads for a failure: its message without the agent procedure it carries. */
-export const userFailureText = (failure: {
-  readonly message: string;
-  readonly userMessage?: string | undefined;
-}): string => failure.userMessage ?? failure.message;
+export const userFailureText = (failure: FailureText): string =>
+  failure.userMessage ?? failure.message;
 
 /** Both copies of an error's text, so a wrapper can extend them. */
-export const errorText = (error: {
-  readonly message: string;
-  readonly userMessage?: string | undefined;
-}): GuidedText => ({ message: error.message, userMessage: userFailureText(error) });
+export const errorText = (error: FailureText): GuidedText => ({
+  message: error.message,
+  userMessage: userFailureText(error),
+});
 
 /** An error's text fields; the user copy is kept only where it differs. */
 export const failureFields = (
   text: string | GuidedText,
 ): { readonly message: string; readonly userMessage?: string } => {
-  const { message, userMessage } = guided(text);
+  const { message, userMessage } = guidedText(text);
   return userMessage === message ? { message } : { message, userMessage };
 };
 
 /** The user copy of an error, kept when a wrapper rewrites its model text. */
-const keptUserMessage = (error: {
-  readonly message: string;
-  readonly userMessage?: string | undefined;
-}) => ({ userMessage: userFailureText(error) });
+const keptUserMessage = (error: FailureText) => ({ userMessage: userFailureText(error) });
 
 export class InvalidSubagentRequestError extends Schema.TaggedError<
   InvalidSubagentRequestError,
@@ -258,26 +254,18 @@ export class SubagentRuntimeClosedError extends Schema.TaggedError<
   userMessage: Schema.optional(Schema.String),
 }) {}
 
-/** Whether a value is one of this package's typed failures, such as a rejected tool call's. */
-export const isSubagentError = Schema.is(
-  Schema.Union([
-    InvalidSubagentRequestError,
-    SubagentNotFoundError,
-    SubagentCapacityError,
-    SubagentHistoryCapacityError,
-    SubagentWriterConflictError,
-    SubagentProcessError,
-    SubagentProtocolError,
-    SubagentRuntimeClosedError,
-  ]),
-);
+const SubagentErrorSchema = Schema.Union([
+  InvalidSubagentRequestError,
+  SubagentNotFoundError,
+  SubagentCapacityError,
+  SubagentHistoryCapacityError,
+  SubagentWriterConflictError,
+  SubagentProcessError,
+  SubagentProtocolError,
+  SubagentRuntimeClosedError,
+]);
 
-export type SubagentError =
-  | InvalidSubagentRequestError
-  | SubagentNotFoundError
-  | SubagentCapacityError
-  | SubagentHistoryCapacityError
-  | SubagentWriterConflictError
-  | SubagentProcessError
-  | SubagentProtocolError
-  | SubagentRuntimeClosedError;
+/** Whether a value is one of this package's typed failures, such as a rejected tool call's. */
+export const isSubagentError = Schema.is(SubagentErrorSchema);
+
+export type SubagentError = typeof SubagentErrorSchema.Type;

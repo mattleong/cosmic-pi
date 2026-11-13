@@ -142,6 +142,17 @@ use Oxlint's AST and lexical scopes. They report without fixes because each find
   `eslint/no-restricted-imports` cannot express it: with `importNames` or `importNamePattern` it
   also rejects every `import * as Effect` namespace import. Type-only imports remain valid, and
   the property ban's boundary files are exempt.
+- **`anti-slop-effect/no-curried-string-call`** reports a call whose callee is itself a call of an
+  `effect/String` operation, such as `Str.slice(1)(text)`. Call the operation data-first when its
+  API offers that form, and otherwise as `Fn.pipe(text, Str.op(args))`. The operation resolves
+  through its import, including renamed namespaces, `const` aliases, and named imports. A
+  data-last step passed as an argument, such as to `Fn.pipe`, `Fn.flow`, or `Arr.map`, remains
+  valid.
+- **`anti-slop-effect/no-boolean-filter`** reports `filter` from `effect/Array`, data-first or
+  data-last, whose predicate is the global `Boolean` or `isTruthy` from `effect/Predicate`. Use
+  `Predicate.isString` for optional string parts, `Str.isNonEmpty` for string arrays, or an
+  explicit type predicate. Both names resolve through their imports; a shadowed `Boolean`, other
+  operations, native `.filter`, and a function that wraps the truthiness check remain valid.
 
 The local rules share import, alias, and function resolution from `shared/ast.ts`, and the
 boundary rules match their exempt files through `shared/workspace-path.ts`; rule policy

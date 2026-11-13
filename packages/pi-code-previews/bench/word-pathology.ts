@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import type { DiffWordEmphasis } from "../src/config/schema";
 import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { wordEmphasisTelemetry } from "../tests/support/word-emphasis-telemetry";
@@ -238,11 +238,9 @@ function findResult(
   layer: string,
   mode: string,
 ): { meanMs: number } | undefined {
-  return Option.getOrUndefined(
-    Arr.findFirst(
-      results,
-      (result) => result.caseName === caseName && result.layer === layer && result.mode === mode,
-    ),
+  return findOrUndefined(
+    results,
+    (result) => result.caseName === caseName && result.layer === layer && result.mode === mode,
   );
 }
 

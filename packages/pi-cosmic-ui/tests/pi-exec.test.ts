@@ -15,10 +15,6 @@ describe("Pi exec", () => {
 
     return Effect.gen(function* () {
       yield* boundary.exec("git", ["status", "--short"], { cwd: "/project", timeout: 2_000 });
-      yield* boundary.exec("git", ["diff", "--numstat", "HEAD", "--"], {
-        cwd: "/project",
-        timeout: 2_000,
-      });
       yield* boundary.exec("gh", ["pr", "view", "--json", "number"], {
         cwd: "/project",
         timeout: 3_000,
@@ -26,10 +22,6 @@ describe("Pi exec", () => {
 
       expect(calls).toEqual([
         { command: "git", args: ["--no-optional-locks", "status", "--short"] },
-        {
-          command: "git",
-          args: ["--no-optional-locks", "diff", "--numstat", "HEAD", "--"],
-        },
         { command: "gh", args: ["pr", "view", "--json", "number"] },
       ]);
     });

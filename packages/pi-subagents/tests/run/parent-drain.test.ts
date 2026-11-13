@@ -15,7 +15,7 @@ import {
   withService,
 } from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 describe("session-end completion flush", () => {
   it.effect("hands a pending report to the notifier without waiting for the retry clock", () => {
@@ -55,11 +55,9 @@ describe("headless parent drain", () => {
 
       expect(drain.pollUnsafe()).toBeDefined();
       yield* Fiber.join(drain);
-      expect(
-        Option.getOrUndefined(
-          Arr.findFirst(yield* runViews(service), (run) => run.id === sibling.id),
-        )?.state,
-      ).toBe("running");
+      expect(findOrUndefined(yield* runViews(service), (run) => run.id === sibling.id)?.state).toBe(
+        "running",
+      );
     });
   });
 

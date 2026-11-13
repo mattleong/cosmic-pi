@@ -32,13 +32,18 @@ type Selection = {
   fields: Map<number, ProfileWorkspaceField>;
   expanded: Set<number>;
 };
+/** A profile's remembered cursor, which a new editor copies. */
 export interface ProfileWorkspaceSelectionMemory {
-  readonly profile: ProfileId;
-  readonly control?: ProfileWorkspaceField | undefined;
+  readonly control: ProfileWorkspaceField | undefined;
   readonly candidateIndex: number;
-  readonly fields: ReadonlyArray<readonly [number, ProfileWorkspaceField]>;
-  readonly expanded: ReadonlyArray<number>;
+  readonly fields: ReadonlyMap<number, ProfileWorkspaceField>;
+  readonly expanded: ReadonlySet<number>;
 }
+/** An embedded select page as the editor drives it, whatever its choices carry. */
+export type ProfileWorkspaceSelectPage = Pick<
+  SearchableSelectPage<unknown>,
+  "focused" | "handleInput" | "invalidate" | "renderBody" | "keyHints"
+>;
 type WorkspaceMessage = {
   readonly kind: "info" | "success" | "warning" | "error";
   readonly text: string;
@@ -63,9 +68,8 @@ export abstract class ProfileWorkspaceState {
   protected message: WorkspaceMessage | undefined;
   protected pendingAction: "remove" | "reset" | undefined;
   protected hintsExpanded = false;
-  protected catalogLoad: AbortController | undefined;
   protected modelPicker: ReturnType<typeof profileModelPickerPage> | undefined;
-  protected selectPage: SearchableSelectPage<string> | undefined;
+  protected selectPage: ProfileWorkspaceSelectPage | undefined;
   protected focusState = false;
   protected disposed = false;
   protected readonly options: ProfileWorkspaceOptions;
@@ -79,8 +83,8 @@ export abstract class ProfileWorkspaceState {
     this.inspection = options.inspection;
     this.editVisit = options.editVisit ?? new ProfileEditVisit(options.inspection);
     this.scope = profileWorkspaceScope(options.target);
-    for (const saved of options.initialSelections ?? []) {
-      this.selections.set(saved.profile, {
+    for (const [profile, saved] of options.initialSelections ?? []) {
+      this.selections.set(profile, {
         control: saved.control,
         candidateIndex: saved.candidateIndex,
         fields: new Map(saved.fields),
@@ -134,22 +138,13 @@ export abstract class ProfileWorkspaceState {
     return (
       this.modelPicker !== undefined ||
       this.selectPage !== undefined ||
-      this.pendingAction !== undefined ||
-      this.catalogLoad !== undefined
+      this.pendingAction !== undefined
     );
   }
   getPosition() {
     this.rememberSelection();
-    const initialSelections: ReadonlyArray<ProfileWorkspaceSelectionMemory> = Array.from(
-      this.selections,
-      ([profile, selection]) => ({
-        profile,
-        control: selection.control,
-        candidateIndex: selection.candidateIndex,
-        fields: Array.from(selection.fields, ([index, field]) => [index, field] as const),
-        expanded: Array.from(selection.expanded),
-      }),
-    );
+    const initialSelections: ReadonlyMap<ProfileId, ProfileWorkspaceSelectionMemory> =
+      this.selections;
     return {
       initialSelections,
       initialProfile: this.profile(),
@@ -174,9 +169,6 @@ export abstract class ProfileWorkspaceState {
     if (Option.isSome(moved)) this.candidateIndex = moved.value;
     this.editVisit.reconcile(inspection);
     this.inspection = inspection;
-    this.catalogLoad?.abort();
-    if (this.catalogLoad) this.busy = false;
-    this.catalogLoad = undefined;
     this.modelPicker = undefined;
     this.selectPage = undefined;
     this.addingCandidate = false;

@@ -16,6 +16,7 @@ import { clearSyntaxProjection, publishSyntaxProjection } from "../../src/syntax
 import { getShikiStatus } from "../../src/syntax/render";
 import { codemodeRenderers, scriptResult } from "../support/native-codemode";
 import { builtinRenderers, textResult } from "../support/render";
+import { inertCapability } from "../support/renderer-host";
 
 const owner = acquireProjectionOwnership("streaming-highlight-test");
 const highlighter = await createHighlighter({
@@ -46,11 +47,7 @@ beforeAll(() => {
     status: { initialized: true, loadedLanguages: 2, pendingLanguages: 0, statusVersion: 1 },
   });
   // Builtin previews highlight only for the session that owns them.
-  installCodePreviewSessionCapability({
-    run: () => Promise.reject(new Error("not used")),
-    defer: () => () => undefined,
-    schedule: () => () => undefined,
-  });
+  installCodePreviewSessionCapability(inertCapability());
 });
 afterAll(() => {
   clearCodePreviewSessionCapability();

@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
@@ -64,15 +63,13 @@ const ENVIRONMENT_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 const selectEnvironment = (source: Readonly<NodeJS.ProcessEnv>): NodeJS.ProcessEnv =>
-  Rec.fromEntries(
-    Arr.flatMap(Rec.toEntries(source), ([key, value]) =>
+  Rec.filter(
+    source,
+    (value, key) =>
       value !== undefined &&
       (ENVIRONMENT_KEYS.has(key) ||
         Fn.pipe(key, Str.startsWith("REX_")) ||
-        Fn.pipe(key, Str.startsWith("XDG_")))
-        ? ([[key, value]] as const)
-        : [],
-    ),
+        Fn.pipe(key, Str.startsWith("XDG_"))),
   );
 
 const rexExecutable = (environment: Readonly<NodeJS.ProcessEnv>): string =>

@@ -18,6 +18,7 @@ import { codePreviewApplicationLayer } from "../../src/layer";
 import { getCodePreviewToolStatuses } from "../../src/tools/status";
 import { step } from "../support/effect-test";
 import { resultText } from "../support/render";
+import { builtinToolInfo } from "../support/renderer-host";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -30,12 +31,7 @@ const preview = {
   toolCallBackground: "off" as const,
   toolCallTiming: false,
 };
-const builtin = {
-  source: "builtin",
-  path: "builtin:codemode",
-  scope: "temporary",
-  origin: "top-level",
-} as const;
+const builtin = builtinToolInfo("codemode").sourceInfo;
 const foreign = {
   source: "other",
   path: "/foreign.ts",
@@ -43,10 +39,7 @@ const foreign = {
   origin: "top-level",
 } as const;
 const info = (sourceInfo: ToolInfo["sourceInfo"] = builtin): ToolInfo => ({
-  name: "codemode",
-  description: "native",
-  parameters: {},
-  exposure: "model-only",
+  ...builtinToolInfo("codemode"),
   sourceInfo,
 });
 const downstream: ToolRenderers = {

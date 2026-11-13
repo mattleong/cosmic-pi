@@ -11,7 +11,7 @@ import {
   decodeQuestionnaireProxyRequest,
   encodeSubagentProxyPayload,
 } from "../tools/proxy-protocol.ts";
-import { InvalidSubagentRequestError, subagentErrorCode, type SubagentError } from "./errors.ts";
+import { subagentErrorCode, type SubagentError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
 
@@ -49,11 +49,20 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
         event
           .respond(false, encodeSubagentProxyPayload({ code, message }) ?? "{}")
           .pipe(Effect.ignore);
-      if (
-        (event.tool === "ask_user" ? !executeQuestionnaire : !executeProxy) ||
-        record.stoppedByParent ||
-        !isActiveRunState(record.view.state)
-      )
+      // The executor is bound here, so its decode and call still follow the checks below.
+      const dispatch =
+        event.tool === "ask_user"
+          ? executeQuestionnaire &&
+            (() =>
+              Effect.fromResult(decodeQuestionnaireProxyRequest(event)).pipe(
+                Effect.flatMap((questionnaire) =>
+                  askWithShownNotice(event, (shown) =>
+                    executeQuestionnaire(record, event.requestId, questionnaire, shown),
+                  ),
+                ),
+              ))
+          : executeProxy && (() => executeProxy(record.view.id, event));
+      if (!dispatch || record.stoppedByParent || !isActiveRunState(record.view.state))
         return reject(
           "proxy_caller_disconnected",
           "Nested Pi coordinator access is unavailable for this run.",
@@ -69,27 +78,7 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
           "proxy_request_conflict",
           "Nested Pi reused an active coordinator request identity.",
         );
-      const unavailable = Effect.fail(
-        InvalidSubagentRequestError.make({
-          code: "proxy_caller_disconnected",
-          message: "Nested Pi coordinator access is unavailable for this run.",
-        }),
-      );
-      const dispatch: Effect.Effect<BackendProxyResult, SubagentError> =
-        event.tool === "ask_user"
-          ? Effect.fromResult(decodeQuestionnaireProxyRequest(event)).pipe(
-              Effect.flatMap((questionnaire) =>
-                executeQuestionnaire
-                  ? askWithShownNotice(event, (shown) =>
-                      executeQuestionnaire(record, event.requestId, questionnaire, shown),
-                    )
-                  : unavailable,
-              ),
-            )
-          : executeProxy
-            ? executeProxy(record.view.id, event)
-            : unavailable;
-      const execute = dispatch.pipe(
+      const execute = dispatch().pipe(
         Effect.matchEffect({
           onFailure: (error) => reject(subagentErrorCode(error), error.message),
           onSuccess: (result) =>

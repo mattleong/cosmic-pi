@@ -3,7 +3,6 @@ import type {
   CompactSubagentToolDetails,
   SubagentStartAwaitCardDetails,
 } from "./details-schema.ts";
-import * as Fn from "effect/Function";
 import { decodeOutcomeDetails } from "./details-decode.ts";
 
 type SubagentOutcomeDetails = SubagentStartAwaitCardDetails | CompactSubagentToolDetails;
@@ -20,11 +19,6 @@ export const hasSubagentToolFailure = (details: SubagentOutcomeDetails): boolean
   details.action === "start"
     ? (details.startFailures?.length ?? 0) > 0
     : "actionFailures" in details && (details.actionFailures?.length ?? 0) > 0;
-
-export const hasReturnedFailureEvidence = Fn.flow(
-  decodeOutcomeDetails,
-  (details) => details !== undefined && hasSubagentToolFailure(details),
-);
 
 export const isUncertainToolFailure = (failure: { readonly code?: string | undefined }): boolean =>
   isOutcomeUncertain(failure) || isCleanupUnconfirmed(failure);

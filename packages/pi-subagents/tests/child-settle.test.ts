@@ -1,18 +1,8 @@
 import { fauxAssistantMessage, type TranscriptContext } from "@earendil-works/pi-ai";
-import {
-  type AgentSession,
-  type ExtensionAPI,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { temporaryDirectory } from "pi-cosmic-core/testing";
-import {
-  fauxModels,
-  quietLoader,
-  quietSettings,
-  scopedPrintSession,
-} from "pi-cosmic-core/testing/sdk";
+import { fauxPrintSession } from "pi-cosmic-core/testing/sdk";
 import {
   FINAL_REPORT_REMINDER_MESSAGE_TYPE,
   PROXY_NOTIFICATION_MESSAGE_TYPE,
@@ -37,32 +27,14 @@ const childSession = (
   } = {},
 ) =>
   Effect.gen(function* () {
-    const directory = yield* temporaryDirectory("pi-child-settle-");
-    const { fake, models } = yield* fauxModels("child-settle-test");
-    const settings = quietSettings();
     const slot: ChildSessionSlot = {};
-    const loader = yield* quietLoader({
-      cwd: directory,
-      agentDir: directory,
-      settingsManager: settings,
-      noExtensions: true,
-      extensionFactories: [
-        (pi) => others.before?.(pi),
-        (pi) => {
-          slot.deliver = registerChildSettle(pi, () => slot.session?.isIdle ?? false);
-        },
-        (pi) => others.after?.(pi, (message) => slot.deliver?.(message) ?? false),
-      ],
-    });
-    const session = yield* scopedPrintSession({
-      cwd: directory,
-      agentDir: directory,
-      model: fake.getModel(),
-      modelRuntime: models,
-      settingsManager: settings,
-      sessionManager: SessionManager.inMemory(directory),
-      resourceLoader: loader,
-    });
+    const { fake, session } = yield* fauxPrintSession("pi-child-settle-", "child-settle-test", [
+      (pi) => others.before?.(pi),
+      (pi) => {
+        slot.deliver = registerChildSettle(pi, () => slot.session?.isIdle ?? false);
+      },
+      (pi) => others.after?.(pi, (message) => slot.deliver?.(message) ?? false),
+    ]);
     slot.session = session;
     const customMessages = (customType: string) =>
       Arr.filter(

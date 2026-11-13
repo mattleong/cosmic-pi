@@ -5,8 +5,9 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Order from "effect/Order";
-import type { SafeFile } from "pi-cosmic-core";
+import type { CrossProcessLockContract, SafeFile } from "pi-cosmic-core";
 import {
+  isFinishedWorkspace,
   isOriginalWorker,
   type UnavailableWorkspaceArtifact,
   type WorkspaceError,
@@ -26,11 +27,14 @@ import {
 } from "./git-worktree-process.ts";
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";
 import {
+  ownerLockNamespace,
   readWorkspaceRecord,
   saveWorkspaceRecord,
+  sourceLockNamespace,
   syncWorkspaceDirectory,
   validWorkspaceId,
   workspaceDirectory,
+  withFreeLock,
 } from "./git-worktree-store.ts";
 
 /**
@@ -151,9 +155,6 @@ export const listWorkspaceRecords = Effect.fn("GitWorktreeRecovery.listWorkspace
   },
 );
 
-const finished = (record: WorkspaceRecord) =>
-  record.status === "discarded" || record.status === "integrated";
-
 /** Discarded and integrated records stay this long for inspection, like delivered reports. */
 const WORKSPACE_RECORD_RETENTION = Duration.days(7);
 
@@ -180,7 +181,7 @@ const collectRecord = Effect.fn("GitWorktreeRecovery.collectRecord")(function* (
   now: number,
 ) {
   const record = yield* readWorkspaceRecord(registry, workspaceId);
-  if (!finished(record)) return false;
+  if (!isFinishedWorkspace(record)) return false;
   const directory = workspaceDirectory(registry, workspaceId);
   yield* checkDirectory(directory);
   const saved = yield* workspaceIO("collect", () => fs.stat(path.join(directory, "record.json")));
@@ -197,19 +198,24 @@ interface WorkspaceCollection {
   readonly now: number;
   /** Records this session still owns are never collected. */
   readonly owned: (workspaceId: string) => boolean;
-  /** Runs under the source checkout's lock, or returns none while another session holds it. */
-  readonly whenSourceFree: (
-    sourceRoot: string,
-    effect: Effect.Effect<boolean, WorkspaceError, SafeFile>,
-  ) => Effect.Effect<Option.Option<boolean>, WorkspaceError, SafeFile>;
-  /** Runs while holding the free owner lease, or returns none while its session still runs. */
-  readonly whenOwnerEnded: (
-    ownerLease: string,
-    effect: Effect.Effect<boolean, WorkspaceError, SafeFile>,
-  ) => Effect.Effect<Option.Option<boolean>, WorkspaceError, SafeFile>;
+  readonly locks: CrossProcessLockContract;
+  readonly lockDirectory: string;
   /** Runs before each retained tree's removal (the WorktreeRemove hooks). */
   readonly beforeRemove?: BeforeTreeRemoval | undefined;
 }
+
+// Runs while holding the free owner lease, or returns none while its session still runs.
+const whenOwnerEnded = (
+  collection: WorkspaceCollection,
+  record: WorkspaceRecord,
+  effect: Effect.Effect<boolean, WorkspaceError, SafeFile>,
+) =>
+  withFreeLock(
+    collection.locks,
+    collection.lockDirectory,
+    ownerLockNamespace(record.ownerLease),
+    effect,
+  );
 
 // A create that crashed after adding its worker left a locked worktree in the user's repository
 // that no run was ever given; once its session has provably ended, its trees and refs go.
@@ -220,8 +226,9 @@ const abandonCreate = Effect.fn("GitWorktreeRecovery.abandonCreate")(function* (
 ) {
   const record = yield* readWorkspaceRecord(registry, workspaceId);
   if (record.status !== "creating") return false;
-  const removed = yield* collection.whenOwnerEnded(
-    record.ownerLease,
+  const removed = yield* whenOwnerEnded(
+    collection,
+    record,
     Effect.gen(function* () {
       yield* removeWorkspaceTrees(registry, record);
       yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
@@ -244,11 +251,12 @@ const removeRetainedTrees = Effect.fn("GitWorktreeRecovery.removeRetainedTrees")
   collection: WorkspaceCollection,
 ) {
   const record = yield* readWorkspaceRecord(registry, workspaceId);
-  if (!finished(record)) return false;
+  if (!isFinishedWorkspace(record)) return false;
   yield* checkDirectory(workspaceDirectory(registry, workspaceId));
   if (!(yield* hasEditableTree(registry, workspaceId))) return false;
-  const removed = yield* collection.whenOwnerEnded(
-    record.ownerLease,
+  const removed = yield* whenOwnerEnded(
+    collection,
+    record,
     removeWorkspaceTrees(registry, record, { beforeRemove: collection.beforeRemove }).pipe(
       Effect.as(true),
     ),
@@ -265,49 +273,50 @@ export const collectWorkspaceRecords = Effect.fn("GitWorktreeRecovery.collectWor
   function* (registry: string, collection: WorkspaceCollection) {
     const { records } = yield* listWorkspaceRecords(registry);
     const collected: string[] = [];
+    // Runs under the source checkout's lock, or not at all while another session holds it; a
+    // failure is logged and leaves the record for the next collection.
+    const attempt = (
+      record: WorkspaceRecord,
+      failure: string,
+      effect: Effect.Effect<boolean, WorkspaceError, SafeFile>,
+    ) =>
+      withFreeLock(
+        collection.locks,
+        collection.lockDirectory,
+        sourceLockNamespace(record.handle.sourceRoot),
+        effect,
+      ).pipe(
+        Effect.map(Option.getOrElse(() => false)),
+        Effect.catchTag("WorkspaceError", (error) =>
+          Effect.logWarning(`${failure}: ${error.message}`).pipe(
+            Effect.annotateLogs("workspaceId", record.handle.workspaceId),
+            Effect.as(false),
+          ),
+        ),
+      );
     for (const record of records) {
       const workspaceId = record.handle.workspaceId;
       if (record.status === "creating" && !collection.owned(workspaceId))
-        yield* collection
-          .whenSourceFree(
-            record.handle.sourceRoot,
-            abandonCreate(registry, workspaceId, collection),
-          )
-          .pipe(
-            Effect.catchTag("WorkspaceError", (error) =>
-              Effect.logWarning(`Abandoned workspace was not removed: ${error.message}`).pipe(
-                Effect.annotateLogs("workspaceId", workspaceId),
-              ),
-            ),
-          );
-      if (!finished(record) || collection.owned(workspaceId)) continue;
+        yield* attempt(
+          record,
+          "Abandoned workspace was not removed",
+          abandonCreate(registry, workspaceId, collection),
+        );
+      if (!isFinishedWorkspace(record) || collection.owned(workspaceId)) continue;
       if (yield* hasEditableTree(registry, workspaceId).pipe(Effect.orElseSucceed(() => false)))
-        yield* collection
-          .whenSourceFree(
-            record.handle.sourceRoot,
-            removeRetainedTrees(registry, workspaceId, collection),
-          )
-          .pipe(
-            Effect.catchTag("WorkspaceError", (error) =>
-              Effect.logWarning(`Retained workspace trees were not removed: ${error.message}`).pipe(
-                Effect.annotateLogs("workspaceId", workspaceId),
-              ),
-            ),
-          );
-      const removed = yield* collection
-        .whenSourceFree(
-          record.handle.sourceRoot,
+        yield* attempt(
+          record,
+          "Retained workspace trees were not removed",
+          removeRetainedTrees(registry, workspaceId, collection),
+        );
+      if (
+        yield* attempt(
+          record,
+          "Workspace record was not collected",
           collectRecord(registry, workspaceId, collection.now),
         )
-        .pipe(
-          Effect.catchTag("WorkspaceError", (error) =>
-            Effect.logWarning(`Workspace record was not collected: ${error.message}`).pipe(
-              Effect.annotateLogs("workspaceId", workspaceId),
-              Effect.as(Option.none<boolean>()),
-            ),
-          ),
-        );
-      if (Option.getOrElse(removed, () => false)) collected.push(workspaceId);
+      )
+        collected.push(workspaceId);
     }
     const names = yield* workspaceIOIfPresent("collect", () => fs.readdir(registry));
     for (const name of names ?? [])

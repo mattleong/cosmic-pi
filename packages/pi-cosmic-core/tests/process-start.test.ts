@@ -17,17 +17,6 @@ afterEach(() => {
 });
 
 describe("process liveness", () => {
-  it("never treats incomparable start evidence as death", () => {
-    for (const started of [
-      "an earlier process",
-      // Local-time `lstart` text, as an environment-dependent reader would have recorded it.
-      "Mon Oct 19 05:54:19 2026",
-      "other-scheme:12345",
-      `${currentProcessIdentity().started ?? ""} `,
-    ])
-      expect(processLiveness({ pid: process.pid, started })).toBe("unknown");
-  });
-
   it("reads the same start identity whatever the time zone and locale", () => {
     const child = nodeSpawn(process.execPath, ["-e", "setTimeout(() => {}, 60_000)"], {
       stdio: "ignore",
@@ -74,6 +63,12 @@ describe("non-blocking process liveness", () => {
         [{ pid }, "unknown"],
         [{ pid: process.pid }, "unknown"],
         [{ pid, started: "an earlier process" }, "unknown"],
+        // Incomparable start evidence is never read as death.
+        [{ pid: process.pid, started: "an earlier process" }, "unknown"],
+        // Local-time `lstart` text, as an environment-dependent reader would have recorded it.
+        [{ pid: process.pid, started: "Mon Oct 19 05:54:19 2026" }, "unknown"],
+        [{ pid: process.pid, started: "other-scheme:12345" }, "unknown"],
+        [{ pid: process.pid, started: `${currentProcessIdentity().started ?? ""} ` }, "unknown"],
       ];
       for (const [identity, expected] of cases) {
         expect(yield* probeProcessLiveness(identity)).toBe(expected);

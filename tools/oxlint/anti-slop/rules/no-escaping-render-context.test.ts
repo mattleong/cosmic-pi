@@ -9,7 +9,7 @@ const tester = new RuleTester({ languageOptions: { parserOptions: { lang: "ts" }
 const error = { messageId: "escapingRenderContext" };
 const rendererFile = "/repo/packages/pi-code-previews/src/tools/renderers/edit.ts";
 
-const headingImport = "import { stateHeading } from './shared/state-heading';";
+const headingImport = "import { previewHeadingText } from '../../preview/heading-wrap';";
 const componentImport = "import { composeToolComponent } from 'pi-cosmic-ui/tool';";
 
 const validRenderer = (code: string) => ({ filename: rendererFile, code });
@@ -20,7 +20,7 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
     validRenderer(`${headingImport}
       const tool = { renderCall(args, theme, renderContext) {
         const { state, expanded, invalidate } = renderContext;
-        const heading = stateHeading(() => state.summary);
+        const heading = previewHeadingText(() => state.summary);
         consume(renderContext.args, expanded, invalidate);
         return heading;
       } };`),
@@ -43,7 +43,7 @@ tester.run("anti-slop/no-escaping-render-context", noEscapingRenderContextRule, 
   invalid: [
     invalidRenderer(`${headingImport}
       const tool = { renderCall(args, theme, renderContext) {
-        return stateHeading(() => renderContext.state.editSummaryText);
+        return previewHeadingText(() => renderContext.state.editSummaryText);
       } };`),
     {
       code: `${componentImport}
@@ -126,9 +126,9 @@ for (const source of ["pi-cosmic-core", "pi-cosmic-core/host-session"]) {
 
 tester.run("anti-slop/no-escaping-render-context-file-reset", noEscapingRenderContextRule, {
   valid: [
-    validRenderer(`const stateHeading = callback => new Text(callback());
+    validRenderer(`const previewHeadingText = callback => new Text(callback());
       const tool = { renderCall(args, theme, context) {
-        return stateHeading(() => context.state.summary);
+        return previewHeadingText(() => context.state.summary);
       } };`),
     `const tool = { renderCall(args, theme, context) { return new Text(context.args.text); } };`,
     `import { invokeHostCallback } from 'pi-cosmic-core/host-session/custom';
@@ -149,9 +149,9 @@ tester.run("anti-slop/no-escaping-render-context-helper-table", noEscapingRender
   invalid: [
     {
       name: "a moved callback parameter",
-      filename: "/repo/packages/pi-code-previews/src/tools/renderers/shared/state-heading.ts",
-      code: `export function stateHeading(theme: Theme, text: () => string): Component {
-        return render(theme, text);
+      filename: "/repo/packages/pi-code-previews/src/preview/heading-wrap.ts",
+      code: `export function previewHeadingText(state: WeakKey, text: () => string): Component {
+        return render(state, text);
       }`,
       errors: [stale],
     },

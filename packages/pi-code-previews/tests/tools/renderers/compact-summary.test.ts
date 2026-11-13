@@ -23,6 +23,7 @@ import type { BuiltinCompactTool } from "../../../src/tools/builtin-subject";
 import type { CompactPhase, CompactSummary } from "../../../src/tools/compact-summary";
 import type { RendererState, ToolRenderContext } from "../../../src/tools/renderers/shared/types";
 import { previewBodiesDisabled, textResult as result } from "../../support/render";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import * as Match from "effect/Match";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
@@ -73,7 +74,7 @@ function codes(value: CompactSummary | undefined): string[] {
 }
 
 function issueFor(value: CompactSummary | undefined, code: string) {
-  return Option.getOrUndefined(Arr.findFirst(value?.issues ?? [], (entry) => entry.code === code));
+  return findOrUndefined(value?.issues ?? [], (entry) => entry.code === code);
 }
 
 const tools: BuiltinCompactTool[] = ["read", "bash", "write", "edit", "grep", "find", "ls"];

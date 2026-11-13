@@ -4,11 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { type AgentCaller, MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
+import { MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
 import type { AgentMessageArrivals } from "../../src/run/message-watches.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import type { SubagentRunObservation } from "../../src/run/service.ts";
-import { fakeAgentMain } from "./fixtures/agent-main.ts";
+import { asRun, fakeAgentMain, MAIN, nesting } from "./fixtures/agent-main.ts";
 import {
   completeLocalRun,
   localServiceFixture,
@@ -16,10 +16,6 @@ import {
   withService,
   yieldTurns,
 } from "./fixtures/service-harness.ts";
-
-const MAIN: AgentCaller = { kind: "main" };
-const asRun = (run: SubagentRunView): AgentCaller => ({ kind: "run", runId: run.id });
-const nesting = { maxDirectChildren: 12, maxDepth: 3 };
 
 const summarize = (
   observations: ReadonlyArray<SubagentRunObservation>,

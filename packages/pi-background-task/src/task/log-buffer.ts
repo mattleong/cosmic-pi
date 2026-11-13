@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
-import { utf8ByteLength, utf8Suffix } from "pi-cosmic-core/text";
+import { isHighSurrogate, isLowSurrogate, utf8ByteLength, utf8Suffix } from "pi-cosmic-core/text";
 import { BACKGROUND_LOG_BOUNDS as LOG_BOUNDS } from "./bounds.ts";
 import type {
   BackgroundLogEvent,
@@ -24,6 +24,8 @@ const LEDGER_FINISHED_CURSORS = 256;
 // which dominates the per-character and per-line scans below.
 const codeAt = codeUnitAt;
 const lastIndexAt = lastIndexOfFrom;
+const highSurrogate = isHighSurrogate;
+const lowSurrogate = isLowSurrogate;
 
 const utf8Encoder = new TextEncoder();
 const utf8Decoder = new TextDecoder();
@@ -35,29 +37,26 @@ const utf8Decoder = new TextDecoder();
  */
 export const ownedText = (text: string): string => utf8Decoder.decode(utf8Encoder.encode(text));
 
-const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
-const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
-
 /**
  * Where the stored event starting at `start` ends: within the byte and line bounds, at a line
  * break when one falls in the second half, and never inside a surrogate pair.
  */
-const eventEnd = (text: string, start: number, maxBytes: number, maxLines: number): number => {
+const eventEnd = (text: string, start: number): number => {
   let bytes = 0;
   let lines = 0;
   let lineBreak = -1;
   let index = start;
   while (index < text.length) {
     const code = codeAt(text, index);
-    const pair = isHighSurrogate(code) && isLowSurrogate(codeAt(text, index + 1));
+    const pair = highSurrogate(code) && lowSurrogate(codeAt(text, index + 1));
     const size = code < 0x80 ? 1 : code < 0x800 ? 2 : pair ? 4 : 3;
-    if (bytes + size > maxBytes && index > start) break;
+    if (bytes + size > LOG_BOUNDS.maxEventBytes && index > start) break;
     bytes += size;
     index += pair ? 2 : 1;
     if (code === 0x0a) {
       lineBreak = index;
       lines += 1;
-      if (lines >= maxLines) return index;
+      if (lines >= LOG_BOUNDS.maxEventLines) return index;
     }
   }
   if (index >= text.length) return text.length;
@@ -65,14 +64,10 @@ const eventEnd = (text: string, start: number, maxBytes: number, maxLines: numbe
 };
 
 /** Splits normalized output into the bounded pieces stored as separate events. */
-export const splitLogText = (
-  text: string,
-  maxBytes: number = LOG_BOUNDS.maxEventBytes,
-  maxLines: number = LOG_BOUNDS.maxEventLines,
-): string[] => {
+export const splitLogText = (text: string): string[] => {
   const pieces: string[] = [];
   for (let start = 0; start < text.length; ) {
-    const end = eventEnd(text, start, maxBytes, maxLines);
+    const end = eventEnd(text, start);
     pieces.push(Fn.pipe(text, Str.slice(start, end)));
     start = end;
   }

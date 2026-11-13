@@ -497,7 +497,7 @@ export const subagentConfigStoreLayer = Layer.effect(
 
     const patchVoid = <Patch extends SubagentConfigPatchBase>(
       apply: ApplyPatch<Patch>,
-    ): ConfigPatch<Patch> => Fn.flow(patchWithReceipt(apply), (receipt) => Effect.asVoid(receipt));
+    ): ConfigPatch<Patch> => Fn.flow(patchWithReceipt(apply), Effect.asVoid);
 
     return SubagentConfigStore.of({
       load: (cwd, agentDirectory, projectTrusted) =>

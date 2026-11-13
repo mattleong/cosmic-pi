@@ -10,6 +10,7 @@ import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { MAX_TARGET_RUNS, MAX_TOOL_OUTPUT_CHARS } from "../run/limits.ts";
 import {
   isTerminalRunState,
@@ -284,15 +285,18 @@ export function awaitExecutionFor(
     lastUpdate = key;
     onUpdate({ content: [{ type: "text", text: progressText(runs) }], details });
   };
-  /** `now` is when the wait ended on the Effect clock, for stall signs; without it there are none. */
-  const cancelled = (
+  /**
+   * Builds and publishes the result of a wait that ended before its outcomes. `now` is when it
+   * ended on the Effect clock, for stall signs; without it there are none.
+   */
+  const ended = (
     now: number | undefined,
-    proxyCleanupUnconfirmed = false,
-    ending: AwaitEnding = { kind: "cancelled" },
+    proxyCleanupUnconfirmed: boolean,
+    ending: AwaitEnding,
   ): AgentToolResult<unknown> => {
-    const unfinished = Arr.filter(latestRuns, (run) => !isTerminalRunState(run.state)).length;
+    const unfinished = Arr.countBy(latestRuns, (run) => !isTerminalRunState(run.state));
     const timedOutSeconds = ending.kind === "timed_out" ? ending.seconds : undefined;
-    const ended = Match.value(ending).pipe(
+    const reason = Match.value(ending).pipe(
       Match.when({ kind: "timed_out" }, ({ seconds }) => `Await timed out after ${seconds}s`),
       Match.when(
         { kind: "user_input" },
@@ -302,8 +306,8 @@ export function awaitExecutionFor(
     );
     const summary =
       latestRuns.length === 0
-        ? `${ended} before progress was observed; selected run states are unobserved.`
-        : `${ended}; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished in the latest observation.`;
+        ? `${reason} before progress was observed; selected run states are unobserved.`
+        : `${reason}; ${unfinished} subagent${unfinished === 1 ? " is" : "s are"} unfinished in the latest observation.`;
     const text = formatRunBlocks(
       [
         summary,
@@ -328,7 +332,7 @@ export function awaitExecutionFor(
         ),
       ),
     );
-    return {
+    const result: AgentToolResult<unknown> = {
       content: [{ type: "text", text }],
       structuredContent: encodeSubagentContract(
         cancelledAwaitContract({
@@ -353,6 +357,8 @@ export function awaitExecutionFor(
         ...(Arr.some(latestRuns, isParentActionRequiredRun) && { attentionRequired: true }),
       }),
     };
+    invokeHostCallback(() => onUpdate?.(result), undefined);
+    return result;
   };
   return {
     requestedIds,
@@ -368,7 +374,7 @@ export function awaitExecutionFor(
     markDeliveryAttempt: (attempted: ReadonlyArray<string>) => {
       for (const id of attempted) deliveryAttemptedIds.add(id);
     },
-    cancelled,
+    ended,
   };
 }
 

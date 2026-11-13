@@ -3,13 +3,9 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import {
-  DEFAULT_MAX_ACTIVE_RUNS,
-  DEFAULT_SUBAGENT_NESTING_POLICY,
-  type WriterWorkspaceMode,
-} from "../config/schema.ts";
+import { DEFAULT_SUBAGENT_NESTING_POLICY, type WriterWorkspaceMode } from "../config/schema.ts";
 import type { WorkspaceHandle, WorkspaceLaunch, WorkspaceRebase } from "../workspace/model.ts";
-import { processCapacityError, treeCapacityError } from "./admission.ts";
+import { capacityError } from "./admission.ts";
 import {
   invalidRequest as invalid,
   type SubagentError,
@@ -166,13 +162,17 @@ const integrationQuarantinedError = () =>
     "Integration ownership is quarantined; writer admission is blocked.",
   );
 
-const holdsRevision = ({ binding, revision }: Succession) =>
-  binding.state.phase === "revising" && binding.state.hold === revision;
-
-const releaseRevisionLocked = ({ binding, revision }: Succession) => {
+/** The binding's revising state while this succession's revision still holds it. */
+const heldRevision = ({ binding, revision }: Succession) => {
   const { state } = binding;
-  if (state.phase === "revising" && state.hold === revision)
-    binding.state = { phase: "idle", knowledge: state.knowledge };
+  return state.phase === "revising" && state.hold === revision ? state : undefined;
+};
+
+const holdsRevision = (succession: Succession) => heldRevision(succession) !== undefined;
+
+const releaseRevisionLocked = (succession: Succession) => {
+  const current = heldRevision(succession);
+  if (current) succession.binding.state = { phase: "idle", knowledge: current.knowledge };
 };
 
 export function workspaceLaunchOperations(context: WorkspaceControlContext) {
@@ -226,14 +226,13 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
     caller: string,
   ) {
     const nesting = request.nestingPolicy ?? DEFAULT_SUBAGENT_NESTING_POLICY;
-    const direct = nesting.maxDirectChildren;
-    const tree = nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS;
-    const capacityFailure =
-      processCapacityError(records, caller, direct) ?? treeCapacityError(records, tree);
+    const capacityFailure = capacityError(records, caller, nesting);
     if (capacityFailure) return yield* capacityFailure;
     // Only launches still creating workspaces fill the limit, so wait for one to resolve.
-    return (processCapacityError(records, caller, direct, undefined, heldLaunchSlots(caller)) ??
-      treeCapacityError(records, tree, undefined, heldLaunchSlots()))
+    return capacityError(records, caller, nesting, undefined, {
+      direct: heldLaunchSlots(caller),
+      tree: heldLaunchSlots(),
+    })
       ? state.slotReleased
       : undefined;
   });
@@ -330,9 +329,8 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
           if (succession) {
             yield* withLock(
               Effect.sync(() => {
-                const { state: current } = succession.binding;
-                if (current.phase === "revising" && current.hold === succession.revision)
-                  succession.binding.state = { ...current, slot };
+                const current = heldRevision(succession);
+                if (current) succession.binding.state = { ...current, slot };
               }),
             );
             return succession.binding.handle;
@@ -418,9 +416,8 @@ export function workspaceLaunchOperations(context: WorkspaceControlContext) {
       .pipe(Effect.mapError(mapWorkspaceError));
     yield* withLock(
       Effect.sync(() => {
-        const { state: current } = binding;
-        if (current.phase === "revising" && current.hold === held.revision)
-          binding.state = { ...current, knowledge: { kind: "unreviewed" } };
+        const current = heldRevision(held);
+        if (current) binding.state = { ...current, knowledge: { kind: "unreviewed" } };
       }),
     );
     yield* runWorktreeCreateHooks(service, worktreeCreate, binding.handle, {

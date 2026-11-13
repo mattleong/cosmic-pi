@@ -6,8 +6,9 @@ import * as Str from "effect/String";
 import * as Order from "effect/Order";
 import { WorkspaceError, type WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
-import { nodeErrorCode } from "./harness-shared.ts";
+import { nodeErrorCode } from "pi-cosmic-core/platform/errors";
 import {
+  CHECKOUT_TIMEOUT_MILLIS,
   checkDirectory,
   git,
   gitFields,
@@ -23,9 +24,6 @@ import {
   withScratchIndex,
   workspaceRef,
 } from "./git-capture.ts";
-
-// Checking out large files runs every filter, such as Git LFS, so it may take a while.
-const CHECKOUT_TIMEOUT_MILLIS = 10 * 60 * 1000;
 
 /** Whether anything is at `name` in the checkout at `root`; a final symlink isn't followed. */
 const present = (root: string, name: string) =>

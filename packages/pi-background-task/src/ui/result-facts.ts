@@ -4,6 +4,7 @@ import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
+import { joinInline } from "pi-cosmic-ui/manager";
 import type { BackgroundTaskSnapshot } from "../task/model.ts";
 import { BackgroundTaskFailureDetailsSchema } from "../task/schema.ts";
 import type { BackgroundTaskFailureDetails, BackgroundTaskToolDetails } from "../tools/command.ts";
@@ -18,12 +19,6 @@ type Failure = BackgroundTaskFailureDetails["failure"];
 /** A working directory as the user reads it: home-relative (`~/web`), never absolute under home. */
 export const displayDirectory = (cwd: string): string =>
   sanitizeTerminalLine(formatDisplayPath(cwd, ""));
-
-const joined = (parts: ReadonlyArray<string | undefined>): string =>
-  Arr.join(
-    Arr.filter(parts, (part): part is string => part !== undefined && part !== ""),
-    " · ",
-  );
 
 const argumentList = (fields: ReadonlyArray<string>): string => {
   const names = Arr.map(fields, sanitizeTerminalLine);
@@ -85,13 +80,13 @@ export function failureFactLines(failure: Failure, directoryStated = false): str
   const cursors =
     failure.afterCursor === undefined
       ? undefined
-      : joined([
+      : joinInline([
           `requested cursor ${failure.afterCursor}`,
           failure.latestCursor === undefined ? undefined : `latest ${failure.latestCursor}`,
         ]);
   return Arr.filter(
     [
-      joined([task, cursors]),
+      joinInline([task, cursors]),
       failure.cwd === undefined || directoryStated ? "" : displayDirectory(failure.cwd),
       failure.limit === undefined ? "" : `limit ${failure.limit} running`,
     ],
@@ -100,7 +95,7 @@ export function failureFactLines(failure: Failure, directoryStated = false): str
 }
 
 const taskFacts = (task: BackgroundTaskSnapshot, directoryStated = false): string =>
-  joined([
+  joinInline([
     sanitizeTerminalLine(task.id),
     directoryStated ? undefined : displayDirectory(task.cwd),
     task.pid === undefined ? undefined : `pid ${task.pid}`,
@@ -124,7 +119,7 @@ export function resultFactLines(
       const { wait, appliedWaitSeconds } = details;
       return [
         taskFacts(wait.snapshot),
-        joined([
+        joinInline([
           `cursor ${wait.matchCursor ?? wait.nextCursor}`,
           `wait limit ${formatDuration(appliedWaitSeconds * 1_000)}`,
         ]),
@@ -133,7 +128,7 @@ export function resultFactLines(
     case "logs": {
       const { logs } = details;
       return [
-        joined([
+        joinInline([
           sanitizeTerminalLine(logs.id),
           `next cursor ${logs.nextCursor}`,
           `earliest ${logs.earliestAvailableCursor}`,

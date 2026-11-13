@@ -1,5 +1,3 @@
-import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
@@ -7,8 +5,7 @@ import * as Str from "effect/String";
 import { stripAnsi } from "pi-cosmic-core";
 import { beforeEach, expect, test } from "vitest";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
-import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
-import { textResult } from "../support/render";
+import { demoShellTool, textResult } from "../support/render";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -19,25 +16,12 @@ const SHORT = "needs input";
 
 // The shell captures its mode when wrapping, so each background wraps its own tool.
 const tool = () =>
-  withCodePreviewShell(
-    {
-      ...createReadToolDefinition("/project"),
-      renderCall: () => new Text("Demo call", 0, 0),
-      renderResult: () => new Text("Demo result", 0, 0),
-    },
-    {
-      compactSummary: () => ({
-        action: "await",
-        subject: "questionnaire",
-        counters: [LONG, SHORT],
-        outcome: "returned",
-      }),
-      expandedContent: {
-        renderCall: () => new Container(),
-        renderResult: () => new Text("Everything retained", 0, 0),
-      },
-    },
-  );
+  demoShellTool(() => ({
+    action: "await",
+    subject: "questionnaire",
+    counters: [LONG, SHORT],
+    outcome: "returned",
+  }));
 
 // The heading row and the continuation rows it wraps onto, as one line of words.
 const heading = (width: number, expanded: boolean) => {

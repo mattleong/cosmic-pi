@@ -26,6 +26,10 @@ export const completionClaimOwner = (record: RunRecord, generation: number): str
 export const hasCompletionGenerationCapacity = (record: RunRecord): boolean =>
   record.completionGenerations.size < MAX_UNRESOLVED_REPORT_GENERATIONS;
 
+/** The generation of a finished run's outcome, or the one a working run's outcome will take. */
+export const currentOrNextGeneration = (record: RunRecord): number =>
+  record.completionGeneration + (isTerminalRunState(record.view.state) ? 0 : 1);
+
 export const claimCompletion = (
   record: RunRecord,
   generation: number,
@@ -69,7 +73,7 @@ export const holdStartFailureLocked = (
   record: RunRecord,
 ): number | undefined => {
   if (!hold.open) return undefined;
-  const generation = record.completionGeneration + (isTerminalRunState(record.view.state) ? 0 : 1);
+  const generation = currentOrNextGeneration(record);
   if (!claimCompletion(record, generation, hold.claimToken)) return undefined;
   hold.held.set(record.view.id, generation);
   return generation;

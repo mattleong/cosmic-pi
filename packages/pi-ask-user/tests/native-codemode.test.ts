@@ -1,34 +1,38 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
 import { nativeCodemodeSession } from "./support/native-codemode-session.ts";
-import { acquireService, asyncRequest } from "./support/questionnaire.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
+import {
+  acquireService,
+  asyncRequest,
+  submitted as submittedOutcome,
+} from "./support/questionnaire.ts";
 
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const literal = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const output = (text: string) => {
-  const line = Option.getOrUndefined(
-    Arr.findFirst(Str.split(text, "\n"), Str.startsWith("WORKFLOW_RESULT ")),
-  );
+  const line = findOrUndefined(Str.split(text, "\n"), Str.startsWith("WORKFLOW_RESULT "));
   expect(line, text).toBeDefined();
   return decodeOutput(Fn.pipe(line!, Str.slice("WORKFLOW_RESULT ".length)));
 };
 const print = (expression: string) => `text('WORKFLOW_RESULT ' + JSON.stringify(${expression}));`;
 const request = literal(asyncRequest);
 const envelope = { contract: "pi-ask-user/questionnaire", version: 1 };
-const submitted: AskUserOutcome = {
-  outcome: "submitted",
-  answers: [{ key: "choice", kind: "choices", values: ["a"], labels: ["A"], note: "Keep A" }],
-};
+const submitted = submittedOutcome({
+  key: "choice",
+  kind: "choices",
+  values: ["a"],
+  labels: ["A"],
+  note: "Keep A",
+});
 const check = `function checked(value, tool) {
   if (value.contract !== 'pi-ask-user/questionnaire' || value.version !== 1 || value.tool !== tool)
     throw new Error('Unsupported questionnaire contract');

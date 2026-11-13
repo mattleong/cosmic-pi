@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { formatElapsed, formatRelativeAge } from "pi-cosmic-core/display";
@@ -48,19 +47,10 @@ interface RunRoutePresentationInput {
 export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
   const profile = sanitizeTerminalLine(run.profile ?? "generalist");
   const providerModel = sanitizeTerminalLine(run.model);
-  const providerSeparator = Option.getOrElse(Fn.pipe(providerModel, Str.indexOf("/")), () => -1);
-  const modelName =
-    providerSeparator < 0
-      ? providerModel
-      : Fn.pipe(providerModel, Str.slice(providerSeparator + 1));
   const effort = sanitizeTerminalLine(run.effort);
   const fast = run.openaiFastMode ? " ⚡" : "";
   const override = run.modelOverride ? " · override" : "";
-  return {
-    profile,
-    model: `${providerModel}:${effort}${fast}${override}`,
-    narrowModel: `${modelName}:${effort}${fast}${override}`,
-  };
+  return { profile, model: `${providerModel}:${effort}${fast}${override}` };
 };
 
 interface RunModelPresentationInput extends RunRoutePresentationInput {

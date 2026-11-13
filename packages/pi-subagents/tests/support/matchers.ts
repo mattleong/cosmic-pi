@@ -19,8 +19,3 @@ export const stringMatching = (expected: RegExp) => {
   const matcher: unknown = expect.stringMatching(expected);
   return matcher;
 };
-
-export const anything = () => {
-  const matcher: unknown = expect.anything();
-  return matcher;
-};

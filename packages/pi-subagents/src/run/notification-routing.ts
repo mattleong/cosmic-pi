@@ -8,10 +8,12 @@ import {
   completionNoticeDetails,
   inlineCompletionReport,
   questionNoticeDetails,
+  type SubagentCompletionNotification,
   type SubagentNotification,
   type SubagentNotificationDelivery,
 } from "../boundary/host-notifier.ts";
 import { indentQuestionLines } from "../tools/format.ts";
+import type { NoticeDetails } from "../ui/notice-details.ts";
 import { formatRunBlock, withInlineReports } from "../tools/run-block.ts";
 import {
   ancestorCompletionKey,
@@ -34,17 +36,18 @@ interface RunNotificationRoutingDependencies extends Pick<RunContext, "records" 
   ) => SubagentNotificationDelivery | undefined | void;
 }
 
-const ancestorMessage = (notification: SubagentNotification): string => {
-  if (notification.type === "question")
-    return sanitizeOutputText(
-      `Descendant ${notification.name} (${notification.id}) is waiting for a reply.\n\nQuestion:\n${indentQuestionLines(notification.message, "  ")}\n\nIf it isn't answered yet, answer with agent_send({ to: "${notification.id}", message: "..." }).`,
-      32 * 1024,
-    );
-  const run = notification.runs[0];
-  if (!run) return "A descendant subagent finished.";
-  // The same bounded block a root notice shows, so it always fits the parent message, and the
-  // whole report when it fits too.
-  return sanitizeOutputText(
+const ancestorQuestionMessage = (
+  notification: Extract<SubagentNotification, { readonly type: "question" }>,
+): string =>
+  sanitizeOutputText(
+    `Descendant ${notification.name} (${notification.id}) is waiting for a reply.\n\nQuestion:\n${indentQuestionLines(notification.message, "  ")}\n\nIf it isn't answered yet, answer with agent_send({ to: "${notification.id}", message: "..." }).`,
+    32 * 1024,
+  );
+
+// The same bounded block a root notice shows, so it always fits the parent message, and the
+// whole report when it fits too.
+const ancestorCompletionMessage = (run: SubagentCompletionNotification): string =>
+  sanitizeOutputText(
     withInlineReports(
       `Descendant subagent ${run.outcome === "failed" ? "failed" : "reported"}.\n\n${formatRunBlock(completionBlock(run))}\n\nUse agent_read for the full run record.`,
       [inlineCompletionReport(run)],
@@ -52,13 +55,6 @@ const ancestorMessage = (notification: SubagentNotification): string => {
     ),
     MAX_PARENT_MESSAGE_CHARS,
   );
-};
-
-/** The display receipt a nested parent shows for the notice; the message stays what it reads. */
-const ancestorDetails = (notification: SubagentNotification) =>
-  notification.type === "question"
-    ? questionNoticeDetails(notification)
-    : completionNoticeDetails(notification.runs);
 
 /** Whether the run can take notices once any pending pause request is refused. */
 export const keepsTakingNotifications = (record: RunRecord): boolean =>
@@ -114,7 +110,8 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
     sourceRunId: string,
     message: string,
     key: string,
-    details: ReturnType<typeof ancestorDetails>,
+    // The display receipt a nested parent shows for the notice; the message stays what it reads.
+    details: NoticeDetails,
     takeLocked?: (recipient: RunRecord) => void,
   ): Effect.Effect<RunRecord | false | "uncertain"> =>
     Effect.suspend(() => {
@@ -176,13 +173,13 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
           (records.get(run.id)?.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID) === SUBAGENT_ROOT_RUN_ID,
       )
     )
-      return Effect.succeed(notifyRoot(notification));
+      return Effect.sync(() => notifyRoot(notification));
     if (notification.type === "question")
       return deliverToNearestAncestor(
         notification.id,
-        ancestorMessage(notification),
+        ancestorQuestionMessage(notification),
         `${notification.id}:question:${notification.generation}`,
-        ancestorDetails(notification),
+        questionNoticeDetails(notification),
       ).pipe(
         Effect.map((delivered) =>
           delivered === "uncertain"
@@ -201,9 +198,9 @@ export function notificationRouter(dependencies: RunNotificationRoutingDependenc
       (run) =>
         deliverToNearestAncestor(
           run.id,
-          ancestorMessage({ type: "completed", runs: [run] }),
+          ancestorCompletionMessage(run),
           ancestorCompletionKey(run),
-          ancestorDetails({ type: "completed", runs: [run] }),
+          completionNoticeDetails([run]),
           (recipient) => handoff.takeReportLocked(recipient, run.id, run.generation),
         ).pipe(
           Effect.map((delivered) => {

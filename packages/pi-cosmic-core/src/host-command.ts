@@ -6,6 +6,7 @@ import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { clipText } from "./display.ts";
 import { notifyAtHostBoundary } from "./host-session.ts";
+import { findOrUndefined } from "./array.ts";
 
 interface CommandCompletion {
   readonly value: string;
@@ -43,7 +44,7 @@ export interface ExtensionCommand {
   readonly add: (subcommand: ExtensionSubcommand) => void;
 }
 
-export const completeExtensionCommand = (
+const completeExtensionCommand = (
   prefix: string,
   subcommands: ReadonlyArray<Pick<ExtensionSubcommand, "name" | "description" | "complete">>,
 ): CommandCompletion[] | null => {
@@ -59,9 +60,7 @@ export const completeExtensionCommand = (
     return matches.length > 0 ? matches : null;
   }
   const [, head = "", rest = ""] = split;
-  const subcommand = Option.getOrUndefined(
-    Arr.findFirst(subcommands, (entry) => entry.name === head),
-  );
+  const subcommand = findOrUndefined(subcommands, (entry) => entry.name === head);
   const inner = subcommand?.complete?.(Str.trimStart(rest));
   if (!inner || inner.length === 0) return null;
   return Arr.map(inner, (choice) =>
@@ -135,7 +134,7 @@ export const extensionCommandOverview = (
 const UNKNOWN_SUBCOMMAND_COLUMNS = 24;
 
 /** What an unrecognized subcommand shows: which word wasn't known, then the overview. */
-export const unknownSubcommandText = (name: string, subcommand: string, overview: string): string =>
+const unknownSubcommandText = (name: string, subcommand: string, overview: string): string =>
   `Unknown /${name} command: ${clipText(subcommand, UNKNOWN_SUBCOMMAND_COLUMNS)}\n${overview}`;
 
 const settle = (run: () => Promise<void> | void): Promise<void> => {

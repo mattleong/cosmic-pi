@@ -4,7 +4,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import { nodeFilePlatformLayer, SafeFile } from "pi-cosmic-core";
 import { readWorkspaceRecord } from "../../src/boundary/git-worktree-store.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
@@ -22,30 +21,21 @@ import {
   integrateFailingRemoval,
   io,
   openWorkspaceService,
+  orphanScenario,
   prepareIntegration,
   readText,
   registryOf,
-  temporaryDirectory,
+  successorDependencies,
   writeFile,
 } from "./fixtures/repository.ts";
 import * as Arr from "effect/Array";
 
 const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema));
 
-/** A checkout with a session that created workspaces in it and then ended. */
-const orphanScenario = (prefix: string) =>
-  Effect.gen(function* () {
-    const temporary = yield* temporaryDirectory(prefix);
-    const source = path.join(temporary, "source");
-    const agent = path.join(temporary, "agent");
-    yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
-    yield* commitRepository(source, [
-      ["src/main.ts", "baseline\n"],
-      ["other.txt", "other\n"],
-    ]);
-    const creator = yield* openWorkspaceService(agent);
-    return { source, agent, creator };
-  });
+const FILES = [
+  ["src/main.ts", "baseline\n"],
+  ["other.txt", "other\n"],
+] as const;
 
 /** The root coordinator of a later session sharing the agent directory. */
 const laterSession = (agent: string, source: string) =>
@@ -55,16 +45,7 @@ const laterSession = (agent: string, source: string) =>
       Effect.provide(WriterLeaseService.layer({ agentDirectory: agent })),
     );
     const control = yield* workspaceControl({
-      ownerScope: yield* Scope.Scope,
-      records: new Map(),
-      withLock: (effect) => effect,
-      writerLeases: leases,
-      engine: successor.service,
-      initialMode: "worktree",
-      worktreeCreate: [],
-      ownerId: "new",
-      sourceCwd: source,
-      isClosed: () => false,
+      ...(yield* successorDependencies(leases, successor.service, source)),
       publish: Effect.void,
     });
     return { control, leases, successor };
@@ -117,7 +98,7 @@ it.live(
   "adopts an ended session's workspace on review, then prepares and applies it",
   () =>
     Effect.gen(function* () {
-      const { source, agent, creator } = yield* orphanScenario("pi-adopt-");
+      const { source, agent, creator } = yield* orphanScenario("pi-adopt-", FILES);
       const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       yield* writeFile(path.join(handle.cwd, "src/main.ts"), "adopted change\n");
       const { control, successor } = yield* laterSession(agent, source);
@@ -147,7 +128,7 @@ it.live(
   "refuses takeover while a writer holds the worker tree",
   () =>
     Effect.gen(function* () {
-      const { source, agent, creator } = yield* orphanScenario("pi-adopt-refusals-");
+      const { source, agent, creator } = yield* orphanScenario("pi-adopt-refusals-", FILES);
       const held = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       yield* creator.close;
       const { control, leases, successor } = yield* laterSession(agent, source);
@@ -169,7 +150,7 @@ it.live(
   "only discards a mid-integration orphan, rolling it back",
   () =>
     Effect.gen(function* () {
-      const { source, agent, creator } = yield* orphanScenario("pi-orphan-rollback-");
+      const { source, agent, creator } = yield* orphanScenario("pi-orphan-rollback-", FILES);
       const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       yield* stopIntegrationMidway(creator.service, handle, source);
       yield* creator.close;
@@ -198,7 +179,7 @@ it.live(
   "sweeps month-old orphans, keeping each patch and skipping the rest",
   () =>
     Effect.gen(function* () {
-      const { source, agent, creator } = yield* orphanScenario("pi-orphan-sweep-");
+      const { source, agent, creator } = yield* orphanScenario("pi-orphan-sweep-", FILES);
       const create = creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       const old = yield* create;
       yield* writeFile(path.join(old.cwd, "src/main.ts"), "month-old work\n");
@@ -231,7 +212,7 @@ it.live(
   "sweeps only the session's own checkout",
   () =>
     Effect.gen(function* () {
-      const { source, agent, creator } = yield* orphanScenario("pi-orphan-sweep-scope-");
+      const { source, agent, creator } = yield* orphanScenario("pi-orphan-sweep-scope-", FILES);
       const other = path.join(path.dirname(source), "other");
       yield* commitRepository(other, [["main.ts", "other\n"]]);
       const own = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });

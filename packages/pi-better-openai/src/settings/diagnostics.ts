@@ -5,7 +5,7 @@ import { currentModelKey, fastDiagnosticLines, type FastSnapshot } from "../fast
 import { usageDiagnosticLines } from "../usage/debug.ts";
 import type { OpenAIProjection } from "../usage/projection.ts";
 
-export interface DiagnosticFacts {
+interface DiagnosticFacts {
   readonly ctx: ExtensionContext;
   readonly configPath: string;
   readonly fast: FastSnapshot;

@@ -1,4 +1,9 @@
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+
+/** The string `code` of a Node system error, such as `ENOENT`, or `undefined` for anything else. */
+export const nodeErrorCode = (cause: unknown): string | undefined =>
+  Predicate.hasProperty(cause, "code") && Predicate.isString(cause.code) ? cause.code : undefined;
 
 export class JsonDocumentError extends Schema.TaggedError<
   JsonDocumentError,

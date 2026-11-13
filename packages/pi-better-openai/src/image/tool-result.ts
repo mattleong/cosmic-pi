@@ -2,24 +2,16 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
-import { ImageOutputFormatSchema } from "../config/schema.ts";
 import { imageResultText } from "./result-text.ts";
-import { IMAGE_ACTIONS, type CodexImageDetails, type CodexImageResult } from "./types.ts";
+import { CodexImageDetailsSchema, type CodexImageDetails, type CodexImageResult } from "./types.ts";
 
+// The structured result carries the details record with its MIME type inside `image`.
+const { mimeType: _mimeType, ...detailFields } = CodexImageDetailsSchema.fields;
 const ImageToolResultSchema = Schema.Struct({
   contract: Schema.Literal("pi-better-openai/image"),
   version: Schema.Literal(1),
   tool: Schema.Literal("openai_image"),
-  id: Schema.String,
-  status: Schema.String,
-  prompt: Schema.String,
-  revisedPrompt: Schema.optional(Schema.String),
-  savedPath: Schema.optional(Schema.String),
-  model: Schema.String,
-  imageModel: Schema.optional(Schema.String),
-  action: Schema.Literals(IMAGE_ACTIONS),
-  outputFormat: ImageOutputFormatSchema,
-  note: Schema.optional(Schema.String),
+  ...detailFields,
   image: Schema.Struct({
     type: Schema.Literal("image"),
     data: Schema.String,

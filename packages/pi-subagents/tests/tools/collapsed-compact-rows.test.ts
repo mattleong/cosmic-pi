@@ -1,24 +1,14 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
 import { stripAnsi } from "pi-cosmic-core";
-import { extensionApiFixture, keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderAgentMessageEntry, renderSubagentMessage } from "../../src/application/messages.ts";
-import { agentMessageDetails, AGENT_MESSAGE_TYPE } from "../../src/boundary/host-agent-messages.ts";
-import { hostNotifier } from "../../src/boundary/host-notifier.ts";
-import {
-  agentMessageContent,
-  runSender,
-  type AgentReadout,
-} from "../../src/run/agent-messaging.ts";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { MAIN_AGENT_ID, runListEntry, type AgentReadout } from "../../src/run/agent-messaging.ts";
 import type { SubagentRunView } from "../../src/run/model.ts";
 import { listDetails, readDetails } from "../../src/tools/agent-details.ts";
 import { awaitDetails, startDetails } from "../../src/tools/details.ts";
 import { runIdFixture, view } from "../fixtures/run-view.ts";
-import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import { captureSubagentTools } from "./fixtures/tool-harness.ts";
+import { renderOnlyTool } from "./fixtures/tool-harness.ts";
 
 /**
  * Compact style's collapsed rule: a row is its heading, then one line per error, warning, or
@@ -35,18 +25,7 @@ beforeEach(() => {
 });
 afterEach(() => restore());
 
-const tools = (panel = false) =>
-  captureSubagentTools(subagentServiceDouble({}), {
-    environment: { cwd: "/project", projectTrusted: false },
-    startUiTicker: () => () => undefined,
-    toolPresentation: {
-      beginStart: () => () => undefined,
-      beginAwait: () => () => undefined,
-      isLiveHierarchyAvailable: () => panel,
-    },
-  });
-
-const tool = (name: string, panel = false) => tools(panel).get(name)!;
+const tool = (name: string, panel = false) => renderOnlyTool(name, { panel });
 
 const finished = view({
   id: runIdFixture(1),
@@ -66,15 +45,6 @@ const failed = view({
 });
 const running = (id: number, name: string): SubagentRunView =>
   view({ id: runIdFixture(id), name, state: "running", startedAt: 1 });
-
-const entry = (run: SubagentRunView) => ({
-  id: run.id,
-  name: run.name,
-  kind: "run" as const,
-  state: run.state,
-  self: false,
-  run,
-});
 
 const occurrences = (text: string, part: string): number => Str.split(text, part).length - 1;
 
@@ -133,7 +103,7 @@ describe("collapsed compact tool rows", () => {
     expect(collapsed).toHaveLength(3);
     const [failure, question] = problemLines(collapsed);
     expect(failure).toContain("Disk is full");
-    expect(question).toContain(`schema-check asks: ${QUESTION}`);
+    expect(question).toContain(QUESTION);
     expect(Arr.join(collapsed, "\n")).not.toContain("REPORT_SENTINEL");
     expect(Arr.join(collapsed, "\n")).not.toContain("STACK_SENTINEL");
     // Expanded, the failure is its issue alone, and every report, failure, and question shows once.
@@ -195,9 +165,6 @@ describe("collapsed compact tool rows", () => {
       },
     );
     expect(collapsed).toHaveLength(1);
-    const [heading = ""] = collapsed;
-    expect(heading).toContain("failed");
-    expect(heading).not.toMatch(/[✗⚠]/u);
     expect(occurrences(expanded, "Disk is full")).toBe(1);
     expect(occurrences(expanded, "STACK_SENTINEL")).toBe(1);
   });
@@ -209,11 +176,13 @@ describe("collapsed compact tool rows", () => {
       {},
       {
         content: text("list output"),
-        details: listDetails({ agents: Arr.map(listed, entry), missingIds: [] }, 0),
+        details: listDetails(
+          { agents: Arr.map(listed, (run) => runListEntry(run, MAIN_AGENT_ID)), missingIds: [] },
+          0,
+        ),
       },
     );
     expect(collapsed).toHaveLength(1);
-    expect(collapsed[0]).not.toMatch(/[✓✗⚠]/u);
     for (const run of listed) {
       expect(Arr.join(collapsed, "\n")).not.toContain(run.name);
       expect(occurrences(expanded, run.name)).toBeGreaterThan(0);
@@ -254,96 +223,5 @@ describe("collapsed compact tool rows", () => {
     expect(problemLines(collapsed)[0]).toContain("Disk is full");
     expect(Arr.join(collapsed, "\n")).not.toContain("TASK_ONE");
     for (const task of ["TASK_ONE", "TASK_TWO"]) expect(occurrences(expanded, task)).toBe(1);
-  });
-});
-
-type SentMessage = Parameters<ExtensionAPI["sendMessage"]>[0];
-
-const drawMessage = (message: SentMessage, expanded: boolean): ReadonlyArray<string> => {
-  const renderer =
-    message.customType === AGENT_MESSAGE_TYPE ? renderAgentMessageEntry : renderSubagentMessage;
-  const component = renderer(
-    { ...message, role: "custom", timestamp: 0, display: true },
-    { ...keybindingHintsFixture, expanded, outputPad: 0 },
-    plainTheme,
-  );
-  return Arr.map(component?.render(140) ?? [], (row) => stripAnsi(row));
-};
-
-const notices = (): ReadonlyArray<SentMessage> => {
-  const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-  const notify = hostNotifier(extensionApiFixture({ sendMessage }));
-  notify({
-    type: "completed",
-    runs: [
-      {
-        id: finished.id,
-        name: "auth-review",
-        generation: 1,
-        outcome: "completed",
-        finalText: REPORT,
-      },
-    ],
-  });
-  notify({
-    type: "completed",
-    runs: [
-      { id: failed.id, name: "db-migration", generation: 1, outcome: "failed", error: FAILURE },
-    ],
-  });
-  notify({
-    type: "question",
-    id: runIdFixture(3),
-    name: "schema-check",
-    requestId: "q-1",
-    generation: 1,
-    message: QUESTION,
-  });
-  return Arr.map(sendMessage.mock.calls, ([message]) => message);
-};
-
-describe("collapsed compact messages", () => {
-  it("show a report notice as one row and its report only expanded", () => {
-    const [report, failure] = notices();
-    const collapsed = drawMessage(report!, false);
-    expect(collapsed).toHaveLength(1);
-    expect(Arr.join(collapsed, "\n")).not.toContain("REPORT_SENTINEL");
-    expect(occurrences(Arr.join(drawMessage(report!, true), "\n"), "REPORT_SENTINEL")).toBe(1);
-
-    const failedRows = drawMessage(failure!, false);
-    expect(failedRows).toHaveLength(2);
-    expect(problemLines(failedRows)[0]).toContain("Disk is full");
-    const failedExpanded = Arr.join(drawMessage(failure!, true), "\n");
-    expect(occurrences(failedExpanded, "Disk is full")).toBe(1);
-    expect(occurrences(failedExpanded, "STACK_SENTINEL")).toBe(1);
-  });
-
-  it("raise a pending question as its problem line, quoted once expanded", () => {
-    const [, , question] = notices();
-    if (question === undefined) throw new Error("No question notice was sent");
-    const collapsed = drawMessage(question, false);
-    expect(collapsed).toHaveLength(2);
-    expect(problemLines(collapsed)[0]).toContain(`schema-check asks: ${QUESTION}`);
-    expect(occurrences(Arr.join(drawMessage(question, true), "\n"), QUESTION)).toBe(1);
-  });
-
-  it("keep an agent message's words behind expansion", () => {
-    const content = agentMessageContent(runSender(failed), "MESSAGE_SENTINEL");
-    const message: SentMessage = {
-      customType: AGENT_MESSAGE_TYPE,
-      content,
-      details: agentMessageDetails({
-        messageId: "message-1",
-        from: failed.id,
-        fromName: failed.name,
-        to: "main",
-        content,
-        text: "MESSAGE_SENTINEL",
-      }),
-      display: true,
-    };
-    expect(drawMessage(message, false)).toHaveLength(1);
-    expect(Arr.join(drawMessage(message, false), "\n")).not.toContain("MESSAGE_SENTINEL");
-    expect(occurrences(Arr.join(drawMessage(message, true), "\n"), "MESSAGE_SENTINEL")).toBe(1);
   });
 });

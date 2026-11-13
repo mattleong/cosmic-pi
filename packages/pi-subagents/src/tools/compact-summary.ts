@@ -96,14 +96,14 @@ const compactReceiptLabel = (
     case "models":
       return details.profiles.length === 0 ? undefined : "profiles";
     case "await": {
-      const targets = new Set(details.awaitedRunIds ?? Arr.map(details.cards, (card) => card.id));
-      const reports = Arr.filter(
+      const targets = new Set(details.awaitedRunIds);
+      const reports = Arr.countBy(
         details.cards,
         (card) =>
           targets.has(card.id) &&
           card.state === "completed" &&
           (card.finalText !== undefined || card.finalTextTruncated === true),
-      ).length;
+      );
       return reports > 0 ? plural(reports, "report") : undefined;
     }
     case "interrupt":
@@ -196,7 +196,7 @@ function awaitCounter(cards: readonly SubagentRunCard[], total: number, subject:
   if (cards.length === 1 && total === 1 && Str.trim(subject) && only)
     return runStateLabel(only.state);
   const count = (states: readonly SubagentRunCard["state"][]) =>
-    Arr.filter(cards, (card) => states.includes(card.state)).length;
+    Arr.countBy(cards, (card) => states.includes(card.state));
   const failed = count(["failed"]);
   const stopped = count(["stopped"]);
   return Arr.join(
@@ -365,7 +365,8 @@ const unavailableRouteDetail = (candidates: ReadonlyArray<SubagentProfileCandida
 const ROUTE_PROVIDER = /(^|\()[^\s/()]+\//u;
 
 /** A route without its provider, `gpt-5.6-sol:high`, for a row too narrow for the whole route. */
-const withoutProvider = (route: string): string => Str.replace(ROUTE_PROVIDER, "$1")(route);
+const withoutProvider = (route: string): string =>
+  Fn.pipe(route, Str.replace(ROUTE_PROVIDER, "$1"));
 
 function summarizeModels(
   details: Extract<CompactSubagentToolDetails, { action: "models" }>,
@@ -379,7 +380,7 @@ function summarizeModels(
     const invalid = profile.source === "global-invalid" || profile.source === "project-invalid";
     const options = invalid
       ? 0
-      : Arr.filter(profile.candidates, (candidate) => candidate.status === "eligible").length;
+      : Arr.countBy(profile.candidates, (candidate) => candidate.status === "eligible");
 
     if (invalid || (profile.candidates.length > 0 && options === 0)) {
       unavailable++;
@@ -449,7 +450,7 @@ function isSingleRequestedRun(
 }
 
 function labelChangesToReview(summary: CompactSummary, cards: readonly SubagentRunCard[]): void {
-  const reviewable = Arr.filter(cards, hasChangesToReview).length;
+  const reviewable = Arr.countBy(cards, hasChangesToReview);
   if (reviewable === 0) return;
   const label =
     reviewable === 1 && cards.length === 1 ? "ready to apply" : `${reviewable} ready to apply`;

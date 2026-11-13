@@ -1,18 +1,12 @@
 import { registerSessionResourceCleanup } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { expect, layer } from "@effect/vitest";
-import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
-import {
-  extensionContextFixture,
-  type ExtensionEventName,
-  type ExtensionEventNamed,
-} from "pi-cosmic-core/testing";
+import { extensionContextFixture } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import { resetOpenAICodexTransport } from "../src/boundary/host-codex-transport.ts";
-import { extensionHarness } from "./extension-harness.ts";
-import { testModel } from "./helpers.ts";
+import { extensionHarness, modelSelectEvent } from "./extension-harness.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -24,33 +18,24 @@ const transportHarness = Effect.gen(function* () {
   const h = yield* extensionHarness({ dependencies: { resetOpenAICodexTransport: reset } });
   let idle = true;
   const ctx = { ...h.ctx, isIdle: () => idle };
-  const deliver = <Name extends ExtensionEventName>(name: Name, event: ExtensionEventNamed<Name>) =>
-    Effect.promise(() =>
-      Promise.all(Arr.map(h.handlers.get(name), (handler) => Promise.resolve(handler(event, ctx)))),
-    ).pipe(Effect.asVoid);
   yield* h.emit("session_start", ctx);
   reset.mockClear();
   return {
     ...h,
     ctx,
     reset,
-    deliver,
     setIdle: (value: boolean) => {
       idle = value;
     },
     toggleFast: Effect.promise(() =>
       Promise.resolve(h.commands.get("openai")?.handler("fast", ctx)),
     ),
-    selectModel: deliver("model_select", {
-      type: "model_select",
-      model: testModel(),
-      previousModel: undefined,
-      source: "set",
-    }),
-    providerRequest: deliver("before_provider_headers", {
-      type: "before_provider_headers",
-      headers: {},
-    }),
+    selectModel: h.deliver("model_select", modelSelectEvent(), ctx),
+    providerRequest: h.deliver(
+      "before_provider_headers",
+      { type: "before_provider_headers", headers: {} },
+      ctx,
+    ),
   };
 });
 
@@ -88,7 +73,7 @@ layer(nodeFilePlatformLayer)("Codex transport reset", (it) => {
       h.setIdle(false);
       yield* h.toggleFast;
       yield* h.emit("agent_end", h.ctx);
-      yield* h.deliver("agent_settled", { type: "agent_settled", aborted: true });
+      yield* h.deliver("agent_settled", { type: "agent_settled", aborted: true }, h.ctx);
       h.setIdle(true);
       yield* h.providerRequest;
       expect(h.reset).toHaveBeenCalledOnce();

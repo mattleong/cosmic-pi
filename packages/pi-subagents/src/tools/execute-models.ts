@@ -6,7 +6,6 @@ import type {
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import { hostProfileEnvironment } from "../boundary/host-profile-resolution.ts";
 import type { InvalidSubagentRequestError } from "../run/errors.ts";
 import type { SubagentParentContext } from "../run/model.ts";
@@ -15,9 +14,11 @@ import {
   profileCandidateLabel,
   PROFILE_IDS,
   type ProfileCandidate,
+  type ProfileDefinition,
   type ProfileId,
 } from "../profiles/model.ts";
-import type { ProfileResolution } from "../profiles/resolve.ts";
+import { PROFILE_DEFINITIONS } from "../profiles/definitions.ts";
+import { resolveProfilePlan, type ProfileResolution } from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { encodeSubagentContract } from "./contract-schema.ts";
 import { modelsContract } from "./discovery-contract.ts";
@@ -30,6 +31,7 @@ import type {
   SubagentProfileView,
 } from "./model.ts";
 import type { SubagentModelsInput } from "./schema.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const candidateLines = (candidates: ReadonlyArray<ProfileCandidateDiscovery>) =>
   candidates.length > 0
@@ -108,11 +110,10 @@ const candidateDiscovery = (
 ): ReadonlyArray<ProfileCandidateDiscovery> => {
   const attempts = resolution.kind === "resolved" ? resolution.attempts : [];
   return Arr.map(candidates, (candidate, index) => {
-    const attempt = Option.getOrUndefined(
-      Arr.findFirst(attempts, (value) => value.candidateIndex === index),
-    );
-    const omitted = Option.getOrUndefined(
-      Arr.findFirst(resolution.skippedCandidates, (value) => value.candidateIndex === index),
+    const attempt = findOrUndefined(attempts, (value) => value.candidateIndex === index);
+    const omitted = findOrUndefined(
+      resolution.skippedCandidates,
+      (value) => value.candidateIndex === index,
     );
     return Object.assign({}, candidate, {
       status: attempt ? ("eligible" as const) : ("skipped" as const),
@@ -122,13 +123,6 @@ const candidateDiscovery = (
     });
   });
 };
-
-// An agent's candidates show its overrides.
-const agentCandidates = (
-  candidates: ReadonlyArray<ProfileCandidate>,
-  agent: CustomAgent,
-): ReadonlyArray<ProfileCandidate> =>
-  Arr.map(candidates, (candidate) => customAgentCandidate(candidate, agent));
 
 // The agent's private instructions stay out of discovery.
 const agentView = (
@@ -142,31 +136,26 @@ export const executeModelsAction = Effect.fn("SubagentTools.models")(function* (
   ctx: ExtensionContext,
   parentContext?: SubagentParentContext,
 ): Effect.fn.Return<AgentToolResult<unknown>, InvalidSubagentRequestError, SubagentProfileService> {
-  const profileService = yield* SubagentProfileService;
-  const snapshot = yield* profileService.capture;
+  const snapshot = yield* (yield* SubagentProfileService).capture;
   const { fallbackProfile } = snapshot.effectiveConfig;
   const ids: ReadonlyArray<ProfileId> = input.profile ? [input.profile] : PROFILE_IDS;
   const environment = yield* hostProfileEnvironment(pi, ctx, parentContext);
-  const profiles: ReadonlyArray<SubagentProfileView> = Arr.flatMap(ids, (id) => {
-    const definition = profileService.definition(id);
-    if (!definition) return [];
-    const route = snapshot.effectiveConfig.profiles[definition.id];
-    const resolution = profileService.resolve(snapshot, definition.id, environment);
-    const candidates = candidateDiscovery(route.candidates, resolution);
-    return [
-      {
-        id: definition.id,
-        description: definition.description,
-        source: snapshot.effectiveConfig.profileSources[definition.id],
-        isDefault: definition.id === fallbackProfile,
-        defaultContext: definition.defaultContext,
-        defaultWriteIntent: definition.defaultWriteIntent,
-        ...(definition.defaultEffort !== undefined && {
-          defaultEffort: definition.defaultEffort,
-        }),
-        candidates,
-      } satisfies SubagentProfileView,
-    ];
+  const profiles = Arr.map(ids, (id): SubagentProfileView => {
+    const definition: ProfileDefinition = PROFILE_DEFINITIONS[id];
+    const route = snapshot.effectiveConfig.profiles[id];
+    const resolution = resolveProfilePlan(id, snapshot.effectiveConfig, environment);
+    return {
+      id,
+      description: definition.description,
+      source: snapshot.effectiveConfig.profileSources[id],
+      isDefault: id === fallbackProfile,
+      defaultContext: definition.defaultContext,
+      defaultWriteIntent: definition.defaultWriteIntent,
+      ...(definition.defaultEffort !== undefined && {
+        defaultEffort: definition.defaultEffort,
+      }),
+      candidates: candidateDiscovery(route.candidates, resolution),
+    };
   });
   const agents: ReadonlyArray<SubagentAgentView> = Fn.pipe(
     snapshot.effectiveConfig.agents,
@@ -175,8 +164,11 @@ export const executeModelsAction = Effect.fn("SubagentTools.models")(function* (
       agentView(
         agent,
         candidateDiscovery(
-          agentCandidates(snapshot.effectiveConfig.profiles[agent.profile].candidates, agent),
-          profileService.resolve(snapshot, agent.profile, environment, agent),
+          // An agent's candidates show its overrides.
+          Arr.map(snapshot.effectiveConfig.profiles[agent.profile].candidates, (candidate) =>
+            customAgentCandidate(candidate, agent),
+          ),
+          resolveProfilePlan(agent.profile, snapshot.effectiveConfig, environment, agent),
         ),
       ),
     ),

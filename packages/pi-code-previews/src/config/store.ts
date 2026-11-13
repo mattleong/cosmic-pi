@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import {
   hasCodePreviewSessionCapability,
   runCodePreviewSessionEffect,
@@ -143,7 +144,7 @@ export function formatSettingsSaveError(cause: unknown, cwd = ""): string {
   const reason = code === undefined ? undefined : SAVE_CAUSES.get(code);
   // A lock another writer holds clears on its own; one that needs recovery says how.
   if (facts.operation === "lock")
-    return Str.startsWith("Another process")(facts.message ?? "")
+    return Fn.pipe(facts.message ?? "", Str.startsWith("Another process"))
       ? `${SAVE_LEAD}: another process was saving them\nTry again in a moment`
       : `${SAVE_LEAD}: ${message}`;
   if (reason === undefined && facts.operation === undefined) return `${SAVE_LEAD}: ${message}`;

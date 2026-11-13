@@ -1,5 +1,4 @@
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { codeUnitAt } from "./text-scan.ts";
 
@@ -11,21 +10,13 @@ export const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff
 
 export const safeTextPrefix = (value: string, maximumCodeUnits: number): string => {
   let end = Math.max(0, Math.min(value.length, Math.floor(maximumCodeUnits)));
-  if (
-    Option.exists(Str.charCodeAt(value, end - 1), isHighSurrogate) &&
-    Option.exists(Str.charCodeAt(value, end), isLowSurrogate)
-  )
-    end -= 1;
+  if (isHighSurrogate(codeAt(value, end - 1)) && isLowSurrogate(codeAt(value, end))) end -= 1;
   return Fn.pipe(value, Str.slice(0, end));
 };
 
 export const safeTextSuffix = (value: string, maximumCodeUnits: number): string => {
   let start = Math.max(0, value.length - Math.max(0, Math.floor(maximumCodeUnits)));
-  if (
-    Option.exists(Str.charCodeAt(value, start), isLowSurrogate) &&
-    Option.exists(Str.charCodeAt(value, start - 1), isHighSurrogate)
-  )
-    start += 1;
+  if (isLowSurrogate(codeAt(value, start)) && isHighSurrogate(codeAt(value, start - 1))) start += 1;
   return Fn.pipe(value, Str.slice(start));
 };
 

@@ -8,6 +8,7 @@ import {
   io,
   prepareIntegration,
   readText,
+  registryOf,
   workspaceTarget,
   workspaceTests,
   writeFile,
@@ -176,7 +177,7 @@ describe(".worktreeinclude", () => {
     yield* includeFile(root, "many/\n");
     const error = yield* failureOf(service.create({ sourceCwd: root, ownerId: "parent" }));
     expect(error.operation).toBe("create");
-    const left = yield* io(() => fs.readdir(path.join(agent, "subagent-worktrees")));
+    const left = yield* io(() => fs.readdir(registryOf(agent)));
     expect(Arr.filter(left, (name) => /^[a-f0-9-]{36}$/u.test(name))).toEqual([]);
   });
 

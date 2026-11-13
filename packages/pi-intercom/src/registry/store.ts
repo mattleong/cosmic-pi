@@ -245,12 +245,13 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
 
       const readRecord = (file: string, instance: string) =>
         readRecordAt(paths.join(sessions, file)).pipe(
-          Effect.map((record) =>
-            Option.isSome(record) && record.value.instance === instance
-              ? RecordRead.Found({ record: record.value })
-              : RecordRead.Skipped({ reason: "invalid" }),
-          ),
-          Effect.catch((error) => Effect.succeed(skippedFor(error))),
+          Effect.match({
+            onFailure: skippedFor,
+            onSuccess: (record) =>
+              Option.isSome(record) && record.value.instance === instance
+                ? RecordRead.Found({ record: record.value })
+                : RecordRead.Skipped({ reason: "invalid" }),
+          }),
         );
 
       const sessionEntries = managedDirectory(sessions).pipe(
@@ -440,19 +441,18 @@ export class IntercomRegistry extends Context.Service<IntercomRegistry>()(
       /** What a socket directory's owner record says, for the instance its name carries. */
       const socketOwnerEvidence = (directory: string, instance: string) =>
         readPrivateFile(paths.join(directory, SOCKET_OWNER_FILE), MAX_OWNER_BYTES).pipe(
-          Effect.map((source) => {
-            const owner = decodeOwner(source);
-            return Option.isSome(owner) && owner.value.instance === instance
-              ? SocketOwnerEvidence.Owner({ owner: owner.value })
-              : SocketOwnerEvidence.Unproven();
-          }),
-          Effect.catch((error) =>
-            Effect.succeed(
+          Effect.match({
+            onFailure: (error) =>
               error.reason === "missing"
                 ? SocketOwnerEvidence.Unowned()
                 : SocketOwnerEvidence.Unproven(),
-            ),
-          ),
+            onSuccess: (source) => {
+              const owner = decodeOwner(source);
+              return Option.isSome(owner) && owner.value.instance === instance
+                ? SocketOwnerEvidence.Owner({ owner: owner.value })
+                : SocketOwnerEvidence.Unproven();
+            },
+          }),
         );
 
       /**

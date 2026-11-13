@@ -23,10 +23,11 @@ import {
   previewIssuesSlot,
   type ExpandedField,
 } from "pi-code-previews";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { formatBytes } from "pi-cosmic-core/display";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { clipToWidth, wrapFacts } from "pi-cosmic-ui/manager";
+import { clipToWidth, joinInline, wrapFacts } from "pi-cosmic-ui/manager";
 import {
   composeToolComponent,
   renderToolHeader,
@@ -42,7 +43,7 @@ import {
 import { imageResultText } from "./result-text.ts";
 import type { CodexImageDetails, ToolParams } from "./types.ts";
 
-export const IMAGE_TITLE = "OpenAI image";
+const IMAGE_TITLE = "OpenAI image";
 
 export interface ImageView {
   readonly record: CodexImageDetails | undefined;
@@ -51,13 +52,13 @@ export interface ImageView {
   readonly cwd: string;
 }
 
-export interface ImageBodyOptions {
+interface ImageBodyOptions {
   readonly expanded: boolean;
   readonly isError: boolean;
   readonly nested: boolean;
 }
 
-export interface ImageResultContext {
+interface ImageResultContext {
   readonly cwd: string;
   readonly isError: boolean;
 }
@@ -67,10 +68,8 @@ export const base64ByteLength = (data: string): number => {
   return Math.max(0, Math.floor((data.length * 3) / 4) - padding);
 };
 
-export const imageViewOf = <Details>(result: AgentToolResult<Details>, cwd: string): ImageView => {
-  const image = Option.getOrUndefined(
-    Arr.findFirst(result.content, (part) => part.type === "image"),
-  );
+const imageViewOf = <Details>(result: AgentToolResult<Details>, cwd: string): ImageView => {
+  const image = findOrUndefined(result.content, (part) => part.type === "image");
   return {
     record: imageRecord(result.details),
     text: getTextContent(result.content),
@@ -89,7 +88,7 @@ const OPTION_LABELS: ReadonlyMap<string, string> = new Map([
   ["saveDir", "Save directory"],
 ]);
 
-export interface ImageRequestOptions {
+interface ImageRequestOptions {
   readonly prompt: boolean;
   readonly action: boolean;
   /** The session directory input and save paths read against. */
@@ -188,16 +187,10 @@ const imageModels = (record: CodexImageDetails, expanded: boolean): string =>
     : (record.imageModel ?? "");
 
 const imageFormat = (record: CodexImageDetails, view: ImageView): string =>
-  Arr.join(
-    Arr.filter(
-      [
-        Str.toUpperCase(record.outputFormat),
-        view.imageBytes === undefined ? undefined : formatBytes(view.imageBytes),
-      ],
-      (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
-    ),
-    " · ",
-  );
+  joinInline([
+    Str.toUpperCase(record.outputFormat),
+    view.imageBytes === undefined ? undefined : formatBytes(view.imageBytes),
+  ]);
 
 const savedPath = (record: CodexImageDetails, view: ImageView): string =>
   record.savedPath ? compactPlainText(formatDisplayPath(record.savedPath, view.cwd)) : "";
@@ -216,16 +209,13 @@ const fittedSavedPath = (saved: string, room: number): string => {
 
 /** A collapsed preview's facts: one muted summary line and where the image was saved. */
 const collapsedFacts = (record: CodexImageDetails, view: ImageView, theme: Theme): Component[] => {
-  const summary = Arr.filter(
-    [imageFormat(record, view), imageModels(record, false)],
-    Str.isNonEmpty,
-  );
+  const summary = joinInline([imageFormat(record, view), imageModels(record, false)]);
   const saved = sanitizeTerminalLine(savedPath(record, view));
   return [
     // Facts wrap between whole facts, so no row ends with a separator.
     composeToolComponent((width) =>
       Number.isFinite(width) && width >= 1
-        ? Arr.map(wrapFacts(sanitizeTerminalLine(Arr.join(summary, " · ")), width), (line) =>
+        ? Arr.map(wrapFacts(sanitizeTerminalLine(summary), width), (line) =>
             theme.fg("muted", line),
           )
         : [],

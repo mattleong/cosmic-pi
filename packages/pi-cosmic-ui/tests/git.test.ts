@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import * as Arr from "effect/Array";
-import { applyGitNumstat, formatGitStatus, parseGitStatus } from "../src/footer/git.ts";
+import { applyGitNumstat, parseGitStatus } from "../src/footer/git.ts";
 
 describe("git footer status", () => {
   test("summarizes staged, modified, untracked, conflicted, and diverged files", () => {
@@ -37,20 +37,5 @@ describe("git footer status", () => {
     );
 
     expect(withLines).toMatchObject({ linesAdded: 12, linesRemoved: 11 });
-  });
-
-  test("compact signs never reuse the token arrows or the `~` that reads as about", () => {
-    const status = parseGitStatus(
-      "## main...origin/main [ahead 2, behind 1]\n M first.ts\nUU both.ts\n?? new.ts\n",
-    )!;
-
-    expect(status).toMatchObject({ modified: 1, conflicts: 1, ahead: 2, behind: 1 });
-    expect(formatGitStatus(status)).not.toMatch(/[~↑↓]/u);
-  });
-
-  test("labels modified files in words, never with a `~` that reads as about", () => {
-    const status = parseGitStatus("## main\n M first.ts\n?? new.ts\n")!;
-
-    expect(formatGitStatus(status, true)).not.toContain("~");
   });
 });

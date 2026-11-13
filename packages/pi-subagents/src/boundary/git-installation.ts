@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Match from "effect/Match";
+import * as Predicate from "effect/Predicate";
 import { hasControlCharacter } from "pi-cosmic-core/security";
 import { runBoundedProcessNode } from "pi-cosmic-core/platform/process";
 import {
@@ -95,7 +96,11 @@ const probeGitInstallation = Effect.fn("GitInstallation.probeGitInstallation")(f
   if (!match) return { kind: "unversioned", executable };
   return {
     kind: "found",
-    installation: { executable, version: Arr.join(Arr.filter(match.slice(1), Boolean), ".") },
+    // The patch group is absent from a two-part version.
+    installation: {
+      executable,
+      version: Arr.join(Arr.filter(match.slice(1), Predicate.isString), "."),
+    },
   };
 });
 

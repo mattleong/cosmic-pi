@@ -25,7 +25,7 @@ export interface OpenAISessionInput {
   readonly publicationOwner: MutableRef.MutableRef<boolean>;
 }
 
-export interface OpenAIApplicationLayerOptions {
+interface OpenAIApplicationLayerOptions {
   readonly projection: MutableRef.MutableRef<OpenAIProjection>;
   readonly configProjection: MutableRef.MutableRef<ResolvedConfig | undefined>;
   readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;

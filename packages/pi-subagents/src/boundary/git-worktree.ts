@@ -10,8 +10,15 @@ import {
 } from "pi-cosmic-core/platform/cross-process-lock";
 import { type SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
+import { isStrictlyInsidePath } from "pi-cosmic-core/platform/paths";
+import { hasControlCharacter } from "pi-cosmic-core/security";
 import type { WorktreeHook } from "../config/schema.ts";
-import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
+import {
+  OPEN_WORKSPACE_STATUSES,
+  reopenedWorkspaceRecord,
+  unpreparedWorkspaceRecord,
+  WorkspaceError,
+} from "../workspace/model.ts";
 import { canonicalizeWriterDirectory } from "./writer-lease.ts";
 import { runWorktreeHook } from "./worktree-hook.ts";
 import { homeDisplayPath } from "../ui/display-path.ts";
@@ -45,7 +52,6 @@ import {
 } from "./git-worktree-process.ts";
 import { supportedGitInstallation } from "./git-installation.ts";
 import {
-  headCommit,
   inspectSource,
   refuseHiddenLocalEdits,
   type SourceCheckout,
@@ -88,14 +94,11 @@ import {
   newWorkspaceId,
   readRevisionDiff,
   readWorkspaceRecord,
-  reopenedWorkspaceRecord,
   saveWorkspaceRecord,
   syncWorkspaceDirectory,
   validWorkspaceId,
   workspaceDirectory,
   ownerLockNamespace,
-  sourceLockNamespace,
-  withFreeLock,
   withWorkspaceStoreLock,
   workspaceLockDirectory,
 } from "./git-worktree-store.ts";
@@ -110,8 +113,6 @@ import {
   touchedParentDrift,
   writeChanges,
 } from "./git-worktree-integration.ts";
-
-const subdirectory = workspaceSubdirectory;
 
 // A checkout leaves a submodule's own repository alone, so freeze refuses submodules that change.
 const isSubmodule = (mode: string) => mode === "160000";
@@ -137,16 +138,6 @@ const settled = (target: WorkspaceSettledTarget) =>
   target.processCleanupConfirmed
     ? Effect.void
     : Effect.fail(workspaceFailure("cleanup", "Process cleanup must be independently confirmed."));
-
-// Failed WorktreeCreate hooks in a prepared tree leave the reviewed revision frozen, with nothing to integrate.
-const withoutPreparation = ({
-  preparation: _preparation,
-  parentTree: _parentTree,
-  preparedTree: _preparedTree,
-  sourceHead: _sourceHead,
-  sourceIndex: _sourceIndex,
-  ...record
-}: WorkspaceRecord): WorkspaceRecord => ({ ...record, status: "frozen" });
 
 /** Serializes this process's workspace operations; WorktreeCreate hooks release it while they run. */
 type WorkspaceOperationGate = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
@@ -224,11 +215,10 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     workspaceId: string,
   ) {
     const record = yield* readWorkspaceRecord(registry, workspaceId);
-    const relative = subdirectory(record);
+    const relative = workspaceSubdirectory(record);
     if (
-      relative === ".." ||
-      Fn.pipe(relative, Str.startsWith(`..${path.sep}`)) ||
-      path.isAbsolute(relative) ||
+      (relative !== "" &&
+        !isStrictlyInsidePath(record.handle.sourceRoot, record.handle.sourceCwd)) ||
       record.handle.artifactRoot !== directory(record) ||
       record.handle.cwd !== path.join(worker(record), relative)
     )
@@ -274,10 +264,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     input: CreateWorkspaceInput,
     source: SourceCheckout,
   ) {
-    if (
-      registry === source.sourceRoot ||
-      Fn.pipe(registry, Str.startsWith(`${source.sourceRoot}${path.sep}`))
-    )
+    if (withinTree(source.sourceRoot, registry))
       return yield* workspaceFailure(
         "create",
         "Private workspaces must be outside the source checkout.",
@@ -318,9 +305,8 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     return yield* Effect.gen(function* () {
       const { sourceRoot, repository } = source;
       const identity = yield* sourceIdentity(sourceRoot);
-      const head = yield* headCommit(sourceRoot);
       const captured = yield* captureSource(record);
-      const baseline = yield* commitTree(repository, captured.tree, [head], "baseline");
+      const baseline = yield* commitTree(repository, captured.tree, [identity.commit], "baseline");
       if (
         source.subdirectory !== "" &&
         !(yield* treeHolds(repository, baseline, source.subdirectory))
@@ -400,7 +386,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
 
   const create = Effect.fn("GitWorkspaceEngine.create")(function* (input: CreateWorkspaceInput) {
     yield* supportedGitInstallation;
-    if (/\p{Cc}/u.test(registry))
+    if (hasControlCharacter(registry))
       return yield* workspaceRefusal("create", "The agent directory path can't hold workspaces.", {
         path: registry,
         rule: "workspace paths must not contain control characters such as newlines",
@@ -519,9 +505,8 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
         "Worker changed after review; freeze a new revision.",
       );
     const identity = yield* sourceIdentity(sourceRoot);
-    const head = yield* headCommit(sourceRoot);
     const parent = yield* captureSource(record);
-    const parentCommit = yield* commitTree(repository, parent.tree, [head], "parent");
+    const parentCommit = yield* commitTree(repository, parent.tree, [identity.commit], "parent");
     const parentEntries = yield* treeEntries(repository, parentCommit);
     if (Arr.some(selected, (name) => isSubmodule(parentEntries.get(name)?.mode ?? "")))
       return yield* workspaceFailure(
@@ -544,7 +529,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
       const result = {
         preparationId,
         revisionId: target.revisionId,
-        cwd: path.join(preparedRoot, subdirectory(record)),
+        cwd: path.join(preparedRoot, workspaceSubdirectory(record)),
       };
       yield* checkDirectory(result.cwd);
       yield* saveWorkspaceRecord(
@@ -663,7 +648,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     yield* saveWorkspaceRecord(registry, next);
     return next.handle;
   }, locked);
-  const discardInternal = Effect.fn("GitWorkspaceEngine.discardInternal")(function* (
+  const discard = Effect.fn("GitWorkspaceEngine.discard")(function* (
     target: WorkspaceSettledTarget,
   ) {
     yield* settled(target);
@@ -674,8 +659,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     yield* saveWorkspaceRecord(registry, { ...record, status: "discarded" });
     owned.delete(target.workspaceId);
     return undefined;
-  });
-  const discard = (target: WorkspaceSettledTarget) => locked(discardInternal(target), target);
+  }, locked);
   const { discardOrphan, adopt, endedOwners, sweepCandidates, sweepOrphan } =
     orphanWorkspaceOperations({
       registry,
@@ -686,7 +670,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
       managedRecord,
       workerTree: (record) => captureWorker(record).pipe(Effect.map(({ tree }) => tree)),
       freezeAnew: (record) =>
-        freezeRecord({ ...withoutPreparation(record), status: "active" }).pipe(
+        freezeRecord({ ...unpreparedWorkspaceRecord(record), status: "active" }).pipe(
           Effect.map((frozen) => frozen.record),
         ),
       beforeRemove,
@@ -701,15 +685,11 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     return yield* collectWorkspaceRecords(registry, {
       now,
       owned: (workspaceId) => owned.has(workspaceId),
-      whenSourceFree: (sourceRoot, effect) =>
-        withFreeLock(locks, lockDirectory, sourceLockNamespace(sourceRoot), effect),
-      whenOwnerEnded: (ownerLease, effect) =>
-        withFreeLock(locks, lockDirectory, ownerLockNamespace(ownerLease), effect),
+      locks,
+      lockDirectory,
       beforeRemove,
     });
   });
-  const hookTree = (record: WorkspaceRecord, preparation: string | undefined) =>
-    preparation === undefined ? worker(record) : prepared(record, preparation);
   // The tree a WorktreeCreate run targets, checked under the locks before any hook starts.
   const createHookTree = Effect.fn("GitWorkspaceEngine.createHookTree")(function* (
     target: WorkspaceHookTarget,
@@ -722,7 +702,10 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
         : record.status !== "prepared" || record.preparation?.preparationId !== preparation
     )
       return yield* workspaceFailure("hook", "The hook's tree is stale or unavailable.");
-    return { root: hookTree(record, preparation), sourceCwd: record.handle.sourceCwd };
+    return {
+      root: preparation === undefined ? worker(record) : prepared(record, preparation),
+      sourceCwd: record.handle.sourceCwd,
+    };
   }, locked);
   // Withdraws a preparation whose WorktreeCreate hooks failed or were interrupted, so its
   // untested tree can never be integrated.
@@ -733,7 +716,8 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     const record = yield* checked(target);
     if (record.status !== "prepared" || record.preparation?.preparationId !== preparationId)
       return undefined;
-    const frozen = withoutPreparation(record);
+    // Failed hooks leave the reviewed revision frozen, with nothing to integrate.
+    const frozen = unpreparedWorkspaceRecord(record);
     yield* saveWorkspaceRecord(registry, frozen);
     yield* removePreparation(frozen, preparationId);
     return undefined;
@@ -861,7 +845,7 @@ export const gitWorkspaceEngine = Effect.fn("GitWorkspaceEngine.make")(function*
     ),
   );
   const list = (input: { readonly ownerId: string }) =>
-    listWorkspaceRecords(registry).pipe(
+    listRecords.pipe(
       Effect.map(({ records }) =>
         Arr.filter(records, (record) => record.handle.ownerId === input.ownerId),
       ),

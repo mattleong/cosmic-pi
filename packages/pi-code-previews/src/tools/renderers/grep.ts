@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 
 import { Text } from "@earendil-works/pi-tui";
@@ -17,12 +18,7 @@ import { shouldSkipHighlight } from "../../syntax/render";
 import { numericArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { renderCodePreviewToolTitle } from "../presentation";
-import {
-  collapsedNotesHint,
-  splitListingNotice,
-  withAgentNotes,
-  withCollapsedLimit,
-} from "./shared/output-notice";
+import { collapsedLimit, splitListingNotice, withAgentNotes } from "./shared/output-notice";
 import { cachedDeferredPreview } from "./shared/cache";
 import { previewCacheKey } from "./shared/preview-cache-key";
 import { renderSelectedOutputLines } from "./shared/preview-text";
@@ -73,33 +69,28 @@ export function grepPreviewRenderers(cwd: string): PreviewRenderers {
         ? { singular: "line" }
         : { singular: "match", plural: "matches" };
       const { args, invalidate } = renderContext;
-      const notesHint = expanded
-        ? undefined
-        : collapsedNotesHint(renderContext, theme, "grep", {
+      const input = hostObject(args);
+      // Built before the deferred render, while the shell can still take the row's tag.
+      const withLimit = expanded
+        ? Fn.identity
+        : collapsedLimit(renderContext, theme, "grep", {
             details: hostObject(result.details),
-            args: hostObject(args),
+            args: input,
             notice,
             offered: selectPreviewLines(rawLines, limit).hidden > 0,
           });
       const render = (active: boolean) => {
-        let text = renderSelectedOutputLines(rawLines, limit, theme, hidden, (chunk) =>
-          renderGrepOutputLines(
-            Arr.join(chunk, "\n"),
-            theme,
-            hostObject(args),
-            invalidate,
-            active && !skipHighlight,
+        let text = withLimit(
+          renderSelectedOutputLines(rawLines, limit, theme, hidden, (chunk) =>
+            renderGrepOutputLines(
+              Arr.join(chunk, "\n"),
+              theme,
+              input,
+              invalidate,
+              active && !skipHighlight,
+            ),
           ),
         );
-        if (!expanded)
-          text = withCollapsedLimit(
-            text,
-            theme,
-            "grep",
-            hostObject(result.details),
-            hostObject(args),
-            notesHint,
-          );
         if (skipHighlight)
           text += previewFooter(theme, "Syntax highlighting skipped for large grep output");
         return new Text(text, 0, 0);

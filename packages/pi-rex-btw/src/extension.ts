@@ -36,31 +36,30 @@ const notify = (ctx: ExtensionContext, message: string, level: HostNotificationL
   if (invokeHostCallback(() => ctx.hasUI, false)) notifyAtHostBoundary(ctx, message, level);
 };
 
-/** Reads what the child inherits at the moment /btw runs, since model and session can change. */
+/**
+ * Reads what the child inherits at the moment /btw runs, since model and session can change.
+ * Undefined when this conversation has no saved session file a child could read.
+ */
 const captureRequest = (
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
   prompt: string | undefined,
-): BtwRequest =>
-  invokeHostCallback<BtwRequest>(
-    () => {
-      const model = ctx.model;
-      const sessionFile = ctx.sessionManager.getSessionFile();
-      const parent = parseParentReference(ctx.sessionManager.getSessionId(), sessionFile);
-      return {
-        prompt,
-        model: model === undefined ? undefined : { provider: model.provider, id: model.id },
-        thinkingLevel: pi.getThinkingLevel(),
-        parent: parent !== undefined && isRegularFile(parent.path) ? parent : undefined,
-      };
-    },
-    {
-      prompt,
-      model: undefined,
-      thinkingLevel: undefined,
-      parent: undefined,
-    },
-  );
+): BtwRequest | undefined =>
+  invokeHostCallback<BtwRequest | undefined>(() => {
+    const model = ctx.model;
+    const parent = parseParentReference(
+      ctx.sessionManager.getSessionId(),
+      ctx.sessionManager.getSessionFile(),
+    );
+    return parent !== undefined && isRegularFile(parent.path)
+      ? {
+          prompt,
+          model: model === undefined ? undefined : { provider: model.provider, id: model.id },
+          thinkingLevel: pi.getThinkingLevel(),
+          parent,
+        }
+      : undefined;
+  }, undefined);
 
 /**
  * Why a BTW pane couldn't read this conversation: Pi writes a session's file with its first
@@ -90,28 +89,17 @@ export default function rexBtw(pi: ExtensionAPI): void {
   });
 
   /** Opens a side pane, asking `args` there when given; `/btw help` never reaches it. */
-  const open = (args: string, ctx: ExtensionCommandContext): Promise<void> => {
-    if (invokeHostCallback(() => ctx.mode, undefined) !== "tui") {
-      notify(ctx, "Open Pi in an interactive terminal to use /btw", "warning");
-      return Promise.resolve();
-    }
-    if (!slot.isActive()) {
-      notify(ctx, REX_UNAVAILABLE_MESSAGE, "error");
-      return Promise.resolve();
-    }
+  const open = (args: string, ctx: ExtensionCommandContext): Promise<void> | void => {
+    if (invokeHostCallback(() => ctx.mode, undefined) !== "tui")
+      return notify(ctx, "Open Pi in an interactive terminal to use /btw", "warning");
+    if (!slot.isActive()) return notify(ctx, REX_UNAVAILABLE_MESSAGE, "error");
     const trimmed = Str.trim(args);
     const prompt = trimmed === "" ? undefined : trimmed;
     const problem = prompt === undefined ? undefined : promptProblem(prompt);
-    if (problem !== undefined) {
-      notify(ctx, problem, "error");
-      return Promise.resolve();
-    }
+    if (problem !== undefined) return notify(ctx, problem, "error");
     const request = captureRequest(pi, ctx, prompt);
     // A pane that can't read this conversation can't answer about it, so none opens.
-    if (request.parent === undefined) {
-      notify(ctx, unreadableParentMessage(ctx), "warning");
-      return Promise.resolve();
-    }
+    if (request === undefined) return notify(ctx, unreadableParentMessage(ctx), "warning");
     const isCurrent = slot.captureAuthority();
     return slot.run(RexBtw.use((btw) => btw.open(request))).then(
       () => undefined,

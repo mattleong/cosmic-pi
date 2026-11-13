@@ -82,13 +82,6 @@ const clientFailure = Match.type<RpcClientError.RpcClientError["reason"]>().pipe
   Match.orElse(() => "protocol"),
 );
 
-const transportFailure = (error: RpcClientError.RpcClientError | IntercomUnauthorized) =>
-  failWith(
-    Predicate.isTagged(error, "IntercomUnauthorized")
-      ? "unauthorized"
-      : clientFailure(error.reason),
-  );
-
 /**
  * Opens the handshake and requires the listener to prove it holds the record's token before
  * anything else is sent; only then does the client prove its own. The token itself never crosses
@@ -153,8 +146,8 @@ const call = <A>(
     }).pipe(
       Effect.scoped,
       Effect.catchTags({
-        RpcClientError: (error) => Effect.fail(transportFailure(error)),
-        IntercomUnauthorized: (error) => Effect.fail(transportFailure(error)),
+        RpcClientError: ({ reason }) => reason.pipe(clientFailure, failWith, Effect.fail),
+        IntercomUnauthorized: () => Effect.fail(failWith("unauthorized")),
       }),
       // A peer that answers with frames the client can't decode surfaces as a defect.
       Effect.catchDefect(() => Effect.fail(failWith("protocol"))),

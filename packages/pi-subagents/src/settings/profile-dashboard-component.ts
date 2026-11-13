@@ -1,5 +1,3 @@
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type Component, type Focusable } from "@earendil-works/pi-tui";
@@ -26,6 +24,7 @@ import {
 } from "./ui/profile-dashboard-render.ts";
 import { profileSetPickerEntries } from "./ui/profile-set-picker-model.ts";
 import { withoutNavigationKeys } from "./ui/profile-workspace-keys.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 type Pane = ProfileWorkspaceComponent | ProfileSetPickerComponent;
 
@@ -111,14 +110,12 @@ export class ProfileDashboardComponent implements Component, Focusable {
     const entries = profileSetPickerEntries(this.inspection, isProjectTrusted(this.options.ctx));
     for (const [key, { target }] of this.editors) {
       if (target.kind === "session" || key === this.renaming) continue;
-      const entry = Option.getOrUndefined(
-        Arr.findFirst(
-          entries,
-          (candidate) =>
-            candidate.kind === "set" &&
-            candidate.scope === target.set.scope &&
-            candidate.ref.name === target.set.name,
-        ),
+      const entry = findOrUndefined(
+        entries,
+        (candidate) =>
+          candidate.kind === "set" &&
+          candidate.scope === target.set.scope &&
+          candidate.ref.name === target.set.name,
       );
       if (entry?.kind === "set" && (!entry.invalid || entry.repairable)) continue;
       this.visit.deleteTarget(target);

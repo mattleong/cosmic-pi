@@ -1,18 +1,17 @@
-import { tmpdir } from "node:os";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import { deferredPromise, recordingExtensionHost } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  recordingExtensionHost,
+  temporaryDirectory,
+} from "pi-cosmic-core/testing";
 import { fakeCustomSurfaceHost } from "pi-cosmic-ui/testing";
 import {
-  COSMIC_UI_FOOTER_REMOVE,
-  COSMIC_UI_FOOTER_UPSERT,
   COSMIC_UI_HOST_QUERY,
-  normalizeCosmicFooterRemoveEvent,
-  normalizeCosmicFooterUpsertEvent,
   normalizeCosmicUiHostQuery,
   type CosmicUiHostState,
 } from "pi-cosmic-ui/protocol";
@@ -28,16 +27,10 @@ import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-
-const STATUS_KEY = "pi-subagents.session";
+import * as Fn from "effect/Function";
 
 const agentDirectoryWithProfileSet = function* (name: string, delegation?: DelegationMode) {
-  const directory = yield* step(() =>
-    nodeFsPromises.mkdtemp(nodePath.join(tmpdir(), "pi-subagents-delegation-")),
-  );
-  yield* Effect.addFinalizer(() =>
-    Effect.promise(() => nodeFsPromises.rm(directory, { recursive: true, force: true })),
-  );
+  const directory = yield* temporaryDirectory("pi-subagents-delegation-");
   yield* step(() =>
     nodeFsPromises.writeFile(
       nodePath.join(directory, "pi-subagents.json"),
@@ -59,26 +52,13 @@ const setup = function* (
 ) {
   const agentDirectory = yield* agentDirectoryWithProfileSet("review", delegation);
   const events = createEventBus();
-  const upserts: string[] = [];
-  let ownerRemoved = false;
-  if (cosmicUi) {
+  if (cosmicUi)
     events.on(COSMIC_UI_HOST_QUERY, (data) => normalizeCosmicUiHostQuery(data)?.respond(cosmicUi));
-    events.on(COSMIC_UI_FOOTER_UPSERT, (data) => {
-      const event = normalizeCosmicFooterUpsertEvent(data);
-      if (event?.owner === STATUS_KEY && event.contribution.kind === "text")
-        upserts.push(event.contribution.text);
-    });
-    events.on(COSMIC_UI_FOOTER_REMOVE, (data) => {
-      const event = normalizeCosmicFooterRemoveEvent(data);
-      if (event?.owner === STATUS_KEY && event.id === undefined) ownerRemoved = true;
-    });
-  }
   const host = recordingExtensionHost({}, { events });
   registerSubagentApplication(host.pi, {
     getAgentDirectory: () => agentDirectory,
     loadSettings: () => Promise.resolve(),
   });
-  const setStatus = vi.fn<(key: string, text: string | undefined) => void>();
   const notify = vi.fn();
   const surface = fakeCustomSurfaceHost();
   let nextMount = deferredPromise();
@@ -90,7 +70,6 @@ const setup = function* (
       ...(projectTrusted && { cwd: agentDirectory }),
       isProjectTrusted: () => projectTrusted,
       ui: {
-        setStatus,
         notify,
         custom: (factory, options) => {
           const opened = surface.custom(factory, options);
@@ -122,8 +101,6 @@ const setup = function* (
       registeredGuidelines: startGuidelines,
     };
   };
-  const status = () =>
-    Option.getOrUndefined(Arr.findLast(setStatus.mock.calls, ([key]) => key === STATUS_KEY))?.[1];
   return {
     host,
     ctx,
@@ -143,9 +120,6 @@ const setup = function* (
       ),
     settings,
     prompt,
-    status,
-    upserts,
-    ownerRemoved: () => ownerRemoved,
   };
 };
 
@@ -247,7 +221,7 @@ describe("delegation mode", () => {
         Option.getOrElse(Arr.findFirst(lines(), matches), () => "");
       // The Delegation row, not the group description that also starts with the word.
       const delegationRow = () => find((entry) => /^\s*›?\s*Delegation\s{2}/u.test(entry));
-      const marked = () => find((entry) => Str.includes("(•)")(entry));
+      const marked = () => find((entry) => Fn.pipe(entry, Str.includes("(•)")));
       const cursor = () => find((entry) => /^\s*›/u.test(entry));
       const picker = yield* openGlobalDelegation(fixture);
       // Its list leads with `inherit (normal)`, then normal, encouraged, and orchestration.

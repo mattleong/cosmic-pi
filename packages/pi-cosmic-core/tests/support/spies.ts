@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import { vi } from "vitest";
 
-const scopedSpy = <Spy extends { readonly mockRestore: () => void }>(make: () => Spy) =>
+export const scopedSpy = <Spy extends { readonly mockRestore: () => void }>(make: () => Spy) =>
   Effect.acquireRelease(Effect.sync(make), (spy) => Effect.sync(() => spy.mockRestore()));
 
 export const silencedConsole = Effect.gen(function* () {

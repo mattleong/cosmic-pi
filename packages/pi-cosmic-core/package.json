@@ -70,6 +70,7 @@
     "./host-environment": "./src/host-environment.ts",
     "./text": "./src/text.ts",
     "./text-scan": "./src/text-scan.ts",
+    "./array": "./src/array.ts",
     "./display": "./src/display.ts",
     "./message-text": "./src/message-text.ts",
     "./projection": "./src/projection.ts",

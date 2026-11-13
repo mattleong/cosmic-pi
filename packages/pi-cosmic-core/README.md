@@ -82,7 +82,7 @@ no generated build.
 | Entrypoint suffix                                                                                                                     | Use                                                                     |
 | ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | `host-environment`                                                                                                                    | Dependency-free `isSubagentChildProcess` admission guard                |
-| `text`, `text-scan`, `display`, `message-text`                                                                                        | Text scans, bounded text, formatting, and message summaries             |
+| `text`, `text-scan`, `array`, `display`, `message-text`                                                                               | Text scans, bounded text, `findOrUndefined`, formatting, message text   |
 | `security`, `security/sha256`                                                                                                         | Redaction, terminal safety, and hashing                                 |
 | `schema/decode`, `schema/foreign-callable`, `schema/tool-output`                                                                      | Unknown input, foreign callbacks, and tool output schemas               |
 | `host-session`, `host-command`, `host-wake`, `host-transcript`, `host-agent-messages`, `host-message-origin`                          | Host callbacks, commands, delivery, message origins, and transcripts    |

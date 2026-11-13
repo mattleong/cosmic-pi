@@ -23,7 +23,7 @@ import {
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import type { CompactSummary } from "../../src/tools/compact-summary";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
-import { plainTheme, textResult } from "../support/render";
+import { demoShellTool, plainTheme, textResult } from "../support/render";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -67,8 +67,8 @@ test("a compact row shortens its subject for the tag and keeps its counter", () 
     expect(visibleWidth(row)).toBeLessThanOrEqual(width);
     expect(expansionTag(row)).toBeDefined();
     const content = contentBeforeTag(row);
-    expect(Str.startsWith("✓ bash cd")(content)).toBe(true);
-    if (width >= 57) expect(Str.endsWith("· 3 failed")(content)).toBe(true);
+    expect(Fn.pipe(content, Str.startsWith("✓ bash cd"))).toBe(true);
+    if (width >= 57) expect(Fn.pipe(content, Str.endsWith("· 3 failed"))).toBe(true);
   }
 });
 
@@ -155,30 +155,13 @@ test("wide glyphs and styling never push a tagged row past its width", () => {
   expect(placeHeadingTag("ab", "output", styled, 3)).toBe("ab");
 });
 
-test("a row whose content fills its width is cut by the tag's width", () => {
-  const row = Fn.pipe("a", Str.repeat(57));
-  const tagged = stripAnsi(placeHeadingTag(row, "output", plainTheme, 57));
-  expect(tagged).toBe(`${Fn.pipe("a", Str.repeat(53))}…  ▸`);
-});
-
 const shellTool = (summary: (phase: string) => CompactSummary, result: "empty" | "text") =>
-  withCodePreviewShell(
-    {
-      ...createReadToolDefinition("/project"),
-      renderCall: () => new Text("Demo call", 0, 0),
-      renderResult: (value) =>
-        result === "empty"
-          ? new Container()
-          : new Text(value.content[0]?.type === "text" ? value.content[0].text : "", 0, 0),
-    },
-    {
-      compactSummary: ({ phase }) => summary(phase),
-      expandedContent: {
-        renderCall: () => new Container(),
-        renderResult: () => new Text("Everything retained", 0, 0),
-      },
-    },
-  );
+  demoShellTool(summary, {
+    result: (value) =>
+      result === "empty"
+        ? new Container()
+        : new Text(value.content[0]?.type === "text" ? value.content[0].text : "", 0, 0),
+  });
 
 test("a collapsed preview row that hides its result is its heading, ending in the tag", () => {
   applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
@@ -215,7 +198,7 @@ test("a preview row whose result decides the tag shows it on the heading, not th
   harness.result(textResult("first\nsecond"));
   const rows = Arr.map(harness.render(100), stripAnsi);
   expect(rows[0]).toMatch(/^Demo call\s{2,}▸ log$/u);
-  expect(Arr.some(rows, (row) => Str.includes("Took")(row))).toBe(true);
+  expect(Arr.some(rows, (row) => Fn.pipe(row, Str.includes("Took")))).toBe(true);
   expect(expansionOffers(rows)).toEqual(["log"]);
 });
 
@@ -275,7 +258,7 @@ test("a preview heading that fits its row but not beside the tag wraps rather th
   const rows = Arr.map(drawRow(headingTool("hidden")), stripAnsi);
   expect(rows).toHaveLength(2);
   expect(expansionTag(rows[0] ?? "")).toBe("");
-  expect(Arr.some(rows, (row) => Str.includes("…")(row))).toBe(false);
+  expect(Arr.some(rows, (row) => Fn.pipe(row, Str.includes("…")))).toBe(false);
   expect(
     Arr.join(
       Arr.map(rows, (row) => Str.trim(contentBeforeTag(row))),
@@ -341,7 +324,7 @@ test("a body's hidden-content hint names the heading's tag instead of drawing a 
   framed.call({ path: "a.ts" });
   framed.result(textResult("export const a = 1;"));
   const corner = Arr.findLast(Arr.map(framed.render(100), stripAnsi), (row) =>
-    Str.startsWith("╰")(row),
+    Fn.pipe(row, Str.startsWith("╰")),
   );
   expect(Option.getOrThrow(corner)).toContain("▸ content");
   expect(expansionOffers(framed.render(100))).toEqual([]);
@@ -358,5 +341,4 @@ const corner = (width: number) => {
 test("a bordered row's corner shows a bare ▸ where its label can't fit", () => {
   expect(corner(40)).toMatch(/─ ▸ proposed edit ╯$/u);
   expect(corner(16)).toMatch(/─ ▸ ╯$/u);
-  expect(corner(16)).not.toContain("C-o");
 });

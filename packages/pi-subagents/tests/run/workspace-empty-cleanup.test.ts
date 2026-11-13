@@ -13,6 +13,7 @@ import {
   yieldTurns,
 } from "./fixtures/service-harness.ts";
 import {
+  failedWriter,
   pauseAt,
   repoWriter,
   stoppedWriter,
@@ -34,6 +35,20 @@ const countInspections = (f: Fixture) => {
     counter.inspected += 1;
   });
   return counter;
+};
+
+/** A fixture that records each notification the service delivers. */
+const notifying = () => {
+  const delivered: SubagentNotification[] = [];
+  const f = workspaceFixture({
+    serviceOptions: {
+      notify: (notification) => {
+        delivered.push(notification);
+        return acknowledgeCompletions(notification);
+      },
+    },
+  });
+  return { delivered, f };
 };
 
 describe("empty worktree proposal cleanup", () => {
@@ -122,10 +137,7 @@ describe("empty worktree proposal cleanup", () => {
     f.hooks.workerChanges = unchanged;
     const counter = countInspections(f);
     return withService(f.layer, function* (service) {
-      const failed = yield* service.start(repoWriter());
-      const control = f.children.controls.at(-1)!;
-      control.exit(1);
-      yield* yieldUntil(() => control.released() === 1);
+      const failed = yield* failedWriter(service, f);
       const stopped = yield* stoppedWriter(service);
       yield* yieldTurns(50);
       expect(counter.inspected).toBe(0);
@@ -166,15 +178,7 @@ describe("empty worktree proposal cleanup", () => {
   });
 
   it.effect("delivers and awaits the report without waiting for the probe", () => {
-    const delivered: SubagentNotification[] = [];
-    const f = workspaceFixture({
-      serviceOptions: {
-        notify: (notification) => {
-          delivered.push(notification);
-          return acknowledgeCompletions(notification);
-        },
-      },
-    });
+    const { delivered, f } = notifying();
     f.hooks.workerChanges = unchanged;
     return withService(f.layer, function* (service) {
       const gate = yield* pauseAt;
@@ -191,15 +195,7 @@ describe("empty worktree proposal cleanup", () => {
   });
 
   it.effect("names the outcome in a completion delivered after it is known", () => {
-    const delivered: SubagentNotification[] = [];
-    const f = workspaceFixture({
-      serviceOptions: {
-        notify: (notification) => {
-          delivered.push(notification);
-          return acknowledgeCompletions(notification);
-        },
-      },
-    });
+    const { delivered, f } = notifying();
     f.hooks.workerChanges = unchanged;
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);

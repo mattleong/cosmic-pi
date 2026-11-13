@@ -1,23 +1,21 @@
 import { beforeEach, expect, test } from "vitest";
-import { createReadToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { stripAnsi } from "pi-cosmic-core";
-import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import {
   applyPresentationSettings,
   createToolPresentationHarness,
   expansionOffers,
 } from "../../testing";
-import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { withCodePreviewMessageShell } from "../../src/preview/message-shell";
 import { authoredTextLines } from "../../src/preview/authored-text";
 import { wrapPreviewHeading } from "../../src/preview/heading-wrap";
 import type { CompactSummary } from "../../src/tools/compact-summary";
-import { textResult } from "../support/render";
+import { customMessage, demoShellTool, drawMessage, textResult } from "../support/render";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -30,51 +28,30 @@ const tool = (
   summary: (phase: string) => CompactSummary,
   options: { readonly result?: "empty" | "clipped" | "text" } = {},
 ) =>
-  withCodePreviewShell(
-    {
-      ...createReadToolDefinition("/project"),
-      renderCall: () => new Text("Demo call", 0, 0),
-      renderResult: (result, _options, theme) => {
-        if (options.result === "empty") return new Container();
-        const clipped = `first\n${renderExpansionAffordance("2 more lines", false, theme)}`;
-        const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-        return new Text(options.result === "clipped" ? clipped : text, 0, 0);
-      },
+  demoShellTool(summary, {
+    result: (result, _options, theme) => {
+      if (options.result === "empty") return new Container();
+      const clipped = `first\n${renderExpansionAffordance("2 more lines", false, theme)}`;
+      const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+      return new Text(options.result === "clipped" ? clipped : text, 0, 0);
     },
-    {
-      compactSummary: ({ phase }) => summary(phase),
-      expandedContent: {
-        renderCall: () => new Container(),
-        renderResult: () => new Text("Everything retained", 0, 0),
-      },
-    },
-  );
+  });
 
-test.each(styles)("a declared expandLabel is offered once in %s style", (style) => {
-  applyPresentationSettings({ toolCallCollapsedStyle: style });
-  const harness = createToolPresentationHarness(
-    tool(() => ({ subject: "check", outcome: "returned", expandLabel: "checks" }), {
-      result: "empty",
-    }),
-  );
-  harness.call({ path: "a.ts" });
-  harness.result(textResult("12 checks passed"));
-  const shown = affordances(Arr.join(harness.render(), "\n"));
-  expect(shown).toHaveLength(1);
-  expect(shown[0]).toContain("checks");
-});
-
-test.each(styles)("expandLabel false offers no expansion in %s style", (style) => {
-  applyPresentationSettings({ toolCallCollapsedStyle: style });
-  const harness = createToolPresentationHarness(
-    tool(() => ({ subject: "check", outcome: "returned", expandLabel: false }), {
-      result: "empty",
-    }),
-  );
-  harness.call({ path: "a.ts" });
-  harness.result(textResult("12 checks passed"));
-  expect(affordances(Arr.join(harness.render(), "\n"))).toHaveLength(0);
-});
+for (const style of styles)
+  test.each([
+    ["checks", ["checks"]],
+    [false, []],
+  ] as const)(`expandLabel %j offers %j in ${style} style`, (expandLabel, offers) => {
+    applyPresentationSettings({ toolCallCollapsedStyle: style });
+    const harness = createToolPresentationHarness(
+      tool(() => ({ subject: "check", outcome: "returned", expandLabel }), { result: "empty" }),
+    );
+    harness.call({ path: "a.ts" });
+    harness.result(textResult("12 checks passed"));
+    const shown = affordances(Arr.join(harness.render(), "\n"));
+    expect(shown).toHaveLength(offers.length);
+    for (const [index, label] of offers.entries()) expect(shown[index]).toContain(label);
+  });
 
 test("an empty partial result keeps a compact call's expansion", () => {
   const harness = createToolPresentationHarness(tool(() => ({ subject: "question" })));
@@ -98,8 +75,8 @@ test.each(styles)(
     const rows = Str.split(stripAnsi(Arr.join(harness.render(), "\n")), "\n");
     expect(affordances(Arr.join(rows, "\n"))).toHaveLength(1);
     if (style === "preview") {
-      const took = Arr.findFirstIndex(rows, (row) => Str.includes("Took")(row));
-      const hint = Arr.findFirstIndex(rows, (row) => Str.startsWith("▸ ")(Str.trim(row)));
+      const took = Arr.findFirstIndex(rows, (row) => Fn.pipe(row, Str.includes("Took")));
+      const hint = Arr.findFirstIndex(rows, (row) => Fn.pipe(Str.trim(row), Str.startsWith("▸ ")));
       expect(Option.getOrThrow(took)).toBeLessThan(Option.getOrThrow(hint));
     }
   },
@@ -120,24 +97,20 @@ test("an expanded preview row whose issues state its state draws no state line",
   harness.result(textResult("received\nnotes ready"), { expanded: true });
   const text = stripAnsi(Arr.join(harness.render(), "\n"));
   expect(text).toContain("Docker isn't running");
-  expect(Str.match(/⚠/gu)(text).pipe(Option.map((found) => found.length))).toEqual(Option.some(1));
+  expect(
+    Fn.pipe(
+      text,
+      Str.match(/⚠/gu),
+      Option.map((found) => found.length),
+    ),
+  ).toEqual(Option.some(1));
 });
 
 const heldTool = (summary: (phase: string) => CompactSummary, body: string) =>
-  withCodePreviewShell(
-    {
-      ...createReadToolDefinition("/project"),
-      renderCall: () => new Text("Demo call", 0, 0),
-      renderResult: () => new Text(body, 0, 0),
-    },
-    {
-      compactSummary: ({ phase }) => summary(phase),
-      expandedContent: {
-        renderCall: () => new Container(),
-        renderResult: () => new Text(body, 0, 0),
-      },
-    },
-  );
+  demoShellTool(summary, {
+    result: () => new Text(body, 0, 0),
+    expandedResult: () => new Text(body, 0, 0),
+  });
 
 test.each([
   ["paused", "Reviewed 3 of 7 files", 1],
@@ -217,12 +190,12 @@ test("a bordered preview row names what expansion reveals in its corner", () => 
   harness.result(textResult("12 checks passed"));
   const corner = Arr.findFirst(
     Str.split(stripAnsi(Arr.join(harness.render(), "\n")), "\n"),
-    (row) => Str.startsWith("╰")(Str.trim(row)),
+    (row) => Fn.pipe(Str.trim(row), Str.startsWith("╰")),
   );
   expect(Option.getOrThrow(corner)).toContain("checks");
 });
 
-const renderNote = (content: string) =>
+const note = (content: string) =>
   withCodePreviewMessageShell((_message, _options, theme) => ({
     name: "note",
     summary: { subject: "notes", outcome: "returned" },
@@ -231,11 +204,7 @@ const renderNote = (content: string) =>
       invalidate: () => undefined,
     }),
     expandLabel: "message",
-  }))(
-    { role: "custom", customType: "note", content, display: true, timestamp: 0 },
-    { ...keybindingHintsFixture, expanded: false, outputPad: 1 },
-    plainTheme,
-  );
+  }));
 
 test.each(styles)("a message's expandLabel is offered once in %s style", (style) => {
   applyPresentationSettings({ toolCallCollapsedStyle: style });
@@ -243,12 +212,17 @@ test.each(styles)("a message's expandLabel is offered once in %s style", (style)
     Arr.map(Arr.range(1, 20), (line) => `Line ${line}`),
     "\n",
   );
-  expect(affordances(Arr.join(renderNote("Short note").render(80), "\n"))).toHaveLength(1);
-  // Clipped words end in their own affordance, so the label isn't added again.
-  expect(affordances(Arr.join(renderNote(long).render(80), "\n"))).toHaveLength(1);
+  for (const content of [
+    "Short note",
+    // Clipped words end in their own affordance, so the label isn't added again.
+    long,
+  ])
+    expect(
+      affordances(Arr.join(drawMessage(note(content), false, customMessage({ content })), "\n")),
+    ).toHaveLength(1);
 });
 
-const withoutSpaces = (text: string) => Str.replace(/\s+/gu, "")(text);
+const withoutSpaces = (text: string) => Fn.pipe(text, Str.replace(/\s+/gu, ""));
 
 test("a wrapped preview heading keeps every character, hangs, and never ends a row with a separator", () => {
   const heading =
@@ -258,10 +232,12 @@ test("a wrapped preview heading keeps every character, hangs, and never ends a r
     expect(rows.length).toBeGreaterThan(1);
     expect(withoutSpaces(Arr.join(rows, ""))).toBe(withoutSpaces(heading));
     Arr.forEach(rows, (row, index) => {
-      expect(Str.endsWith("·")(Str.trimEnd(row))).toBe(false);
+      expect(Fn.pipe(Str.trimEnd(row), Str.endsWith("·"))).toBe(false);
       // Facts stay whole, and continuation rows hang beneath the heading.
-      expect(Str.includes("typescript")(row) || !Str.includes("typ")(row)).toBe(true);
-      if (index > 0) expect(Str.startsWith("  ")(row)).toBe(true);
+      expect(Fn.pipe(row, Str.includes("typescript")) || !Fn.pipe(row, Str.includes("typ"))).toBe(
+        true,
+      );
+      if (index > 0) expect(Fn.pipe(row, Str.startsWith("  "))).toBe(true);
     });
   }
 });
@@ -283,22 +259,15 @@ test.each([
     applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
     const cut = "“Startup is faster because the parser loads…”";
     const harness = createToolPresentationHarness(
-      withCodePreviewShell(
+      demoShellTool(
+        (phase) => ({
+          subject: "Summary",
+          metadata: [cut],
+          ...(phase === "settled" && { outcome: "success" }),
+        }),
         {
-          ...createReadToolDefinition("/project"),
-          renderCall: () => new Text("Demo call", 0, 0),
-          renderResult: () => new Text(`Summary: ${cut}`, 0, 0),
-        },
-        {
-          compactSummary: ({ phase }) => ({
-            subject: "Summary",
-            metadata: [cut],
-            ...(phase === "settled" && { outcome: "success" }),
-          }),
-          expandedContent: {
-            renderCall: () => new Container(),
-            renderResult: () => new Text(`Summary: ${whole}`, 0, 0),
-          },
+          result: () => new Text(`Summary: ${cut}`, 0, 0),
+          expandedResult: () => new Text(`Summary: ${whole}`, 0, 0),
         },
       ),
     );
@@ -306,6 +275,6 @@ test.each([
     harness.result(textResult(whole), { expanded: true });
     // At 57 columns the whole answer wraps across rows, which still state the cut words.
     const rows = Str.split(stripAnsi(Arr.join(harness.render(57), "\n")), "\n");
-    expect(Arr.filter(rows, (row) => Str.includes(cut)(row))).toHaveLength(lines);
+    expect(Arr.filter(rows, (row) => Fn.pipe(row, Str.includes(cut)))).toHaveLength(lines);
   },
 );

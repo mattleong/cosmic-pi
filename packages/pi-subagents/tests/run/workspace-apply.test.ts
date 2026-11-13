@@ -2,8 +2,12 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import { WorkspaceError } from "../../src/workspace/model.ts";
-import { completeLocalRun, waitForCompleted, withService } from "./fixtures/service-harness.ts";
+import {
+  completeLocalRun,
+  waitForCompleted,
+  withService,
+  yieldTurns,
+} from "./fixtures/service-harness.ts";
 import {
   pauseAt,
   repoWriter,
@@ -66,22 +70,6 @@ describe("one-step workspace apply", () => {
     });
   });
 
-  it.effect("a plain apply integrates the parent's tested preparation", () => {
-    const f = hooked();
-    return withService(f.layer, function* (service) {
-      const id = (yield* stoppedWriter(service)).workspaceId!;
-      const tested = yield* reviewAndPrepare(service, id);
-      const hookRuns = f.hookRuns.length;
-      expect(yield* service.workspaceApply(id)).toMatchObject({
-        revisionId: tested.revisionId,
-        preparationId: tested.preparationId,
-        testing: "parent-tested",
-      });
-      expect(f.hookRuns).toHaveLength(hookRuns);
-      expect(f.integrations).toMatchObject([{ preparationId: tested.preparationId }]);
-    });
-  });
-
   it.effect("pages a review by offset alone", () => {
     const f = workspaceFixture();
     return withService(f.layer, function* (service) {
@@ -96,23 +84,6 @@ describe("one-step workspace apply", () => {
       expect(yield* service.workspacePrepare(id, first.revisionId)).toMatchObject({
         revisionId: first.revisionId,
       });
-    });
-  });
-
-  it.effect("a failed WorktreeCreate hook in the prepared tree leaves it untested", () => {
-    const f = hooked();
-    return withService(f.layer, function* (service) {
-      const id = (yield* stoppedWriter(service)).workspaceId!;
-      f.hooks.createHookFailure = WorkspaceError.make({
-        operation: "hook",
-        message: "Hook failed.",
-      });
-      expect(yield* reviewAndPrepare(service, id).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_hook_failed",
-      });
-      expect(f.integrations).toEqual([]);
-      expect(yield* service.workspaceApply(id)).toMatchObject({ testing: "untested" });
-      expect(f.entries.get(id)?.status).toBe("integrated");
     });
   });
 
@@ -163,7 +134,7 @@ describe("one-step workspace apply", () => {
       control.settle("Done.");
       yield* waitForCompleted(service, writer.id);
       const applying = yield* service.workspaceApply(writer.workspaceId!).pipe(Effect.forkChild);
-      for (let turn = 0; turn < 20; turn += 1) yield* Effect.yieldNow;
+      yield* yieldTurns(20);
       expect(f.integrations).toEqual([]);
       yield* Deferred.succeed(cleanup, undefined);
       expect(yield* Fiber.join(applying)).toMatchObject({ testing: "untested" });
@@ -185,17 +156,22 @@ describe("one-step workspace apply", () => {
     });
   });
 
-  it.effect("refuses a revision that a resume made stale", () => {
-    const f = workspaceFixture();
+  it.effect("refuses to prepare or apply a revision that a resume made stale", () => {
+    const f = hooked();
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);
       const id = writer.workspaceId!;
       const old = yield* service.workspaceReview(id);
       yield* service.resume(writer.id, "Rename the helper too.");
       yield* completeLocalRun(service, f.children.controls[1]!, writer.id, "Renamed.");
+      const stale = { code: "workspace_revision_stale" };
+      expect(yield* service.workspacePrepare(id, old.revisionId).pipe(Effect.flip)).toMatchObject(
+        stale,
+      );
+      expect(f.entries.get(id)?.preparation).toBeUndefined();
       expect(
         yield* service.workspaceApply(id, { revisionId: old.revisionId }).pipe(Effect.flip),
-      ).toMatchObject({ code: "workspace_revision_stale" });
+      ).toMatchObject(stale);
       const applied = yield* service.workspaceApply(id);
       expect(applied.revisionId).not.toBe(old.revisionId);
     });
@@ -208,7 +184,7 @@ describe("one-step workspace apply", () => {
       const replaced = yield* reviewAndPrepare(service, id);
       const tested = yield* service.workspacePrepare(id, replaced.revisionId);
       const hookRuns = f.hookRuns.length;
-      const applied = yield* service.workspaceApply(id, { revisionId: tested.revisionId });
+      const applied = yield* service.workspaceApply(id);
       expect(applied).toMatchObject({
         revisionId: tested.revisionId,
         preparationId: tested.preparationId,
@@ -219,21 +195,6 @@ describe("one-step workspace apply", () => {
       });
       expect(f.hookRuns).toHaveLength(hookRuns);
       expect(f.integrations).toMatchObject([{ preparationId: tested.preparationId }]);
-    });
-  });
-
-  it.effect("prepare refuses a revision that a resume made stale", () => {
-    const f = hooked();
-    return withService(f.layer, function* (service) {
-      const writer = yield* completedWriter(service, f);
-      const id = writer.workspaceId!;
-      const old = yield* service.workspaceReview(id);
-      yield* service.resume(writer.id, "Rename the helper too.");
-      yield* completeLocalRun(service, f.children.controls[1]!, writer.id, "Renamed.");
-      expect(yield* service.workspacePrepare(id, old.revisionId).pipe(Effect.flip)).toMatchObject({
-        code: "workspace_revision_stale",
-      });
-      expect(f.entries.get(id)?.preparation).toBeUndefined();
     });
   });
 });

@@ -101,16 +101,7 @@ export function registerQuestionnaireCapability(
           AskUserService.use((service) => service.askOwned(request, owner, reportShown)),
           linked,
         );
-        return running.then(
-          (outcome) => {
-            finish();
-            return outcome;
-          },
-          (cause: unknown) => {
-            finish();
-            throw cause;
-          },
-        );
+        return running.finally(finish);
       } catch {
         abort();
         finish();

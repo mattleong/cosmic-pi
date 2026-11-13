@@ -182,6 +182,8 @@
     {
       "files": ["packages/**", "scripts/**"],
       "rules": {
+        "anti-slop-effect/no-boolean-filter": "error",
+        "anti-slop-effect/no-curried-string-call": "error",
         "anti-slop-effect/no-manual-tag-comparison": "error",
         "anti-slop-effect/no-manual-tagged-construction": "error",
         "anti-slop-effect/no-service-constructor-imports": "error",
@@ -309,8 +311,8 @@
               },
               {
                 "name": "pi-cosmic-core",
-                "importNames": ["stripAnsi"],
-                "message": "stripAnsi removes only CSI sequences, so OSC and other terminal controls survive. Use stripTerminalControls or sanitizeTerminalLine from pi-cosmic-core, or escapeControlChars from pi-code-previews to keep controls visible."
+                "allowTypeImports": true,
+                "message": "The root barrel loads core's HTTP, process, and RPC stacks. Import from the narrow subpath that owns the capability, such as `pi-cosmic-core/platform/private-file`; only `import type` may name the root."
               },
               {
                 "name": "effect",
@@ -418,8 +420,8 @@
               },
               {
                 "name": "pi-cosmic-core",
-                "importNames": ["stripAnsi"],
-                "message": "stripAnsi removes only CSI sequences, so OSC and other terminal controls survive. Use stripTerminalControls or sanitizeTerminalLine from pi-cosmic-core, or escapeControlChars from pi-code-previews to keep controls visible."
+                "allowTypeImports": true,
+                "message": "The root barrel loads core's HTTP, process, and RPC stacks. Import from the narrow subpath that owns the capability, such as `pi-cosmic-core/platform/private-file`; only `import type` may name the root."
               },
               {
                 "name": "effect",

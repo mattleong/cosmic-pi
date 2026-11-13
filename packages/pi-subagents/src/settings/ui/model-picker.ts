@@ -3,6 +3,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   boundedMiddle,
   ModelPickerPage,
+  modelSelector,
   type ModelPickerModel,
 } from "pi-cosmic-ui/manager/model-picker";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
@@ -37,13 +38,13 @@ export function createPiModelOptions(input: {
   readonly parentModel?: ProjectedPiModel | undefined;
 }): ProfileModelOption[] {
   const models = Arr.flatMap(input.models, (model) => {
-    const selector = `${model.provider}/${model.id}`;
+    const selector = modelSelector(model);
     return isSafeNativeModelSelector(selector)
       ? [{ ...model, selector, fastModeAvailable: supportsSubagentFastMode(selector) }]
       : [];
   });
   const parent = input.parentModel;
-  const canonical = parent ? `${parent.provider}/${parent.id}` : undefined;
+  const canonical = parent ? modelSelector(parent) : undefined;
   return [
     {
       ...pseudoModel("parent"),
@@ -82,7 +83,7 @@ export const retainUnavailableCurrent = (
         ...options,
       ];
 
-export interface ProfileModelPickerContext {
+interface ProfileModelPickerContext {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
 }

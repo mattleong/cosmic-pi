@@ -25,6 +25,7 @@ import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.t
 import { pickQuestionnaire } from "./support/questionnaire.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 type CapturedTool = ToolDefinition;
 type CapturedToolInput = Parameters<CapturedTool["execute"]>[1];
@@ -134,6 +135,15 @@ const makeHarness = (options: HarnessOptions = {}) => {
         return contact!;
       }),
     );
+  /** Resolves with the `count`th proxy request once exactly that many were sent. */
+  const awaitRequest = (count: number) =>
+    step(() =>
+      vi.waitFor(() => {
+        const requests = Arr.filter(contacts, (contact) => contact.type === "proxy_request");
+        expect(requests).toHaveLength(count);
+        return requests[count - 1]!;
+      }),
+    );
   const ask = (signal?: AbortSignal) =>
     execute(
       latestTool("agent_contact_parent"),
@@ -145,6 +155,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
     activeTools: () => [...active],
     ask,
     awaitContact,
+    awaitRequest,
     contacts,
     currentListener,
     latestTool,
@@ -173,6 +184,18 @@ function contactOfType<Type extends LocalPiContact["type"]>(
   );
 }
 
+const descendantNotice = (
+  requestId: string,
+  key: string,
+  message: string,
+): LocalPiParentControl => ({
+  channel: "pi-subagents",
+  type: "proxy_notification",
+  requestId,
+  key,
+  message,
+});
+
 const rejection = (promise: Promise<unknown>) =>
   promise.then(
     () => undefined,
@@ -190,6 +213,7 @@ const decodeForwardedTimeout = Schema.decodeUnknownSync(
 
 afterEach(() => {
   vi.unstubAllEnvs();
+  vi.useRealTimers();
 });
 
 describe("local Pi child bridge", () => {
@@ -275,75 +299,63 @@ describe("local Pi child bridge", () => {
       const harness = makeHarness();
       yield* settle(harness.start);
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      try {
-        let settled = false;
-        const pending = execute(
-          harness.latestTool(SUBAGENT_TOOL_NAME.await),
-          { runIds: ["a"], until: "all_finished", timeoutSeconds: 86_400 },
-          undefined,
-        ).finally(() => {
-          settled = true;
-        });
-        const request = yield* harness.awaitContact("proxy_request");
-        expect(decodeForwardedTimeout(request.argumentsJson).argumentsJson.timeoutSeconds).toBe(
-          3_600,
-        );
-        // The root answers at the timeout, so within its backstop the child neither gives up nor
-        // cancels on its own.
-        yield* step(() => vi.advanceTimersByTimeAsync(3_600_000 + 29_000));
-        expect(settled).toBe(false);
-        expect(contactOfType(harness.contacts, "proxy_cancel")).toBeUndefined();
-        harness.currentListener().handlers.onControl({
-          channel: "pi-subagents",
-          type: "proxy_response",
-          requestId: request.requestId,
-          ok: true,
-          payloadJson: JSON.stringify({
-            content: [{ type: "text", text: "Await timed out after 3600s" }],
-            structuredContent: cancelledAwaitContract({
-              runs: [view({ id: "a" })],
-              requestedRunIds: ["a"],
-              until: "all_finished",
-              cleanup: "confirmed",
-              ending: "timed_out",
-              now: 0,
-            }),
+      let settled = false;
+      const pending = execute(
+        harness.latestTool(SUBAGENT_TOOL_NAME.await),
+        { runIds: ["a"], until: "all_finished", timeoutSeconds: 86_400 },
+        undefined,
+      ).finally(() => {
+        settled = true;
+      });
+      const request = yield* harness.awaitContact("proxy_request");
+      expect(decodeForwardedTimeout(request.argumentsJson).argumentsJson.timeoutSeconds).toBe(
+        3_600,
+      );
+      // The root answers at the timeout, so within its backstop the child neither gives up nor
+      // cancels on its own.
+      yield* step(() => vi.advanceTimersByTimeAsync(3_600_000 + 29_000));
+      expect(settled).toBe(false);
+      expect(contactOfType(harness.contacts, "proxy_cancel")).toBeUndefined();
+      harness.currentListener().handlers.onControl({
+        channel: "pi-subagents",
+        type: "proxy_response",
+        requestId: request.requestId,
+        ok: true,
+        payloadJson: JSON.stringify({
+          content: [{ type: "text", text: "Await timed out after 3600s" }],
+          structuredContent: cancelledAwaitContract({
+            runs: [view({ id: "a" })],
+            requestedRunIds: ["a"],
+            until: "all_finished",
+            cleanup: "confirmed",
+            deliveryAttemptedIds: new Set(),
+            ending: "timed_out",
+            now: 0,
           }),
-        });
-        expect((yield* step(() => pending)).structuredContent).toMatchObject({
-          outcome: "timed_out",
-          cleanup: "confirmed",
-        });
-      } finally {
-        vi.useRealTimers();
-      }
+        }),
+      });
+      expect((yield* step(() => pending)).structuredContent).toMatchObject({
+        outcome: "timed_out",
+        cleanup: "confirmed",
+      });
+      vi.useRealTimers();
 
       // A root answer lost while the connection stays up ends at the backstop, as a timeout that
       // cancels the wait at the root and doesn't claim its cleanup.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-      try {
-        const lost = execute(
-          harness.latestTool(SUBAGENT_TOOL_NAME.await),
-          { runIds: ["a"], until: "all_finished", timeoutSeconds: 60 },
-          undefined,
-        );
-        yield* step(() =>
-          vi.waitFor(() =>
-            expect(
-              Arr.filter(harness.contacts, (contact) => contact.type === "proxy_request"),
-            ).toHaveLength(2),
-          ),
-        );
-        const lostRequest = yield* harness.awaitContact("proxy_request");
-        yield* step(() => vi.advanceTimersByTimeAsync(90_000));
-        expect((yield* step(() => lost)).structuredContent).toMatchObject({
-          outcome: "timed_out",
-          cleanup: "unconfirmed",
-        });
-        yield* harness.awaitContact("proxy_cancel", { requestId: lostRequest.requestId });
-      } finally {
-        vi.useRealTimers();
-      }
+      const lost = execute(
+        harness.latestTool(SUBAGENT_TOOL_NAME.await),
+        { runIds: ["a"], until: "all_finished", timeoutSeconds: 60 },
+        undefined,
+      );
+      const lostRequest = yield* harness.awaitRequest(2);
+      yield* step(() => vi.advanceTimersByTimeAsync(90_000));
+      expect((yield* step(() => lost)).structuredContent).toMatchObject({
+        outcome: "timed_out",
+        cleanup: "unconfirmed",
+      });
+      yield* harness.awaitContact("proxy_cancel", { requestId: lostRequest.requestId });
+      vi.useRealTimers();
 
       // The caller's own abort still ends a timed wait at once and cancels it at the root.
       const abort = new AbortController();
@@ -352,14 +364,7 @@ describe("local Pi child bridge", () => {
         { runIds: ["a"], until: "all_finished", timeoutSeconds: 60 },
         abort.signal,
       );
-      yield* step(() =>
-        vi.waitFor(() =>
-          expect(
-            Arr.filter(harness.contacts, (contact) => contact.type === "proxy_request"),
-          ).toHaveLength(3),
-        ),
-      );
-      const cancelledRequest = yield* harness.awaitContact("proxy_request");
+      const cancelledRequest = yield* harness.awaitRequest(3);
       abort.abort();
       expect((yield* step(() => cancelled)).structuredContent).toMatchObject({
         outcome: "cancelled",
@@ -397,13 +402,7 @@ describe("local Pi child bridge", () => {
         startAbort.signal,
       ),
     );
-    yield* step(() =>
-      vi.waitFor(() =>
-        expect(
-          Arr.filter(harness.contacts, (contact) => contact.type === "proxy_request"),
-        ).toHaveLength(2),
-      ),
-    );
+    yield* harness.awaitRequest(2);
     startAbort.abort();
     const failure = yield* step(() => start);
     expect(failure).toBeInstanceOf(Error);
@@ -483,28 +482,25 @@ describe("local Pi child bridge", () => {
     const harness = makeHarness();
     yield* settle(harness.start);
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
-    try {
-      let settled = false;
-      const result = harness.ask().finally(() => {
-        settled = true;
-      });
-      const question = yield* harness.awaitContact("contact_request");
-      yield* step(() => vi.advanceTimersByTimeAsync(24 * 60 * 60_000));
-      expect(settled).toBe(false);
-      expect(contactOfType(harness.contacts, "contact_cancel")).toBeUndefined();
-      harness.currentListener().handlers.onControl({
-        channel: "pi-subagents",
-        type: "parent_reply",
-        requestId: question.requestId,
-        ackId: "late-reply",
-        message: "still here",
-      });
-      yield* step(() =>
-        expect(result).resolves.toMatchObject({ content: [{ text: "Parent reply: still here" }] }),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
+    let settled = false;
+    const result = harness.ask().finally(() => {
+      settled = true;
+    });
+    const question = yield* harness.awaitContact("contact_request");
+    yield* step(() => vi.advanceTimersByTimeAsync(24 * 60 * 60_000));
+    expect(settled).toBe(false);
+    expect(contactOfType(harness.contacts, "contact_cancel")).toBeUndefined();
+    harness.currentListener().handlers.onControl({
+      channel: "pi-subagents",
+      type: "parent_reply",
+      requestId: question.requestId,
+      ackId: "late-reply",
+      message: "still here",
+    });
+    yield* step(() =>
+      expect(result).resolves.toMatchObject({ content: [{ text: "Parent reply: still here" }] }),
+    );
+    vi.useRealTimers();
     yield* settle(harness.shutdown);
   });
 
@@ -544,13 +540,7 @@ describe("local Pi child bridge", () => {
       type: "turn_input_barrier",
       requestId: "stale-barrier",
     });
-    stale.onControl({
-      channel: "pi-subagents",
-      type: "proxy_notification",
-      requestId: "stale-notification",
-      key: "agent-1:1",
-      message: "old",
-    });
+    stale.onControl(descendantNotice("stale-notification", "agent-1:1", "old"));
     yield* step(eventLoopTurn);
     expect(harness.contacts).toHaveLength(0);
     expect(harness.sendMessage).not.toHaveBeenCalled();
@@ -593,13 +583,7 @@ describe("local Pi child bridge", () => {
       yield* settle(() => harness.start("/repo"));
       const { handlers } = harness.currentListener();
       // No run is open, so the notice is refused and goes to another recipient.
-      handlers.onControl({
-        channel: "pi-subagents",
-        type: "proxy_notification",
-        requestId: "notice-early",
-        key: "agent-1:1",
-        message: "Descendant reported.",
-      });
+      handlers.onControl(descendantNotice("notice-early", "agent-1:1", "Descendant reported."));
       yield* harness.awaitContact("proxy_notification_ack", {
         requestId: "notice-early",
         ok: false,
@@ -607,23 +591,11 @@ describe("local Pi child bridge", () => {
       expect(harness.sendMessage).not.toHaveBeenCalled();
       yield* settle(harness.openRun);
       for (const requestId of ["notice-1", "notice-retry"]) {
-        handlers.onControl({
-          channel: "pi-subagents",
-          type: "proxy_notification",
-          requestId,
-          key: "agent-1:1",
-          message: "Descendant reported.",
-        });
+        handlers.onControl(descendantNotice(requestId, "agent-1:1", "Descendant reported."));
         yield* harness.awaitContact("proxy_notification_ack", { requestId, ok: true });
       }
       expect(harness.sendMessage).toHaveBeenCalledOnce();
-      handlers.onControl({
-        channel: "pi-subagents",
-        type: "proxy_notification",
-        requestId: "notice-2",
-        key: "agent-1:2",
-        message: "Descendant reported again.",
-      });
+      handlers.onControl(descendantNotice("notice-2", "agent-1:2", "Descendant reported again."));
       yield* harness.awaitContact("proxy_notification_ack", { requestId: "notice-2", ok: true });
       expect(harness.sendMessage).toHaveBeenCalledTimes(2);
       yield* settle(harness.shutdown);
@@ -635,8 +607,9 @@ describe("local Pi child bridge", () => {
     yield* settle(harness.start);
     yield* step(() => vi.waitFor(() => expect(harness.listeners[0]?.detached).toBe(true)));
     expect(harness.activeTools()).toEqual(["read"]);
-    const partial = Option.getOrUndefined(
-      Arr.findFirst(harness.tools, (tool) => tool.name === SUBAGENT_TOOL_NAME.models),
+    const partial = findOrUndefined(
+      harness.tools,
+      (tool) => tool.name === SUBAGENT_TOOL_NAME.models,
     );
     expect(partial).toBeDefined();
     yield* step(() =>

@@ -3,8 +3,12 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { codePreviewSettings } from "../../../config/state";
 import { hostObject, type HostObject } from "../../../shared/untrusted-value";
 import { getReadStartLine, hasReadLimit } from "../../data/args";
-import { getTextContent, isTruncated, splitReadContinuationNotice } from "../../data/results";
-import { oversizedReadNotice } from "./output-notice";
+import {
+  getTextContent,
+  isTruncated,
+  oversizedReadNotice,
+  splitReadContinuationNotice,
+} from "../../data/results";
 
 type ReadResultBody =
   | { readonly kind: "image"; readonly text: string }

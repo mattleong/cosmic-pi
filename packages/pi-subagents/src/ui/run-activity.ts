@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { ACTIVITY_LIMITS, type ActivityDetail, type ActivityItem } from "pi-cosmic-ui/activity";
 import { countLabel } from "pi-cosmic-core/display";
@@ -20,7 +19,12 @@ import {
 } from "./activity-panel.ts";
 import { runActivityDetail } from "./run-activity-detail.ts";
 import { projectRunModel } from "./run-presentation.ts";
-import { isWaitingOnRuns, runLiveActivity, type RunNameLookup } from "./run-live-activity.ts";
+import {
+  isWaitingOnRuns,
+  runLiveActivity,
+  runNameLookup,
+  type RunNameLookup,
+} from "./run-live-activity.ts";
 import {
   canInterruptRun,
   canRenameRun,
@@ -30,6 +34,7 @@ import {
   type RunMessageMode,
 } from "./run-state.ts";
 import { projectFleetTree } from "./run-tree-rows.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 export const SUBAGENT_ACTIVITY_PROVIDER = "pi-subagents";
 
 type UnrevisionedItem<Item extends ActivityItem = ActivityItem> = Item extends ActivityItem
@@ -235,8 +240,7 @@ export function subagentActivityItems(
 ): readonly ActivityItem[] {
   const awaited = new Set(Arr.flatMap(presentation.awaits, (lease) => lease.runIds));
   const rows = projectFleetTree(projection.runs, "root").rows;
-  const names = new Map(Arr.map(projection.runs, (run) => [run.id, run.name] as const));
-  const nameOf: RunNameLookup = (id) => names.get(id);
+  const nameOf = runNameLookup(projection.runs);
   const descendants = activeDescendantCounts(projection.runs);
   const runs = Arr.map(rows, ({ run }) =>
     cachedRunActivityItem(run, awaited.has(run.id), nameOf, descendants.get(run.id) ?? 0),
@@ -248,12 +252,10 @@ export function subagentActivityDetail(
   projection: SubagentProjection,
   id: string,
 ): ActivityDetail | undefined {
-  const run = Option.getOrUndefined(
-    Arr.findFirst(projectFleetTree(projection.runs, "root").rows, (row) => row.run.id === id),
+  const run = findOrUndefined(
+    projectFleetTree(projection.runs, "root").rows,
+    (row) => row.run.id === id,
   )?.run;
   if (!run) return undefined;
-  const names = new Map(
-    Arr.map(projection.runs, (candidate) => [candidate.id, candidate.name] as const),
-  );
-  return runActivityDetail(run, (runId) => names.get(runId));
+  return runActivityDetail(run, runNameLookup(projection.runs));
 }

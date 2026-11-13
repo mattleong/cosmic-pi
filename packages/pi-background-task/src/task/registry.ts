@@ -14,6 +14,7 @@ import { LogBuffer, ownedText, readLogBuffer } from "./log-buffer.ts";
 import {
   isActiveTaskState,
   sortTasksByActivity,
+  type BackgroundLogSlice,
   type BackgroundLogStream,
   type BackgroundTaskNotifyFilter,
   type BackgroundTaskProjection,
@@ -84,14 +85,17 @@ export const wakeTaskRecord = (record: TaskRecord) => {
   Deferred.doneUnsafe(current, Effect.void);
 };
 
+/** Reads a record's log buffer as a slice of its own task, in the state the record is in now. */
+export const readRecordLogs = (
+  record: TaskRecord,
+  options: { readonly afterCursor?: number; readonly tailLines?: number },
+): BackgroundLogSlice =>
+  readLogBuffer(record.snapshot.id, record.logs, record.snapshot.state, options);
+
 const recentOutputLines = (record: TaskRecord): string[] =>
   Str.split(
     Arr.join(
-      Arr.map(
-        readLogBuffer(record.snapshot.id, record.logs, record.snapshot.state, { tailLines: 200 })
-          .events,
-        (event) => event.text,
-      ),
+      Arr.map(record.logs.tail(200).events, (event) => event.text),
       "",
     ),
     /\r?\n/u,

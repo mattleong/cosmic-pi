@@ -1,9 +1,7 @@
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import { joinKeyHints, keyHint, keyRangeLabel } from "../manager/key-labels.ts";
-import type { ActivityRow } from "./model.ts";
-
-type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
+import type { ActivityAction } from "./model.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 /** Actions without a letter key are numbered, nine to a page. */
 export const ACTIVITY_ACTION_PAGE_SIZE = 9;
@@ -90,9 +88,7 @@ export const activityActionForKey = (
   key: string,
   page = 0,
 ): ActivityAction | undefined =>
-  Option.getOrUndefined(
-    Arr.findFirst(activityActionKeys(actions, page).shown, (keyed) => keyed.key === key),
-  )?.action;
+  findOrUndefined(activityActionKeys(actions, page).shown, (keyed) => keyed.key === key)?.action;
 
 /** An action that acts on its item's whole section, which Activity offers on the heading. */
 export const isSectionAction = (action: ActivityAction): boolean => action.scope === "section";

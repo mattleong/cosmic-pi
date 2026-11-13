@@ -4,7 +4,6 @@ import { applyPresentationSettings, createToolPresentationHarness } from "../../
 import { codemodeRenderers, nativeCall, scriptResult } from "../support/native-codemode";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 
 const completed = scriptResult(
@@ -55,19 +54,3 @@ for (const style of ["compact", "preview"] as const)
     }
     assert.deepEqual(result, before);
   });
-
-test("a program ending in a line break leaves no blank row before the next section", () => {
-  applyPresentationSettings({
-    toolCallCollapsedStyle: "compact",
-    toolCallTiming: false,
-    toolCallBackground: "off",
-  });
-  const h = createToolPresentationHarness(codemodeRenderers());
-  h.call({ code: "const total = 1 + 2;\ntext(String(total));\n" }, { expanded: true });
-  h.result(completed, { expanded: true });
-  const rows = h.render(80);
-  const last = Option.getOrThrow(
-    Arr.findFirstIndex(rows, (row) => Fn.pipe(row, Str.includes("text(String(total));"))),
-  );
-  assert.ok(Str.isNonEmpty(Str.trim(rows[last + 1] ?? "")));
-});

@@ -10,6 +10,7 @@ import {
 } from "pi-cosmic-core/host-session";
 import { hasCustomSurface, openOwnedSurfacePromise } from "pi-cosmic-ui/boundary/host-surface";
 import { fullScreenKeybindingOptions } from "pi-cosmic-ui/manager/key-labels";
+import { modelSelector } from "pi-cosmic-ui/manager/model-picker";
 import { normalizeDeclaredProfileRoute, type ProfileId } from "../profiles/model.ts";
 import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
 import {
@@ -76,7 +77,7 @@ export function openProfileDashboard(
       const parentEffort: SubagentEffort = ctx.model
         ? invokeHostCallback(() => decodeSubagentEffort(pi.getThinkingLevel()) ?? "high", "high")
         : "high";
-      const parentModel = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+      const parentModel = ctx.model ? modelSelector(ctx.model) : undefined;
       const refreshInspection = (
         conflictMessage?: string,
         receipt?: ProfileEditCommitReceipt,
@@ -187,10 +188,8 @@ export function openProfileDashboard(
             ...fullScreenKeybindingOptions(keybindings),
             close: () => finish(undefined),
             saveDraft,
-            loadModelPicker: (profile, candidateIndex, candidate) =>
+            loadModelPicker: (candidate) =>
               loadCandidateModelPicker({
-                profile,
-                candidateIndex,
                 candidate,
                 piCatalog: modelCatalog.capture(),
                 parentSelector: parentModel,

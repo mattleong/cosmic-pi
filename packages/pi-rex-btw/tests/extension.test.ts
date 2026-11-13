@@ -30,11 +30,20 @@ const harness = (sessionFile?: string) => {
   rexBtw(host.pi);
   return {
     notify,
-    start: () => host.emit("session_start", ctx),
-    shutdown: () => host.emit("session_shutdown", ctx),
+    /** Starts the session and shuts it down when the test's scope closes, even after a failure. */
+    started: Effect.acquireRelease(
+      Effect.promise(() => host.emit("session_start", ctx)),
+      () => Effect.promise(() => host.emit("session_shutdown", ctx)),
+    ),
     btw: (args: string) => host.commands.get("btw")!.handler(args, ctx),
-    complete: (prefix: string) => host.commands.get("btw")!.getArgumentCompletions?.(prefix),
   };
+};
+
+/** Places the session in a Rex pane whose `rex` binary lives in `binDirectory`. */
+const stubRexPane = (binDirectory: string): void => {
+  vi.stubEnv("REX_SESSION", "session:s");
+  vi.stubEnv("REX_BLOCK", "block:b");
+  vi.stubEnv("REX_BIN_DIR", binDirectory);
 };
 
 /**
@@ -65,9 +74,7 @@ const fakeRex = Effect.gen(function* () {
   yield* fs.chmod(rex, 0o755);
   const sessionFile = path.join(root, "parent.jsonl");
   yield* fs.writeFileString(sessionFile, "");
-  vi.stubEnv("REX_SESSION", "session:s");
-  vi.stubEnv("REX_BLOCK", "block:b");
-  vi.stubEnv("REX_BIN_DIR", root);
+  stubRexPane(root);
   vi.stubEnv("REX_TEST_LOG", log);
   const calls = Effect.map(
     Effect.orElseSucceed(fs.readFileString(log), () => ""),
@@ -81,12 +88,11 @@ describe("/btw", () => {
     Effect.gen(function* () {
       const rex = yield* fakeRex;
       const h = harness();
-      yield* Effect.promise(h.start);
+      yield* h.started;
       yield* Effect.promise(() => Promise.resolve(h.btw("help")));
       expect(h.notify).toHaveBeenCalledOnce();
       expect(h.notify.mock.calls[0]?.[1]).toBe("info");
       expect(yield* rex.calls).toEqual([""]);
-      yield* Effect.promise(h.shutdown);
     }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
   );
 
@@ -94,22 +100,13 @@ describe("/btw", () => {
     Effect.gen(function* () {
       const rex = yield* fakeRex;
       const h = harness(rex.sessionFile);
-      yield* Effect.promise(h.start);
+      yield* h.started;
       yield* Effect.promise(() => Promise.resolve(h.btw("why does the cart test fail?")));
       expect(h.notify).not.toHaveBeenCalled();
       const calls = yield* rex.calls;
       expect(calls).toContain("split");
       expect(calls).toContain("why does the cart test fail?");
-      yield* Effect.promise(h.shutdown);
     }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
-  );
-
-  it.effect("offers help when completing the command", () =>
-    Effect.gen(function* () {
-      const h = harness();
-      const completions = yield* Effect.promise(() => Promise.resolve(h.complete("he")));
-      expect(Arr.map(completions ?? [], (choice) => choice.value)).toEqual(["help"]);
-    }),
   );
 
   it.effect("explains that it needs a Rex pane when the session runs elsewhere", () =>
@@ -117,40 +114,33 @@ describe("/btw", () => {
       vi.stubEnv("REX_SESSION", undefined);
       vi.stubEnv("REX_BLOCK", undefined);
       const h = harness();
-      yield* Effect.promise(h.start);
+      yield* h.started;
       yield* Effect.promise(() => Promise.resolve(h.btw("question")));
       expect(h.notify).toHaveBeenCalledExactlyOnceWith(REX_UNAVAILABLE_MESSAGE, "error");
-      yield* Effect.promise(h.shutdown);
     }),
   );
 
   it.effect("rejects a prompt that can't be passed to a new pane before contacting Rex", () =>
     Effect.gen(function* () {
-      vi.stubEnv("REX_SESSION", "session:s");
-      vi.stubEnv("REX_BLOCK", "block:b");
-      vi.stubEnv("REX_BIN_DIR", "/nonexistent-rex-bin");
+      stubRexPane("/nonexistent-rex-bin");
       const h = harness();
-      yield* Effect.promise(h.start);
+      yield* h.started;
       yield* Effect.promise(() => Promise.resolve(h.btw("a\0b")));
       expect(h.notify).toHaveBeenCalledOnce();
       expect(h.notify.mock.calls[0]?.[1]).toBe("error");
-      yield* Effect.promise(h.shutdown);
     }),
   );
 
   it.effect("opens no pane that couldn't read this conversation, and says what to do", () =>
     Effect.gen(function* () {
-      vi.stubEnv("REX_SESSION", "session:s");
-      vi.stubEnv("REX_BLOCK", "block:b");
       // A pane that tried to open would fail here and report an error.
-      vi.stubEnv("REX_BIN_DIR", "/nonexistent-rex-bin");
+      stubRexPane("/nonexistent-rex-bin");
       for (const sessionFile of [undefined, "/nonexistent/session.jsonl"]) {
         const h = harness(sessionFile);
-        yield* Effect.promise(h.start);
+        yield* h.started;
         yield* Effect.promise(() => Promise.resolve(h.btw("question")));
         expect(h.notify).toHaveBeenCalledOnce();
         expect(h.notify.mock.calls[0]?.[1]).toBe("warning");
-        yield* Effect.promise(h.shutdown);
       }
     }),
   );

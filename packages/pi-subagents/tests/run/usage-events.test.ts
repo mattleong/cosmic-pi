@@ -35,5 +35,5 @@ it.effect("process usage rechecks handle ownership inside the mutation lock", ()
     expect(record.view.usage.input).toBe(0);
     yield* settlement.mergeProcessUsage(record, replacement, charge);
     expect(record.view.usage.input).toBe(10);
-  }).pipe(Effect.scoped),
+  }),
 );

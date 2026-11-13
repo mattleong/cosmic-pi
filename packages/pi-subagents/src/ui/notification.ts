@@ -4,9 +4,8 @@ import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
-import * as Match from "effect/Match";
 import { countLabel, nameListForms } from "pi-cosmic-core/display";
-import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
+import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth, managerActivityGlyph, managerActivityColor } from "pi-cosmic-ui/manager";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import type { CodePreviewMessagePresenter, CompactIssue, CompactSummary } from "pi-code-previews";
@@ -19,34 +18,15 @@ import {
   factRowLines,
   indentedBody,
   indentedLines,
+  pad,
 } from "./agent-text.ts";
 import { agentFactLines, savedAgentFactLines } from "./run-facts.ts";
-import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
+import { decodeMessageEnvelope, receivedMessageBody } from "./message-envelope.ts";
 import { NoticeDetailsSchema, type NoticeDetails, type NoticeRun } from "./notice-details.ts";
 
 const decodeDetails = Schema.decodeUnknownOption(NoticeDetailsSchema, {
   onExcessProperty: "ignore",
 });
-
-// Notices saved before display copies: which notice it was, from its message type.
-const UNTYPED_NOTICES = new Map<string, NoticeHeading>([
-  [
-    "pi-subagents-proxy-notification",
-    {
-      name: "descendant_update",
-      label: "Descendant update",
-      summary: { subject: "from a subagent you started", outcome: "returned" },
-    },
-  ],
-  [
-    "pi-subagents-peer-notice",
-    {
-      name: "shared_checkout",
-      label: "Shared checkout",
-      summary: { subject: "other agents in this directory", outcome: "returned" },
-    },
-  ],
-]);
 
 const STOP_CAUSES = { reload: "on reload", session: "on leaving the session" };
 
@@ -95,8 +75,8 @@ const peerSummary = (details: PeerDetails): CompactSummary =>
  * text, such as a provider error and its stack, as the issue's expanded detail.
  */
 const runIssues = (details: CompletedDetails): CompactIssue[] => {
-  const single = (details.runs?.length ?? 0) === 1;
-  return Arr.flatMap(details.runs ?? [], (run): CompactIssue[] => {
+  const single = details.runs.length === 1;
+  return Arr.flatMap(details.runs, (run): CompactIssue[] => {
     const named = (message: string) =>
       single ? message : `${sanitizeTerminalLine(run.name)}: ${message}`;
     const warnings = Arr.map(
@@ -132,7 +112,7 @@ const completedSummary = (details: CompletedDetails): CompactSummary => {
   const finished = details.total - details.failed;
   const outcome = details.failed ? "error" : details.warnings ? "warning" : "success";
   const issues = runIssues(details);
-  const [only] = details.runs ?? [];
+  const [only] = details.runs;
   // A single report's icon says how it ended, and its size how much there is to read.
   if (details.total === 1 && details.name)
     return {
@@ -152,7 +132,7 @@ const completedSummary = (details: CompletedDetails): CompactSummary => {
   // Counter alternatives, widest first, so a narrow heading keeps the whole counts that fit.
   return {
     ...namesOrCount(
-      Arr.map(details.runs ?? [], (run) => run.name),
+      Arr.map(details.runs, (run) => run.name),
       details.total,
       "subagent",
     ),
@@ -188,7 +168,7 @@ const questionCut = (details: QuestionDetails): boolean =>
   (details.question !== undefined && quotesPartOfQuestion(details.question));
 
 const stoppedSummary = (details: StoppedDetails): CompactSummary => {
-  const names = Arr.map(details.runs ?? [], (run) => run.name);
+  const names = Arr.map(details.runs, (run) => run.name);
   const subject =
     names.length === 0 && details.total === 1 && details.name
       ? { subject: details.name }
@@ -201,10 +181,7 @@ const stoppedSummary = (details: StoppedDetails): CompactSummary => {
   };
 };
 
-const notificationHeading = (
-  customType: string | undefined,
-  details: NoticeDetails | undefined,
-): NoticeHeading => {
+const notificationHeading = (details: NoticeDetails | undefined): NoticeHeading => {
   if (details?.kind === "question")
     return { name: "agent_question", label: "Agent question", summary: questionSummary(details) };
   if (details?.kind === "stopped" && details.total > 0)
@@ -222,41 +199,19 @@ const notificationHeading = (
     details.warnings <= details.total
   )
     return { name: "agent_report", label: "Agent report", summary: completedSummary(details) };
-  return (
-    UNTYPED_NOTICES.get(customType ?? "") ?? {
-      name: "subagent_update",
-      label: "Subagent update",
-      summary: { subject: "from a subagent", outcome: "returned" },
-    }
-  );
+  return {
+    name: "subagent_update",
+    label: "Subagent update",
+    summary: { subject: "from a subagent", outcome: "returned" },
+  };
 };
 
-const expansionLabel = (details: NoticeDetails | undefined): string => {
-  if (details === undefined) return "message";
-  return Match.value(details).pipe(
-    Match.when({ kind: "question" }, () => "question"),
-    Match.when({ kind: "stopped" }, () => "list"),
-    Match.when({ kind: "peers" }, () => "peers"),
-    Match.when({ kind: "completed" }, (completed) =>
-      completed.failed === completed.total
-        ? countLabel(completed.total, "failure detail")
-        : countLabel(completed.total, "report"),
-    ),
-    Match.orElse(() => "message"),
-  );
-};
-
-/** Details saved before display copies existed carry only counts for the heading. */
-const hasDisplayCopy = (details: NoticeDetails | undefined): boolean => {
-  if (details === undefined) return false;
-  return Match.value(details).pipe(
-    Match.when({ kind: "completed" }, (completed) => (completed.runs?.length ?? 0) > 0),
-    Match.when({ kind: "question" }, (question) => question.question !== undefined),
-    Match.when({ kind: "stopped" }, (stopped) => stopped.runs !== undefined),
-    Match.when({ kind: "peers" }, () => true),
-    Match.exhaustive,
-  );
-};
+/** Whether the details carry words to show: a question its text, a completion a run. */
+const hasDisplayCopy = (details: NoticeDetails | undefined): boolean =>
+  details !== undefined &&
+  (details.kind === "completed"
+    ? details.runs.length > 0
+    : details.kind !== "question" || details.question !== undefined);
 
 interface NoticeBody {
   /** The rows beneath the heading: the words agents wrote and short notes. */
@@ -276,7 +231,7 @@ interface NoticeBody {
  * What a collapsed report notice hides: in compact style the reports themselves, or a failure's
  * whole text; in preview style, whose body shows the reports, their `Details`.
  */
-const reportsLabel = (runs: NonNullable<CompletedDetails["runs"]>, compact: boolean): string => {
+const reportsLabel = (runs: CompletedDetails["runs"], compact: boolean): string => {
   if (!compact) return "details";
   const failed = Arr.every(runs, (run) => run.outcome === "failed");
   // A failure its problem line quotes whole leaves only its `Details` to expansion.
@@ -287,7 +242,7 @@ const reportsLabel = (runs: NonNullable<CompletedDetails["runs"]>, compact: bool
 };
 
 const completedBody = (
-  runs: NonNullable<CompletedDetails["runs"]>,
+  runs: CompletedDetails["runs"],
   theme: Theme,
   expanded: boolean,
   indent: number,
@@ -330,13 +285,13 @@ const completedBody = (
 
 const stoppedBody = (
   details: StoppedDetails,
-  stopped: NonNullable<StoppedDetails["runs"]>,
   theme: Theme,
   expanded: boolean,
   indent: number,
 ): NoticeBody => {
+  const stopped = details.runs;
   const hidden = details.total - stopped.length;
-  const pad = Str.repeat(indent)(" ");
+  const lead = pad(indent);
   const note = (width: number) =>
     indentedLines(
       theme.fg("muted", "They won't report; partial work they left in the checkout remains."),
@@ -349,12 +304,12 @@ const stoppedBody = (
         ? [
             ...Arr.map(stopped, (run) =>
               clipToWidth(
-                `${pad}${theme.fg("muted", managerActivityGlyph("stopped"))} ${sanitizeTerminalLine(run.name)} ${theme.fg("muted", `· was ${sanitizeTerminalLine(run.state)}`)}`,
+                `${lead}${theme.fg("muted", managerActivityGlyph("stopped"))} ${sanitizeTerminalLine(run.name)} ${theme.fg("muted", `· was ${sanitizeTerminalLine(run.state)}`)}`,
                 width,
               ),
             ),
             ...(hidden > 0
-              ? [clipToWidth(theme.fg("dim", `${pad}… ${countLabel(hidden, "more")}`), width)]
+              ? [clipToWidth(theme.fg("dim", `${lead}… ${countLabel(hidden, "more")}`), width)]
               : []),
             ...note(width),
           ]
@@ -442,12 +397,11 @@ const noticeBody = (
   indent: number,
   compact: boolean,
 ): NoticeBody | undefined => {
-  if (details?.kind === "completed" && details.runs !== undefined && details.runs.length > 0)
+  if (details?.kind === "completed" && details.runs.length > 0)
     return completedBody(details.runs, theme, expanded, indent, compact);
   if (details?.kind === "question" && details.question !== undefined)
     return questionBody(details, details.question, theme, expanded, indent, compact);
-  if (details?.kind === "stopped" && details.runs !== undefined)
-    return stoppedBody(details, details.runs, theme, expanded, indent);
+  if (details?.kind === "stopped") return stoppedBody(details, theme, expanded, indent);
   if (details?.kind === "peers") return peersBody(details, theme, expanded, indent, compact);
   return undefined;
 };
@@ -456,17 +410,13 @@ const noticeBody = (
 export const presentSubagentNotification: CodePreviewMessagePresenter = (input, options, theme) => {
   const envelope = Option.getOrUndefined(decodeMessageEnvelope(input));
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
-  const presentation = notificationHeading(envelope?.customType, details);
+  const presentation = notificationHeading(details);
   // Without a display copy, expansion keeps the notice as the agent received it.
   if (!hasDisplayCopy(details))
     return {
       ...presentation,
-      expandLabel: expansionLabel(details),
-      expanded: () =>
-        indentedBody(
-          theme,
-          new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
-        ),
+      expandLabel: details?.kind === "question" ? "question" : "message",
+      expanded: () => receivedMessageBody(theme, envelope?.content),
     };
   const compact = options.collapsedStyle === "compact";
   const shape = noticeBody(details, theme, true, 0, compact);

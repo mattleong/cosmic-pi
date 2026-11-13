@@ -524,7 +524,7 @@ describe("profile declaration visit restore", () => {
         { expectedDocument: { version: 6 } },
       ]) {
         const { memory, result } = yield* restore(original, patch);
-        expect(result._tag).toBe("Failure");
+        expect(Result.isFailure(result)).toBe(true);
         expect(memory.documents.get(GLOBAL)).toEqual(original);
       }
     }),

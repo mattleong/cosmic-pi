@@ -22,7 +22,7 @@ import {
 import { activityCanFollow, needsYou } from "./attention.ts";
 import { activityFilterMatcher } from "./filter.ts";
 import { activityInspectionKey } from "./widget-projection.ts";
-import { isFinished, type ActivityRow } from "./model.ts";
+import { isFinished, type ActivityAction, type ActivityRow } from "./model.ts";
 import type { ActivityActionRequest, ActivityDetailRequest } from "./service.ts";
 import {
   activitySectionId,
@@ -34,6 +34,7 @@ import {
 import { renderGroupedActivity, type ActivityFilterView } from "./grouped-render.ts";
 import type { ActivitySection } from "./view-protocol.ts";
 import type { ActivityDetail } from "./protocol.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export interface ActivityPresentation {
   readonly shell: ListDetailShell;
@@ -88,7 +89,6 @@ interface ActivityMatcher {
 }
 const sameSet = (left: ReadonlySet<string>, right: ReadonlySet<string>) =>
   left.size === right.size && Arr.every([...left], (value) => right.has(value));
-type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
 const handsOff = (action: ActivityAction) => action.handoff !== false;
 const sameAction = (left: ActivityAction, right: ActivityAction) =>
   left.id === right.id &&
@@ -171,7 +171,7 @@ export class ActivityComponent {
     this.fullTree = {
       rows,
       entries,
-      members: Arr.filter(entries, (entry) => entry.type === "member").length,
+      members: Arr.countBy(entries, (entry) => entry.type === "member"),
     };
     return this.fullTree;
   }
@@ -220,9 +220,7 @@ export class ActivityComponent {
   private reveal(id: string): void {
     this.presentation.focus = undefined;
     const matches = this.matcher();
-    const row = Option.getOrUndefined(
-      Arr.findFirst(this.options.snapshot(), (candidate) => candidate.key === id),
-    );
+    const row = findOrUndefined(this.options.snapshot(), (candidate) => candidate.key === id);
     // A filter that hides the item gives way to it.
     if (matches && row && !matches(row)) this.resetFilter();
     const all = this.allEntries();
@@ -255,22 +253,18 @@ export class ActivityComponent {
       entry.type === "member" && waiting.has(entry.id);
     if (!section)
       return (
-        Option.getOrUndefined(Arr.findFirst(all, needsInput)) ??
+        findOrUndefined(all, needsInput) ??
         (this.shell.state.selectedId
           ? undefined
-          : Option.getOrUndefined(Arr.findFirst(all, (entry) => entry.type === "member")))
+          : findOrUndefined(all, (entry) => entry.type === "member"))
       );
     const matching = (entry: GroupedActivityRow) =>
       source(entry)?.kind === (section === "tasks" ? "command" : "agent");
     return (
-      Option.getOrUndefined(
-        Arr.findFirst(all, (entry) => entry.section === section && needsInput(entry)),
-      ) ??
-      Option.getOrUndefined(
-        Arr.findFirst(all, (entry) => entry.section === section && matching(entry)),
-      ) ??
-      Option.getOrUndefined(Arr.findFirst(all, matching)) ??
-      Option.getOrUndefined(Arr.findFirst(all, (entry) => entry.id === activitySectionId(section)))
+      findOrUndefined(all, (entry) => entry.section === section && needsInput(entry)) ??
+      findOrUndefined(all, (entry) => entry.section === section && matching(entry)) ??
+      findOrUndefined(all, matching) ??
+      findOrUndefined(all, (entry) => entry.id === activitySectionId(section))
     );
   }
   private selectableEntries(): readonly GroupedActivityRow[] {
@@ -325,8 +319,9 @@ export class ActivityComponent {
     this.options.close(request);
   }
   private dispatch(displayed: ActivityActionRequest, action: ActivityAction): void {
-    const row = Option.getOrUndefined(
-      Arr.findFirst(this.options.snapshot(), (candidate) => candidate.key === displayed.key),
+    const row = findOrUndefined(
+      this.options.snapshot(),
+      (candidate) => candidate.key === displayed.key,
     );
     const request =
       row &&
@@ -351,9 +346,7 @@ export class ActivityComponent {
     this.requested = request;
     this.options.loadDetail?.(request, (detail) => {
       const current = source(
-        Option.getOrUndefined(
-          Arr.findFirst(this.allEntries(), (entry) => entry.id === this.shell.state.selectedId),
-        ),
+        findOrUndefined(this.allEntries(), (entry) => entry.id === this.shell.state.selectedId),
       );
       if (
         this.closed ||
@@ -436,7 +429,7 @@ export class ActivityComponent {
     const inList = this.shell.state.pane === "list";
     if (action === "confirm" && selected?.type === "section") {
       if (selected.children) this.setExpanded(selected.id, !selected.expanded);
-    } else if (action === "confirm" && selected) this.enterSelection();
+    } else if (action === "confirm" && selected) this.shell.enterPane();
     // There is nothing to filter until something appears.
     else if (action === "search" && inList && this.fullTreeCache().members > 0) this.startFilter();
     // An applied filter is cleared before the next Esc closes.
@@ -480,11 +473,9 @@ export class ActivityComponent {
     if (Arr.some(entries, (entry) => entry.id === this.shell.state.selectedId)) return;
     const matches = this.matcher();
     const first =
-      Option.getOrUndefined(
-        Arr.findFirst(
-          entries,
-          (entry) => entry.type === "member" && (matches === undefined || matches(entry.row)),
-        ),
+      findOrUndefined(
+        entries,
+        (entry) => entry.type === "member" && (matches === undefined || matches(entry.row)),
       ) ?? entries[0];
     if (first) this.selectId(entries, first.id);
   }
@@ -650,8 +641,7 @@ export class ActivityComponent {
       query: matches ? Str.trim(this.filterQuery) : "",
       typing: this.filterTyping,
       matches: matches
-        ? Arr.filter(this.allEntries(), (entry) => entry.type === "member" && matches(entry.row))
-            .length
+        ? Arr.countBy(this.allEntries(), (entry) => entry.type === "member" && matches(entry.row))
         : this.fullTreeCache().members,
       input: (width) => theme.fg("accent", this.filterInput.render(Math.max(1, width))[0] ?? ""),
     };
@@ -664,9 +654,7 @@ export class ActivityComponent {
       key,
       shown.actionPage,
     );
-    const offer = Option.getOrUndefined(
-      Arr.findFirst(shown.offers, (candidate) => candidate.action === action),
-    );
+    const offer = findOrUndefined(shown.offers, (candidate) => candidate.action === action);
     if (!action || !offer) return;
     const request = {
       key: offer.row.key,
@@ -677,9 +665,6 @@ export class ActivityComponent {
     if (handsOff(action) || !this.options.invoke) this.cancelDetails();
     if (action.confirmation !== undefined) this.confirmation = { request, action, key };
     else this.dispatch(request, action);
-  }
-  private enterSelection(): void {
-    this.shell.enterPane();
   }
   private handleNavigation(
     action: FullScreenAction,

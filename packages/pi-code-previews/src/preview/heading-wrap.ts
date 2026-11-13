@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { recordHeadingSubject } from "./heading-coverage";
 
@@ -34,17 +35,17 @@ function items(text: string): Item[] {
       result.push({ text: segment, width: visibleWidth(segment) });
   };
   let last = 0;
-  for (const match of Str.matchAll(STYLING)(text)) {
+  for (const match of Fn.pipe(text, Str.matchAll(STYLING))) {
     const start = match.index ?? last;
-    pushText(Str.slice(last, start)(text));
+    pushText(Fn.pipe(text, Str.slice(last, start)));
     result.push({ text: match[0], width: 0 });
     last = start + match[0].length;
   }
-  pushText(Str.slice(last)(text));
+  pushText(Fn.pipe(text, Str.slice(last)));
   return result;
 }
 
-const isStyling = (item: Item) => item.width === 0 && Str.startsWith(ESC)(item.text);
+const isStyling = (item: Item) => item.width === 0 && Fn.pipe(item.text, Str.startsWith(ESC));
 
 const visibleText = (atom: Atom) =>
   Arr.join(

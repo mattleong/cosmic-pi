@@ -1,6 +1,5 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { assert, describe, expect, it } from "@effect/vitest";
-import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Arr from "effect/Array";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -9,9 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
-import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
@@ -22,17 +19,10 @@ import {
   yieldUntil,
 } from "pi-cosmic-core/testing";
 import type { BackendDriver, BackendEvent, BackendHandle } from "../../src/backend/model.ts";
-import {
-  SubagentBackendRegistry,
-  type SubagentBackendRegistryContract,
-} from "../../src/backend/service.ts";
 import { InvalidSubagentRequestError, SubagentProcessError } from "../../src/run/errors.ts";
-import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import type { SubagentProfileServiceContract } from "../../src/profiles/service.ts";
-import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { SubagentService, type SubagentServiceContract } from "../../src/run/service.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
-import { SubagentStartDetailsSchema } from "../../src/tools/details-schema.ts";
 import { executeSubagentActionEffect } from "../../src/tools/execute.ts";
 import type { SubagentStartSpec } from "../../src/tools/schema.ts";
 import { declaredCandidate } from "../fixtures/profiles.ts";
@@ -48,7 +38,16 @@ import {
   withService,
   type FakeChildControl,
 } from "../run/fixtures/service-harness.ts";
-import { profileServiceFor, testBackendRegistry } from "./fixtures/tool-harness.ts";
+import {
+  decodeStartDetails,
+  issueStyle,
+  noticedRuns,
+  profileServiceFor,
+  provideToolServices,
+  settledSummary,
+} from "./fixtures/tool-harness.ts";
+import { inertDriver } from "../run/fixtures/run-context.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 // The fake Pi child always reports this model, so a route candidate naming another one fails
 // its startup with a model mismatch before the task is issued.
@@ -66,9 +65,7 @@ const ctx = extensionContextFixture({
   cwd: "/project",
   modelRegistry: {
     find: (provider, id) =>
-      Option.getOrUndefined(
-        Arr.findFirst(registryModels, (model) => model.provider === provider && model.id === id),
-      ),
+      findOrUndefined(registryModels, (model) => model.provider === provider && model.id === id),
     hasConfiguredAuth: () => true,
     getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
     getRegisteredProviderIds: () => [],
@@ -100,7 +97,7 @@ const start = (
   service: SubagentServiceContract,
   profiles: SubagentProfileServiceContract,
   agents: ReadonlyArray<SubagentStartSpec>,
-  hostBackends: SubagentBackendRegistryContract = testBackendRegistry,
+  hostBackends: BackendDriver = inertDriver,
   api = pi,
 ) =>
   executeSubagentActionEffect(
@@ -109,11 +106,7 @@ const start = (
     { tool: "agent_start", args: { agents: [...agents] } },
     undefined,
     ctx,
-  ).pipe(
-    Effect.provideService(SubagentService, service),
-    Effect.provideService(SubagentProfileService, profiles),
-    Effect.provideService(SubagentBackendRegistry, hostBackends),
-  );
+  ).pipe(provideToolServices(service, { profiles, registry: hostBackends }));
 
 /** The host's readiness probes. Each is recorded by model, then may wait on a gate or fail. */
 const hostBackends = (
@@ -123,20 +116,20 @@ const hostBackends = (
   } = {},
 ) => {
   const probed: string[] = [];
-  const registry: SubagentBackendRegistryContract = {
-    resolve: testBackendRegistry.resolve,
-    preflight: (selection, probe) =>
+  const registry: BackendDriver = {
+    ...inertDriver,
+    preflight: (model) =>
       Effect.gen(function* () {
-        probed.push(probe.model);
-        const gate = options.gates?.[probe.model];
+        probed.push(model);
+        const gate = options.gates?.[model];
         if (gate) yield* Deferred.await(gate);
-        const code = options.failures?.[probe.model];
+        const code = options.failures?.[model];
         if (code)
           return yield* InvalidSubagentRequestError.make({
             code,
-            message: `Fixture probe for ${probe.model} failed.`,
+            message: `Fixture probe for ${model} failed.`,
           });
-        return yield* testBackendRegistry.resolve(selection);
+        return undefined;
       }),
   };
   return { registry, probed };
@@ -154,8 +147,7 @@ const fakeDriver = (
 ) => {
   const spawns: string[] = [];
   const driver: BackendDriver = {
-    supportsContext: (context) => context === "fresh",
-    preflight: ({ model }) => {
+    preflight: (model) => {
       const code = options.preflightFailures?.[model];
       return code
         ? Effect.fail(
@@ -210,27 +202,19 @@ const fakeDriver = (
 const mixedProfiles = (candidates: ReadonlyArray<ReturnType<typeof declaredCandidate>>) =>
   profileServiceFor({ profiles: { generalist: [...candidates] } });
 
-const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
-
 const startIssueStyleProblems = (
   agents: ReadonlyArray<SubagentStartSpec>,
   result: AgentToolResult<unknown>,
   isError: boolean,
 ) =>
-  Arr.flatMap(
-    createSubagentCompactSummary("agent_start")({
-      phase: "settled",
-      args: { agents: [...agents] },
-      result: { content: [{ type: "text", text: "" }], details: result.details },
-      context: renderContextFixture({ isError }),
-    })?.issues ?? [],
+  issueStyle(
+    settledSummary(
+      createSubagentCompactSummary("agent_start"),
+      { agents: [...agents] },
+      { details: result.details, isError },
+    ),
     // Quoted warnings and failures are clipped after their launch label.
-    (issue) => issueMessageStyleProblems(issue.message, { maxLength: 160 }),
-  );
-
-const noticedRuns = (notifications: ReadonlyArray<SubagentNotification>) =>
-  Arr.flatMap(notifications, (notification) =>
-    notification.type === "completed" ? notification.runs : [],
+    { maxLength: 160 },
   );
 
 const override = (model: string) => ({ model }) as const;
@@ -550,7 +534,7 @@ describe("startup fallback stops", () => {
         service,
         routeProfiles([LUNA, REPORTED]),
         [{ task: "Map the auth flow" }],
-        testBackendRegistry,
+        inertDriver,
         replaced,
       );
       expect(fake.controls).toHaveLength(1);

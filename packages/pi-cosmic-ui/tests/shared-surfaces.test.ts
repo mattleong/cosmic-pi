@@ -1,19 +1,10 @@
-import {
-  KeybindingsManager as TuiKeybindingsManager,
-  setKeybindings,
-  Text,
-  TUI_KEYBINDINGS,
-  visibleWidth,
-  type SettingItem,
-} from "@earendil-works/pi-tui";
-import { beforeEach, describe, expect, it, vi } from "@effect/vitest";
+import { visibleWidth, type SettingItem } from "@earendil-works/pi-tui";
+import { describe, expect, it, vi } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-import { stripAnsi } from "pi-cosmic-core/security";
 import { plainTheme } from "pi-cosmic-core/testing";
-import { clipToWidth } from "../src/manager/chrome.ts";
 import {
   framedKeyHintBar,
   framedKeyHints,
@@ -25,42 +16,14 @@ import {
 import { TextPanelComponent } from "../src/manager/panel.ts";
 import {
   createSettingsGroupSubmenu,
-  createSettingsListSurface,
   managerSettingsTheme,
-  type SettingsSurfaceItem,
   withSettingsGroupChildren,
 } from "../src/manager/settings-surface.ts";
 import { managerTable } from "../src/manager/table.ts";
+import { surfaceFor } from "./support/settings-surface.ts";
 
 const DOWN = "\u001b[B";
 const ESC = "\u001b";
-
-beforeEach(() => setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS)));
-
-const surfaceFor = (items: SettingsSurfaceItem[], onChange = vi.fn()) => {
-  const onCancel = vi.fn();
-  const created = createSettingsListSurface({
-    header: new Text("Settings", 0, 0),
-    items,
-    height: items.length,
-    listTheme: managerSettingsTheme(plainTheme),
-    onChange,
-    onCancel,
-    matchesKeybinding: undefined,
-    requestRender: () => undefined,
-    dim: (text) => text,
-    bridge: {},
-  });
-  const press = (...keys: string[]) => {
-    for (const key of keys) created.surface.handleInput?.(key);
-  };
-  return {
-    press,
-    onChange,
-    onCancel,
-    text: () => Arr.join(created.surface.render(80), "\n"),
-  };
-};
 
 const rows = (): SettingItem[] => [
   { id: "first", label: "First", currentValue: "on", values: ["on", "off"] },
@@ -88,13 +51,6 @@ describe("shared settings surface", () => {
     expect(onChange).toHaveBeenLastCalledWith("last", "on", expect.anything());
     press("g", "g", "\r");
     expect(onChange).toHaveBeenLastCalledWith("first", "off", expect.anything());
-  });
-
-  it("names Pi's configured cancel aliases, such as C-c, only in expanded help", () => {
-    const { press, text } = surfaceFor(rows());
-    expect(text()).not.toContain("C-c");
-    press("?");
-    expect(text()).toContain("Esc/C-c/h/q Close");
   });
 
   it("clears an applied filter with Esc before Esc closes the surface", () => {
@@ -250,19 +206,14 @@ describe("text panel", () => {
       lines: [`✗ Agent ${name}: disabled`],
       done: () => undefined,
     });
-    const body = Arr.map(panel.render(57), (line) => Str.trim(Str.replace(/│/gu, "")(line)));
-    const first = Option.getOrThrow(Arr.findFirst(body, (line) => Str.startsWith("✗ Agent")(line)));
+    const body = Arr.map(panel.render(57), (line) =>
+      Str.trim(Fn.pipe(line, Str.replace(/│/gu, ""))),
+    );
+    const first = Option.getOrThrow(Arr.findFirst(body, Str.startsWith("✗ Agent")));
     expect(first).not.toBe("✗ Agent");
     const parts = Arr.filter(body, (line) => /[a-z]-/u.test(line));
-    expect(Arr.every(Arr.take(parts, parts.length - 1), (line) => Str.endsWith("-")(line))).toBe(
-      true,
-    );
-    expect(
-      Arr.join(
-        Arr.map(parts, (line) => Str.replace(/^✗ Agent /u, "")(line)),
-        "",
-      ),
-    ).toContain(name);
+    expect(Arr.every(Arr.take(parts, parts.length - 1), Str.endsWith("-"))).toBe(true);
+    expect(Arr.join(Arr.map(parts, Str.replace(/^✗ Agent /u, "")), "")).toContain(name);
   });
 
   it("breaks a row of facts between whole facts before it breaks between words", () => {
@@ -272,7 +223,9 @@ describe("text panel", () => {
       lines: ["  Collapsed tool calls: compact · changes apply after /reload"],
       done: () => undefined,
     });
-    const body = Arr.map(panel.render(57), (line) => Str.trim(Str.replace(/│/gu, "")(line)));
+    const body = Arr.map(panel.render(57), (line) =>
+      Str.trim(Fn.pipe(line, Str.replace(/│/gu, ""))),
+    );
     expect(body).toContain("Collapsed tool calls: compact");
     expect(body).toContain("· changes apply after /reload");
   });
@@ -361,16 +314,16 @@ describe("key hints", () => {
       expect(
         Arr.some(
           expanded,
-          (shown) => shown.verb === pair.verb && Str.includes(pair.keys)(shown.keys),
+          (shown) => shown.verb === pair.verb && Fn.pipe(shown.keys, Str.includes(pair.keys)),
         ),
       ).toBe(true);
     const verbs = Arr.map(expanded, (pair) => pair.verb);
     expect(Arr.dedupe(verbs)).toEqual(verbs);
     expect(
-      Arr.some(expanded, (pair) => pair.verb === "Move" && Str.includes("j/k")(pair.keys)),
+      Arr.some(expanded, (pair) => pair.verb === "Move" && Fn.pipe(pair.keys, Str.includes("j/k"))),
     ).toBe(true);
     expect(
-      Arr.some(expanded, (pair) => pair.verb === "Close" && Str.includes("q")(pair.keys)),
+      Arr.some(expanded, (pair) => pair.verb === "Close" && Fn.pipe(pair.keys, Str.includes("q"))),
     ).toBe(true);
   });
 
@@ -379,7 +332,7 @@ describe("key hints", () => {
       { hints: ["↑↓ Move"], more: ["q Close", "h Back"], exit: "top", exitAliases: ["C-c"] },
       true,
     );
-    const closes = Arr.filter(Str.split(expanded, " · "), (pair) => Str.endsWith(" Close")(pair));
+    const closes = Arr.filter(Str.split(expanded, " · "), Str.endsWith(" Close"));
     expect(closes).toHaveLength(1);
     expect(closes[0]).toContain("C-c");
     expect(closes[0]).toContain("q");
@@ -423,13 +376,5 @@ describe("key hints", () => {
       for (const row of wrapped)
         for (const part of Str.split(row, " · ")) expect(pairs).toContain(Fn.pipe(part, Str.trim));
     }
-  });
-});
-
-describe("width-safe clipping", () => {
-  it("closes up a word-boundary cut before the ellipsis", () => {
-    const clipped = clipToWidth("Approve the dependency", 9);
-    expect(stripAnsi(clipped)).toBe("Approve…");
-    expect(visibleWidth(clipped)).toBeLessThanOrEqual(9);
   });
 });

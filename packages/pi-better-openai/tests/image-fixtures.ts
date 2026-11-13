@@ -7,17 +7,27 @@ import {
   registerOpenAIImage,
   registerOpenAIImageMessageRenderer,
 } from "../src/image/register.ts";
+import type { CodexImageDetails } from "../src/image/types.ts";
 
 export const pngPart = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
 export const textPart = (text: string) => ({ type: "text" as const, text });
 
-/** `cwd`, when given, is the session directory the message renderer shows saved paths against. */
-export function registerImagePresentation(
-  scheduleAnimation?: CompactAnimationScheduler,
-  cwd?: string,
-) {
+/** A completed image's details; tests override the fields they assert on. */
+export const imageDetailsFixture = (
+  overrides: Partial<CodexImageDetails> = {},
+): CodexImageDetails => ({
+  id: "image-1",
+  status: "completed",
+  prompt: "An otter",
+  mimeType: pngPart.mimeType,
+  model: "model",
+  action: "generate",
+  outputFormat: "png",
+  ...overrides,
+});
+
+export function registerImagePresentation(scheduleAnimation?: CompactAnimationScheduler) {
   const messageRenderer = createOpenAIImageMessageRenderer();
-  if (cwd !== undefined) messageRenderer.noteCwd({ cwd });
   const { tools, messageRenderers } = captureRegistrations((pi) => {
     const noteCwd = registerOpenAIImageMessageRenderer(pi, messageRenderer);
     registerOpenAIImage(

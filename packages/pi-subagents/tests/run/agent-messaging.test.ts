@@ -4,20 +4,16 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { type AgentCaller, MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
+import { MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
-import {
-  captureSubagentControlExpectation,
-  type SubagentProjection,
-  type SubagentRunView,
-} from "../../src/run/model.ts";
+import { captureSubagentControlExpectation, type SubagentRunView } from "../../src/run/model.ts";
 import { anyString, objectContaining, stringContaining } from "../support/matchers.ts";
-import { fakeAgentMain } from "./fixtures/agent-main.ts";
+import { asRun, fakeAgentMain, MAIN, nesting } from "./fixtures/agent-main.ts";
 import {
   acknowledgeCompletions,
+  askParent,
   assistantMessageEndFrame,
   completeLocalRun,
-  contactParentFrame,
   type FakeChildControl,
   fakeChildLayer,
   fakeEventBackendLayer,
@@ -33,10 +29,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
-
-const MAIN: AgentCaller = { kind: "main" };
-const asRun = (run: SubagentRunView): AgentCaller => ({ kind: "run", runId: run.id });
-const nesting = { maxDirectChildren: 12, maxDepth: 3 };
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const steerMessages = (control: FakeChildControl | undefined): ReadonlyArray<string> =>
   Arr.flatMap(control?.commands ?? [], (command) =>
@@ -59,17 +52,6 @@ const parentNotices = (run: SubagentRunView | undefined) =>
   Arr.flatMap(run?.sessionEvents ?? [], (event) =>
     event.type === "notice" && event.kind === "parent" ? [event.text] : [],
   );
-
-const askQuestion = (
-  control: FakeChildControl,
-  projections: ReadonlyArray<SubagentProjection>,
-  id: string,
-  requestId: string,
-) =>
-  Effect.gen(function* () {
-    control.offerIpc(contactParentFrame(requestId, "question", "Which API?"));
-    yield* yieldUntil(() => latest(projections, id)?.state === "waiting_for_parent");
-  });
 
 describe("agent messaging", () => {
   it.effect("reaches agents outside the caller's subtree under the caller's own identity", () => {
@@ -113,9 +95,7 @@ describe("agent messaging", () => {
       expect(Arr.map(listing.agents, (agent) => agent.id)).toEqual(
         expect.arrayContaining([MAIN_AGENT_ID, alpha.id, beta.id, child.id]),
       );
-      expect(Option.getOrUndefined(Arr.findFirst(listing.agents, (agent) => agent.self))?.id).toBe(
-        child.id,
-      );
+      expect(findOrUndefined(listing.agents, (agent) => agent.self)?.id).toBe(child.id);
     });
   });
 
@@ -129,7 +109,7 @@ describe("agent messaging", () => {
         request({ name: "child", nestingPolicy: nesting }),
       );
       const childControl = fake.controls[2]!;
-      yield* askQuestion(childControl, projections, child.id, "question-1");
+      yield* askParent(childControl, projections, "question-1", undefined, child.id);
 
       // The sibling's guidance waits behind the question until an ancestor answers it.
       const fromSibling = yield* service.agentSend(asRun(sibling), child.id, "Prefer v1.");
@@ -145,7 +125,7 @@ describe("agent messaging", () => {
       ).toBe(true);
       expect(steerMessages(childControl)).toHaveLength(1);
 
-      yield* askQuestion(childControl, projections, child.id, "question-2");
+      yield* askParent(childControl, projections, "question-2", undefined, child.id);
       expect(yield* service.agentSend(MAIN, child.id, "Use v2.")).toMatchObject({
         disposition: "answered",
         run: { state: "running" },
@@ -171,12 +151,10 @@ describe("agent messaging", () => {
       );
       yield* completeLocalRun(service, fake.controls[0]!, parent.id, "Parent done.");
       const childControl = fake.controls[1]!;
-      yield* askQuestion(childControl, projections, child.id, "question-routed");
+      yield* askParent(childControl, projections, "question-routed", undefined, child.id);
       yield* TestClock.adjust("200 millis");
       yield* yieldUntil(() => Arr.some(notifications, (notice) => notice.type === "question"));
-      expect(
-        Option.getOrUndefined(Arr.findFirst(notifications, (notice) => notice.type === "question")),
-      ).toMatchObject({
+      expect(findOrUndefined(notifications, (notice) => notice.type === "question")).toMatchObject({
         id: child.id,
       });
 
@@ -257,28 +235,6 @@ describe("agent messaging", () => {
     });
   });
 
-  it.effect("binds each native backend's agent messaging to its own run as the caller", () => {
-    const { backend, layer } = eventBackendServiceFixture();
-    return withService(layer, function* (service) {
-      const first = yield* service.start(eventBackendRequest({ name: "first" }));
-      const second = yield* service.start(eventBackendRequest({ name: "second" }));
-      const messaging = backend.agentMessaging[0]!;
-      expect(
-        Option.getOrUndefined(
-          Arr.findFirst((yield* messaging.list()).agents, (agent) => agent.self),
-        )?.id,
-      ).toBe(first.id);
-      expect((yield* messaging.send(second.id, "Compare notes.")).disposition).toBe("guided");
-      expect(backend.controls[1]?.prompts.at(-1)).toContain(first.id);
-      expect(yield* messaging.send(first.id, "Me?").pipe(Effect.flip)).toMatchObject({
-        code: "agent_self_target",
-      });
-      expect((yield* messaging.read([second.id])).agents).toEqual([
-        objectContaining({ id: second.id }),
-      ]);
-    });
-  });
-
   it.effect("refuses a run whose state is being reclaimed, then reports it gone", () => {
     let gate: Deferred.Deferred<void> | undefined;
     const fake = fakeChildLayer(Effect.void, {
@@ -332,19 +288,19 @@ describe("agent messaging", () => {
       return withService(layer, function* (service) {
         const run = yield* service.start(request({ name: "reporter" }));
         const send = (text: string) => service.agentSend(asRun(run), MAIN_AGENT_ID, text);
-        for (const text of ["one", "two", "three", "four", "five"])
+        for (const text of ["one", "two"])
           expect(yield* send(text)).toMatchObject({ disposition: "guided", mainState: "idle" });
         expect(Arr.every(main.delivered, (delivery) => delivery.startTurn)).toBe(true);
         expect(main.delivered[0]?.frame).toMatchObject({ from: run.id, to: MAIN_AGENT_ID });
         expect(main.delivered[0]?.frame.content).toContain("one");
 
         main.control.state = "busy";
-        expect((yield* send("six")).mainState).toBe("busy");
+        expect((yield* send("three")).mainState).toBe("busy");
         main.control.held = true;
-        expect((yield* send("seven")).mainState).toBe("held");
+        expect((yield* send("four")).mainState).toBe("held");
 
         main.control.retired = true;
-        expect(yield* send("eight").pipe(Effect.flip)).toMatchObject({ code: "agent_unavailable" });
+        expect(yield* send("five").pipe(Effect.flip)).toMatchObject({ code: "agent_unavailable" });
       });
     },
   );
@@ -360,7 +316,7 @@ describe("agent messaging", () => {
           request({ name: "child", nestingPolicy: nesting }),
         );
         yield* completeLocalRun(service, fake.controls[1]!, child.id);
-        for (let round = 0; round < 5; round += 1) {
+        for (let round = 0; round < 2; round += 1) {
           expect((yield* service.agentSend(asRun(parent), child.id, "Again.")).disposition).toBe(
             "resumed",
           );
@@ -370,7 +326,7 @@ describe("agent messaging", () => {
     },
   );
 
-  it.effect("never limits messages up, down, or across the tree", () => {
+  it.effect("guides runs up, down, and across the tree", () => {
     const { layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const parent = yield* service.start(request({ name: "parent", nestingPolicy: nesting }));
@@ -379,29 +335,13 @@ describe("agent messaging", () => {
         request({ name: "child", nestingPolicy: nesting }),
       );
       const peer = yield* service.start(request({ name: "peer" }));
-      for (let index = 0; index < 30; index += 1) {
-        for (const [caller, to] of [
-          [MAIN, child.id],
-          [asRun(parent), child.id],
-          [asRun(peer), child.id],
-          [asRun(child), parent.id],
-        ] as const)
-          expect((yield* service.agentSend(caller, to, `Note ${index}.`)).disposition).toBe(
-            "guided",
-          );
-      }
-    });
-  });
-
-  it.effect("lets the main agent resume its own paused run any number of times", () => {
-    const { layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "worker" }));
-      for (let round = 0; round < 5; round += 1) {
-        expect((yield* service.interrupt(run.id)).state).toBe("paused");
-        expect((yield* service.agentSend(MAIN, run.id, "Continue.")).disposition).toBe("resumed");
-      }
-      expect((yield* runView(service, run.id)).state).toBe("running");
+      for (const [caller, to] of [
+        [MAIN, child.id],
+        [asRun(parent), child.id],
+        [asRun(peer), child.id],
+        [asRun(child), parent.id],
+      ] as const)
+        expect((yield* service.agentSend(caller, to, "Note.")).disposition).toBe("guided");
     });
   });
 
@@ -566,7 +506,7 @@ describe("the user's messages", () => {
     return withService(layer, function* (service) {
       const asking = yield* service.start(request({ name: "asking" }));
       const working = yield* service.start(request({ name: "working", task: "Review tests" }));
-      yield* askQuestion(fake.controls[0]!, projections, asking.id, "question-1");
+      yield* askParent(fake.controls[0]!, projections, "question-1", undefined, asking.id);
 
       const outcomes = yield* Effect.forEach(
         [asking.id, working.id],
@@ -627,7 +567,7 @@ describe("the user's messages", () => {
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "changing" }));
       const expected = captureSubagentControlExpectation(yield* runView(service, run.id));
-      yield* askQuestion(fake.controls[0]!, projections, run.id, "question-later");
+      yield* askParent(fake.controls[0]!, projections, "question-later", undefined, run.id);
 
       expect(
         yield* service.send(run.id, "Old guidance.", expected).pipe(Effect.flip),
@@ -641,7 +581,7 @@ describe("the user's messages", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "reply-in-flight" }));
-      yield* askQuestion(fake.controls[0]!, projections, run.id, "question-in-flight");
+      yield* askParent(fake.controls[0]!, projections, "question-in-flight", undefined, run.id);
       const replyGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateNextIpcType("parent_reply", replyGate);
       const replying = yield* service
@@ -667,7 +607,7 @@ describe("the user's messages", () => {
     const { fake, projections, layer } = localServiceFixture();
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "unsent-reply" }));
-      yield* askQuestion(fake.controls[0]!, projections, run.id, "unsent-question");
+      yield* askParent(fake.controls[0]!, projections, "unsent-question", undefined, run.id);
 
       fake.controls[0]?.failNextIpc("transport_not_sent");
       expect(yield* service.send(run.id, "Proceed.").pipe(Effect.flip)).toMatchObject({

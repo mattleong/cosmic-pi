@@ -11,10 +11,9 @@ import type {
   BackendDriver,
   BackendCleanupVerifier,
   BackendEvent,
-  BackendAgentMessaging,
   BackendLaunchRequest,
 } from "../../../src/backend/model.ts";
-import { backendRegistryFor, SubagentBackendRegistry } from "../../../src/backend/service.ts";
+import { SubagentBackendRegistry } from "../../../src/backend/service.ts";
 import {
   WriterLeaseConflictError,
   WriterLeaseMarkError,
@@ -36,7 +35,6 @@ import type { OversizedLine } from "../../../src/boundary/bounded-line-parser.ts
 import type { ProcessExit } from "../../../src/boundary/process-transport.ts";
 import { runNotFound, SubagentProcessError } from "../../../src/run/errors.ts";
 import {
-  emptyUsage,
   type StartSubagentRequest,
   type SubagentProjection,
   type SubagentCleanupDiagnostic,
@@ -55,6 +53,7 @@ import { type JsonObject } from "pi-cosmic-core";
 import { yieldUntil, provideBuiltLayer } from "pi-cosmic-core/testing";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export const withService = <Eff extends Effect.Effect<unknown, unknown, unknown>, A, ROut, LE, LR>(
   layer: Layer.Layer<ROut, LE, LR>,
@@ -97,7 +96,7 @@ export const runViews = (service: SubagentServiceContract) =>
 export const runView = (service: SubagentServiceContract, id: string) =>
   runViews(service).pipe(
     Effect.flatMap((runs) => {
-      const run = Option.getOrUndefined(Arr.findFirst(runs, (candidate) => candidate.id === id));
+      const run = findOrUndefined(runs, (candidate) => candidate.id === id);
       return run ? Effect.succeed(run) : Effect.fail(runNotFound(id));
     }),
   );
@@ -150,17 +149,6 @@ export const reportsAtRoot = (notifications: ReadonlyArray<SubagentNotification>
     notification.type === "completed" ? Arr.map(notification.runs, (run) => run.finalText) : [],
   );
 
-export const useProbe = () => {
-  const probe = {
-    entered: false,
-    use: () =>
-      Effect.sync(() => {
-        probe.entered = true;
-      }),
-  };
-  return probe;
-};
-
 // A steering prompt carries guidance, so tests address it apart from the assignment prompt.
 type FakeCommandType = RpcCommand["type"] | "steer";
 
@@ -177,11 +165,7 @@ type IpcControlOf<T extends LocalPiParentControl["type"]> = Extract<
 >;
 
 interface FakeCleanupControl {
-  readonly fail: (
-    diagnostic: SubagentCleanupDiagnostic,
-    recoverable?: boolean,
-    mixed?: boolean,
-  ) => void;
+  readonly fail: (diagnostic: SubagentCleanupDiagnostic) => void;
   readonly confirm: () => void;
   readonly gate: (gate: Deferred.Deferred<void>) => void;
   readonly verifications: () => number;
@@ -190,18 +174,14 @@ interface FakeCleanupControl {
 const cleanupFixture = () => {
   let diagnostic: SubagentCleanupDiagnostic | undefined;
   let failure: SubagentProcessError | undefined;
-  let recoverable = true;
   let confirmed = true;
-  let mixed = false;
   let gate: Deferred.Deferred<void> | undefined;
   let verifications = 0;
   const control: FakeCleanupControl = {
-    fail: (nextDiagnostic, nextRecoverable = true, nextMixed = false) => {
+    fail: (nextDiagnostic) => {
       diagnostic = nextDiagnostic;
       failure = SubagentProcessError.make({ operation: "fixture cleanup", ...nextDiagnostic });
-      recoverable = nextRecoverable;
       confirmed = false;
-      mixed = nextMixed;
     },
     confirm: () => {
       confirmed = true;
@@ -212,7 +192,7 @@ const cleanupFixture = () => {
     verifications: () => verifications,
   };
   const verifier: BackendCleanupVerifier = {
-    canVerify: () => recoverable,
+    canVerify: () => true,
     diagnostic: (reason) =>
       (Cause.isDieReason(reason) && reason.defect === failure) ||
       (Cause.isFailReason(reason) && reason.error === failure)
@@ -225,15 +205,7 @@ const cleanupFixture = () => {
       return undefined;
     }),
   };
-  const release = Effect.suspend(() =>
-    failure
-      ? Effect.failCause(
-          mixed
-            ? Cause.combine(Cause.die(failure), Cause.die(new Error("Unrelated finalizer failed.")))
-            : Cause.die(failure),
-        )
-      : Effect.void,
-  );
+  const release = Effect.suspend(() => (failure ? Effect.die(failure) : Effect.void));
   return { control, verifier, release };
 };
 
@@ -266,7 +238,6 @@ export interface FakeChildControl {
   readonly beforeNextResponse: (type: FakeCommandType, value: RpcWireValue) => void;
   readonly offer: (value: RpcWireValue) => void;
   readonly offerIpc: (value: IpcWireValue) => void;
-  readonly offerProtocolError: (message: string) => void;
   readonly offerOversizedLine: (line: OversizedLine) => void;
   readonly exit: (
     exitCode?: number | null,
@@ -297,11 +268,6 @@ export function fakeChildLayer(
       readonly spawnIndex: number;
       readonly type: FakeCommandType;
       readonly error: string;
-    }>;
-    readonly initialTransportFailures?: ReadonlyArray<{
-      readonly spawnIndex: number;
-      readonly type: FakeCommandType;
-      readonly code: string;
     }>;
     readonly initialSendGates?: ReadonlyArray<{
       readonly spawnIndex: number;
@@ -359,10 +325,6 @@ export function fakeChildLayer(
           const failures: Array<{ readonly type: FakeCommandType; readonly error: string }> =
             forSpawn(options.initialFailures);
           const dropped: FakeCommandType[] = remainingInitialStateDrops > 0 ? ["get_state"] : [];
-          const transportFailures: Array<{
-            readonly type: FakeCommandType;
-            readonly code: string;
-          }> = forSpawn(options.initialTransportFailures);
           const ipcFailures: string[] = [];
           if (remainingInitialStateDrops > 0) remainingInitialStateDrops -= 1;
           const sendGates: Array<{
@@ -448,8 +410,6 @@ export function fakeChildLayer(
                 requestId: message.requestId,
               });
           };
-          const offerProtocolError = (message: string) =>
-            Queue.offerUnsafe(events, { type: "protocol_error", message });
           const offerOversizedLine = (line: OversizedLine) =>
             Queue.offerUnsafe(events, { type: "oversized_line", ...line });
           const exit: FakeChildControl["exit"] = (exitCode = 0, diagnostic = {}) => {
@@ -476,13 +436,6 @@ export function fakeChildLayer(
                   entry.type === commandType(command);
                 const gate = takeFirst(sendGates, forCommand)?.gate;
                 if (gate) yield* Deferred.await(gate);
-                const transportFailure = takeFirst(transportFailures, forCommand);
-                if (transportFailure)
-                  return yield* SubagentProcessError.make({
-                    operation: "send RPC command to",
-                    code: transportFailure.code,
-                    message: "Fixture transport outcome.",
-                  });
                 const before = takeFirst(beforeResponses, forCommand);
                 if (before) offer(before.value);
                 if (takeFirst(dropped, (type) => type === commandType(command)) !== undefined)
@@ -571,7 +524,6 @@ export function fakeChildLayer(
             beforeNextResponse: (type, value) => void beforeResponses.push({ type, value }),
             offer,
             offerIpc,
-            offerProtocolError,
             offerOversizedLine,
             exit,
             failExit,
@@ -696,7 +648,7 @@ export function fakeWriterLeaseLayer(
 const localPiBackendRegistryLayer = Layer.effect(
   SubagentBackendRegistry,
   ChildProcess.use((childProcesses) =>
-    Effect.succeed(backendRegistryFor(localPiBackendDriver(childProcesses, Effect.void))),
+    Effect.succeed(localPiBackendDriver(childProcesses, Effect.void)),
   ),
 );
 
@@ -731,19 +683,15 @@ interface FakeEventBackendControl {
 export function fakeEventBackendLayer(
   options: {
     readonly initialStartGate?: Deferred.Deferred<void> | undefined;
-    readonly interruptGate?: Deferred.Deferred<void> | undefined;
-    readonly releaseGate?: Deferred.Deferred<void> | undefined;
     /** Replaces recorded guidance delivery, such as with a failed one. */
     readonly steer?: ((message: string) => Effect.Effect<void, SubagentProcessError>) | undefined;
   } = {},
 ) {
   const controls: FakeEventBackendControl[] = [];
   const launches: BackendLaunchRequest[] = [];
-  const agentMessaging: Array<BackendAgentMessaging | undefined> = [];
   const driver: BackendDriver = {
-    supportsContext: (context) => context === "fresh",
     preflight: () => Effect.void,
-    spawn: (launch, agents) =>
+    spawn: (launch) =>
       Effect.acquireRelease(
         Effect.gen(function* () {
           const events = yield* Queue.unbounded<BackendEvent, Cause.Done>();
@@ -769,7 +717,6 @@ export function fakeEventBackendLayer(
                 type: "assistant_message",
                 assignmentEpoch,
                 text,
-                usage: emptyUsage(),
                 terminal,
               });
               offer({ type: "run_settled", assignmentEpoch, terminal });
@@ -778,7 +725,6 @@ export function fakeEventBackendLayer(
           };
           controls.push(control);
           launches.push(launch);
-          agentMessaging.push(agents);
           return {
             handle: {
               pid: 22_001,
@@ -803,9 +749,7 @@ export function fakeEventBackendLayer(
                   Effect.sync(() => void prompts.push(`steer:${message}`)).pipe(
                     Effect.andThen(options.steer?.(message) ?? Effect.void),
                   ),
-                interrupt: options.interruptGate
-                  ? Deferred.await(options.interruptGate)
-                  : Effect.void,
+                interrupt: Effect.void,
                 reply: () => Effect.void,
                 notifyPeers: () => Effect.void,
               },
@@ -814,8 +758,7 @@ export function fakeEventBackendLayer(
                 Effect.sync(() => void terminations.push(mode)),
               cancelPending: () => {},
             },
-            release: Effect.gen(function* () {
-              if (options.releaseGate) yield* Deferred.await(options.releaseGate);
+            release: Effect.sync(() => {
               releaseCount += 1;
               Queue.endUnsafe(events);
             }),
@@ -827,8 +770,7 @@ export function fakeEventBackendLayer(
   return {
     controls,
     launches,
-    agentMessaging,
-    layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver)),
+    layer: Layer.succeed(SubagentBackendRegistry, driver),
   };
 }
 
@@ -872,10 +814,11 @@ export function driverServiceFixture(
   driver: BackendDriver,
   options: SubagentServiceOptions = {},
   profiles = profileLayerFor({}),
+  writerLeases?: Layer.Layer<WriterLeaseService>,
 ) {
   const { projections, notifications, options: captured } = capturing(options);
-  const registry = Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver));
-  const layer = layerOver(registry, captured, profiles);
+  const registry = Layer.succeed(SubagentBackendRegistry, driver);
+  const layer = layerOver(registry, captured, profiles, writerLeases);
   return { projections, notifications, layer };
 }
 
@@ -895,15 +838,21 @@ export const contactParentFrame = (
   message: string,
 ): IpcWireValue => ({ channel: "pi-subagents", type: "contact_request", requestId, kind, message });
 
+/** Asks a question as the child and waits until `runId`, or else the first run, shows it. */
 export const askParent = (
   control: FakeChildControl,
   projections: ReadonlyArray<SubagentProjection>,
   requestId: string,
   message = "Which answer?",
+  runId?: string,
 ) =>
   Effect.gen(function* () {
     control.offerIpc(contactParentFrame(requestId, "question", message));
-    yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
+    yield* yieldUntil(() => {
+      const run =
+        runId === undefined ? projections.at(-1)?.runs[0] : latestProjectedRun(projections, runId);
+      return run?.state === "waiting_for_parent";
+    });
   });
 
 export const request = (overrides: Partial<StartSubagentRequest> = {}): StartSubagentRequest => ({

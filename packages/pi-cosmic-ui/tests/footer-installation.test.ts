@@ -1,25 +1,10 @@
-import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { describe, expect, it, vi } from "vitest";
-import {
-  extensionApiFixture,
-  extensionContextFixture,
-  footerDataFixture,
-  plainTheme,
-  tuiFixture,
-} from "pi-cosmic-core/testing";
+import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { defaultResolvedCosmicUiConfig } from "../src/config/schema.ts";
 import { createFooterInstallation } from "../src/footer/installation.ts";
 import { createProjection } from "../src/protocol/service.ts";
-
-type FooterFactory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
-
-const mountFooter = (factory: FooterFactory | undefined, requestRender: () => void) => {
-  if (!factory) throw new Error("Expected an installed footer factory.");
-  const component = factory(tuiFixture({ requestRender }), plainTheme, footerDataFixture());
-  if (!component.dispose) throw new Error("Expected a disposable footer.");
-  return { dispose: () => component.dispose?.() };
-};
+import { makeFooter, type FooterFactory } from "./support/host.ts";
 
 function installation() {
   const projection = createProjection();
@@ -47,7 +32,7 @@ function installation() {
     onActiveChange: () => undefined,
   });
   const instance = (requestRender: () => void, factory?: FooterFactory) =>
-    mountFooter(factory ?? factories.at(-1), requestRender);
+    makeFooter(factory ?? factories.at(-1), {}, requestRender);
   return { footer, context, instance, factories };
 }
 

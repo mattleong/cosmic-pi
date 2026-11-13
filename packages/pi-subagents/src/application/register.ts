@@ -6,7 +6,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import {
   CodePreviewSchedulerService,
@@ -58,7 +57,7 @@ import {
 import type { SubagentProjection } from "../run/model.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
-import { SubagentService } from "../run/service.ts";
+import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import { ROOT_TOOL_NAMES, SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeAgentActionEffect } from "../tools/execute-agents.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
@@ -77,6 +76,7 @@ import {
   sessionRestoreNotice,
   type ProfileReloadCapture,
 } from "./profile-reload-handoff.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const ROOT_TOOL_NAME_SET: ReadonlySet<string> = new Set(ROOT_TOOL_NAMES);
 const PARENT_IDLE_CHECK_INTERVAL = "50 millis";
@@ -151,6 +151,16 @@ const activateWorktreeTool = (pi: ExtensionAPI): void =>
     if (!active.includes(SUBAGENT_TOOL_NAME.workspace))
       pi.setActiveTools([...active, SUBAGENT_TOOL_NAME.workspace]);
   }, undefined);
+
+const sessionReplaced = () =>
+  InvalidSubagentRequestError.make({
+    code: "proxy_caller_disconnected",
+    message: "The subagent session was replaced.",
+  });
+
+/** The authenticated caller's own run, while the service still holds it. */
+const callerRun = (service: Pick<SubagentServiceContract, "visibleList">, id: string) =>
+  Effect.map(service.visibleList(id), (runs) => findOrUndefined(runs, (run) => run.id === id));
 
 function notifyActivationWarning(ctx: ExtensionContext, message: string): void {
   if (invokeHostCallback(() => ctx.hasUI, false)) notifyAtHostBoundary(ctx, message, "warning");
@@ -235,6 +245,7 @@ export function registerSubagentApplication(
     >({
       makeRuntime: (activation) => {
         const ownsActivation = slot.captureAuthority();
+        const isLive = () => ownsActivation() && currentActivation === activation;
         if (activation.trigger !== "tree") profileOverrideHandoff.clear();
         const owner = profileOverrideHandoff.open();
         if (activation.trigger === "reload")
@@ -264,8 +275,7 @@ export function registerSubagentApplication(
             )
               pendingRestore = undefined;
             // The footer is presentation; its failure must not fail the committed change.
-            if (ownsActivation() && currentActivation === activation)
-              invokeHostCallback(showSessionFooter, undefined);
+            if (isLive()) invokeHostCallback(showSessionFooter, undefined);
           },
           publish: (projection) => {
             if (!ownsActivation()) return;
@@ -284,17 +294,16 @@ export function registerSubagentApplication(
           // spent their usage in this session.
           recordSessionUsage: sessionUsageRecorder(pi, activation.ctx),
           notify: (notification) =>
-            ownsActivation() && currentActivation === activation
+            isLive()
               ? notify(notification)
               : { deliveredCompletionKeys: [], actionAccepted: false },
           agentMain: agentMainCapabilities(pi, {
             wake,
-            session: () =>
-              ownsActivation() && currentActivation === activation ? activation.ctx : undefined,
+            session: () => (isLive() ? activation.ctx : undefined),
           }),
           questionnaireHandler: (request, questionnaireOwner, shown) =>
             Effect.suspend(() =>
-              ownsActivation() && currentActivation === activation
+              isLive()
                 ? askParentQuestionnaire(
                     pi.events,
                     activation.ctx.sessionManager.getSessionId(),
@@ -302,29 +311,15 @@ export function registerSubagentApplication(
                     questionnaireOwner,
                     shown,
                   )
-                : Effect.fail(
-                    InvalidSubagentRequestError.make({
-                      code: "proxy_caller_disconnected",
-                      message: "The subagent session was replaced.",
-                    }),
-                  ),
+                : Effect.fail(sessionReplaced()),
             ),
           proxyHandler: Effect.fn("SubagentsExtension.proxyHandler")(
             function* (service, callerRunId, request) {
-              if (!ownsActivation() || currentActivation !== activation)
-                return yield* InvalidSubagentRequestError.make({
-                  code: "proxy_caller_disconnected",
-                  message: "The subagent session was replaced.",
-                });
+              if (!isLive()) return yield* sessionReplaced();
               // The authenticated channel names the caller; agent payloads carry no identity.
               const agentInput = yield* Effect.fromResult(decodeAgentProxyRequest(request));
               if (agentInput) {
-                const callerCwd = Option.getOrUndefined(
-                  Arr.findFirst(
-                    yield* service.visibleList(callerRunId),
-                    (run) => run.id === callerRunId,
-                  ),
-                )?.cwd;
+                const callerCwd = (yield* callerRun(service, callerRunId))?.cwd;
                 return yield* executeAgentActionEffect(
                   agentInput,
                   { kind: "run", runId: callerRunId },
@@ -337,12 +332,7 @@ export function registerSubagentApplication(
                 ? yield* service.captureLaunchParent(callerRunId, decoded.parentContext)
                 : undefined;
               const input = yield* Effect.fromResult(decodeSubagentProxyRequest(decoded.request));
-              const caller = Option.getOrUndefined(
-                Arr.findFirst(
-                  yield* service.visibleList(callerRunId),
-                  (run) => run.id === callerRunId,
-                ),
-              );
+              const caller = yield* callerRun(service, callerRunId);
               if (!caller)
                 return yield* InvalidSubagentRequestError.make({
                   code: "parent_run_not_found",

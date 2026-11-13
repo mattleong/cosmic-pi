@@ -1,6 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
+import * as Fn from "effect/Function";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 
@@ -81,10 +83,10 @@ export function endElide(text: string, width: number, slack = WORD_CUT_SLACK): s
   const kept = Option.getOrElse(
     Arr.findFirst([lastBreak, lastNameBreak], (cut) => {
       if (cut === undefined) return Option.none();
-      const trimmed = Str.replace(TRAILING_BREAK, "")(cut);
+      const trimmed = Fn.pipe(cut, Str.replace(TRAILING_BREAK, ""));
       return Str.isNonEmpty(trimmed) && enough(trimmed) ? Option.some(trimmed) : Option.none();
     }),
-    () => Str.replace(TRAILING_BREAK, "")(head),
+    () => Fn.pipe(head, Str.replace(TRAILING_BREAK, "")),
   );
   return `${kept || head}…`;
 }
@@ -111,9 +113,11 @@ const WORD_BREAK = /^[,;:.\-–—…]*\s/u;
 export function cutsCleanly(text: string, cut: string, kind: CompactSubjectKind): boolean {
   if (cut === text) return true;
   if (kind === "path")
-    return Str.endsWith(Option.getOrElse(Arr.last(Str.split(text, "/")), () => text))(cut);
-  const head = Str.endsWith("…")(cut) ? Str.slice(0, -1)(cut) : cut;
-  return Str.startsWith(head)(text) && WORD_BREAK.test(Str.slice(head.length)(text));
+    return Fn.pipe(cut, Str.endsWith(Option.getOrElse(Arr.last(Str.split(text, "/")), () => text)));
+  const head = Fn.pipe(cut, Str.endsWith("…")) ? Fn.pipe(cut, Str.slice(0, -1)) : cut;
+  return (
+    Fn.pipe(text, Str.startsWith(head)) && WORD_BREAK.test(Fn.pipe(text, Str.slice(head.length)))
+  );
 }
 
 /** The columns a collapsed heading's subject keeps beside a fact, unless it is shorter. */
@@ -139,11 +143,11 @@ export function layoutCompactHeader(
   candidateCounters: readonly string[],
   optional: readonly (string | undefined)[],
   width: number,
-  separator = " · ",
-  timing?: string,
-  subjectKind: CompactSubjectKind = "prose",
-  subjectMinimumColumns = SUBJECT_MINIMUM,
-  subjectAlternatives: readonly string[] = [],
+  separator: string,
+  timing: string | undefined,
+  subjectKind: CompactSubjectKind,
+  subjectMinimumColumns: number,
+  subjectAlternatives: readonly string[],
 ) {
   const lay = (shown: string, counters: readonly string[]) =>
     layoutSubjectHeader(
@@ -173,23 +177,28 @@ export function layoutCompactHeader(
   return base;
 }
 
+/** The first non-blank optional fact, which takes a counter's place on a row without counters. */
+export const promotedFact = (
+  counters: readonly string[],
+  optional: readonly (string | undefined)[],
+): string | undefined =>
+  counters.length > 0
+    ? undefined
+    : findOrUndefined(optional, (value) => value !== undefined && Str.isNonEmpty(Str.trim(value)));
+
 function layoutSubjectHeader(
   identity: string,
   subject: string,
   candidateCounters: readonly string[],
   optional: readonly (string | undefined)[],
   width: number,
-  separator = " · ",
-  timing?: string,
-  subjectKind: CompactSubjectKind = "prose",
-  subjectMinimumColumns = SUBJECT_MINIMUM,
+  separator: string,
+  timing: string | undefined,
+  subjectKind: CompactSubjectKind,
+  subjectMinimumColumns: number,
 ) {
   const counters = Arr.filter(candidateCounters, (value) => Str.isNonEmpty(Str.trim(value)));
-  const extra = counters.length
-    ? undefined
-    : Option.getOrUndefined(
-        Arr.findFirst(optional, (value) => value !== undefined && Str.isNonEmpty(Str.trim(value))),
-      );
+  const extra = promotedFact(counters, optional);
   const remaining = width - visibleWidth(identity);
   // A clipped heading always ends in an ellipsis, so it never reads as complete; the identity stays
   // whole beside a subject cut to its first column and `…`.
@@ -206,8 +215,9 @@ function layoutSubjectHeader(
   const counterBudget = remaining - subjectMinimum;
   const timingToken = timing && Str.trim(timing) ? `${separator}${timing}` : "";
   const lay = (facts: readonly string[]) => {
-    const counter = Option.getOrUndefined(
-      Arr.findFirst(facts, (value) => visibleWidth(`${separator}${value}`) <= counterBudget),
+    const counter = findOrUndefined(
+      facts,
+      (value) => visibleWidth(`${separator}${value}`) <= counterBudget,
     );
     const counterText = counter === undefined ? "" : `${separator}${counter}`;
     const counterWidth = visibleWidth(counterText);

@@ -85,19 +85,19 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
       let cachedIdentity: DirectoryIdentity | undefined;
       const warned = new Set<string>();
 
-      const warnOnce = (key: string, message: string) =>
+      // Each warning is shown once per session, however many restores and saves raise it.
+      const warnOnce = (message: string) =>
         Effect.sync(() => {
-          if (warned.has(key)) return;
-          warned.add(key);
+          if (warned.has(message)) return;
+          warned.add(message);
           notify(message, "warning");
         });
 
       const recovered = <Value, E>(
         effect: Effect.Effect<Value, E>,
-        key: string,
-        message: string,
+        warning: (error: E) => string,
       ): Effect.Effect<Value | undefined> =>
-        effect.pipe(Effect.catch(() => Effect.as(warnOnce(key, message), undefined)));
+        effect.pipe(Effect.catch((error) => Effect.as(warnOnce(warning(error)), undefined)));
 
       const identity = Effect.gen(function* () {
         if (cachedIdentity) return cachedIdentity;
@@ -115,7 +115,7 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
           Effect.flatMap((stored) =>
             stored && equivalentPreference(stored, preference)
               ? Effect.void
-              : recovered(store.write(identified, preference), "write", writeWarning(identified)),
+              : recovered(store.write(identified, preference), () => writeWarning(identified)),
           ),
         );
 
@@ -125,14 +125,13 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
           if (!selected) return Effect.undefined;
           return recovered(
             preferenceFromSelectedModel(pi, canonicalCwd, selected),
-            "current",
-            "Couldn't read Pi's current model, so it wasn't saved for this directory\nPick it again with /model to save it",
+            (error) => error.message,
           );
         });
 
       const remember = gate.withPermit(
         Effect.gen(function* () {
-          const identified = yield* recovered(identity, "identify", IDENTIFY_WARNING);
+          const identified = yield* recovered(identity, () => IDENTIFY_WARNING);
           if (!identified) return;
           const preference = yield* currentPreference(identified.canonicalCwd);
           if (!preference) return;
@@ -143,10 +142,10 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
       const initialize = gate.withPermit(
         Effect.gen(function* () {
           if (!input.fresh || input.explicitPreference) return;
-          const identified = yield* recovered(identity, "identify", IDENTIFY_WARNING);
+          const identified = yield* recovered(identity, () => IDENTIFY_WARNING);
           if (!identified) return;
           const loaded = yield* store.read(identified).pipe(
-            Effect.tapError((error) => warnOnce("read", readWarning(error.reason, identified))),
+            Effect.tapError((error) => warnOnce(readWarning(error.reason, identified))),
             Effect.option,
           );
           if (Option.isNone(loaded)) return;
@@ -156,12 +155,10 @@ export class DirectoryModelPreferenceService extends Context.Service<DirectoryMo
             if (current) yield* write(identified, current);
             return;
           }
-          if (loadedPreference.invalidThinkingLevel)
-            yield* warnOnce("read:thinkingLevel", THINKING_LEVEL_WARNING);
-          const restored = yield* applyHostPreference(pi, input.models, loadedPreference).pipe(
-            Effect.catch((error) =>
-              Effect.as(warnOnce(`restore:${error.operation}`, error.message), undefined),
-            ),
+          if (loadedPreference.invalidThinkingLevel) yield* warnOnce(THINKING_LEVEL_WARNING);
+          const restored = yield* recovered(
+            applyHostPreference(pi, input.models, loadedPreference),
+            (error) => error.message,
           );
           if (!restored) return;
           if (restored.changed)

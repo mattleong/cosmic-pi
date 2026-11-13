@@ -1,9 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { WriterLeaseConflictError } from "../../src/boundary/writer-lease.ts";
 import type { WorkspaceLaunch, WorkspaceRecord } from "../../src/workspace/model.ts";
-import { withService } from "./fixtures/service-harness.ts";
+import { workspaceRecord } from "../fixtures/workspace-record.ts";
+import { fakeWriterLeaseLayer, withService } from "./fixtures/service-harness.ts";
 import {
+  heldElsewhere,
+  type LeaseOverride,
   leasesWith,
   repoWriter,
   workspaceFixture as fixture,
@@ -15,7 +17,7 @@ import * as Rec from "effect/Record";
 const ORPHAN_DIGEST = Fn.pipe("f", Str.repeat(64));
 
 // The worker tree an orphan saved keeps the digest its creating session saw.
-const orphanLeases = leasesWith((base) => ({
+const orphanCanonicalize: LeaseOverride = (base) => ({
   canonicalize: (cwd) =>
     base
       .canonicalize(cwd)
@@ -26,34 +28,29 @@ const orphanLeases = leasesWith((base) => ({
             : identity,
         ),
       ),
-}));
+});
 
 const orphan = (
   workspaceId: string,
   status: WorkspaceRecord["status"],
-  extra: Partial<WorkspaceRecord> = {},
-): WorkspaceRecord => ({
-  version: 2,
-  repository: "/repo/.git",
-  handle: {
-    workspaceId,
-    ownerId: "old-session/root",
-    sourceRoot: "/repo",
-    sourceCwd: "/repo",
-    artifactRoot: `/private/${workspaceId}`,
-    cwd: `/private/${workspaceId}/worker`,
-    writerCwd: {
-      path: `/private/${workspaceId}/worker`,
-      filesystemIdentity: `dev:1;ino:/private/${workspaceId}/worker`,
-      digest: ORPHAN_DIGEST,
+  extra: Partial<Omit<WorkspaceRecord, "handle">> = {},
+): WorkspaceRecord =>
+  workspaceRecord(workspaceId, {
+    handle: {
+      ownerId: "old-session/root",
+      sourceRoot: "/repo",
+      sourceCwd: "/repo",
+      artifactRoot: `/private/${workspaceId}`,
+      cwd: `/private/${workspaceId}/worker`,
+      writerCwd: {
+        path: `/private/${workspaceId}/worker`,
+        filesystemIdentity: `dev:1;ino:/private/${workspaceId}/worker`,
+        digest: ORPHAN_DIGEST,
+      },
     },
-  },
-  status,
-  baseline: "baseline",
-  ownerLease: "ended-owner",
-  lastChangedAt: 0,
-  ...extra,
-});
+    status,
+    ...extra,
+  });
 
 describe("orphaned workspace takeover", () => {
   it.effect("marks which orphans of ended sessions the root may adopt", () => {
@@ -73,29 +70,39 @@ describe("orphaned workspace takeover", () => {
     });
   });
 
+  it.effect("refuses orphan discard without original directory identity", () => {
+    const f = fixture();
+    f.hooks.orphanOwnerEnded = true;
+    const original = orphan("unready", "active");
+    const { writerCwd: _identity, ...handle } = original.handle;
+    f.entries.set("unready", { ...original, handle });
+    return withService(f.layer, function* (service) {
+      expect(yield* service.workspaceDiscard("unready").pipe(Effect.flip)).toMatchObject({
+        code: "workspace_process_unsettled",
+      });
+      expect(f.entries.get("unready")?.status).toBe("active");
+      expect(f.acquired).toEqual([]);
+    });
+  });
+
+  it.effect("keeps an orphan while a writer still holds its worker tree", () => {
+    const f = fixture({ writerLeases: fakeWriterLeaseLayer({ failAcquire: true }) });
+    f.hooks.orphanOwnerEnded = true;
+    f.entries.set("orphan", orphan("orphan", "active"));
+    return withService(f.layer, function* (service) {
+      expect(yield* service.workspaceDiscard("orphan").pipe(Effect.flip)).toMatchObject({
+        code: "workspace_process_unsettled",
+      });
+      expect(f.entries.get("orphan")?.status).toBe("active");
+    });
+  });
+
   it.effect("rolls a mid-integration orphan back only while no writer holds the checkout", () => {
-    let heldElsewhere = true;
+    let held = true;
     const f = fixture({
       writerLeases: leasesWith((base) => ({
-        canonicalize: (cwd) =>
-          base
-            .canonicalize(cwd)
-            .pipe(
-              Effect.map((identity) =>
-                Fn.pipe(cwd, Str.startsWith("/private/orphan/"))
-                  ? { ...identity, digest: ORPHAN_DIGEST }
-                  : identity,
-              ),
-            ),
-        acquire: (input) =>
-          heldElsewhere && input.cwd.path === "/repo"
-            ? Effect.fail(
-                WriterLeaseConflictError.make({
-                  reason: "live",
-                  message: "Another live writer already owns this filesystem directory identity.",
-                }),
-              )
-            : base.acquire(input),
+        ...orphanCanonicalize(base),
+        ...heldElsewhere((cwd) => held && cwd === "/repo")(base),
       })),
     });
     f.hooks.orphanOwnerEnded = true;
@@ -105,7 +112,7 @@ describe("orphaned workspace takeover", () => {
         code: "workspace_target_busy",
       });
       expect(f.entries.get("orphan")?.status).toBe("integrating");
-      heldElsewhere = false;
+      held = false;
       yield* service.workspaceDiscard("orphan");
       expect(f.rollbacks).toEqual(["orphan"]);
       expect(f.entries.get("orphan")?.status).toBe("discarded");
@@ -127,7 +134,7 @@ describe("orphaned workspace takeover", () => {
   });
 
   it.effect("revises an adopted workspace as a new run of its recorded launch", () => {
-    const f = fixture({ writerLeases: orphanLeases });
+    const f = fixture({ writerLeases: leasesWith(orphanCanonicalize) });
     f.hooks.orphanOwnerEnded = true;
     f.entries.set(
       "orphan",

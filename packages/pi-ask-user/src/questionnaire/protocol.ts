@@ -5,7 +5,15 @@ import * as Predicate from "effect/Predicate";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
 import { querySessionCapability } from "pi-cosmic-core/session-capability";
-import { MAX_CHOICES, MAX_QUESTIONS, MAX_TITLE_LENGTH, type AskUserRequest } from "./schema.ts";
+import {
+  MAX_CHOICES,
+  MAX_CUSTOM_ANSWER_LENGTH,
+  MAX_KEY_LENGTH,
+  MAX_NOTE_LENGTH,
+  MAX_QUESTIONS,
+  MAX_TITLE_LENGTH,
+  type AskUserRequest,
+} from "./schema.ts";
 import {
   normalizeAskUserRequest,
   validateAskUserRequest,
@@ -47,7 +55,11 @@ export interface QuestionnaireRelay {
   ) => Promise<AskUserOutcome>;
 }
 
-const questionFields = { key: text(32), title: text(MAX_TITLE_LENGTH), prompt: text(500) };
+const questionFields = {
+  key: text(MAX_KEY_LENGTH),
+  title: text(MAX_TITLE_LENGTH),
+  prompt: text(500),
+};
 export const QuestionnaireRequestSchema = Schema.Struct({
   questions: Schema.Array(
     Schema.Union([
@@ -72,8 +84,8 @@ export const QuestionnaireRequestSchema = Schema.Struct({
   ).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_QUESTIONS)),
 });
 const answerFields = {
-  key: text(32),
-  note: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2000))),
+  key: text(MAX_KEY_LENGTH),
+  note: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_NOTE_LENGTH))),
 };
 export const QuestionnaireOutcomeSchema = Schema.Union([
   Schema.Struct({ outcome: Schema.Literal("cancelled"), answers: Schema.Tuple([]) }),
@@ -81,11 +93,15 @@ export const QuestionnaireOutcomeSchema = Schema.Union([
     outcome: Schema.Literal("submitted"),
     answers: Schema.Array(
       Schema.Union([
-        Schema.Struct({ ...answerFields, kind: Schema.Literal("custom"), text: text(4000) }),
+        Schema.Struct({
+          ...answerFields,
+          kind: Schema.Literal("custom"),
+          text: text(MAX_CUSTOM_ANSWER_LENGTH),
+        }),
         Schema.Struct({
           ...answerFields,
           kind: Schema.Literal("text"),
-          text: text(4000).check(Schema.isPattern(/\S/)),
+          text: text(MAX_CUSTOM_ANSWER_LENGTH).check(Schema.isPattern(/\S/)),
         }),
         Schema.Struct({
           ...answerFields,

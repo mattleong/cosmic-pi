@@ -29,8 +29,8 @@ import { nodeFsPromises as fs, nodePath as path } from "./support/node-builtins.
 import { processAlive } from "./support/process-liveness.ts";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 import * as Order from "effect/Order";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 const reexport = (target: string) => `export { default } from ${JSON.stringify(target)};\n`;
@@ -130,10 +130,9 @@ describe("installed Pi child through the local launch path", () => {
               text: SCRIPT.progressMessage,
             }),
           );
-          const assignment = Option.getOrUndefined(
-            Arr.findFirst(yield* readObservations(agentDirectory), (observation) =>
-              Fn.pipe(observation.prompt, Str.includes(SCRIPT.progressTask)),
-            ),
+          const assignment = findOrUndefined(
+            yield* readObservations(agentDirectory),
+            (observation) => Fn.pipe(observation.prompt, Str.includes(SCRIPT.progressTask)),
           );
           expect(assignment?.systemPrompt).toContain(childSystemPrompt(first));
           assert(assignment !== undefined);
@@ -159,10 +158,9 @@ describe("installed Pi child through the local launch path", () => {
             sessionFile,
           });
           // A respawned resume keeps its read-only tool policy.
-          const resumedTools = Option.getOrUndefined(
-            Arr.findFirst(yield* readObservations(agentDirectory), (observation) =>
-              Fn.pipe(observation.prompt, Str.includes(SCRIPT.resumeTask)),
-            ),
+          const resumedTools = findOrUndefined(
+            yield* readObservations(agentDirectory),
+            (observation) => Fn.pipe(observation.prompt, Str.includes(SCRIPT.resumeTask)),
           )?.tools;
           expect(resumedTools).toEqual(expect.arrayContaining(["read", "bash"]));
           for (const name of ["edit", "write"]) expect(resumedTools).not.toContain(name);

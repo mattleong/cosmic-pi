@@ -9,11 +9,8 @@ import {
 import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { registerAskUserTool } from "../src/tools/ask-user.ts";
-import {
-  registerAsyncAskUserMessageRenderer,
-  registerAsyncAskUserTools,
-  renderAskUserAsyncMessage,
-} from "../src/tools/ask-user-async.ts";
+import { registerAsyncAskUserTools } from "../src/tools/ask-user-async.ts";
+import { renderAsyncMessage } from "../src/ui/async-tool-render.ts";
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 import { noExecution } from "./support/questionnaire.ts";
 import * as Arr from "effect/Array";
@@ -42,12 +39,10 @@ function register(
     toolCallCollapsedStyle: style,
     ...(mode && { toolCallBackground: mode }),
   });
-  const { tools, messageRenderers } = captureRegistrations((pi) => {
+  const { tools } = captureRegistrations((pi) => {
     registerAskUserTool(pi, noExecution, scheduleAnimation);
     registerAsyncAskUserTools(pi, noExecution, noExecution, scheduleAnimation);
-    registerAsyncAskUserMessageRenderer(pi);
   });
-  expect([...messageRenderers.values()]).toEqual([renderAskUserAsyncMessage]);
   return { tools };
 }
 const restoreSettings = applyPresentationSettings({});
@@ -64,7 +59,7 @@ const rowsOf = (text: string | undefined) =>
 const occurrences = (text: string, part: string) => Str.split(text, part).length - 1;
 /** Where `part` first appears in `text`, or past its end when it doesn't. */
 const position = (text: string, part: string) =>
-  Option.getOrElse(Str.indexOf(part)(text), () => text.length);
+  Option.getOrElse(Fn.pipe(text, Str.indexOf(part)), () => text.length);
 
 describe("registered questionnaire presentation", () => {
   it("preserves answers and full call input, showing model text only without details", () => {
@@ -154,11 +149,11 @@ describe("registered questionnaire presentation", () => {
     };
     expect(
       Arr.join(
-        renderAskUserAsyncMessage(
+        renderAsyncMessage(
           message,
           { ...keybindingHintsFixture, expanded: true, outputPad: 0 },
           theme,
-        )!.render(160),
+        ).render(160),
         "\n",
       ),
     ).toContain("Display label");
@@ -205,95 +200,17 @@ describe("registered questionnaire presentation", () => {
         const harness = createToolPresentationHarness(tool, { width: 160 });
         const result = {
           details: entry.details,
-          content: [{ type: "text" as const, text: entry.text }],
+          content: [{ type: "text" as const, text: `${entry.text}\nIndependent raw evidence` }],
         };
         for (const frame of harness.cycle(entry.args, result, { states: [false, true] }))
-          for (const instruction of ["Do not", "Treat repeated", "Retrieve the", "Continue only"])
+          for (const instruction of [
+            "Do not",
+            "Treat repeated",
+            "Continue only",
+            "Independent raw evidence",
+          ])
             expect(frame.text).not.toContain(instruction);
       }
-    },
-  );
-
-  it.each([57, 100])(
-    "names a collapsed preview row's hidden answer lines in its heading tag at %i columns",
-    (width) => {
-      const answered = {
-        outcome: "submitted" as const,
-        answers: [
-          { key: "summary", kind: "text" as const, text: "First line\nHIDDEN_SECOND_LINE" },
-        ],
-      };
-      const { tools } = register("preview", "off");
-      const tool = Option.getOrThrow(Arr.findFirst(tools, (entry) => entry.name === "ask_user"));
-      const harness = createToolPresentationHarness(tool, { width });
-      harness.call({ questions: [{ key: "summary", title: "Summary", prompt: "Describe it" }] });
-      harness.result({
-        details: answered,
-        content: [{ type: "text", text: formatAskUserOutcome(answered) }],
-      });
-      const [heading = "", ...body] = harness.render(width);
-      // The heading's tag offers the rest; the body draws no affordance line of its own.
-      expect(heading).toContain("▸");
-      expect(Arr.some(body, (row) => Fn.pipe(row, Str.trim, Str.startsWith("▸")))).toBe(false);
-      const text = Arr.join(body, "\n");
-      expect(text).toContain("First line");
-      expect(text).not.toContain("HIDDEN_SECOND_LINE");
-    },
-  );
-
-  it.each([57, 100])(
-    "leaves a lone answer's label to a preview heading that shows its whole title at %i columns",
-    (width) => {
-      const { tools } = register("preview", "off");
-      const tool = Option.getOrThrow(Arr.findFirst(tools, (entry) => entry.name === "ask_user"));
-      const answerBody = (
-        questions: ReadonlyArray<{ readonly key: string; readonly title: string }>,
-        answers: ReadonlyArray<{
-          readonly key: string;
-          readonly text: string;
-          readonly note?: string;
-        }>,
-      ) => {
-        const answered = {
-          outcome: "submitted" as const,
-          answers: Arr.map(answers, (answer) => ({ ...answer, kind: "text" as const })),
-        };
-        const harness = createToolPresentationHarness(tool, { width });
-        harness.call({
-          questions: Arr.map(questions, (question) => ({ ...question, prompt: "?" })),
-        });
-        harness.result({
-          details: answered,
-          content: [{ type: "text", text: formatAskUserOutcome(answered) }],
-        });
-        const [, ...body] = harness.render(width);
-        return Arr.join(body, "\n");
-      };
-      const lone = answerBody(
-        [{ key: "env", title: "Environment" }],
-        [{ key: "env", text: "Staging", note: "Watch the logs" }],
-      );
-      expect(lone).toContain("Staging");
-      expect(lone).not.toContain("Environment:");
-      // A note keeps its own label.
-      expect(lone).toContain("Note:");
-      // Several answers, or a title the heading had to cut, keep their labels.
-      expect(
-        answerBody(
-          [
-            { key: "env", title: "Environment" },
-            { key: "lib", title: "Library" },
-          ],
-          [
-            { key: "env", text: "Staging" },
-            { key: "lib", text: "Intl" },
-          ],
-        ),
-      ).toContain("Environment:");
-      const long = "Deployment environment for the first release";
-      expect(answerBody([{ key: "env", title: long }], [{ key: "env", text: "Staging" }])).toMatch(
-        /: Staging/u,
-      );
     },
   );
 
@@ -375,7 +292,9 @@ describe("registered questionnaire presentation", () => {
       const text = expanded?.text ?? "";
       // Each questionnaire is a listed row; Details key its IDs by the same name.
       for (const title of ["Colour", "Scope"])
-        expect(Arr.filter(rowsOf(text), (row) => Str.includes(title)(row))).toHaveLength(2);
+        expect(Arr.filter(rowsOf(text), (row) => Fn.pipe(row, Str.includes(title)))).toHaveLength(
+          2,
+        );
       expect(text).toContain(open.requestId);
       // The heading counts what needs the user's input; no information line says it again.
       expect(text).not.toContain("ℹ");

@@ -39,7 +39,7 @@ import {
 import { setResultDiffShown, unlessResultDiffShown } from "./shared/result-diff";
 import { writeDiffShowsContent } from "./shared/edit-diff-coverage";
 import { renderPreviewError } from "./shared/result-prelude";
-import { stateHeading } from "./shared/state-heading";
+import { previewHeadingText } from "../../preview/heading-wrap";
 import type { PreviewRenderers } from "./shared/types";
 import { writeBeforeSnapshot, writeDiffPlan } from "./shared/write-result";
 import { countLabel, formatBytes } from "pi-cosmic-core/display";
@@ -81,7 +81,7 @@ export function writePreviewRenderers(cwd: string): PreviewRenderers {
       // A new file needs no fact: an overwrite is told apart by the diff beneath it.
       const header = title + metadata(theme, details);
       const container = new Container();
-      container.addChild(stateHeading(() => header));
+      container.addChild(previewHeadingText(() => header));
       container.addChild(previewIssuesSlot(renderContext));
       if (!expanded && !codePreviewSettings.writeContentPreview) {
         const hint = hiddenPreviewExpandHintForShell({ state }, theme, "content");

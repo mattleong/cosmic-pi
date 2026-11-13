@@ -24,6 +24,7 @@ import {
 import { countLabel, formatBytes } from "pi-cosmic-core/display";
 import { clipToWidth, wrapFacts } from "pi-cosmic-ui/manager";
 import {
+  cachedComponent,
   composeToolComponent,
   renderExpansionAffordance,
   toolRunningLine,
@@ -39,6 +40,7 @@ import { MAX_READ_BYTES } from "../transport/protocol.ts";
 import {
   SESSION_TOOL,
   type ListedSession,
+  type SessionListContract,
   type SessionReadContract,
   type SessionRefusal,
   type SessionSendDetails,
@@ -56,7 +58,7 @@ import {
   sessionSubject,
   type SessionNames,
 } from "../identity.ts";
-import { NO_OTHER_SESSIONS, sessionToolDetails } from "./summary.ts";
+import { hasReply, NO_OTHER_SESSIONS, sessionToolDetails } from "./summary.ts";
 
 /** What a settled result tells the call heading, which renders before it is known. */
 export interface SessionRenderState {
@@ -140,8 +142,6 @@ const STATE_GLYPH_COLORS = {
   unresponsive: "warning",
   unreachable: "error",
 } as const satisfies Record<ListedSession["state"], "success" | "accent" | "warning" | "error">;
-
-type ListDetails = Extract<SessionToolDetails, { readonly tool: "session_list" }>;
 
 const listedFacts = (session: ListedSession, theme: Theme, expanded: boolean) => [
   theme.fg(STATE_COLORS[session.state], SESSION_STATE_LABELS[session.state]),
@@ -229,22 +229,19 @@ const NO_SESSIONS = Str.capitalize(NO_OTHER_SESSIONS);
  * Expanded, every session on its own wrapped row; full ids close in `Details`. A compact heading
  * already says when there are none.
  */
-const listExpanded = (details: ListDetails, theme: Theme, compact: boolean): Component => {
+const listExpanded = (details: SessionListContract, theme: Theme, compact: boolean): Component => {
   if (details.sessions.length === 0)
     return compact
       ? new Container()
       : expandedText(theme, undefined, [{ text: NO_SESSIONS, tone: "muted" }]);
   const labels = distinctSessionLabels(details.sessions);
   const label = (index: number) => labels[index] ?? "";
-  const rows = composeToolComponent((width) => {
-    if (!Number.isFinite(width) || width < 1) return [];
-    return [
-      ...Arr.flatMap(details.sessions, (session, index) =>
-        expandedListedRows(session, label(index), theme, width),
-      ),
-      ...(details.omitted > 0 ? [theme.fg("muted", `and ${details.omitted} more`)] : []),
-    ];
-  });
+  const rows = cachedComponent((width) => [
+    ...Arr.flatMap(details.sessions, (session, index) =>
+      expandedListedRows(session, label(index), theme, width),
+    ),
+    ...(details.omitted > 0 ? [theme.fg("muted", `and ${details.omitted} more`)] : []),
+  ]);
   // A compact heading only counts the sessions, so the list is labeled; a preview heading names it.
   return expandedBody(
     expandedSection(theme, compact ? "Sessions" : undefined, rows),
@@ -255,13 +252,12 @@ const listExpanded = (details: ListDetails, theme: Theme, compact: boolean): Com
   );
 };
 
-const listBody = (details: ListDetails, theme: Theme): Component => {
+const listBody = (details: SessionListContract, theme: Theme): Component => {
   if (details.sessions.length === 0) return statusLine(NO_SESSIONS, theme);
   const labels = distinctSessionLabels(details.sessions);
   const shown = details.sessions.slice(0, MAX_COLLAPSED_SESSIONS);
   const hidden = details.sessions.length - shown.length + details.omitted;
-  return composeToolComponent((width) => {
-    if (!Number.isFinite(width) || width < 1) return [];
+  return cachedComponent((width) => {
     const rows = Arr.map(shown, (session, index) =>
       collapsedListedRow(session, labels[index] ?? sessionSubject(session), theme, width),
     );
@@ -312,7 +308,7 @@ const sendExpanded = (details: SendOutcome, to: string | undefined, theme: Theme
 
 /** The reply's text, unless the latest message has none to show. */
 const replyText = (details: SessionReadContract): string | undefined =>
-  details.text !== undefined && Str.isNonEmpty(Str.trim(details.text)) ? details.text : undefined;
+  hasReply(details) ? details.text : undefined;
 
 const readStatus = (details: SessionReadContract): ReadonlyArray<string> =>
   Arr.filter(
@@ -388,9 +384,9 @@ const fallbackText = (result: AgentToolResult<unknown>, theme: Theme): Component
     Fn.pipe(getTextContent(result.content), Str.replace(/\n+$/u, ""), Str.split("\n")),
   );
 
-const settledTarget = (details: SessionToolDetails): string => {
-  if (details.tool === SESSION_TOOL.list) return "";
-  return "session" in details && details.session ? sessionSubject(details.session) : "";
+const settledTarget = (details: SessionToolDetails): string | undefined => {
+  if (details.tool === SESSION_TOOL.list) return undefined;
+  return "session" in details && details.session ? sessionSubject(details.session) : undefined;
 };
 
 export const renderSessionResult =
@@ -403,8 +399,7 @@ export const renderSessionResult =
   ): Component => {
     if (options.isPartial) return new Container();
     const details = sessionToolDetails(tool, result);
-    const target = details ? settledTarget(details) : "";
-    context.state.sessionTarget = Str.isNonEmpty(target) ? target : undefined;
+    context.state.sessionTarget = details ? settledTarget(details) : undefined;
     if (!details) return options.expanded ? fallbackText(result, theme) : new Container();
     return options.expanded
       ? expandedContent(details, context.args, theme, false)

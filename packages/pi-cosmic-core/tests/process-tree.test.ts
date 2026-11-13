@@ -13,25 +13,30 @@ import {
   signalProcessGroup,
 } from "../index.ts";
 import { nodeSpawn } from "../src/platform/node-builtins.ts";
+import { pollUntil } from "../src/testing/polling.ts";
+import { scopedSpy } from "./support/spies.ts";
+
+/** Stubs `process.kill` to report a live process or throw the observed OS error code. */
+const stubbedKill = (observe: () => true | "EPERM" | "ESRCH" | "EIO") =>
+  scopedSpy(() =>
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      const seen = observe();
+      if (seen === true) return true;
+      throw Object.assign(new Error(seen), { code: seen });
+    }),
+  );
+
 describe("process signals", () => {
   for (const initial of ["present", "permission"] as const)
     it.effect(`confirms process-group absence after an initial ${initial} observation`, () =>
       Effect.gen(function* () {
         const inspected = yield* Deferred.make<void>();
         let alive = true;
-        yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            vi.spyOn(process, "kill").mockImplementation(() => {
-              Deferred.doneUnsafe(inspected, Effect.void);
-              if (alive) {
-                if (initial === "present") return true;
-                throw Object.assign(new Error("settling"), { code: "EPERM" });
-              }
-              throw Object.assign(new Error("gone"), { code: "ESRCH" });
-            }),
-          ),
-          (spy) => Effect.sync(() => spy.mockRestore()),
-        );
+        yield* stubbedKill(() => {
+          Deferred.doneUnsafe(inspected, Effect.void);
+          if (!alive) return "ESRCH";
+          return initial === "present" ? true : "EPERM";
+        });
         const pending = yield* confirmProcessGroupExit(42, 100).pipe(Effect.forkScoped);
         yield* Deferred.await(inspected);
         alive = false;
@@ -43,14 +48,7 @@ describe("process signals", () => {
   for (const code of ["EPERM", "EIO"] as const)
     it.effect(`does not confirm process-group exit when inspection fails with ${code}`, () =>
       Effect.gen(function* () {
-        yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            vi.spyOn(process, "kill").mockImplementation(() => {
-              throw Object.assign(new Error("unavailable"), { code });
-            }),
-          ),
-          (spy) => Effect.sync(() => spy.mockRestore()),
-        );
+        yield* stubbedKill(() => code);
         const pending = yield* confirmProcessGroupExit(42, 100).pipe(Effect.forkScoped);
         yield* TestClock.adjust(100);
         expect(yield* Fiber.join(pending)).toBe(false);
@@ -60,15 +58,7 @@ describe("process signals", () => {
   it.effect("waits for process-group exit without a deadline", () =>
     Effect.gen(function* () {
       let alive = true;
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          vi.spyOn(process, "kill").mockImplementation(() => {
-            if (alive) return true;
-            throw Object.assign(new Error("gone"), { code: "ESRCH" });
-          }),
-        ),
-        (spy) => Effect.sync(() => spy.mockRestore()),
-      );
+      yield* stubbedKill(() => alive || "ESRCH");
       const pending = yield* awaitProcessGroupExit(42).pipe(Effect.forkScoped);
       yield* TestClock.adjust("1 second");
       expect(pending.pollUnsafe()).toBeUndefined();
@@ -91,41 +81,35 @@ describe("process signals", () => {
     }
   });
 
-  it("kills a live detached group after its leader exits", () => {
-    const leader = nodeSpawn(
-      process.execPath,
-      [
-        "-e",
-        `const { spawn } = require("node:child_process");
+  it.live("kills a live detached group after its leader exits", () =>
+    Effect.gen(function* () {
+      const leader = nodeSpawn(
+        process.execPath,
+        [
+          "-e",
+          `const { spawn } = require("node:child_process");
 const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
 child.unref();
 process.stdout.write(String(child.pid) + "\\n");`,
-      ],
-      { detached: true, stdio: ["ignore", "pipe", "ignore"] },
-    );
-    let output = "";
-    leader.stdout.setEncoding("utf8");
-    leader.stdout.on("data", (chunk: string) => {
-      output += chunk;
-    });
-    let descendant = 0;
-    return once(leader, "close")
-      .then(() => {
-        descendant = Number(Str.trim(output));
-        expect(signalProcess(descendant, 0)).toBe("present");
-        expect(signalProcessGroup(leader.pid, "SIGKILL")).toBe("present");
-        return Effect.runPromise(
-          Effect.gen(function* () {
-            for (let attempt = 0; attempt < 200; attempt += 1) {
-              if (signalProcess(descendant, 0) === "absent") return;
-              yield* Effect.sleep(10);
-            }
-          }),
-        );
-      })
-      .then(() => expect(signalProcess(descendant, 0)).toBe("absent"))
-      .finally(() => {
-        if (descendant > 0) signalProcess(descendant, "SIGKILL");
+        ],
+        { detached: true, stdio: ["ignore", "pipe", "ignore"] },
+      );
+      let output = "";
+      leader.stdout.setEncoding("utf8");
+      leader.stdout.on("data", (chunk: string) => {
+        output += chunk;
       });
-  });
+      let descendant = 0;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (descendant > 0) signalProcess(descendant, "SIGKILL");
+        }),
+      );
+      yield* Effect.promise(() => once(leader, "close"));
+      descendant = Number(Str.trim(output));
+      expect(signalProcess(descendant, 0)).toBe("present");
+      expect(signalProcessGroup(leader.pid, "SIGKILL")).toBe("present");
+      expect(yield* pollUntil(() => signalProcess(descendant, 0) === "absent")).toBe(true);
+    }),
+  );
 });

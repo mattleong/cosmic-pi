@@ -17,7 +17,7 @@ import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import { WorkspaceError, WorkspaceRecordSchema, type WorkspaceRecord } from "../workspace/model.ts";
-import { nodeErrorCode } from "./harness-shared.ts";
+import { nodeErrorCode } from "pi-cosmic-core/platform/errors";
 import {
   checkDirectory,
   isSharedOrForeign,
@@ -52,7 +52,7 @@ export const initializeWorkspaceStore = Effect.fn("GitWorktreeStore.initializeWo
     let current = path.parse(absolute).root;
     for (const part of Arr.filter(
       Str.split(Fn.pipe(absolute, Str.slice(current.length)), path.sep),
-      Boolean,
+      Str.isNonEmpty,
     )) {
       const parent = current;
       current = path.join(current, part);
@@ -81,22 +81,6 @@ export const initializeWorkspaceStore = Effect.fn("GitWorktreeStore.initializeWo
     return undefined;
   },
 );
-
-/** An open record as revise and rebase restart it: no revision, preparation, or integration state. */
-export const reopenedWorkspaceRecord = (
-  record: WorkspaceRecord,
-  baseline = record.baseline,
-): WorkspaceRecord => ({
-  version: 2,
-  handle: record.handle,
-  repository: record.repository,
-  baseline,
-  ownerLease: record.ownerLease,
-  lastChangedAt: record.lastChangedAt,
-  status: "active",
-  ...(record.launch && { launch: record.launch }),
-  ...(record.includedPaths && { includedPaths: record.includedPaths }),
-});
 
 export const saveWorkspaceRecord = Effect.fn("GitWorktreeStore.saveWorkspaceRecord")(function* (
   root: string,

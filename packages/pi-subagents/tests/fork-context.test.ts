@@ -182,102 +182,100 @@ describe("forked Pi transcript", () => {
       }),
     );
   }
-  for (const anchor of ["system"] as const) {
-    it.live(`removes parent prompt authority without losing a ${anchor} compaction anchor`, () =>
-      Effect.gen(function* () {
-        const directory = yield* temporaryDirectory("pi-fork-");
-        const parent = SessionManager.create(directory, directory);
-        parent.appendMessage({
-          role: "system",
-          content: "opaque parent secret",
-          toolsAdded: [tool],
-          timestamp: 1,
-        });
-        parent.appendMessage({ role: "user", content: "summarized conversation", timestamp: 2 });
-        const systemId = parent.appendMessage({
-          role: "system",
-          content: "",
-          sections: { parent_section: "parent section secret" },
-          toolsRemoved: [{ name: "read" }],
-          timestamp: 3,
-        });
-        const labelId = parent.appendLabelChange(systemId, "parent bookmark");
-        parent.appendMessage({ role: "user", content: "retained conversation", timestamp: 4 });
-        parent.appendMessage({
-          ...fauxAssistantMessage("retained answer"),
-          content: [
-            {
-              type: "thinking",
-              thinking: "signed private reasoning",
-              thinkingSignature: "signature",
-            },
-            { type: "text", text: "retained answer" },
-          ],
-        });
-        const compactionId = parent.appendCompaction(
-          "retained summary",
-          anchor === "system" ? systemId : labelId,
-          42,
-          { ownedDetail: "preserve" },
-          true,
-        );
-        parent.appendMessage({
-          role: "system",
-          content: "post-compaction parent secret",
-          toolsAdded: [tool],
-          timestamp: 5,
-        });
-        const original = yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"));
-        const parentEntries = parent.getBranch();
-        expect(parent.getEntry(compactionId)).toHaveProperty("systemMessage");
-        const childFile = yield* createForkedSession(forkRequest(directory, parent), directory);
-        const child = SessionManager.open(childFile);
-        const entries = child.getBranch();
-        expect(
-          Arr.map(entries, ({ id, parentId, timestamp }) => ({ id, parentId, timestamp })),
-        ).toEqual(
-          Arr.map(parentEntries, ({ id, parentId, timestamp }) => ({ id, parentId, timestamp })),
-        );
-        expect(child.getEntry(systemId)).toMatchObject({
-          type: "custom",
-          customType: "pi-subagents-fork-anchor",
-        });
-        expect(child.getEntry(labelId)).toMatchObject({
-          type: "custom",
-          customType: "pi-subagents-fork-anchor",
-        });
-        expect(child.getEntry(compactionId)).toMatchObject({
-          summary: "retained summary",
-          details: { ownedDetail: "preserve" },
-          firstKeptEntryId: anchor === "system" ? systemId : labelId,
-        });
-        expect(child.getEntry(compactionId)).not.toHaveProperty("systemMessage");
-        const context = child.buildSessionContext().messages;
-        expect(Arr.map(context, (message) => message.role)).toEqual([
-          "compactionSummary",
-          "user",
-          "assistant",
-        ]);
-        // Pi sends thinking only to the model that produced it.
-        for (const text of ["retained conversation", "retained answer", "signed private reasoning"])
-          expect(toJson(context)).toContain(text);
-        expect(toJson(entries)).not.toMatch(/parent secret|parent section secret|parent_only/);
-        expect(yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"))).toBe(
-          original,
-        );
-        child.appendMessage({
-          role: "system",
-          content: "child-owned prompt",
-          toolsAdded: [{ ...tool, name: "child_only" }],
-          timestamp: 6,
-        });
-        const resumed = SessionManager.open(childFile).buildSessionContext().messages;
-        expect(resumed.at(-1)).toMatchObject({
-          role: "system",
-          content: "child-owned prompt",
-          toolsAdded: [{ name: "child_only" }],
-        });
-      }),
-    );
-  }
+  it.live("removes parent prompt authority without losing a system compaction anchor", () =>
+    Effect.gen(function* () {
+      const directory = yield* temporaryDirectory("pi-fork-");
+      const parent = SessionManager.create(directory, directory);
+      parent.appendMessage({
+        role: "system",
+        content: "opaque parent secret",
+        toolsAdded: [tool],
+        timestamp: 1,
+      });
+      parent.appendMessage({ role: "user", content: "summarized conversation", timestamp: 2 });
+      const systemId = parent.appendMessage({
+        role: "system",
+        content: "",
+        sections: { parent_section: "parent section secret" },
+        toolsRemoved: [{ name: "read" }],
+        timestamp: 3,
+      });
+      const labelId = parent.appendLabelChange(systemId, "parent bookmark");
+      parent.appendMessage({ role: "user", content: "retained conversation", timestamp: 4 });
+      parent.appendMessage({
+        ...fauxAssistantMessage("retained answer"),
+        content: [
+          {
+            type: "thinking",
+            thinking: "signed private reasoning",
+            thinkingSignature: "signature",
+          },
+          { type: "text", text: "retained answer" },
+        ],
+      });
+      const compactionId = parent.appendCompaction(
+        "retained summary",
+        systemId,
+        42,
+        { ownedDetail: "preserve" },
+        true,
+      );
+      parent.appendMessage({
+        role: "system",
+        content: "post-compaction parent secret",
+        toolsAdded: [tool],
+        timestamp: 5,
+      });
+      const original = yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"));
+      const parentEntries = parent.getBranch();
+      expect(parent.getEntry(compactionId)).toHaveProperty("systemMessage");
+      const childFile = yield* createForkedSession(forkRequest(directory, parent), directory);
+      const child = SessionManager.open(childFile);
+      const entries = child.getBranch();
+      expect(
+        Arr.map(entries, ({ id, parentId, timestamp }) => ({ id, parentId, timestamp })),
+      ).toEqual(
+        Arr.map(parentEntries, ({ id, parentId, timestamp }) => ({ id, parentId, timestamp })),
+      );
+      expect(child.getEntry(systemId)).toMatchObject({
+        type: "custom",
+        customType: "pi-subagents-fork-anchor",
+      });
+      expect(child.getEntry(labelId)).toMatchObject({
+        type: "custom",
+        customType: "pi-subagents-fork-anchor",
+      });
+      expect(child.getEntry(compactionId)).toMatchObject({
+        summary: "retained summary",
+        details: { ownedDetail: "preserve" },
+        firstKeptEntryId: systemId,
+      });
+      expect(child.getEntry(compactionId)).not.toHaveProperty("systemMessage");
+      const context = child.buildSessionContext().messages;
+      expect(Arr.map(context, (message) => message.role)).toEqual([
+        "compactionSummary",
+        "user",
+        "assistant",
+      ]);
+      // Pi sends thinking only to the model that produced it.
+      for (const text of ["retained conversation", "retained answer", "signed private reasoning"])
+        expect(toJson(context)).toContain(text);
+      expect(toJson(entries)).not.toMatch(/parent secret|parent section secret|parent_only/);
+      expect(yield* Effect.promise(() => fs.readFile(parent.getSessionFile()!, "utf8"))).toBe(
+        original,
+      );
+      child.appendMessage({
+        role: "system",
+        content: "child-owned prompt",
+        toolsAdded: [{ ...tool, name: "child_only" }],
+        timestamp: 6,
+      });
+      const resumed = SessionManager.open(childFile).buildSessionContext().messages;
+      expect(resumed.at(-1)).toMatchObject({
+        role: "system",
+        content: "child-owned prompt",
+        toolsAdded: [{ name: "child_only" }],
+      });
+    }),
+  );
 });

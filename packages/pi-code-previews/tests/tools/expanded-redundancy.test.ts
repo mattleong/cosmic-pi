@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, test } from "vitest";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import {
   codemodeRenderers,
@@ -10,7 +10,13 @@ import {
   scriptResult,
   settledSummary,
 } from "../support/native-codemode";
-import { builtinRenderers, previewBodiesDisabled, stripAnsi, textResult } from "../support/render";
+import {
+  builtinRenderers,
+  occurrences,
+  previewBodiesDisabled,
+  stripAnsi,
+  textResult,
+} from "../support/render";
 import { issueMessageStyleProblems } from "../../src/testing/issue-messages";
 
 beforeEach(() =>
@@ -22,8 +28,6 @@ beforeEach(() =>
     ...previewBodiesDisabled,
   }),
 );
-
-const occurrences = (text: string, needle: string): number => Str.split(text, needle).length - 1;
 
 type Harness = Pick<ReturnType<typeof createToolPresentationHarness>, "call" | "result" | "render">;
 
@@ -101,9 +105,7 @@ describe("codemode expansion states each fact once", () => {
       { isError: true },
     );
     const issues = Arr.flatMap(summary?.children?.entries ?? [], (entry) => entry.issues ?? []);
-    const failure = Option.getOrUndefined(
-      Arr.findFirst(issues, (issue) => issue.severity === "error"),
-    );
+    const failure = findOrUndefined(issues, (issue) => issue.severity === "error");
     expect(failure?.message).not.toContain("ENOENT");
     expect(issueMessageStyleProblems(failure?.message ?? "")).toEqual([]);
     expect(failure?.detail).toContain(raw);
@@ -188,9 +190,12 @@ describe("builtin expansion states each fact once", () => {
     }
     // Too narrow for the heading: the body keeps the whole command.
     const narrow = stripAnsi(Arr.join(harness.render(30), "\n"));
-    expect(occurrences(Str.replace(/\s+/gu, "")(narrow), Str.replace(/\s+/gu, "")(command))).toBe(
-      1,
-    );
+    expect(
+      occurrences(
+        Fn.pipe(narrow, Str.replace(/\s+/gu, "")),
+        Fn.pipe(command, Str.replace(/\s+/gu, "")),
+      ),
+    ).toBe(1);
   });
 
   test("a multi-line bash command shows once, labeled apart from its output", () => {
@@ -202,15 +207,22 @@ describe("builtin expansion states each fact once", () => {
       harness.call({ command }, { expanded: true });
       harness.result(textResult("Tests 1204 passed"), { expanded: true });
       const rows = Arr.map(harness.render(100), (row) => Str.trim(stripAnsi(row)));
+      // A label is a row of its own, above the row it names, that shows none of the command.
+      const labeled = (text: string) => {
+        const above = findOrUndefined(rows, (_row, index) => rows[index + 1] === text) ?? "";
+        return (
+          Str.isNonEmpty(above) && !Arr.some(lines, (line) => Fn.pipe(above, Str.includes(line)))
+        );
+      };
       // The preview heading draws the exact command; a compact heading flattens it onto one
       // line, so the body shows it as written, labeled apart from its output.
       for (const line of lines)
         if (style === "preview")
-          expect(Arr.filter(rows, (row) => Str.includes(line)(row)).length).toBe(1);
+          expect(Arr.filter(rows, (row) => Fn.pipe(row, Str.includes(line))).length).toBe(1);
         else expect(Arr.contains(rows, line)).toBe(true);
-      expect(Arr.contains(rows, "Command")).toBe(style === "compact");
+      expect(labeled(lines[0] ?? "")).toBe(style === "compact");
       // The output is labeled apart from the command's rows above it in either style.
-      expect(Arr.contains(rows, "Output")).toBe(true);
+      expect(labeled("Tests 1204 passed")).toBe(true);
     }
   });
 

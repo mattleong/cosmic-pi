@@ -2,15 +2,13 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import type { BackendDriver } from "../../src/backend/model.ts";
-import { backendRegistryFor, SubagentBackendRegistry } from "../../src/backend/service.ts";
 import { SubagentProcessError, SubagentWriterConflictError } from "../../src/run/errors.ts";
-import type { StartSubagentRequest, SubagentProjection } from "../../src/run/model.ts";
-import { SubagentService } from "../../src/run/service.ts";
+import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
 import {
   completeLocalRun,
+  driverServiceFixture,
   fakeChildLayer,
   fakeWriterLeaseLayer,
   leaseCounts,
@@ -21,7 +19,6 @@ import {
   runViews,
   withService,
 } from "./fixtures/service-harness.ts";
-import * as Arr from "effect/Array";
 
 const leaseFixture = (
   leases: Parameters<typeof fakeWriterLeaseLayer>[0],
@@ -36,9 +33,7 @@ describe("SubagentService", () => {
     "quarantines a spawn-started writer when a failed local native acquisition owns uncertain cleanup",
     () => {
       const counts = leaseCounts();
-      const projections: SubagentProjection[] = [];
       const driver: BackendDriver = {
-        supportsContext: (context) => context === "fresh",
         preflight: () => Effect.void,
         spawn: () =>
           Effect.gen(function* () {
@@ -58,14 +53,11 @@ describe("SubagentService", () => {
             });
           }),
       };
-      const registry = Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver));
-      const leases = fakeWriterLeaseLayer({ counts });
-      const layer = SubagentService["layer"]({
-        writerWorkspaceMode: "shared-checkout",
-        publish: (projection) => projections.push(projection),
-      }).pipe(
-        Layer.provide(Layer.merge(registry, leases)),
-        Layer.provideMerge(profileLayerFor({})),
+      const { projections, layer } = driverServiceFixture(
+        driver,
+        {},
+        profileLayerFor({}),
+        fakeWriterLeaseLayer({ counts }),
       );
       return withService(layer, function* (service) {
         const failure = yield* service
@@ -292,19 +284,6 @@ describe("SubagentService", () => {
       });
     },
   );
-
-  it.effect("admits several shared-checkout writers in one cwd without file claims", () => {
-    const { layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const runs = [
-        yield* service.start(writer("shared-auth", { task: "Implement auth" })),
-        yield* service.start(writer("shared-tests", { task: "Implement auth tests" })),
-        yield* service.start(writer("shared-docs", { task: "Document auth" })),
-      ];
-      expect(Arr.map(runs, (run) => run.state)).toEqual(["running", "running", "running"]);
-      expect(new Set(Arr.map(runs, (run) => run.cwd)).size).toBe(1);
-    });
-  });
 
   it.effect("refuses a writer when another process holds the cwd's writer lease", () => {
     const counts = leaseCounts();

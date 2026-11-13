@@ -84,7 +84,7 @@ export interface OriginalTextSize {
 }
 
 /** Sanitized output text within the archive cap, with its original size when that cap cut it. */
-export interface BoundedOutputText {
+interface BoundedOutputText {
   readonly text: string;
   readonly originalSize?: OriginalTextSize | undefined;
 }

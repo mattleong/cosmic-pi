@@ -1,8 +1,6 @@
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import {
@@ -12,6 +10,7 @@ import {
   withCodePreviewMessageShell,
   type CodePreviewMessagePresenter,
 } from "pi-code-previews";
+import { contentText } from "pi-cosmic-core/message-text";
 import { INTERCOM_MESSAGE_TYPE } from "./delivery.ts";
 import { PREVIEW_BODY_INDENT, sessionDetails, sessionText, textBody } from "./display.ts";
 import { sessionSubject } from "./identity.ts";
@@ -21,7 +20,6 @@ const Envelope = Schema.Struct({
   content: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
   details: Schema.optional(Schema.Unknown),
 });
-const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 
 const decodeOptions = { onExcessProperty: "ignore" } as const;
 const decodeEnvelope = Schema.decodeUnknownOption(Envelope, decodeOptions);
@@ -34,15 +32,6 @@ const decodeText = Schema.decodeUnknownOption(
   Schema.Struct({ text: Schema.String.check(Schema.isMaxLength(MAX_MESSAGE_CHARS)) }),
   decodeOptions,
 );
-const isTextPart = Schema.is(TextPart);
-
-const contentText = (content: string | ReadonlyArray<unknown> | undefined): string =>
-  Predicate.isString(content)
-    ? content
-    : Arr.join(
-        Arr.map(Arr.filter(content ?? [], isTextPart), (part) => part.text),
-        "\n",
-      );
 
 /**
  * Shows a message from another session as what its sender wrote: who sent it, then the message

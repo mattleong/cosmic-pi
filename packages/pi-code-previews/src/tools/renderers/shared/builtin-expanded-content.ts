@@ -1,18 +1,14 @@
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import { receivedArguments } from "../../argument-failure";
 import type { AgentToolResult, Theme } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
+import { cachedComponent } from "pi-cosmic-ui/tool";
 import type { BuiltinCompactTool } from "../../builtin-subject";
-import {
-  hostObject,
-  ownField,
-  type HostObject,
-  hostValue,
-  type HostValue,
-} from "../../../shared/untrusted-value";
+import { hostObject, ownField, type HostObject } from "../../../shared/untrusted-value";
 import { escapeControlChars } from "../../../shared/terminal-text";
 import {
   editOperationInputs,
@@ -22,12 +18,11 @@ import {
   numericArg,
   stringArg,
 } from "../../data/args";
-import { getEditDiff, getTextContent } from "../../data/results";
+import { getEditDiff, getTextContent, oversizedReadNotice } from "../../data/results";
 import { codePreviewSettings } from "../../../config/state";
 import { renderHighlightedText } from "../../../syntax/render";
 import {
   limitReachedLine,
-  oversizedReadNotice,
   splitListingNotice,
   splitShellNotice,
   withAgentNotes,
@@ -68,7 +63,7 @@ export function builtinExpandedContent(tool: BuiltinCompactTool, cwd: string): P
       const operations = tool === "edit" ? getEditOperations(input) : [];
       const completeEdits =
         tool === "edit" && operations.length === editOperationInputs(input).length;
-      const options = builtinOptionFields(tool, hostValue(args), completeEdits);
+      const options = builtinOptionFields(tool, input, completeEdits);
       if (options.length) container.addChild(optionFields(theme, options, context.state));
       const command = ownField(input, "command");
       if (tool === "bash" && Predicate.isString(command))
@@ -343,10 +338,14 @@ const hasArguments = (input: HostObject | undefined): boolean =>
 
 /** An argument's name as a field label: `file_path` and `ignoreCase` read `File path`, `Ignore case`. */
 function fieldLabel(key: string): string {
-  const words = Str.toLowerCase(
-    Str.trim(Str.replace(/[_\s]+/gu, " ")(Str.replace(/(?<=\p{Ll})(?=\p{Lu})/gu, " ")(key))),
+  const words = Fn.pipe(
+    key,
+    Str.replace(/(?<=\p{Ll})(?=\p{Lu})/gu, " "),
+    Str.replace(/[_\s]+/gu, " "),
+    Str.trim,
+    Str.toLowerCase,
   );
-  return `${Str.toUpperCase(Str.slice(0, 1)(words))}${Str.slice(1)(words)}`;
+  return `${Str.toUpperCase(Fn.pipe(words, Str.slice(0, 1)))}${Fn.pipe(words, Str.slice(1))}`;
 }
 
 interface OptionField extends ExpandedField {
@@ -407,7 +406,7 @@ function optionFields(
 /** Arguments the heading and bodies don't show, as labeled fields. */
 function builtinOptionFields(
   tool: BuiltinCompactTool,
-  args: HostValue | undefined,
+  args: HostObject | undefined,
   completeEdits: boolean,
 ): OptionField[] {
   const shown = new Set<string>();
@@ -420,8 +419,7 @@ function builtinOptionFields(
     "file_path",
     ...(tool === "grep" || tool === "find" ? ["pattern"] : []),
   ]);
-  // @effect-diagnostics-next-line preferEffectRecord:off -- args is an untyped host value that need not be a record.
-  return Arr.flatMap(Object.entries(args ?? {}), ([key, value]): OptionField[] => {
+  return Arr.flatMap(Rec.toEntries(args ?? {}), ([key, value]): OptionField[] => {
     if (shown.has(key) || value === undefined || value === false || value === null) return [];
     const isTarget = target.has(key) && Predicate.isString(value);
     const text =
@@ -435,7 +433,7 @@ function builtinOptionFields(
         label: fieldLabel(key),
         lines: [text],
         target: isTarget,
-        previewHeading: previewHeadingStates(tool, key, hostObject(args)),
+        previewHeading: previewHeadingStates(tool, key, args),
         counter: limitCounter(tool, key, Predicate.isNumber(value) ? value : undefined),
       },
     ];
@@ -504,17 +502,7 @@ function commandBody(
  * hangs two columns and reads apart from the command's next line.
  */
 function commandLines(lines: readonly string[]): Component {
-  let cached: { readonly width: number; readonly rows: string[] } | undefined;
-  return {
-    render(width) {
-      if (cached?.width !== width)
-        cached = { width, rows: Arr.flatMap(lines, (line) => wrapPreviewHeading(line, width)) };
-      return cached.rows;
-    },
-    invalidate() {
-      cached = undefined;
-    },
-  };
+  return cachedComponent((width) => Arr.flatMap(lines, (line) => wrapPreviewHeading(line, width)));
 }
 
 // Set by a shell call's body when it draws the command, so the result beneath is labeled `Output`.

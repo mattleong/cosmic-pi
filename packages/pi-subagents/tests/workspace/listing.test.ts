@@ -8,34 +8,21 @@ import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins
 import { listWorkspaceRecords } from "../../src/boundary/git-worktree-recovery.ts";
 import * as store from "../../src/boundary/git-worktree-store.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
+import { WorkspaceError, WorkspaceRecordSchema } from "../../src/workspace/model.ts";
+import { workspaceRecord } from "../fixtures/workspace-record.ts";
 import {
-  WorkspaceError,
-  WorkspaceRecordSchema,
-  type WorkspaceRecord,
-} from "../../src/workspace/model.ts";
-import { commitRepository, io, readText, temporaryDirectory } from "./fixtures/repository.ts";
+  commitRepository,
+  io,
+  readText,
+  temporaryDirectory,
+  workspaceTarget,
+} from "./fixtures/repository.ts";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 
 const encodeRecord = Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema));
 const id = (ordinal: number) =>
   `${Fn.pipe(ordinal.toString(16), Str.padStart(8, "0"))}-1111-1111-1111-111111111111`;
-const record = (workspaceId: string): WorkspaceRecord => ({
-  version: 2,
-  repository: "/source/.git",
-  handle: {
-    workspaceId,
-    ownerId: "parent",
-    sourceRoot: "/source",
-    sourceCwd: "/source",
-    artifactRoot: "/private",
-    cwd: "/private/worker",
-  },
-  status: "active",
-  baseline: "baseline",
-  ownerLease: "owner",
-  lastChangedAt: 0,
-});
 const fixture = <A, E, R>(test: (root: string, registry: string) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const root = yield* temporaryDirectory("workspace-listing-");
@@ -48,18 +35,16 @@ it.live(
   () =>
     fixture((root, registry) =>
       Effect.gen(function* () {
-        const healthy = record(id(1));
+        const healthy = workspaceRecord(id(1));
         yield* io(() => fs.mkdir(path.join(registry, id(1)), { mode: 0o700 }));
         yield* store.saveWorkspaceRecord(registry, healthy);
         const corrupt = [
           undefined,
           '{"ownerId":"secret-owner","sourceCwd":"/secret-source","cwd":"/secret-cwd",',
           '{"handle":{"ownerId":"secret-owner","sourceCwd":"/secret-source"}}',
-          yield* encodeRecord(record(id(1))),
-          yield* encodeRecord({
-            ...record(id(6)),
-            handle: { ...record(id(6)).handle, cwd: "/source/worker" },
-          }),
+          yield* encodeRecord(workspaceRecord(id(1))),
+          // A worker tree inside its own source checkout.
+          yield* encodeRecord(workspaceRecord(id(6), { handle: { cwd: "/source/worker" } })),
         ];
         for (const [index, content] of corrupt.entries()) {
           const directory = path.join(registry, id(index + 2));
@@ -77,7 +62,7 @@ it.live(
         const external = path.join(root, "external");
         yield* io(() => fs.mkdir(external));
         const externalRecord = path.join(external, "record.json");
-        const externalBytes = yield* encodeRecord(record(id(8)));
+        const externalBytes = yield* encodeRecord(workspaceRecord(id(8)));
         yield* io(() => fs.writeFile(externalRecord, externalBytes));
         yield* io(() => fs.symlink(externalRecord, path.join(registry, id(8), "record.json")));
         yield* io(() => fs.mkdir(path.join(registry, id(9), "record.json")));
@@ -156,7 +141,7 @@ it.live(
           expect((yield* service.listAll).unavailable).toHaveLength(1);
           expect(yield* service.list({ ownerId: "parent" })).toHaveLength(1);
           yield* io(() => fs.writeFile(path.join(handle.cwd, "main.ts"), "proposal\n"));
-          const target = { ...handle, processCleanupConfirmed: true as const };
+          const target = workspaceTarget(handle);
           const revision = yield* service.freeze(target);
           yield* service.prepare({ ...target, revisionId: revision.revisionId });
           yield* service.discard(target);

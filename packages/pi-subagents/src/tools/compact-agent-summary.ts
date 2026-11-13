@@ -6,21 +6,19 @@ import {
   type CompactSummary,
   type CompactSummaryProvider,
 } from "pi-code-previews";
-import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { countLabel } from "pi-cosmic-core/display";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { MAIN_AGENT_ID } from "../run/agent-messaging.ts";
-import { SUBAGENT_RUN_STATES } from "../run/model.ts";
 import { AGENT_TOOL_NAME, type AgentToolName } from "../run/tool-policy.ts";
 import { displayName } from "../ui/notice-details.ts";
-import { runStateLabel } from "../ui/run-state.ts";
 import { agentFailureIssues } from "./compact-action-failures.ts";
+import { shortNameList } from "./compact-heading.ts";
 import { quotesPartOfQuestion } from "./compact-run-issues.ts";
 import { rejectedFailure } from "./failure-details.ts";
-import { sendStatus } from "./render-agents.ts";
+import { agentStateLabel, sendStatus } from "./render-agents.ts";
 import { AgentToolDetailsSchema, type AgentToolDetails } from "./details-schema.ts";
 
 export const decodeAgentToolDetails = decodeUnknownOrUndefined(AgentToolDetailsSchema, {
@@ -36,13 +34,6 @@ const AgentCallSchema = Schema.Struct({
 export type AgentCallEvidence = typeof AgentCallSchema.Type;
 export const decodeAgentCall = decodeUnknownOrUndefined(AgentCallSchema);
 
-const stateLabel = (state: string): string => {
-  const runState = Option.getOrUndefined(
-    Arr.findFirst(SUBAGENT_RUN_STATES, (known) => known === state),
-  );
-  return runState === undefined ? state : runStateLabel(runState);
-};
-
 // Before a result names a run, only the main agent has a readable subject.
 const isMain = (id: string | undefined): boolean =>
   id !== undefined && Str.trim(id) === MAIN_AGENT_ID;
@@ -51,7 +42,7 @@ const requestedIds = (args: AgentCallEvidence): ReadonlyArray<string> =>
   Fn.pipe(
     args.agentIds ?? [],
     Arr.map((id) => Str.trim(id)),
-    Arr.filter(Boolean),
+    Arr.filter(Str.isNonEmpty),
   );
 
 const missingIssue = (missingIds: ReadonlyArray<string>): CompactIssue[] =>
@@ -90,7 +81,7 @@ const summarizeList = (
   details: Extract<AgentToolDetails, { readonly action: "agent_list" }>,
 ): CompactSummary => {
   const states = Arr.map(details.states, ({ state, count }) =>
-    details.agentCount === 1 ? stateLabel(state) : `${count} ${stateLabel(state)}`,
+    details.agentCount === 1 ? agentStateLabel(state) : `${count} ${agentStateLabel(state)}`,
   );
   const waiting = Arr.some(details.states, ({ state }) => state === "waiting_for_parent");
   const agents = countLabel(details.agentCount, "agent");
@@ -153,10 +144,6 @@ const summarizeSend = (details: SendDetails): CompactSummary => {
   );
 };
 
-// A few short names read as a list in the heading; more leave it to the counter.
-const MAX_NAMED_AGENTS = 3;
-const MAX_NAMED_AGENT_CHARS = 48;
-
 type ReadAgent = Extract<AgentToolDetails, { readonly action: "agent_read" }>["agents"][number];
 
 /** What reading an agent shows of it, as a tag names it: `report`, `error`, `question`. */
@@ -201,19 +188,18 @@ const summarizeRead = (
   const [only] = details.agents;
   const single = details.agents.length === 1 && only !== undefined;
   // A saved report's readout carries its file, not text.
-  const empty = Arr.filter(
+  const empty = Arr.countBy(
     details.agents,
     (agent) => agent.textStatus === "none" && agent.source !== "report",
-  ).length;
-  const truncated = Arr.filter(details.agents, (agent) => agent.truncated).length;
+  );
+  const truncated = Arr.countBy(details.agents, (agent) => agent.truncated);
   // Each run's status raises its own issues: a question waits on a reply, and the rest describe
   // the run, not the read, so they show expanded.
   const statusIssues = Arr.flatMap(details.agents, (agent) => agent.issues ?? []);
   const names = Arr.map(details.agents, (agent) => displayName(agent.name));
-  const named = Arr.join(names, ", ");
   // How many agents were read in each state, as one combined counter.
   const states = Fn.pipe(
-    Arr.groupBy(details.agents, (agent) => stateLabel(agent.state)),
+    Arr.groupBy(details.agents, (agent) => agentStateLabel(agent.state)),
     (groups) => Arr.map(Rec.toEntries(groups), ([state, agents]) => `${agents.length} ${state}`),
     Arr.join(" · "),
   );
@@ -222,15 +208,11 @@ const summarizeRead = (
     {
       expandLabel: readExpandLabel(details.agents),
       // A few agents read are named, as a wait names the runs it waited for.
-      subject: single
-        ? displayName(only.name)
-        : names.length <= MAX_NAMED_AGENTS && named.length <= MAX_NAMED_AGENT_CHARS
-          ? named
-          : "",
+      subject: single ? displayName(only.name) : (shortNameList(names) ?? ""),
       // The agents' states, such as `failed`, describe the agents; reading them is neutral.
       ...(details.agents.length > 0 && { subjectState: true as const }),
       counters: single
-        ? [stateLabel(only.state)]
+        ? [agentStateLabel(only.state)]
         : details.agents.length > 0
           ? [states, agents]
           : [agents],

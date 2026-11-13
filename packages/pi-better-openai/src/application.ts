@@ -3,7 +3,6 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as MutableRef from "effect/MutableRef";
@@ -18,6 +17,7 @@ import {
 } from "pi-code-previews";
 import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
 import {
+  capturedHostSignal,
   captureSessionHost,
   hasTerminalUI,
   invokeBestEffort,
@@ -31,12 +31,13 @@ import { failureMessage } from "pi-cosmic-core/message-text";
 import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import { createCosmicFooterClient, createHostStateWatch } from "pi-cosmic-ui/client";
 import { makeSetStatusSafely } from "pi-cosmic-ui/boundary/host-status";
+import { joinInline } from "pi-cosmic-ui/manager";
 import {
   createCodexTransportReset,
   resetOpenAICodexTransport,
 } from "./boundary/host-codex-transport.ts";
 import { piRetryPolicy } from "./boundary/host-compaction.ts";
-import { containCommandFailure, safeHostSignal } from "./boundary/host-ui.ts";
+import { containCommandFailure } from "./boundary/host-ui.ts";
 import { latestOwnedCheckpoint } from "./compaction/context.ts";
 import {
   isEligibleOpenAICompactionModel,
@@ -174,16 +175,10 @@ export function betterOpenAIWithDependencies(
       ctx,
       hasTerminalUI(ctx) && cosmicUi.active
         ? undefined
-        : Arr.join(
-            Arr.filter(
-              [
-                fast ? statusSegment(ctx, MutableRef.get(fastProjection)) : undefined,
-                usage ? openAIUsageStatusText(ctx, cfg, projection) : undefined,
-              ],
-              (part): part is string => Predicate.isString(part) && Str.isNonEmpty(part),
-            ),
-            " · ",
-          ) || undefined,
+        : joinInline([
+            fast ? statusSegment(ctx, MutableRef.get(fastProjection)) : undefined,
+            usage ? openAIUsageStatusText(ctx, cfg, projection) : undefined,
+          ]) || undefined,
     );
   };
   /** Renders, then lets the usage service react if the render found usage shown or hidden. */
@@ -319,7 +314,7 @@ export function betterOpenAIWithDependencies(
     description: "Subscription usage",
     handler: (_args, ctx) => {
       updateContext(ctx);
-      const signal = safeHostSignal(ctx);
+      const signal = capturedHostSignal(ctx);
       const refresh = OpenAIUsageService.use((service) =>
         service.refresh({ notify: true, force: true }),
       );
@@ -341,7 +336,7 @@ export function betterOpenAIWithDependencies(
       }
       const desired = !MutableRef.get(fastProjection).desiredActive;
       const isCurrent = slot.captureAuthority();
-      const signal = safeHostSignal(ctx);
+      const signal = capturedHostSignal(ctx);
       const update = FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
@@ -403,7 +398,7 @@ export function betterOpenAIWithDependencies(
     refreshFooter(ctx);
     slot.fork(
       OpenAIUsageService.use((service) => service.refresh()),
-      safeHostSignal(ctx),
+      capturedHostSignal(ctx),
     );
   });
   const openAICompactionRequested = (ctx: ExtensionContext) =>
@@ -455,12 +450,12 @@ export function betterOpenAIWithDependencies(
     if (!currentContext) return undefined;
     return runCompaction(
       (service) => service.resetRetryOmissions(),
-      safeHostSignal(ctx),
+      capturedHostSignal(ctx),
       slot.captureAuthority(),
     ).catch(() => undefined);
   });
   pi.on("model_select", (event, ctx) => {
-    const signal = safeHostSignal(ctx);
+    const signal = capturedHostSignal(ctx);
     providerTransport.request(ctx);
     const before = MutableRef.get(fastProjection).active;
     updateContext(ctx);
@@ -496,7 +491,7 @@ export function betterOpenAIWithDependencies(
       if (needsContextRepair(ctx)) abortIncompleteContext(ctx);
       return undefined;
     }
-    const signal = safeHostSignal(ctx);
+    const signal = capturedHostSignal(ctx);
     const sessionCurrent = slot.captureAuthority();
     const isCurrent = () => sessionCurrent() && !signal?.aborted;
     return runCompaction((service) => service.filterContext(event.messages), signal, isCurrent)
@@ -520,7 +515,7 @@ export function betterOpenAIWithDependencies(
       recordFastInjection,
     );
     if (!currentContext) return fastPayload;
-    const signal = safeHostSignal(ctx);
+    const signal = capturedHostSignal(ctx);
     const sessionCurrent = slot.captureAuthority();
     const isCurrent = () => sessionCurrent() && !signal?.aborted;
     return runWhen(isCurrent)(

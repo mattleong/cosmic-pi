@@ -13,7 +13,6 @@ import { afterEach } from "vitest";
 import type { BackgroundLogEvent, BackgroundTaskStatus } from "../src/task/model.ts";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
 import { utf8ByteLength } from "pi-cosmic-core";
-import { executeBackgroundTaskCommand } from "../src/tools/command.ts";
 import {
   BackgroundTaskContractSchema,
   encodeBackgroundTaskContract,
@@ -21,10 +20,10 @@ import {
 } from "../src/tools/contract-schema.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 import {
-  provideTaskService,
+  executeWith,
   registeredTaskTool,
   taskLogs,
-  taskServiceDouble,
+  taskStatus,
   taskStop,
   taskWait,
 } from "./support/task-service-double.ts";
@@ -34,28 +33,23 @@ afterEach(restoreSettings);
 
 type ServiceOverrides = Partial<BackgroundTaskServiceContract>;
 
-const task = (overrides: Partial<BackgroundTaskStatus> = {}): BackgroundTaskStatus => ({
-  id: "task-0000000001",
-  name: "dev server",
-  command: "command-marker pnpm dev",
-  cwd: "/cwd-marker",
-  state: "running",
-  pid: 987_654,
-  startedAt: 100,
-  logCursor: 3,
-  droppedLogBytes: 0,
-  ...overrides,
-});
+const task = (overrides: Partial<BackgroundTaskStatus> = {}) =>
+  taskStatus({
+    id: "task-0000000001",
+    name: "dev server",
+    command: "command-marker pnpm dev",
+    cwd: "/cwd-marker",
+    state: "running",
+    pid: 987_654,
+    startedAt: 100,
+    logCursor: 3,
+    ...overrides,
+  });
 const event = (
   cursor: number,
   text: string,
   stream: BackgroundLogEvent["stream"] = "stdout",
 ): BackgroundLogEvent => ({ cursor, stream, text, timestamp: cursor, bytes: utf8ByteLength(text) });
-
-const execute = (input: BackgroundTaskToolInput, overrides: ServiceOverrides) =>
-  executeBackgroundTaskCommand(input, "/project").pipe(
-    provideTaskService(taskServiceDouble(overrides)),
-  );
 
 const serialize = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodeStrict = Schema.decodeUnknownSync(Schema.toCodecJson(BackgroundTaskContractSchema), {
@@ -124,7 +118,7 @@ describe("background_task contract", () => {
         { action: "clear" },
       ];
       for (const input of inputs) {
-        const { contract } = yield* execute(input, services);
+        const { contract } = yield* executeWith(input, services);
         const json = encoded(contract);
         expect(contract).toMatchObject({
           contract: "pi-background-task/task",
@@ -136,19 +130,19 @@ describe("background_task contract", () => {
         for (const leaked of ["command-marker", "cwd-marker", "987654", '"pid"', '"awaited"'])
           expect(serialized).not.toContain(leaked);
       }
-      const list = (yield* execute({ action: "list" }, services)).contract;
+      const list = (yield* executeWith({ action: "list" }, services)).contract;
       expect(list.action === "list" && Arr.map(list.tasks, (entry) => entry.id)).toEqual([
         "task-0000000001",
         "task-0000000002",
       ]);
-      const wait = (yield* execute(inputs[6]!, services)).contract;
+      const wait = (yield* executeWith(inputs[6]!, services)).contract;
       expect(wait).toMatchObject({
         outcome: "matched",
         matchCursor: 2,
         task: { id: "task-0000000001" },
         appliedWaitSeconds: 30,
       });
-      expect((yield* execute({ action: "clear" }, services)).contract).toMatchObject({
+      expect((yield* executeWith({ action: "clear" }, services)).contract).toMatchObject({
         removed: 2,
       });
     }),
@@ -165,7 +159,7 @@ describe("background_task contract", () => {
         task({ id: "stopped", state: "stopped", endedAt: 2, exitCode: null, signal: "SIGTERM" }),
         task({ id: "timed_out", state: "timed_out", endedAt: 2 }),
       ];
-      const { contract } = yield* execute(
+      const { contract } = yield* executeWith(
         { action: "list" },
         { list: () => Effect.succeed(tasks) },
       );
@@ -196,7 +190,7 @@ describe("background_task contract", () => {
         error: `\u001b[31mspawn\u001b[0m failed api_key=error-secret ${Fn.pipe("e", Str.repeat(5_000))}`,
         failureCause: "FAIL auth password=cause-secret",
       });
-      const result = yield* execute(
+      const result = yield* executeWith(
         { action: "status", id: "task-0000000001" },
         { status: () => Effect.succeed(failed) },
       );
@@ -214,7 +208,7 @@ describe("background_task contract", () => {
       expect(result.details).toMatchObject({ snapshot: { failureCause: contract.task.cause } });
 
       const blank = task({ name: "\u001b[0m  ", signal: "", error: "\t" });
-      const projected = (yield* execute(
+      const projected = (yield* executeWith(
         { action: "status", id: "task-0000000001" },
         { status: () => Effect.succeed(blank) },
       )).contract;
@@ -241,7 +235,7 @@ describe("registered background_task output", () => {
         ),
       );
       const input = { action: "status", id: "task-0000000001" } as const;
-      const direct = yield* execute(input, services);
+      const direct = yield* executeWith(input, services);
       const result = yield* call(tool, input);
       expect(result.isError).toBeUndefined();
       expect(result.content).toEqual([{ type: "text", text: direct.text }]);
@@ -259,7 +253,7 @@ describe("registered background_task output", () => {
           start: () => Effect.succeed(task({ id: "task-0000000007", startedAt: -1 })),
         };
         const input = { action: "start", command: "pnpm dev" } as const;
-        const direct = yield* execute(input, services);
+        const direct = yield* executeWith(input, services);
         const result = yield* call(registeredTaskTool(services), input);
         expect(result.isError).toBe(true);
         expect(result).not.toHaveProperty("structuredContent");

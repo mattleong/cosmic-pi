@@ -8,14 +8,6 @@ import { frozenProjection, type ProjectionError } from "pi-cosmic-core/projectio
 import type { ResolvedSubagentConfig } from "../config/options.ts";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
 import { SubagentConfigStore } from "../config/store.ts";
-import type { CustomAgent } from "./agents.ts";
-import { PROFILE_DEFINITIONS } from "./definitions.ts";
-import { isProfileId, type ProfileDefinition } from "./model.ts";
-import {
-  resolveProfilePlan,
-  type ProfileResolution,
-  type ProfileResolutionEnvironment,
-} from "./resolve.ts";
 import {
   conflict,
   restoredSessionProfileSnapshot,
@@ -40,14 +32,6 @@ import {
 
 export interface SubagentProfileServiceContract {
   readonly capture: Effect.Effect<SessionProfileSnapshot>;
-  readonly definition: (profile: string) => ProfileDefinition | undefined;
-  readonly resolve: (
-    snapshot: SessionProfileSnapshot,
-    profile: string,
-    environment: ProfileResolutionEnvironment,
-    /** An agent routed to `profile`, whose overrides apply to every candidate. */
-    agent?: CustomAgent,
-  ) => ProfileResolution;
   readonly withSnapshotAtRevision: <A, E, R>(
     expectedRevision: number,
     operation: (snapshot: SessionProfileSnapshot) => Effect.Effect<A, E, R>,
@@ -130,9 +114,6 @@ const subagentProfileService = Effect.fn("SubagentProfileService.make")(function
     );
   return SubagentProfileService.of({
     capture: projection.getState,
-    definition: (profile) => (isProfileId(profile) ? PROFILE_DEFINITIONS[profile] : undefined),
-    resolve: (snapshot, profile, environment, agent) =>
-      resolveProfilePlan(profile, snapshot.effectiveConfig, environment, agent),
     withSnapshotAtRevision: <A, E, R>(
       expectedRevision: number,
       operation: (snapshot: SessionProfileSnapshot) => Effect.Effect<A, E, R>,

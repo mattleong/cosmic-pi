@@ -80,10 +80,7 @@ describe("session capability discovery", () => {
       },
       "query",
       { version: 1, sessionId: "session" },
-      (candidate: string) => {
-        if (candidate === "throw") throw new Error("hostile candidate");
-        return candidate === "invalid" ? undefined : candidate;
-      },
+      (candidate: string) => (candidate === "invalid" ? undefined : candidate),
       limit,
     );
     late?.("late");

@@ -6,8 +6,8 @@ import * as Stream from "effect/Stream";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 import { plainTheme } from "pi-cosmic-core/testing";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { renderSyntaxHighlightedDiff } from "../src/diff/render";
 import { codePreviewSettings, setCodePreviewSettings } from "../src/config/state";
 import { renderedWordEmphasisSpans } from "../tests/support/rendered-word-emphasis";
@@ -17,9 +17,7 @@ import { benchLog } from "./helpers";
 const readInput = Effect.gen(function* () {
   const stdio = yield* Stdio.Stdio;
   const args = yield* stdio.args;
-  const file = Option.getOrUndefined(
-    Arr.findFirst(args, (arg) => !Fn.pipe(arg, Str.startsWith("--"))),
-  );
+  const file = findOrUndefined(args, (arg) => !Fn.pipe(arg, Str.startsWith("--")));
   const text =
     file === undefined
       ? yield* stdio.stdin.pipe(Stream.decodeText, Stream.mkString)

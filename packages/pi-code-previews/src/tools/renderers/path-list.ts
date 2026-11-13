@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { Text } from "@earendil-works/pi-tui";
 import { renderDisplayPath } from "../../paths/display";
@@ -10,12 +11,7 @@ import { numericArg, stringArg } from "../data/args";
 import { getTextContent } from "../data/results";
 import { createPathListRenderer } from "../path-list-render";
 import { renderCodePreviewToolTitle } from "../presentation";
-import {
-  collapsedNotesHint,
-  splitListingNotice,
-  withAgentNotes,
-  withCollapsedLimit,
-} from "./shared/output-notice";
+import { collapsedLimit, splitListingNotice, withAgentNotes } from "./shared/output-notice";
 import { renderSelectedOutputLines } from "./shared/preview-text";
 import { renderResultPrelude } from "./shared/result-prelude";
 import type { PreviewRenderers } from "./shared/types";
@@ -99,25 +95,15 @@ export function pathListPreviewRenderers(tool: "find" | "ls", cwd: string): Prev
         config.footerItem,
         pathList.renderChunk,
       );
-      const notesHint = expanded
-        ? undefined
-        : collapsedNotesHint({ state }, theme, tool, {
+      const withLimit = expanded
+        ? Fn.identity
+        : collapsedLimit({ state }, theme, tool, {
             details: hostObject(result.details),
             args: hostObject(args),
             notice,
             offered: selectPreviewLines(rawLines, limit).hidden > 0,
           });
-      const shown = expanded
-        ? text
-        : withCollapsedLimit(
-            text,
-            theme,
-            tool,
-            hostObject(result.details),
-            hostObject(args),
-            notesHint,
-          );
-      return withAgentNotes(new Text(shown, 0, 0), theme, notes);
+      return withAgentNotes(new Text(withLimit(text), 0, 0), theme, notes);
     },
   };
 }

@@ -19,10 +19,9 @@ import { registerSessionWake, type SessionWakeDelivery } from "../src/host-wake.
 import { temporaryDirectory } from "../src/testing/ipc-child.ts";
 import {
   fauxModels,
+  fauxPrintSession,
   QUIET_RESOURCES,
-  quietLoader,
   quietSettings,
-  scopedPrintSession,
 } from "../src/testing/sdk-session.ts";
 import { eventLoopTurn, macrotask, step } from "../src/testing/steps.ts";
 
@@ -75,33 +74,15 @@ interface WakeSessionExtensions {
 const twoWakeSession = Effect.fn("twoWakeSession")(function* (
   extensions: WakeSessionExtensions = {},
 ) {
-  const directory = yield* temporaryDirectory("pi-session-wake-");
-  const { fake, models } = yield* fauxModels("session-wake-test");
-  const settings = quietSettings();
   const bound: SessionSlot = {};
   const senders: Senders = new Map();
   const send = (sender: Sender) => deliverFrom(senders, sender);
-  const loader = yield* quietLoader({
-    cwd: directory,
-    agentDir: directory,
-    settingsManager: settings,
-    noExtensions: true,
-    extensionFactories: [
-      ...(extensions.before ? [extensions.before(send)] : []),
-      wakeOwner("first", bound, senders),
-      wakeOwner("second", bound, senders),
-      ...(extensions.after ? [extensions.after(send)] : []),
-    ],
-  });
-  const session = yield* scopedPrintSession({
-    cwd: directory,
-    agentDir: directory,
-    model: fake.getModel(),
-    modelRuntime: models,
-    settingsManager: settings,
-    sessionManager: SessionManager.inMemory(directory),
-    resourceLoader: loader,
-  });
+  const { session, fake } = yield* fauxPrintSession("pi-session-wake-", "session-wake-test", [
+    ...(extensions.before ? [extensions.before(send)] : []),
+    wakeOwner("first", bound, senders),
+    wakeOwner("second", bound, senders),
+    ...(extensions.after ? [extensions.after(send)] : []),
+  ]);
   bound.session = session;
   return { session, fake, send };
 });

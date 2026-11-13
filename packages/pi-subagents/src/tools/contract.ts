@@ -1,5 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { isCustomAgentName } from "../profiles/agents.ts";
 import { safeTextPrefix } from "pi-cosmic-core/text";
@@ -37,7 +36,6 @@ import {
   type ContractStall,
   type ContractStartLaunch,
   type ContractWithheldReport,
-  type ContractWithheldRunTarget,
   type SubagentAwaitContract,
   type SubagentContractTool,
   type SubagentLifecycleContract,
@@ -52,6 +50,7 @@ import { MAX_FAILURE_CODE_CHARS } from "./details-schema.ts";
 import type { SubagentActionFailure, SubagentStartFailure, SubagentStartOutcome } from "./model.ts";
 import { actionFailureDisposition } from "./outcome.ts";
 import type { SubagentStartSpec } from "./schema.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export const envelope = <Tool extends SubagentContractTool>(tool: Tool) => ({ tool }) as const;
 
@@ -67,7 +66,7 @@ export const projectName = (value: string): string =>
   sanitizeName(metadata(value, MAX_NAME_CHARS) ?? "");
 
 export const knownProfile = (profile: string | undefined): ProfileId | undefined =>
-  Option.getOrUndefined(Arr.findFirst(PROFILE_IDS, (id) => id === profile));
+  findOrUndefined(PROFILE_IDS, (id) => id === profile);
 
 export const knownAgent = (agent: string | undefined): { readonly agent?: string } =>
   agent !== undefined && isCustomAgentName(agent) ? { agent } : {};
@@ -198,11 +197,6 @@ const targetFields = (
   };
 };
 
-const withheldTarget = (run: SubagentRunView): ContractWithheldRunTarget => ({
-  ...targetFields(run, undefined),
-  report: withheldReport(run),
-});
-
 /**
  * A read's status, the detail surface, which carries the whole pending question, both retained
  * warnings, the error, and cleanup diagnostics.
@@ -215,11 +209,6 @@ export const readStatusTarget = (run: SubagentRunView, now: number): ContractRea
     ...(cleanup !== undefined && { cleanup }),
   };
 };
-
-const observedTarget = (observation: SubagentRunObservation, now: number): ContractRunTarget => ({
-  ...targetFields(observation.run, now),
-  report: observedReport(observation),
-});
 
 const UNOBSERVED_LAUNCH: SubagentStartFailure = {
   index: -1,
@@ -290,7 +279,7 @@ export const startContract = (
 ): SubagentStartContract => {
   const byIndex = new Map(Arr.map(outcomes, (outcome) => [outcome.index, outcome]));
   const launches = Arr.map(specs, (spec, index) => projectLaunch(spec, index, byIndex.get(index)));
-  const started = Arr.filter(launches, (launch) => launch.status === "started").length;
+  const started = Arr.countBy(launches, (launch) => launch.status === "started");
   return {
     ...envelope(SUBAGENT_TOOL_NAME.start),
     outcome: batchOutcome(started, launches.length, "started"),
@@ -313,8 +302,12 @@ interface AwaitContractInput {
 const settled = ({ run }: SubagentRunObservation): boolean => isTerminalRunState(run.state);
 
 export const awaitContract = (input: AwaitContractInput): SubagentAwaitContract => {
-  const targets = Arr.map(input.observations, (observation) =>
-    observedTarget(observation, input.now),
+  const targets = Arr.map(
+    input.observations,
+    (observation): ContractRunTarget => ({
+      ...targetFields(observation.run, input.now),
+      report: observedReport(observation),
+    }),
   );
   const senders = input.messages ? agentMessageSenders(input.messages) : [];
   const finished =
@@ -345,8 +338,8 @@ interface CancelledAwaitContractInput {
   readonly requestedRunIds: ReadonlyArray<string>;
   readonly until: SubagentAwaitUntil;
   readonly cleanup: "confirmed" | "unconfirmed";
-  readonly deliveryAttemptedIds?: ReadonlySet<string>;
-  readonly ending?: "cancelled" | "timed_out" | "user_input" | undefined;
+  readonly deliveryAttemptedIds: ReadonlySet<string>;
+  readonly ending: "cancelled" | "timed_out" | "user_input";
   /** When the result was produced, for stall signs; without it there are none. */
   readonly now: number | undefined;
 }
@@ -357,12 +350,12 @@ export const cancelledAwaitContract = (
   const observed = new Set(Arr.map(input.runs, (run) => run.id));
   return {
     ...envelope(SUBAGENT_TOOL_NAME.await),
-    outcome: input.ending ?? "cancelled",
+    outcome: input.ending,
     until: input.until,
     requestedRunIds: [...input.requestedRunIds],
     targets: Arr.map(input.runs, (run) => ({
       ...targetFields(run, input.now),
-      report: input.deliveryAttemptedIds?.has(run.id) ? { status: "unknown" } : withheldReport(run),
+      report: input.deliveryAttemptedIds.has(run.id) ? { status: "unknown" } : withheldReport(run),
     })),
     unobservedRunIds: Arr.filter(input.requestedRunIds, (id) => !observed.has(id)),
     cleanup: input.cleanup,
@@ -384,7 +377,10 @@ export const lifecycleContract = (
         ? {
             requestedRunId: outcome.runId,
             status: "succeeded",
-            target: withheldTarget(outcome.run),
+            target: {
+              ...targetFields(outcome.run, undefined),
+              report: withheldReport(outcome.run),
+            },
           }
         : {
             requestedRunId: outcome.runId,
@@ -392,7 +388,7 @@ export const lifecycleContract = (
             failure: projectFailure(outcome.failure),
           },
   );
-  const succeeded = Arr.filter(results, (result) => result.status === "succeeded").length;
+  const succeeded = Arr.countBy(results, (result) => result.status === "succeeded");
   return {
     ...envelope(SUBAGENT_TOOL_NAME.lifecycle),
     action,

@@ -100,30 +100,28 @@ export const detachedDescendantGroups = (
     Effect.mapError((error) =>
       processCauseError("snapshot detached descendants", error, "descendant_snapshot_failed"),
     ),
-    Effect.flatMap((result) =>
-      result.code === 0 && !result.overflowed && !result.timedOut && !result.cleanupUnconfirmed
-        ? Effect.suspend(() => {
-            const groups = descendantGroupsFromTable(result.stdout, groupId);
-            return groups
-              ? Effect.succeed(groups)
-              : Effect.fail(
-                  processError(
-                    "snapshot detached descendants",
-                    "descendant_snapshot_malformed",
-                    "Detached descendant snapshot contained malformed process rows.",
-                  ),
-                );
-          })
+    Effect.flatMap((result) => {
+      if (result.code !== 0 || result.overflowed || result.timedOut || result.cleanupUnconfirmed)
+        return Effect.fail(
+          processError(
+            "snapshot detached descendants",
+            "descendant_snapshot_incomplete",
+            result.timedOut
+              ? "Detached descendant snapshot timed out."
+              : result.overflowed
+                ? "Detached descendant snapshot exceeded its output limit."
+                : `Detached descendant snapshot failed (exit ${String(result.code)}). ${result.stderr}`,
+          ),
+        );
+      const groups = descendantGroupsFromTable(result.stdout, groupId);
+      return groups
+        ? Effect.succeed(groups)
         : Effect.fail(
             processError(
               "snapshot detached descendants",
-              "descendant_snapshot_incomplete",
-              result.timedOut
-                ? "Detached descendant snapshot timed out."
-                : result.overflowed
-                  ? "Detached descendant snapshot exceeded its output limit."
-                  : `Detached descendant snapshot failed (exit ${String(result.code)}). ${result.stderr}`,
+              "descendant_snapshot_malformed",
+              "Detached descendant snapshot contained malformed process rows.",
             ),
-          ),
-    ),
+          );
+    }),
   );

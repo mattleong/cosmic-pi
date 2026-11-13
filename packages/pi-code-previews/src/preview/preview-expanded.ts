@@ -2,6 +2,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth, RUNNING_SPINNER_FRAMES, SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
 import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
@@ -17,9 +18,9 @@ import {
   type PreviewIssues,
 } from "./preview-issues";
 import { getCodePreviewAnimationFrame, withLastComponent } from "./tool-timing";
-import { layoutPreviewHeading } from "./preview-heading";
+import { wrappedPreviewHeading } from "./preview-heading";
 import { recordHeadingSubject, recordOwnCallHeading } from "./heading-coverage";
-import { borderState } from "./bordered-tool-call";
+import { borderState, renderWithBorderSlot } from "./bordered-tool-call";
 import { wrapPreviewHeading } from "./heading-wrap";
 import { renderCompactIssues } from "./compact-issues";
 import { compactHold, compactSingleLine, compactStatusIcon } from "./compact-row";
@@ -151,29 +152,12 @@ function headingRows(
   theme: Theme,
   width: number,
 ): string[] {
-  const rows = own?.heading(width);
+  const ownRows = own?.heading(width);
+  recordOwnCallHeading(state, ownRows !== undefined);
+  const rows = ownRows ?? wrappedPreviewHeading(title, summary, theme, width);
   // A preview heading wraps rather than clips, so it shows the whole subject unless it was cut.
-  recordOwnCallHeading(state, rows !== undefined);
-  if (rows) {
-    recordHeadingSubject(state, true, rows);
-    return rows;
-  }
-  const { text, subjectComplete } = layoutPreviewHeading(title, summary, true, theme);
-  const built = wrapPreviewHeading(text, width);
-  recordHeadingSubject(state, subjectComplete, built);
-  return built;
-}
-
-/** Runs a capture outside the row's border slot, so its expand hint labels no border. */
-function outsideBorderSlot<T>(context: { readonly state: unknown }, capture: () => T): T {
-  const border = borderState(context);
-  const slot = border.codePreviewBorderCurrentSlot;
-  border.codePreviewBorderCurrentSlot = undefined;
-  try {
-    return capture();
-  } finally {
-    border.codePreviewBorderCurrentSlot = slot;
-  }
+  recordHeadingSubject(state, true, rows);
+  return rows;
 }
 
 /** Each expanded row's collapsed result body, which its call slot reads to keep what it shows. */
@@ -185,7 +169,8 @@ function captureCollapsedResult<TArgs, TState extends object>(
 ): void {
   let body: Component;
   try {
-    body = outsideBorderSlot(context, () =>
+    // Outside a border slot, so its expand hint labels no border.
+    body = renderWithBorderSlot(borderState(context), undefined, () =>
       render({ ...context, expanded: false, lastComponent: undefined }),
     );
   } catch {
@@ -208,7 +193,7 @@ function captureCollapsedResult<TArgs, TState extends object>(
 }
 
 const plainText = (rows: readonly string[]): string =>
-  Str.toLowerCase(Str.replace(/\s+/gu, " ")(stripTerminalControls(Arr.join(rows, " "))));
+  Fn.pipe(stripTerminalControls(Arr.join(rows, " ")), Str.replace(/\s+/gu, " "), Str.toLowerCase);
 const escapeRegExp = Str.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 
 // A wrapped row may break after these without a space, which joining the rows then adds.
@@ -225,13 +210,17 @@ const piecePattern = (piece: string): string =>
  * only the words it keeps, so whole text that continues past the cut states it too.
  */
 function statesFact(rows: readonly string[], fact: string): boolean {
-  const said = Str.toLowerCase(
-    Str.replace(/\s+/gu, " ")(Str.replace(/^["'“‘«]+|["'”’»]+$/gu, "")(Str.trim(fact))),
+  const said = Fn.pipe(
+    fact,
+    Str.trim,
+    Str.replace(/^["'“‘«]+|["'”’»]+$/gu, ""),
+    Str.replace(/\s+/gu, " "),
+    Str.toLowerCase,
   );
   const pieces = Arr.filter(Arr.map(Str.split(said, "…"), Str.trim), Str.isNonEmpty);
   if (pieces.length === 0) return false;
-  const start = Str.startsWith("…")(said) ? "" : "(?:^|[^\\p{L}\\p{N}])";
-  const end = Str.endsWith("…")(said) ? "" : "(?:$|[^\\p{L}\\p{N}])";
+  const start = Fn.pipe(said, Str.startsWith("…")) ? "" : "(?:^|[^\\p{L}\\p{N}])";
+  const end = Fn.pipe(said, Str.endsWith("…")) ? "" : "(?:$|[^\\p{L}\\p{N}])";
   const body = Arr.join(Arr.map(pieces, piecePattern), ".*?");
   return new RegExp(`${start}${body}${end}`, "u").test(plainText(rows));
 }
@@ -242,7 +231,7 @@ function statesFact(rows: readonly string[], fact: string): boolean {
  */
 const sentenceCase = (text: string): string =>
   /^\p{Ll}+(?:\s|$)/u.test(text)
-    ? `${Str.toUpperCase(Str.slice(0, 1)(text))}${Str.slice(1)(text)}`
+    ? `${Str.toUpperCase(Fn.pipe(text, Str.slice(0, 1)))}${Fn.pipe(text, Str.slice(1))}`
     : text;
 
 interface StatusInput {
@@ -257,13 +246,13 @@ interface StatusInput {
   readonly theme: Theme;
 }
 
-/**
- * The fact a compact heading shows beside its glyph, its first counter or else its first metadata:
- * each ` · ` part the collapsed row states and the expanded row doesn't.
- */
+/** The fact a compact heading shows beside its glyph: its first counter, else its first metadata. */
+const stateFact = (summary: CompactSummary | undefined): string =>
+  compactSingleLine(summary?.counters?.[0] ?? summary?.metadata?.[0] ?? "");
+
+/** Each ` · ` part of that fact the collapsed row states and the expanded row doesn't. */
 function keptFact({ value, collapsed, expanded }: StatusInput): string | undefined {
-  const { summary } = value;
-  const fact = compactSingleLine(summary?.counters?.[0] ?? summary?.metadata?.[0] ?? "");
+  const fact = stateFact(value.summary);
   const kept = Arr.filter(
     Arr.map(Str.split(fact, " · "), Str.trim),
     (part) => part !== "" && statesFact(collapsed, part) && !statesFact(expanded, part),
@@ -311,9 +300,10 @@ function statesHeld(rows: readonly string[], state: HeldState): boolean {
   return Arr.some(rows, (row) => {
     const raw = stripTerminalControls(row);
     if (CHILD_BRANCH.test(raw)) return false;
-    const plain = Str.replace(ROW_LEAD, "")(raw);
+    const plain = Fn.pipe(raw, Str.replace(ROW_LEAD, ""));
     const own = raw.length - Str.trimStart(raw).length <= BODY_INDENT.length;
-    if (own && Arr.some(glyphs, (glyph) => Str.startsWith(`${glyph} `)(plain))) return true;
+    if (own && Arr.some(glyphs, (glyph) => Fn.pipe(plain, Str.startsWith(`${glyph} `))))
+      return true;
     const [first, ...rest] = Str.split(plain, " · ");
     return opening.test(first) || Arr.some(rest, (segment) => fact.test(Str.trim(segment)));
   });
@@ -333,10 +323,7 @@ function previewStatusRows(input: StatusInput, width: number): string[] {
   const { value, theme, issues, expanded } = input;
   if (issues.length > 0 && !cancelledLineReplaced(input, width)) return [];
   const { status, summary } = value;
-  // The state words a compact heading shows beside its glyph: the first counter, else metadata.
-  const stateWords = sentenceCase(
-    compactSingleLine(summary?.counters?.[0] ?? summary?.metadata?.[0] ?? ""),
-  );
+  const stateWords = sentenceCase(stateFact(summary));
   // A live or held state the heading or body already states needs no line. A phrase such as
   // `Needs your input` counts wherever it appears; the bare state word only as `statesHeld` finds it.
   const unstated = (state: HeldState, text: string) =>
@@ -346,6 +333,10 @@ function previewStatusRows(input: StatusInput, width: number): string[] {
       : text;
   const said = (state: HeldState, fallback: string) => unstated(state, stateWords || fallback);
   const hold = status === "pending" || status === "running" ? compactHold(summary) : undefined;
+  const queuedLine = () => {
+    const text = said("queued", "Queued");
+    return text && theme.fg("muted", `${SUITE_STATUS_GLYPHS.queued} ${text}`);
+  };
   const line = Match.value(status).pipe(
     Match.when(
       () => hold === "waiting",
@@ -354,23 +345,14 @@ function previewStatusRows(input: StatusInput, width: number): string[] {
         return text && toolStatusLine(theme, "waiting", text);
       },
     ),
-    Match.when(
-      () => hold === "queued",
-      () => {
-        const text = said("queued", "Queued");
-        return text && theme.fg("muted", `${SUITE_STATUS_GLYPHS.queued} ${text}`);
-      },
-    ),
+    Match.when(() => hold === "queued", queuedLine),
     Match.when("running", () =>
       unstated("running", "running") === undefined
         ? undefined
         : toolRunningLine(theme, input.frame),
     ),
     Match.when("pending", () => undefined),
-    Match.when("queued", () => {
-      const text = said("queued", "Queued");
-      return text && theme.fg("muted", `${SUITE_STATUS_GLYPHS.queued} ${text}`);
-    }),
+    Match.when("queued", queuedLine),
     Match.when("paused", () => {
       const text = said("paused", "Paused");
       return text && toolStatusLine(theme, "paused", text);
@@ -413,7 +395,9 @@ export function previewExpandedCall<TArgs, TDetails, TState extends object>(
   const { frames, provider, context, theme, original, title } = input;
   const body = contentBody("call", context, input.content);
   // Outside a border slot, the collapsed body draws its own hints instead of labeling the border.
-  const own = outsideBorderSlot(context, () => capturePreviewCall(input.heading, context));
+  const own = renderWithBorderSlot(borderState(context), undefined, () =>
+    capturePreviewCall(input.heading, context),
+  );
   return new PreviewExpandedSlot(original, () => {
     const current = frames.latest(context);
     const value = previewIssues(frames, provider, current);

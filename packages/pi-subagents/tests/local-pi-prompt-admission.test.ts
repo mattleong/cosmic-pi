@@ -7,12 +7,11 @@ import * as Queue from "effect/Queue";
 import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
-import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { RpcCommand } from "../src/backend/local-pi-protocol.ts";
 import type { BackendHandle } from "../src/backend/model.ts";
 import type { ChildWireEvent } from "../src/boundary/child-process.ts";
 import { isOutcomeUncertain } from "../src/run/errors.ts";
-import { backendLaunch, takeBackendEvent } from "./fixtures/backend-launch.ts";
+import { piChild, spawnPi, takeBackendEvent } from "./fixtures/backend-launch.ts";
 
 type Prompt = Extract<RpcCommand, { readonly type: "prompt" }>;
 
@@ -29,13 +28,9 @@ const piFixture = Effect.gen(function* () {
       success,
       ...(data !== undefined && { data }),
     });
-  const driver = localPiBackendDriver({
-    reclaimRunState: () => Effect.void,
-    spawn: () =>
-      Effect.succeed({
-        pid: 4242,
-        events,
-        awaitExit: Effect.never,
+  const backend = yield* spawnPi(
+    Effect.succeed(
+      piChild(events, {
         send: (command) => {
           if (command.type === "prompt") return Queue.offer(prompts, command).pipe(Effect.asVoid);
           return emit({
@@ -52,12 +47,9 @@ const piFixture = Effect.gen(function* () {
                   },
           });
         },
-        acknowledge: () => {},
-        sendContactControl: () => Effect.void,
-        terminate: () => Effect.void,
       }),
-  });
-  const backend = yield* driver.spawn(backendLaunch());
+    ),
+  );
   yield* backend.controls.initialize;
   const start = (epoch: number, data: Schema.Json | undefined, success = true) =>
     Effect.gen(function* () {
@@ -132,25 +124,21 @@ describe("local Pi task admission", () => {
     );
   }
 
-  for (const data of [{ disposition: "future-secret" }]) {
-    it.effect(
-      `retains the attempted epoch when admission data is unreadable: ${JSON.stringify(data)}`,
-      () =>
-        Effect.gen(function* () {
-          const { backend, emit, start } = yield* piFixture;
-          expect(Exit.isSuccess(yield* start(1, { disposition: "started" }))).toBe(true);
-          const result = yield* start(2, data);
-          const error = yield* Effect.flip(result);
-          if (!Predicate.isTagged(error, "SubagentProcessError")) return yield* Effect.die(error);
-          expect(error).toMatchObject({ code: "prompt_outcome_uncertain" });
-          expect(isOutcomeUncertain(error)).toBe(true);
-          expect(error.message).not.toContain("future-secret");
-          yield* emit({ type: "agent_start" });
-          yield* expectEpoch(backend, 2);
-          return undefined;
-        }),
-    );
-  }
+  it.effect("retains the attempted epoch when admission data is unreadable", () =>
+    Effect.gen(function* () {
+      const { backend, emit, start } = yield* piFixture;
+      expect(Exit.isSuccess(yield* start(1, { disposition: "started" }))).toBe(true);
+      const result = yield* start(2, { disposition: "future-secret" });
+      const error = yield* Effect.flip(result);
+      if (!Predicate.isTagged(error, "SubagentProcessError")) return yield* Effect.die(error);
+      expect(error).toMatchObject({ code: "prompt_outcome_uncertain" });
+      expect(isOutcomeUncertain(error)).toBe(true);
+      expect(error.message).not.toContain("future-secret");
+      yield* emit({ type: "agent_start" });
+      yield* expectEpoch(backend, 2);
+      return undefined;
+    }),
+  );
 
   it.effect(
     "retains attempted ownership after a missing prompt response without replaying the task",

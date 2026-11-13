@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { activityPath, retainActivity, type ActivityRow } from "../src/activity/model.ts";
 import { groupedActivityTree, type GroupedActivityRow } from "../src/activity/grouped-tree.ts";
 import { needsYou } from "../src/activity/attention.ts";
@@ -36,15 +36,9 @@ describe("activity ownership", () => {
     const retained = retainActivity([root, ...finished], [root, ...live]);
     expect(Arr.filter(retained, (value) => value.status === "done")).toHaveLength(128);
     expect(Arr.filter(retained, (value) => value.status === "running")).toHaveLength(201);
-    expect(
-      Option.getOrUndefined(Arr.findFirst(retained, (value) => value.id === "root"))
-        ?.omittedChildren,
-    ).toBe(172);
+    expect(findOrUndefined(retained, (value) => value.id === "root")?.omittedChildren).toBe(172);
     const repeated = retainActivity(retained, [root, ...finished, ...live]);
-    expect(
-      Option.getOrUndefined(Arr.findFirst(repeated, (value) => value.id === "root"))
-        ?.omittedChildren,
-    ).toBe(172);
+    expect(findOrUndefined(repeated, (value) => value.id === "root")?.omittedChildren).toBe(172);
     const owner = row("finished-owner", "done", "root");
     const running = row("running-child", "running", owner.id);
     expect(
@@ -62,7 +56,7 @@ describe("activity ownership", () => {
     const retained = retainActivity([...history, ...cycle], [live, descendant]);
     expect(Arr.some(retained, (entry) => entry.id === "a" || entry.id === "b")).toBe(false);
     expect(activityPath(retained, live.key)).toEqual([
-      Option.getOrUndefined(Arr.findFirst(retained, (entry) => entry.key === live.key)),
+      findOrUndefined(retained, (entry) => entry.key === live.key),
     ]);
     expect(activityPath([...cycle, live, descendant], descendant.key)).toEqual([descendant]);
     expect(

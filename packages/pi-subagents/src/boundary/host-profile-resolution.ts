@@ -3,7 +3,6 @@ import * as Schema from "effect/Schema";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
-import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
@@ -17,10 +16,15 @@ import {
   disallowedLaunchOverrideMessage,
   firstDisallowedLaunchOverride,
 } from "../run/launch-validation.ts";
-import { failureFields, InvalidSubagentRequestError, withGuidance } from "../run/errors.ts";
+import {
+  invalidRequest,
+  subagentErrorCode,
+  withGuidance,
+  type InvalidSubagentRequestError,
+} from "../run/errors.ts";
 import { resolvePiModelSelector } from "../run/model-catalog.ts";
 import { sanitizeName } from "../run/state.ts";
-import type { WriterWorkspaceMode } from "../config/schema.ts";
+import type { SubagentNestingPolicy, WriterWorkspaceMode } from "../config/schema.ts";
 import type { SubagentEffort } from "../domain/routing.ts";
 import type {
   RouteFallback,
@@ -31,7 +35,9 @@ import type {
   SubagentParentContext,
 } from "../run/model.ts";
 import { lookupCustomAgent, type CustomAgent } from "../profiles/agents.ts";
+import { PROFILE_DEFINITIONS } from "../profiles/definitions.ts";
 import {
+  isProfileId,
   modelOverrideCandidate,
   PROFILE_IDS,
   profileCandidateValidationIssues,
@@ -46,6 +52,7 @@ import {
 } from "../profiles/model.ts";
 import {
   resolveProfileOverridePlan,
+  resolveProfilePlan,
   unsupportedEffortReason,
   type ProfileCandidateAttempt,
   type ProfileResolutionEnvironment,
@@ -81,11 +88,10 @@ const readHost = <A>(read: () => A): Effect.Effect<A, InvalidSubagentRequestErro
   Effect.try({
     try: read,
     catch: () =>
-      InvalidSubagentRequestError.make({
-        code: "host_session_unavailable",
-        message:
-          "The Pi session changed while this request was being prepared. Try again from the current session.",
-      }),
+      invalidRequest(
+        "host_session_unavailable",
+        "The Pi session changed while this request was being prepared. Try again from the current session.",
+      ),
   });
 
 /** The invoking session's model, effort, and branch, read through the stale-session guard. */
@@ -120,43 +126,43 @@ const resolvePiModel = Effect.fn("HostProfileResolution.resolvePiModel")(functio
   }));
   const resolution = resolvePiModelSelector(selector, availableModels);
   if (resolution.kind === "ambiguous")
-    return yield* InvalidSubagentRequestError.make({
-      code: "pi_model_ambiguous",
-      message: `Pi model "${selector}" matches multiple authenticated providers: ${Arr.join(resolution.candidates, ", ")}. Configure one canonical provider/model value.`,
-    });
+    return yield* invalidRequest(
+      "pi_model_ambiguous",
+      `Pi model "${selector}" matches multiple authenticated providers: ${Arr.join(resolution.candidates, ", ")}. Configure one canonical provider/model value.`,
+    );
   if (resolution.kind === "unknown")
-    return yield* InvalidSubagentRequestError.make({
-      code: "pi_model_unknown",
-      message: `Profile route references unknown or unauthenticated Pi model "${selector}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${Arr.join(resolution.nearMatches, ", ")}.` : ""} Update the profile route and reload.`,
-    });
+    return yield* invalidRequest(
+      "pi_model_unknown",
+      `Profile route references unknown or unauthenticated Pi model "${selector}".${resolution.nearMatches.length > 0 ? ` Close authenticated matches: ${Arr.join(resolution.nearMatches, ", ")}.` : ""} Update the profile route and reload.`,
+    );
   const modelId = `${resolution.provider}/${resolution.id}`;
   const model = registry.find(resolution.provider, resolution.id);
   if (!model || !registry.hasConfiguredAuth(model))
-    return yield* InvalidSubagentRequestError.make({
-      code: "pi_model_unauthenticated",
-      message: `Model is unavailable or unauthenticated: ${modelId}`,
-    });
+    return yield* invalidRequest(
+      "pi_model_unauthenticated",
+      `Model is unavailable or unauthenticated: ${modelId}`,
+    );
   const supportedEfforts = getSupportedThinkingLevels(model);
   if (effortWasExplicit && !supportedEfforts.includes(effort))
-    return yield* InvalidSubagentRequestError.make({
-      code: "pi_effort_unsupported",
-      message: unsupportedEffortReason(modelId, effort, supportedEfforts),
-    });
+    return yield* invalidRequest(
+      "pi_effort_unsupported",
+      unsupportedEffortReason(modelId, effort, supportedEfforts),
+    );
   const authSource = registry.getProviderAuthStatus(model.provider).source;
   if (authSource !== "runtime") return { model: modelId };
   const auth = yield* Effect.tryPromise({
     try: () => registry.getApiKeyAndHeaders(model),
     catch: () =>
-      InvalidSubagentRequestError.make({
-        code: "pi_auth_resolution_failed",
-        message: `Unable to resolve runtime authentication for ${modelId}.`,
-      }),
+      invalidRequest(
+        "pi_auth_resolution_failed",
+        `Unable to resolve runtime authentication for ${modelId}.`,
+      ),
   });
   if (!auth.ok || !isTransferableRuntimeApiKey(auth.apiKey))
-    return yield* InvalidSubagentRequestError.make({
-      code: "pi_auth_unavailable",
-      message: `Transferable runtime authentication is unavailable for ${modelId}.`,
-    });
+    return yield* invalidRequest(
+      "pi_auth_unavailable",
+      `Transferable runtime authentication is unavailable for ${modelId}.`,
+    );
   return {
     model: modelId,
     runtimeApiKey: Redacted.make(auth.apiKey, { label: "Subagent runtime API key" }),
@@ -193,7 +199,6 @@ export const hostProfileEnvironment = Effect.fn("HostProfileResolution.hostProfi
 const resolveConcreteModel = Effect.fn("HostProfileResolution.resolveConcreteModel")(function* (
   attempt: ProfileCandidateAttempt,
   modelRegistry: ModelRegistry,
-  cwd: string,
 ): Effect.fn.Return<ResolvedModel, InvalidSubagentRequestError, SubagentBackendRegistry> {
   const registry = yield* SubagentBackendRegistry;
   const resolved = yield* resolvePiModel(
@@ -203,20 +208,11 @@ const resolveConcreteModel = Effect.fn("HostProfileResolution.resolveConcreteMod
     modelRegistry,
   );
   if (attempt.openaiFastMode && !supportsSubagentFastMode(resolved.model))
-    return yield* InvalidSubagentRequestError.make({
-      code: "fast_mode_unsupported",
-      message: `Fast mode is unavailable for ${resolved.model}.`,
-    });
-  yield* registry.preflight(
-    { context: attempt.effectiveContext },
-    {
-      context: attempt.effectiveContext,
-      writeIntent: attempt.writeIntent,
-      model: resolved.model,
-      effort: attempt.effort,
-      cwd,
-    },
-  );
+    return yield* invalidRequest(
+      "fast_mode_unsupported",
+      `Fast mode is unavailable for ${resolved.model}.`,
+    );
+  yield* registry.preflight(resolved.model);
   return resolved;
 });
 
@@ -226,7 +222,7 @@ const dynamicCandidateSkip = (
 ): SkippedProfileCandidate => ({
   candidateIndex: attempt.candidateIndex,
   candidate: skippedCandidateRoute(attempt),
-  code: (error.code ?? "") || error._tag,
+  code: subagentErrorCode(error),
   reason: error.message,
 });
 
@@ -239,6 +235,7 @@ interface PlannedStartInput {
   /** A model override's place in the profile's route, which a failed run continues from. */
   readonly routeIndex?: number | undefined;
   readonly routeSource: LaunchRouteSource;
+  readonly nestingPolicy: SubagentNestingPolicy;
 }
 
 const modelOverrideLabel = ({ model, effort }: SubagentModelOverride): string =>
@@ -283,17 +280,15 @@ const readOnlyIsolation = (
 ): Effect.Effect<string, InvalidSubagentRequestError> =>
   isolation === "worktree"
     ? Effect.fail(
-        InvalidSubagentRequestError.make({
-          code: "isolation_requires_writer",
-          ...failureFields(
-            isolationFromAgent(input)
-              ? `${planSubject(input.definition, input.agent)} sets worktree isolation but resolved read-only.\n\nA read-only run can't be isolated in a worktree. Set the agent's writeIntent to writer, or remove its isolation.`
-              : withGuidance(
-                  `${planSubject(input.definition, input.agent)} resolved read-only, so it can't run in a worktree.\n\nA read-only run can't be isolated in a worktree.`,
-                  "Use profile worker or a writer agent, or omit isolation.",
-                ),
-          ),
-        }),
+        invalidRequest(
+          "isolation_requires_writer",
+          isolationFromAgent(input)
+            ? `${planSubject(input.definition, input.agent)} sets worktree isolation but resolved read-only.\n\nA read-only run can't be isolated in a worktree. Set the agent's writeIntent to writer, or remove its isolation.`
+            : withGuidance(
+                `${planSubject(input.definition, input.agent)} resolved read-only, so it can't run in a worktree.\n\nA read-only run can't be isolated in a worktree.`,
+                "Use profile worker or a writer agent, or omit isolation.",
+              ),
+        ),
       )
     : Effect.succeed(
         isolationFromAgent(input)
@@ -313,15 +308,13 @@ const modelOverrideUnavailable = (
       Arr.map(skipped, (skip) => ` ${coded ? `[${skip.code}] ` : ""}${skip.reason}`),
       "",
     )}`;
-  return InvalidSubagentRequestError.make({
-    code: "model_override_unavailable",
-    ...failureFields(
-      withGuidance(
-        { message: account(true), userMessage: account(false) },
-        `Fix the override, or omit it to use ${routeSubject(definition, agent)}'s route.`,
-      ),
+  return invalidRequest(
+    "model_override_unavailable",
+    withGuidance(
+      { message: account(true), userMessage: account(false) },
+      `Fix the override, or omit it to use ${routeSubject(definition, agent)}'s route.`,
     ),
-  });
+  );
 };
 
 /**
@@ -337,15 +330,13 @@ const validatedModelOverride = (
   const issues = Arr.map(profileCandidateValidationIssues(candidate), (issue) => issue.code);
   if (issues.length === 0) return Effect.succeed(candidate);
   return Effect.fail(
-    InvalidSubagentRequestError.make({
-      code: "model_override_invalid",
-      ...failureFields(
-        withGuidance(
-          `Model override ${modelOverrideLabel(override)} is invalid for ${routeSubject(definition, agent)}\n\nViolations: ${Arr.join(issues, ", ")}.`,
-          "Use a provider/model selector or parent.",
-        ),
+    invalidRequest(
+      "model_override_invalid",
+      withGuidance(
+        `Model override ${modelOverrideLabel(override)} is invalid for ${routeSubject(definition, agent)}\n\nViolations: ${Arr.join(issues, ", ")}.`,
+        "Use a provider/model selector or parent.",
       ),
-    }),
+    ),
   );
 };
 
@@ -371,14 +362,14 @@ const exhaustedRoute = (
         )}`
       : "";
   const subject = `${planSubject(input.definition, input.agent)} has no eligible candidate after pre-start checks.`;
-  return InvalidSubagentRequestError.make({
-    code: "profile_no_eligible_model",
+  return invalidRequest(
+    "profile_no_eligible_model",
     // The user's copy leaves out the skip codes.
-    ...failureFields({
+    {
       message: `${subject}${skipCodes ? ` Skipped: ${skipCodes}.` : ""}${reasons}`,
       userMessage: `${subject}${reasons}`,
-    }),
-  });
+    },
+  );
 };
 
 interface SelectedCandidate {
@@ -403,14 +394,13 @@ interface CandidateSearchStart {
 const firstReadyCandidate = Effect.fn("HostProfileResolution.firstReadyCandidate")(function* (
   input: PlannedStartInput,
   registry: ModelRegistry,
-  cwd: string,
   start: CandidateSearchStart = { skippedBefore: [], afterIndex: -1 },
 ): Effect.fn.Return<CandidateSearch, InvalidSubagentRequestError, SubagentBackendRegistry> {
   const skipped = [...start.skippedBefore];
   for (const attempt of input.plan.attempts) {
     if (attempt.candidateIndex <= start.afterIndex) continue;
     skipped.push(...(attempt.skippedBefore ?? []));
-    const outcome = yield* Effect.result(resolveConcreteModel(attempt, registry, cwd));
+    const outcome = yield* Effect.result(resolveConcreteModel(attempt, registry));
     if (Result.isSuccess(outcome))
       return { selected: { attempt, resolved: outcome.success, skipped }, skipped };
     skipped.push(dynamicCandidateSkip(attempt, outcome.failure));
@@ -418,31 +408,21 @@ const firstReadyCandidate = Effect.fn("HostProfileResolution.firstReadyCandidate
   return { skipped: [...skipped, ...input.plan.trailingSkippedCandidates] };
 });
 
-const selectCandidate = Effect.fn("HostProfileResolution.selectCandidate")(function* (
-  input: PlannedStartInput,
-  registry: ModelRegistry,
-  cwd: string,
-) {
-  const { selected, skipped } = yield* firstReadyCandidate(input, registry, cwd);
-  if (!selected) return yield* exhaustedRoute(input, skipped);
-  return selected;
-});
-
 const validatedStartInput = Effect.fn("HostProfileResolution.validatedStartInput")(function* (
   rawInput: SubagentProfileStartSpec,
 ) {
   const task = Str.trim(rawInput.task);
   if (!task)
-    return yield* InvalidSubagentRequestError.make({
-      code: "task_required",
-      message: "agent_start requires every agent to have a task.",
-    });
+    return yield* invalidRequest(
+      "task_required",
+      "agent_start requires every agent to have a task.",
+    );
   const disallowedField = firstDisallowedLaunchOverride(rawInput);
   if (disallowedField)
-    return yield* InvalidSubagentRequestError.make({
-      code: "launch_override_not_allowed",
-      message: disallowedLaunchOverrideMessage(disallowedField),
-    });
+    return yield* invalidRequest(
+      "launch_override_not_allowed",
+      disallowedLaunchOverrideMessage(disallowedField),
+    );
   return task;
 });
 
@@ -455,10 +435,10 @@ const plannedCandidate = Effect.fn("HostProfileResolution.plannedCandidate")(fun
   isolationWarning: string | undefined,
 ): Effect.fn.Return<StartCandidate, InvalidSubagentRequestError> {
   if (attempt.effectiveContext === "fork" && (!parent.sessionFile || !parent.leafId))
-    return yield* InvalidSubagentRequestError.make({
-      code: "fork_context_unavailable",
-      message: "Copying this conversation needs a saved session with at least one message.",
-    });
+    return yield* invalidRequest(
+      "fork_context_unavailable",
+      "Copying this conversation needs a saved session with at least one message.",
+    );
   const routeContinuation = freezeSnapshot({
     candidates: input.routeCandidates,
     selectedCandidateIndex: input.routeIndex ?? attempt.candidateIndex,
@@ -498,32 +478,6 @@ const plannedCandidate = Effect.fn("HostProfileResolution.plannedCandidate")(fun
   };
 });
 
-/**
- * Continues a profile route past a candidate whose startup failed before its task was issued:
- * the next planned attempt that passes the same model resolution and preflight the first did.
- */
-const routeFallbackFor = (
-  pi: ExtensionAPI,
-  input: PlannedStartInput,
-  registry: ModelRegistry,
-  environment: SubagentSessionEnvironment,
-  parent: SubagentParentContext,
-  isolationWarning: string | undefined,
-  backends: Context.Context<SubagentBackendRegistry>,
-): RouteFallback =>
-  Effect.fn("HostProfileResolution.routeFallback")(function* ({
-    selection,
-    failed,
-  }: RouteFallbackRequest) {
-    const { selected, skipped } = yield* firstReadyCandidate(input, registry, environment.cwd, {
-      skippedBefore: [...selection.skippedCandidates, failed],
-      afterIndex: failed.candidateIndex ?? Number.POSITIVE_INFINITY,
-    });
-    if (!selected) return { skippedCandidates: skipped };
-    const next = yield* plannedCandidate(pi, input, parent, selected, isolationWarning);
-    return { skippedCandidates: skipped, next };
-  }, Effect.provideContext(backends));
-
 const resolvePlannedStart = Effect.fn("HostProfileResolution.resolvePlannedStart")(function* (
   pi: ExtensionAPI,
   input: PlannedStartInput,
@@ -532,7 +486,8 @@ const resolvePlannedStart = Effect.fn("HostProfileResolution.resolvePlannedStart
   parent: SubagentParentContext,
 ): Effect.fn.Return<StartSubagentRequest, InvalidSubagentRequestError, SubagentBackendRegistry> {
   const task = yield* validatedStartInput(input.rawInput);
-  const selected = yield* selectCandidate(input, registry, environment.cwd);
+  const { selected, skipped } = yield* firstReadyCandidate(input, registry);
+  if (!selected) return yield* exhaustedRoute(input, skipped);
   const modelOverride = input.routeSource === "override" ? input.rawInput.model : undefined;
   // An item's isolation wins over the agent's.
   const requestedIsolation = input.rawInput.isolation ?? input.agent?.isolation;
@@ -543,6 +498,23 @@ const resolvePlannedStart = Effect.fn("HostProfileResolution.resolvePlannedStart
       ? yield* readOnlyIsolation(input, requestedIsolation)
       : undefined;
   const candidate = yield* plannedCandidate(pi, input, parent, selected, isolationWarning);
+  const backends = yield* Effect.context<SubagentBackendRegistry>();
+  // Continues the route past a candidate whose startup failed before its task was issued: the
+  // next planned attempt that passes the same model resolution and preflight the first did.
+  const routeFallback: RouteFallback = Effect.fn("HostProfileResolution.routeFallback")(function* ({
+    selection,
+    failed,
+  }: RouteFallbackRequest) {
+    const next = yield* firstReadyCandidate(input, registry, {
+      skippedBefore: [...selection.skippedCandidates, failed],
+      afterIndex: failed.candidateIndex ?? Number.POSITIVE_INFINITY,
+    });
+    if (!next.selected) return { skippedCandidates: next.skipped };
+    return {
+      skippedCandidates: next.skipped,
+      next: yield* plannedCandidate(pi, input, parent, next.selected, isolationWarning),
+    };
+  }, Effect.provideContext(backends));
   // Every copy of the name, including a worktree's recorded launch, keeps the display bound.
   const name = sanitizeName(input.rawInput.name ?? "");
   const request: StartSubagentRequest = {
@@ -553,25 +525,14 @@ const resolvePlannedStart = Effect.fn("HostProfileResolution.resolvePlannedStart
     ...(input.agent && { agent: input.agent.name }),
     // An agent's instructions replace its routed profile's guidance.
     profileGuidance: input.agent?.instructions ?? input.definition.guidance,
-    ...(modelOverride
-      ? { modelOverride }
-      : {
-          routeFallback: routeFallbackFor(
-            pi,
-            input,
-            registry,
-            environment,
-            parent,
-            isolationWarning,
-            yield* Effect.context<SubagentBackendRegistry>(),
-          ),
-        }),
+    ...(modelOverride ? { modelOverride } : { routeFallback }),
     cwd: environment.cwd,
     projectTrusted: environment.projectTrusted,
     parentSessionId: parent.sessionId,
     ...(parent.sessionFile && { parentSessionFile: parent.sessionFile }),
     ...(parent.leafId && { parentLeafId: parent.leafId }),
     ...candidate,
+    nestingPolicy: input.nestingPolicy,
   };
   return request;
 });
@@ -585,15 +546,13 @@ const launchedAgent = (
   if (!name) return Effect.undefined;
   if (rawInput.profile !== undefined)
     return Effect.fail(
-      InvalidSubagentRequestError.make({
-        code: "agent_profile_conflict",
-        ...failureFields(
-          withGuidance(
-            `Agent ${name} can't be combined with a profile\n\nAn agent already routes through its configured profile.`,
-            "Set either agent or profile on the start item, not both.",
-          ),
+      invalidRequest(
+        "agent_profile_conflict",
+        withGuidance(
+          `Agent ${name} can't be combined with a profile\n\nAn agent already routes through its configured profile.`,
+          "Set either agent or profile on the start item, not both.",
         ),
-      }),
+      ),
     );
   const config = profileSnapshot.effectiveConfig;
   const lookup = lookupCustomAgent(config, name);
@@ -605,19 +564,17 @@ const launchedAgent = (
     ) || "none";
   return Effect.fail(
     lookup.kind === "invalid"
-      ? InvalidSubagentRequestError.make({
-          code: "agent_invalid",
-          message: `Agent ${name} is invalid, so it can't start\n\nRepair its entry under agents in ${homeDisplayPath(lookup.scope === "project" ? config.projectConfigPath : config.globalConfigPath)}, then reload. /subagents doctor lists the invalid fields.`,
-        })
-      : InvalidSubagentRequestError.make({
-          code: "agent_unknown",
-          ...failureFields(
-            withGuidance(
-              `Unknown agent ${name}\n\nConfigured agents: ${available}.`,
-              "Call agent_profiles to list them, or launch a profile instead.",
-            ),
+      ? invalidRequest(
+          "agent_invalid",
+          `Agent ${name} is invalid, so it can't start\n\nRepair its entry under agents in ${homeDisplayPath(lookup.scope === "project" ? config.projectConfigPath : config.globalConfigPath)}, then reload. /subagents doctor lists the invalid fields.`,
+        )
+      : invalidRequest(
+          "agent_unknown",
+          withGuidance(
+            `Unknown agent ${name}\n\nConfigured agents: ${available}.`,
+            "Call agent_profiles to list them, or launch a profile instead.",
           ),
-        }),
+        ),
   );
 };
 
@@ -637,12 +594,14 @@ export const resolveProfileStart = Effect.fn("HostProfileResolution.resolveProfi
     const profileSnapshot = capturedProfiles ?? (yield* profiles.capture);
     const agent = yield* launchedAgent(rawInput, profileSnapshot);
     const selectedProfile = agent?.profile ?? (Str.trim(rawInput.profile ?? "") || "generalist");
-    const definition = profiles.definition(selectedProfile);
+    const definition = isProfileId(selectedProfile)
+      ? PROFILE_DEFINITIONS[selectedProfile]
+      : undefined;
     if (!definition)
-      return yield* InvalidSubagentRequestError.make({
-        code: "profile_unknown",
-        message: `Unknown subagent profile "${selectedProfile}". Available profiles: ${Arr.join(PROFILE_IDS, ", ")}.`,
-      });
+      return yield* invalidRequest(
+        "profile_unknown",
+        `Unknown subagent profile "${selectedProfile}". Available profiles: ${Arr.join(PROFILE_IDS, ", ")}.`,
+      );
     const parent = environment.parentContext ?? (yield* captureHostParentContext(pi, ctx));
     // Candidate probes can outlast the session, so later registry reads use this capture.
     const registry = yield* readHost(() => ctx.modelRegistry);
@@ -674,20 +633,20 @@ export const resolveProfileStart = Effect.fn("HostProfileResolution.resolveProfi
             ? { routeCandidates: [candidate] }
             : { routeCandidates: route.candidates, routeIndex }),
           routeSource: "override",
+          nestingPolicy: profileSnapshot.effectiveConfig.nesting,
         },
         registry,
         environment,
         parent,
       );
     }
-    const plan = profiles.resolve(
-      profileSnapshot,
+    const plan = resolveProfilePlan(
       definition.id,
+      profileSnapshot.effectiveConfig,
       profileEnvironment(registry, parent),
       agent,
     );
-    if (plan.kind === "failed")
-      return yield* InvalidSubagentRequestError.make({ code: plan.code, message: plan.message });
+    if (plan.kind === "failed") return yield* invalidRequest(plan.code, plan.message);
     return yield* resolvePlannedStart(
       pi,
       {
@@ -697,6 +656,7 @@ export const resolveProfileStart = Effect.fn("HostProfileResolution.resolveProfi
         plan,
         routeCandidates: route.candidates,
         routeSource: profileSnapshot.effectiveConfig.profileSources[definition.id],
+        nestingPolicy: profileSnapshot.effectiveConfig.nesting,
       },
       registry,
       environment,

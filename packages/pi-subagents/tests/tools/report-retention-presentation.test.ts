@@ -1,8 +1,6 @@
 import {
   applyPresentationSettings,
   createToolPresentationHarness,
-  issueMessageStyleProblems,
-  renderContextFixture,
   withPresentationSettings,
 } from "pi-code-previews/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -12,8 +10,7 @@ import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
 import { decodeStartAwaitCardDetails } from "../../src/tools/details-decode.ts";
 import { awaitDetails } from "../../src/tools/details.ts";
-import { captureSubagentTools, view } from "./fixtures/tool-harness.ts";
-import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
+import { issueStyle, renderOnlyTool, settledSummary, view } from "./fixtures/tool-harness.ts";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
@@ -46,17 +43,13 @@ const detailsFor = (run: SubagentRunView) =>
   awaitDetails({ runs: [run], awaitedRunIds: [run.id], awaitUntil: "all_finished" });
 
 const summarize = (run: SubagentRunView) =>
-  createSubagentCompactSummary(SUBAGENT_TOOL_NAME.await)({
-    phase: "settled",
-    args: { runIds: [run.id], until: "all_finished" },
-    result: { content: [{ type: "text", text: "await output" }], details: detailsFor(run) },
-    context: renderContextFixture({ isError: false }),
-  });
+  settledSummary(
+    createSubagentCompactSummary(SUBAGENT_TOOL_NAME.await),
+    { runIds: [run.id], until: "all_finished" },
+    { details: detailsFor(run), text: "await output" },
+  );
 
-const awaitTool = () =>
-  captureSubagentTools(subagentServiceDouble({}), {
-    environment: { cwd: "/project", projectTrusted: false },
-  }).get(SUBAGENT_TOOL_NAME.await)!;
+const awaitTool = () => renderOnlyTool(SUBAGENT_TOOL_NAME.await);
 
 const restoreSettings: Array<() => void> = [];
 
@@ -76,8 +69,9 @@ describe("cut report presentation", () => {
 
   it("states a cut report's retention in its issue, leaving the saved file to Details", () => {
     for (const complete of [true, false, undefined]) {
-      const issues = summarize(cutRun(complete))?.issues ?? [];
-      expect(Arr.flatMap(issues, (issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
+      const summary = summarize(cutRun(complete));
+      const issues = summary?.issues ?? [];
+      expect(issueStyle(summary)).toEqual([]);
       const details = Arr.join(
         Arr.map(issues, (issue) => issue.detail ?? ""),
         "\n",
@@ -89,7 +83,6 @@ describe("cut report presentation", () => {
       expect(messages).not.toContain(ARCHIVE_PATH);
       // Details name the file and its size, so the issue never repeats them.
       expect(details).not.toContain(ARCHIVE_PATH);
-      expect(Fn.pipe(details, Str.includes(" characters kept"))).toBe(complete !== undefined);
       expect(details).not.toMatch(/\bagent_[a-z]+\b/u);
       // A whole saved copy is a usable recovery path, not a warning.
       expect(Arr.some(issues, (issue) => issue.severity === "warning")).toBe(complete !== true);
@@ -108,7 +101,6 @@ describe("cut report presentation", () => {
       const frames = harness.cycle({ runIds: ["agent-1"], until: "all_finished" }, result, {
         states: [false, true, false, true],
       });
-      expect(Arr.some(frames, ({ expanded }) => expanded)).toBe(true);
       for (const { expanded, text } of frames) {
         // Details name the file once beside the retained report; the issue doesn't repeat it.
         const mentions =

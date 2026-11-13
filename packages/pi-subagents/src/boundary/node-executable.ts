@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import { invalidRequest } from "../run/errors.ts";
-import { nodeErrorCode } from "./harness-shared.ts";
+import { nodeErrorCode } from "pi-cosmic-core/platform/errors";
 import { nodeFsConstants, nodeFsPromises } from "pi-cosmic-core/platform/node-builtins";
 import { homeDisplayPath } from "../ui/display-path.ts";
 

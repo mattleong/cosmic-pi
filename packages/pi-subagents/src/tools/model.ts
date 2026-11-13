@@ -4,7 +4,11 @@ import type {
   ProfileRouteSource,
   SubagentModelOverride,
 } from "../profiles/model.ts";
-import type { SubagentEffort, SubagentWriteIntent } from "../domain/routing.ts";
+import type {
+  SubagentContextMode,
+  SubagentEffort,
+  SubagentWriteIntent,
+} from "../domain/routing.ts";
 import type { CustomAgent, InvalidCustomAgent } from "../profiles/agents.ts";
 import type { FailedStartRecovery, SubagentRunView } from "../run/model.ts";
 
@@ -58,7 +62,7 @@ export interface SubagentProfileView {
   readonly description: string;
   readonly source: ProfileRouteSource;
   readonly isDefault: boolean;
-  readonly defaultContext: "fresh" | "fork";
+  readonly defaultContext: SubagentContextMode;
   readonly defaultWriteIntent: SubagentWriteIntent;
   readonly defaultEffort?: SubagentEffort | undefined;
   readonly candidates: ReadonlyArray<ProfileCandidateDiscovery>;

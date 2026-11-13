@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { piArgumentRejection } from "pi-cosmic-core/testing/sdk";
 import { beforeEach, describe, expect, test } from "vitest";
 import {
@@ -18,11 +19,15 @@ import { resolveCompactSummary } from "../../src/tools/compact-summary";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { nativeToolSearchSummary } from "../../src/tools/native-tool-search-summary";
 import { nativeCall, scriptResult, settledSummary } from "../support/native-codemode";
-import { builtinRenderers, stripAnsi, textResult } from "../support/render";
+import {
+  builtinProjectionPolicy,
+  builtinRenderers,
+  stripAnsi,
+  textResult,
+} from "../support/render";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 
 // Pi generates the rejections, so a change to its wording fails these tests rather than leaving
 // them to pass on stale text.
@@ -54,17 +59,11 @@ const builtins: readonly BuiltinCompactTool[] = [
 ];
 
 const projection: BuiltinCompactProjectionInput = {
-  phase: "settled",
+  ...builtinProjectionPolicy,
   args: {},
   result: undefined,
   cwd: "/project",
   isError: true,
-  beforeWrite: { kind: "unknown" },
-  secretWarnings: true,
-  bashWarnings: true,
-  secretScanChars: 8000,
-  maxWriteDiffBytes: 100000,
-  maxWriteDiffChangedLineCells: 10000,
 };
 const rejected = (tool: BuiltinCompactTool, value: string, args: Record<string, string> = {}) =>
   projectBuiltinCompactSummary(tool, { ...projection, args, result: textResult(value, {}) });
@@ -143,11 +142,9 @@ describe("Pi argument rejections", () => {
         { type: "text", text: "done" },
       ),
     );
-    const child = Option.getOrUndefined(
-      Arr.findFirst(
-        nested?.children?.entries[0]?.issues ?? [],
-        ({ severity }) => severity === "error",
-      ),
+    const child = findOrUndefined(
+      nested?.children?.entries[0]?.issues ?? [],
+      ({ severity }) => severity === "error",
     );
     expect(child?.message).toBe(rejected("read", mismatched("read"))?.issues?.[0]?.message);
   });
@@ -177,9 +174,7 @@ describe("Pi argument rejections", () => {
         renderResult: (result, { expanded }) =>
           new Text(
             expanded
-              ? (Option.getOrUndefined(
-                  Arr.findFirst(result.content, (part) => part.type === "text"),
-                )?.text ?? "")
+              ? (findOrUndefined(result.content, (part) => part.type === "text")?.text ?? "")
               : "",
             0,
             0,
@@ -207,7 +202,10 @@ describe("Pi argument rejections", () => {
         expect(collapsed).not.toContain(MALFORMED_JSON);
         // The issue restates the rejection in words; Pi's diagnostic and the echoed arguments stay.
         const [rejection, echoed = ""] = Str.split(value, "\n\nReceived arguments:\n");
-        const diagnostic = Str.replace(/^Invalid arguments for tool "[^"]*": /u, "")(rejection);
+        const diagnostic = Fn.pipe(
+          rejection,
+          Str.replace(/^Invalid arguments for tool "[^"]*": /u, ""),
+        );
         for (const line of Arr.filter(Str.split(`${diagnostic}\n${echoed}`, "\n"), Str.isNonEmpty))
           expect(expanded).toContain(Str.trim(line));
       }

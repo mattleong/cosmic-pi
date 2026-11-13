@@ -100,14 +100,10 @@ const PROCESS_FAILURES = {
   { readonly operation: string; readonly message: string }
 >;
 
-const processError = (reason: LocalProcessError["reason"], subject?: string) =>
-  LocalProcessError.make({
-    reason,
-    operation: PROCESS_FAILURES[reason].operation,
-    message: subject
-      ? `${PROCESS_FAILURES[reason].message} ${subject}`
-      : PROCESS_FAILURES[reason].message,
-  });
+const processError = (
+  reason: LocalProcessError["reason"],
+  message: string = PROCESS_FAILURES[reason].message,
+) => LocalProcessError.make({ reason, operation: PROCESS_FAILURES[reason].operation, message });
 
 /**
  * The task environment: the host's, without the keys that would load Pi's own startup code or
@@ -233,27 +229,27 @@ const makePosixGroupTermination = Effect.fn("LocalProcess.makePosixGroupTerminat
 });
 
 const missingShell = (shellPath: string | undefined) =>
-  LocalProcessError.make({
-    reason: "spawn",
-    operation: PROCESS_FAILURES.spawn.operation,
-    message: shellPath
+  processError(
+    "spawn",
+    shellPath
       ? `Couldn't find the shell ${formatDisplayPath(shellPath, "")}`
       : "Couldn't find a shell",
-  });
+  );
 
 const verifyCwd = (fs: FileSystem.FileSystem, cwd: string) =>
   fs.stat(cwd).pipe(
     // A task's status shows these messages, so a directory under home reads `~/…`.
-    Effect.mapError(() => processError("cwd", formatDisplayPath(cwd, ""))),
+    Effect.mapError(() =>
+      processError("cwd", `${PROCESS_FAILURES.cwd.message} ${formatDisplayPath(cwd, "")}`),
+    ),
     Effect.flatMap((info) =>
       info.type === "Directory"
         ? Effect.void
         : Effect.fail(
-            LocalProcessError.make({
-              operation: PROCESS_FAILURES.cwd.operation,
-              reason: "cwd",
-              message: `The working directory is not a directory: ${formatDisplayPath(cwd, "")}`,
-            }),
+            processError(
+              "cwd",
+              `The working directory is not a directory: ${formatDisplayPath(cwd, "")}`,
+            ),
           ),
     ),
   );

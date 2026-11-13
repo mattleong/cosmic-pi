@@ -1,23 +1,24 @@
 import { expect, it } from "@effect/vitest";
-import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as Queue from "effect/Queue";
 import * as Result from "effect/Result";
 import * as Scheduler from "effect/Scheduler";
 import * as Scope from "effect/Scope";
 import { interruptingScheduler, yieldUntil } from "pi-cosmic-core/testing";
-import type { BackendEvent, BackendHandle } from "../../src/backend/model.ts";
 import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
-import { snapshotRun, type RunContext, type RunRecord } from "../../src/run/internal.ts";
+import { snapshotRun, type RunContext } from "../../src/run/internal.ts";
 import { processInitializer } from "../../src/run/process-lifecycle.ts";
 import { recordCleanup } from "../../src/run/record-cleanup.ts";
 import { writerSpawnPreparation } from "../../src/run/writer-preparation.ts";
 import { view } from "../fixtures/run-view.ts";
-import { testBackendDriver } from "../tools/fixtures/tool-harness.ts";
-import { makeRunContext } from "./fixtures/run-context.ts";
+import {
+  backendHandleFixture,
+  inertDriver,
+  makeRunContext,
+  runRecordFixture,
+} from "./fixtures/run-context.ts";
 import { fakeWriterLeaseLayer, leaseCounts } from "./fixtures/service-harness.ts";
 
 const processFixture = () =>
@@ -28,78 +29,22 @@ const processFixture = () =>
     const context = yield* makeRunContext({ ownerScope: owner, writerLeases });
     const counts = { spawned: 0, released: 0 };
     const driver = {
-      ...testBackendDriver,
+      ...inertDriver,
       spawn: () =>
         Effect.acquireRelease(
-          Effect.gen(function* () {
-            counts.spawned++;
-            const events = yield* Queue.unbounded<BackendEvent, Cause.Done>();
-            const handle: BackendHandle = {
-              events,
-              awaitExit: Effect.never,
-              acknowledge: () => {},
-              cancelPending: () => {},
-              terminate: () => Effect.void,
-              controls: {
-                initialize: Effect.succeed({ effort: "high", sessionId: "fixture" }),
-                start: () => Effect.void,
-                steer: () => Effect.void,
-                interrupt: Effect.void,
-                reply: () => Effect.void,
-                notifyPeers: () => Effect.void,
-              },
-            };
-            return handle;
-          }),
+          Effect.sync(() => void counts.spawned++).pipe(Effect.andThen(backendHandleFixture())),
           () => Effect.sync(() => void counts.released++),
         ),
     };
     const newRecord = (id: string) =>
       Effect.gen(function* () {
-        const pool = yield* context.writerPools.joinLocked(cwd, id);
-        const record: RunRecord = {
-          scriptOrigin: false,
+        return yield* runRecordFixture({
           view: view({ id, name: id, state: "starting", writeIntent: "writer" }),
           scope: yield* Scope.fork(owner),
           driver,
-          launch: {
-            runId: id,
-            name: id,
-            cwd: cwd.path,
-            context: "fresh",
-            writeIntent: "writer",
-            openaiFastMode: false,
-            model: "test/model",
-            effort: "high",
-            activeTools: [],
-            projectTrusted: true,
-            parentSessionId: "parent",
-            systemPrompt: "",
-          },
-          activeTools: new Map(),
-          cleanupSettlement: yield* Deferred.make<"confirmed" | "quarantined">(),
-          cleanupDisposition: "none",
-          pauseRequested: false,
-          stoppedByParent: false,
-          runStateReclaimState: "pending",
           canonicalWriterCwd: cwd,
-          writerPool: pool,
-          notificationGeneration: 0,
-          completionGeneration: 0,
-          warningSlots: {},
-          completionGenerations: new Map(),
-          completionClaims: new Map(),
-          assignment: {
-            epoch: 1,
-            phase: "preparing",
-            attemptToken: "test",
-            startedObserved: false,
-            outcomeUncertain: false,
-            pendingRunSettled: false,
-          },
-          nextAssignmentEpoch: 2,
-        };
-        return record;
+          writerPool: yield* context.writerPools.joinLocked(cwd, id),
+        });
       });
     return { context, owner, counts, newRecord };
   });

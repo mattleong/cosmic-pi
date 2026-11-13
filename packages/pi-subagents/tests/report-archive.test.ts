@@ -16,9 +16,9 @@ import { vi } from "vitest";
 import { MAX_OUTCOME_FILE_PATH_CHARS } from "../src/run/limits.ts";
 import { MAX_FINAL_TEXT_CHARS } from "../src/run/state.ts";
 import { MAX_RUN_BLOCK_CHARS } from "../src/tools/run-block.ts";
-import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
+import { exists, temporaryDirectory } from "./workspace/fixtures/repository.ts";
+import { findings } from "./run/fixtures/run-context.ts";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 
 const temporaryAgent = temporaryDirectory("report-archive-");
@@ -28,14 +28,6 @@ const sentText = (sendMessage: ReturnType<typeof vi.fn<ExtensionAPI["sendMessage
   return Predicate.isString(content) ? content : "";
 };
 
-const exists = (file: string) =>
-  Effect.promise(() =>
-    fs.stat(file).then(
-      () => true,
-      () => false,
-    ),
-  );
-
 describe("subagent report archive", () => {
   it.effect("delivers a long report as its private file and keeps the body out of the notice", () =>
     Effect.gen(function* () {
@@ -43,10 +35,7 @@ describe("subagent report archive", () => {
       const archive = sessionReportArchive(agent, "session-1");
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
       const notify = hostNotifier(extensionApiFixture({ sendMessage }));
-      const report = Arr.join(
-        Array.from({ length: 2_000 }, (_, line) => `finding ${line}`),
-        "\n",
-      );
+      const report = findings(2_000);
       const reportArchive = yield* archive.save({ id: "agent-1", generation: 2, text: report });
 
       notify({

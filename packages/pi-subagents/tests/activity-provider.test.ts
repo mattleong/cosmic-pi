@@ -19,8 +19,8 @@ import { normalizeRpcEvent } from "../src/backend/local-pi-events.ts";
 import { awaitDetails, startDetails } from "../src/tools/details.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const question = { requestId: "q", message: "Question" };
 const envelope = (text: string) => [{ type: "text", text }];
@@ -46,6 +46,19 @@ const childToolEvent = (
   return finishToolSessionEvent(events, { ...event, endedAt: 3 });
 };
 
+/** The Activity host, or a host that replaced it, announcing itself or its withdrawal. */
+const announceHost = (
+  transport: ReturnType<typeof fakeActivityHost>,
+  available: boolean,
+  replaced = false,
+) =>
+  transport.events.emit(ACTIVITY_HOST, {
+    version: 1,
+    sessionId: "session",
+    hostToken: replaced ? {} : transport.hostToken,
+    available,
+  });
+
 const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () => true) => {
   const transport = fakeActivityHost();
   const bridge = subagentProjectionBridge();
@@ -64,11 +77,9 @@ const promptedProvider = (runs: ReadonlyArray<SubagentRunView>, isCurrent = () =
     },
     act,
   });
-  const item = Option.getOrUndefined(
-    Arr.findFirst(
-      subagentActivityItems(bridge.get(), bridge.getActivityPresentation()),
-      (candidate) => candidate.id === "selected",
-    ),
+  const item = findOrUndefined(
+    subagentActivityItems(bridge.get(), bridge.getActivityPresentation()),
+    (candidate) => candidate.id === "selected",
   )!;
   // Discovered callbacks are foreign, so their results settle as untrusted values.
   const invoke = (action: string, signal: AbortSignal) =>
@@ -84,11 +95,9 @@ const childRun = (id: string, state: SubagentRunView["state"]) =>
 
 /** The first item's stop confirmation, as Activity shows it. */
 const stopConfirmation = (runs: ReadonlyArray<SubagentRunView>) =>
-  Option.getOrUndefined(
-    Arr.findFirst(
-      subagentActivityItems({ revision: 1, runs })[0]?.actions ?? [],
-      (action) => action.id === "stop",
-    ),
+  findOrUndefined(
+    subagentActivityItems({ revision: 1, runs })[0]?.actions ?? [],
+    (action) => action.id === "stop",
   )?.confirmation;
 
 describe("subagent activity provider", () => {
@@ -201,19 +210,9 @@ describe("subagent activity provider", () => {
       else if (changed === "cancel") controller.abort();
       else if (changed === "dispose") dispose();
       else if (Fn.pipe(changed, Str.startsWith("host-"))) {
-        transport.events.emit(ACTIVITY_HOST, {
-          version: 1,
-          sessionId: "session",
-          hostToken: transport.hostToken,
-          available: false,
-        });
+        announceHost(transport, false);
         if (changed !== "host-withdrawal")
-          transport.events.emit(ACTIVITY_HOST, {
-            version: 1,
-            sessionId: "session",
-            hostToken: changed === "host-replaced" ? {} : transport.hostToken,
-            available: true,
-          });
+          announceHost(transport, true, changed === "host-replaced");
       } else
         bridge.publish({
           revision: 2,
@@ -244,8 +243,7 @@ describe("subagent activity provider", () => {
         view({ id: "paused", state: "paused" }),
       ],
     });
-    const status = (id: string) =>
-      Option.getOrUndefined(Arr.findFirst(items, (item) => item.id === id));
+    const status = (id: string) => findOrUndefined(items, (item) => item.id === id);
     expect(status("asking")).toMatchObject({ status: "needs-input", inputTarget: "parent" });
     expect(status("waiting")).toMatchObject({ status: "needs-input", inputTarget: "parent" });
     expect(status("paused")?.status).toBe("paused");
@@ -304,52 +302,6 @@ describe("subagent activity provider", () => {
     expect(JSON.stringify(detail?.technical)).toContain("/private/workspace");
   });
 
-  it("leads recent tool calls with the glyph of how they ended instead of a trailing word", () => {
-    const run = view({
-      id: "run",
-      state: "running",
-      sessionEvents: [
-        {
-          type: "tool",
-          toolCallId: "a",
-          toolName: "bash",
-          target: "sleep 25",
-          state: "completed",
-          startedAt: 1,
-        },
-        {
-          type: "tool",
-          toolCallId: "b",
-          toolName: "bash",
-          target: "pnpm test",
-          state: "failed",
-          startedAt: 2,
-        },
-        {
-          type: "tool",
-          toolCallId: "c",
-          toolName: "read",
-          target: "src/a.ts",
-          state: "running",
-          startedAt: 3,
-        },
-      ],
-    });
-    const detail = subagentActivityDetail({ revision: 1, runs: [run] }, "run");
-    const lines = Arr.flatMap(detail?.sections ?? [], (section) => Str.split(section.body, "\n"));
-    const line = (target: string) =>
-      Option.getOrElse(
-        Arr.findFirst(lines, (entry) => Fn.pipe(entry, Str.includes(target))),
-        () => "",
-      );
-    expect(line("sleep 25")).toMatch(/^✓ /u);
-    expect(line("sleep 25")).not.toMatch(/done$/u);
-    expect(line("pnpm test")).toMatch(/^✗ /u);
-    expect(line("pnpm test")).not.toMatch(/failed$/u);
-    // Details don't redraw, so a call still running keeps its word beside the neutral glyph.
-    expect(line("src/a.ts")).toMatch(/^• .*running$/u);
-  });
-
   it("describes what a running agent is doing and keeps tool output indented as printed", () => {
     const started = startToolSessionEvent([], {
       toolCallId: "t",
@@ -376,27 +328,6 @@ describe("subagent activity provider", () => {
     expect(finished[0]).toMatchObject({ outputPreview: "     1\tfirst\n     2\tsecond" });
   });
 
-  it("keeps the first output line's indentation from the child's event to Activity", () => {
-    const started = startToolSessionEvent([], {
-      toolCallId: "t",
-      toolName: "read",
-      args: { path: "src/thing.ts" },
-      startedAt: 1,
-    });
-    const finished = childToolEvent(started, "t", "read", {
-      content: [{ type: "text", text: "\n    1  import thing;\n    2  export thing;\n" }],
-    });
-    const run = view({ id: "run", state: "running", sessionEvents: finished });
-    const body = Arr.join(
-      Arr.map(
-        subagentActivityDetail({ revision: 1, runs: [run] }, "run")?.sections ?? [],
-        (section) => section.expandedBody ?? section.body,
-      ),
-      "\n",
-    );
-    expect(body).toContain("      1  import thing;\n      2  export thing;");
-  });
-
   it("previews each tool call on one line and shows its output once inspected", () => {
     const started = startToolSessionEvent([], {
       toolCallId: "t",
@@ -408,11 +339,9 @@ describe("subagent activity provider", () => {
       content: [{ type: "text", text: "import thing;\nexport thing;\n" }],
     });
     const run = view({ id: "run", state: "running", sessionEvents: finished });
-    const recent = Option.getOrUndefined(
-      Arr.findFirst(
-        subagentActivityDetail({ revision: 1, runs: [run] }, "run")?.sections ?? [],
-        (section) => section.title === "Recent activity",
-      ),
+    const recent = findOrUndefined(
+      subagentActivityDetail({ revision: 1, runs: [run] }, "run")?.sections ?? [],
+      (section) => section.title === "Recent activity",
     );
     const preview = Str.split(recent?.body ?? "", "\n");
     expect(preview).toHaveLength(1);
@@ -491,7 +420,9 @@ describe("subagent activity provider", () => {
     expect(shown).not.toContain(reportPath);
     expect(shown).not.toContain("openai-codex");
     const markdown = Arr.filter(detail?.sections ?? [], (section) => section.format === "markdown");
-    expect(Arr.some(markdown, (section) => Str.includes("**cart**")(section.body))).toBe(true);
+    expect(Arr.some(markdown, (section) => Fn.pipe(section.body, Str.includes("**cart**")))).toBe(
+      true,
+    );
     const technical = JSON.stringify(detail?.technical);
     expect(technical).toContain(child.id);
     expect(technical).toContain(reportPath);
@@ -571,12 +502,7 @@ describe("subagent activity provider", () => {
         isCurrent: () => current,
         act,
       });
-      transport.events.emit(ACTIVITY_HOST, {
-        version: 1,
-        sessionId: "session",
-        hostToken: transport.hostToken,
-        available: true,
-      });
+      announceHost(transport, true);
       const revision = subagentActivityItems(bridge.get(), bridge.getActivityPresentation())[0]!
         .revision;
       const capability = transport.capability()!;

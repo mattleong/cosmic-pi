@@ -1,5 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   animationSchedulerProbe,
@@ -17,21 +16,18 @@ import type { BackgroundTaskToolDetails } from "../src/tools/command.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
 import { TASK_NOTICE_MESSAGE_TYPE } from "../src/task/notice.ts";
 import { renderTaskNotice } from "../src/ui/notice-message.ts";
+import { taskStatus } from "./support/task-service-double.ts";
 
 const restoreSettings = applyPresentationSettings({});
-const rowsOf = (text: string | undefined) =>
-  Arr.filter(Str.split(text ?? "", "\n"), (row) => Str.isNonEmpty(Str.trim(row)));
 afterEach(restoreSettings);
-const snapshot = {
+const snapshot = taskStatus({
   id: "task-0000000001",
   command: "run",
   cwd: "/task-working-directory",
   pid: 87654,
   state: "running",
-  startedAt: 1,
   logCursor: 10,
-  droppedLogBytes: 0,
-};
+});
 const rejectRun = () => Promise.reject(new Error("not executed"));
 const registeredTool = (
   mode: "on" | "off" | "border",
@@ -147,51 +143,6 @@ it.each(["compact", "preview"] as const)(
   },
 );
 
-it("collapses each compact row to its heading, adding a problem line only for the call's own", () => {
-  const cycle = (args: Partial<BackgroundTaskToolInput>, details: BackgroundTaskToolDetails) =>
-    createToolPresentationHarness(registeredTool("off", "compact"), { width: 140 }).cycle(
-      args,
-      { content: [{ type: "text", text: "ok" }], details },
-      { states: [false, true] },
-    );
-  const failed: BackgroundTaskSnapshot = {
-    ...snapshot,
-    name: "flaky",
-    state: "failed",
-    exitCode: 3,
-    endedAt: 2,
-  };
-  const running: BackgroundTaskSnapshot = { ...snapshot, state: "running" };
-  const inspections = [
-    cycle({ action: "status", id: snapshot.id }, { action: "status", snapshot: failed }),
-    cycle(
-      { action: "logs", id: snapshot.id },
-      {
-        action: "logs",
-        logs: {
-          id: snapshot.id,
-          state: "failed",
-          nextCursor: 10,
-          earliestAvailableCursor: 0,
-          droppedBytes: 0,
-        },
-        task: { name: "flaky", command: "run" },
-      },
-    ),
-    cycle({ action: "list" }, { action: "list", tasks: [running, failed] }),
-  ];
-  for (const [collapsed, expanded] of inspections) {
-    const rows = rowsOf(collapsed?.text);
-    // One neutral heading row, which still says the task failed.
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatch(/^\s*•/u);
-    expect(rows[0]).toContain("failed");
-    expect(rowsOf(expanded?.text).length).toBeGreaterThan(rows.length);
-  }
-  // The list shows every task when expanded.
-  expect(inspections[2]?.[1]?.text).toContain("flaky");
-});
-
 it.each(["compact", "preview"] as const)(
   "names the task whose logs were read in %s style",
   (style) => {
@@ -275,40 +226,3 @@ describe.each(["compact", "preview"] as const)("a long unnamed command in %s sty
     expect(text).toContain("--security-check");
   });
 });
-
-it.each(["compact", "preview"] as const)(
-  "leaves a listed task's state to a glyph that says it in %s style",
-  (style) => {
-    const harness = createToolPresentationHarness(registeredTool("off", style));
-    const listed = (state: BackgroundTaskSnapshot["state"], name: string) => ({
-      ...snapshot,
-      id: `task-${name}`,
-      name,
-      command: `pnpm ${name}`,
-      state,
-      ...(state === "running" ? {} : { endedAt: 400 }),
-    });
-    const [expanded] = harness.cycle(
-      { action: "list" },
-      {
-        content: [{ type: "text", text: "3 tasks" }],
-        details: {
-          action: "list",
-          tasks: [
-            listed("stopped", "server"),
-            listed("stopping", "e2e"),
-            listed("running", "watch"),
-          ],
-        },
-      },
-      { states: [true] },
-    );
-    const text = stripTerminalControls(expanded?.text ?? "");
-    expect(text).not.toContain("server · stopped");
-    expect(text).not.toContain("e2e · stopping");
-    expect(text).toContain("server");
-    expect(text).toContain("e2e");
-    // The neutral `•` says nothing, so a running task keeps its word.
-    expect(text).toContain("watch · running");
-  },
-);

@@ -16,7 +16,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { currentProcessIdentity, synchronousRandomHex } from "pi-cosmic-core";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
-import { createServer, type Socket } from "node:net";
+import { fauxAssistantMessage } from "pi-cosmic-core/testing/sdk";
 import { vi } from "vitest";
 import { registerIntercomApplication } from "../../src/application.ts";
 import { hostIntercomInbound } from "../../src/boundary/host-inbound.ts";
@@ -25,29 +25,14 @@ import { intercomLayer } from "../../src/layer.ts";
 import { SessionRecordFromJson, sessionRecord } from "../../src/registry/schema.ts";
 import { IntercomSession, type IntercomSessionInput } from "../../src/session/service.ts";
 import type { SessionToolArgs } from "../../src/tools/contract.ts";
+import { listenAt } from "./raw-peer.ts";
 
 export const assistantEntry = (text: string): SessionEntry => ({
   type: "message",
   id: "assistant-entry",
   parentId: null,
   timestamp: "",
-  message: {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    api: "openai-responses",
-    provider: "openai",
-    model: "fixture",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
-    stopReason: "stop",
-    timestamp: 0,
-  },
+  message: fauxAssistantMessage(text, { timestamp: 0 }),
 });
 
 export const failureOf = <A, E>(effect: Effect.Effect<A, E>) =>
@@ -95,36 +80,29 @@ export const writeForeignRecord = (
 /** A listener at `socket` that takes connections and never answers them. */
 export const hangingListener = (socket: string) =>
   Effect.gen(function* () {
-    const peers = new Set<Socket>();
+    let arrivals = 0;
     const waiters = new Set<{ readonly total: number; readonly wake: () => void }>();
-    yield* Effect.acquireRelease(
-      Effect.callback<ReturnType<typeof createServer>>((resume) => {
-        const server = createServer((peer) => {
-          peer.on("error", () => undefined);
-          peers.add(peer);
-          for (const waiter of waiters)
-            if (peers.size >= waiter.total) {
-              waiters.delete(waiter);
-              waiter.wake();
-            }
-        });
-        server.listen(socket, () => resume(Effect.succeed(server)));
-      }),
-      (server) =>
-        Effect.callback<void>((resume) => {
-          server.close(() => resume(Effect.void));
-          for (const peer of peers) peer.destroy();
-        }),
-    );
+    const { peers } = yield* listenAt(socket, () => {
+      arrivals += 1;
+      for (const waiter of waiters)
+        if (arrivals >= waiter.total) {
+          waiters.delete(waiter);
+          waiter.wake();
+        }
+    });
     return {
       /** Waits until `total` connections have arrived in all. */
       arrived: (total: number) =>
         Effect.callback<void>((resume) => {
-          if (peers.size >= total) return resume(Effect.void);
+          if (arrivals >= total) return resume(Effect.void);
           const waiter = { total, wake: () => resume(Effect.void) };
           waiters.add(waiter);
           return Effect.sync(() => void waiters.delete(waiter));
         }),
+      /** Drops every connection it holds, so each caller's request fails at once. */
+      drop: () => {
+        for (const peer of peers) peer.destroy();
+      },
     };
   });
 
@@ -266,17 +244,21 @@ export const harness = (options: HarnessOptions = {}) =>
     };
   });
 
+/** What an operation run against a session runtime's context may require. */
+export type SessionRuntimeServices = Layer.Success<ReturnType<typeof intercomLayer>>;
+
 /**
- * One session runtime built directly from its layer, with real delivery into a recorded host, so
- * a test can run tool operations against its context. Its startup sweep may still be running.
- * `PI_CODING_AGENT_DIR` must name the shared agent directory.
+ * One session runtime built directly from its layer in the `shared` registry, with real delivery
+ * into a recorded host, so a test can run tool operations against its context. Its startup sweep
+ * may still be running.
  */
 export const startSessionRuntime = (
   session: IntercomSessionInput,
   replyText: string,
-  fallbackRoot: string,
+  shared: SharedAgentDirectory,
 ) =>
   Effect.gen(function* () {
+    yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
     const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
     const host = recordingExtensionHost({}, { sendMessage });
     const delivery = registerIntercomDelivery(host.pi, { isIdle: () => true, later: () => {} });
@@ -292,7 +274,7 @@ export const startSessionRuntime = (
       intercomLayer(
         session,
         hostIntercomInbound(ctx, () => true, delivery),
-        { fallbackRoot },
+        { fallbackRoot: shared.fallbackRoot },
       ),
     );
     const { record, swept } = yield* Effect.provide(Effect.service(IntercomSession), context);
@@ -308,5 +290,5 @@ export const startSessionRuntime = (
 export const sessionRuntime = (
   session: IntercomSessionInput,
   replyText: string,
-  fallbackRoot: string,
-) => Effect.tap(startSessionRuntime(session, replyText, fallbackRoot), ({ swept }) => swept);
+  shared: SharedAgentDirectory,
+) => Effect.tap(startSessionRuntime(session, replyText, shared), ({ swept }) => swept);

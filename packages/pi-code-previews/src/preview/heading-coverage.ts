@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 
 /**
@@ -13,7 +14,7 @@ const subjectShown = new WeakMap<WeakKey, boolean>();
 const rowsShown = new WeakMap<WeakKey, number>();
 
 const endsClipped = (row: string): boolean =>
-  Str.endsWith("…")(Str.trimEnd(stripTerminalControls(row)));
+  Fn.pipe(Str.trimEnd(stripTerminalControls(row)), Str.endsWith("…"));
 
 /**
  * Records the heading rows just drawn. A row that ends in `…` clipped something, so a heading that

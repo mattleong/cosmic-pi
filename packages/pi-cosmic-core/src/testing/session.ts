@@ -1,9 +1,21 @@
-import { SessionManager, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  type ExtensionContext,
+  type SessionEntry,
+} from "@earendil-works/pi-coding-agent";
 import { overlay } from "./overlay.ts";
 
 export type HostSessionManager = ExtensionContext["sessionManager"];
 
 export const FIXTURE_CWD = "/project";
+
+type SessionMessageEntry = Extract<SessionEntry, { type: "message" }>;
+
+/** A root transcript entry holding `message`. */
+export const sessionMessageEntryFixture = (
+  message: SessionMessageEntry["message"],
+  id = "entry",
+): SessionMessageEntry => ({ type: "message", id, parentId: null, timestamp: "", message });
 
 export const sessionManagerFixture = (
   overrides: Partial<HostSessionManager> = {},

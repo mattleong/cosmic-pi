@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import type { CodePreviewSettings } from "../config/schema";
 import type { CodePreviewToolName } from "./names";
 
@@ -52,12 +53,10 @@ export function shouldHideShellResultByCommand(
 ): boolean {
   if (!settings.bashResultPreview) return true;
   if (!shellCommand) return false;
-  const policy = Option.getOrUndefined(
-    Arr.findFirst(
-      PREVIEW_SETTINGS,
-      (entry) =>
-        "commands" in entry && Arr.some(entry.commands, (command) => command === shellCommand),
-    ),
+  const policy = findOrUndefined(
+    PREVIEW_SETTINGS,
+    (entry) =>
+      "commands" in entry && Arr.some(entry.commands, (command) => command === shellCommand),
   );
   return policy ? !settings[policy.setting] : false;
 }

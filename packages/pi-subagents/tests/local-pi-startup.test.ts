@@ -7,22 +7,18 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Exit from "effect/Exit";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { ProcessExit } from "../src/boundary/process-transport.ts";
-import type { SubagentError } from "../src/run/errors.ts";
-import { backendLaunch } from "./fixtures/backend-launch.ts";
+import { SubagentProcessError, type SubagentError } from "../src/run/errors.ts";
+import { piChild, spawnPi } from "./fixtures/backend-launch.ts";
 
 const fakePiChild = Effect.gen(function* () {
   const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
   const receipt = yield* Deferred.make<ProcessExit>();
   const state = { requested: false, readingExit: false };
-  const driver = localPiBackendDriver({
-    reclaimRunState: () => Effect.void,
-    spawn: () =>
-      Effect.succeed({
-        pid: 4242,
-        events,
+  const spawn = spawnPi(
+    Effect.succeed(
+      piChild(events, {
         awaitExit: Effect.sync(() => {
           state.readingExit = true;
         }).pipe(Effect.andThen(Deferred.await(receipt))),
@@ -30,12 +26,10 @@ const fakePiChild = Effect.gen(function* () {
           Effect.sync(() => {
             state.requested = true;
           }),
-        acknowledge: () => {},
-        sendContactControl: () => Effect.void,
-        terminate: () => Effect.void,
       }),
-  });
-  return { events, receipt, state, driver };
+    ),
+  );
+  return { events, receipt, state, spawn };
 });
 
 describe("local Pi startup transport closure", () => {
@@ -43,11 +37,9 @@ describe("local Pi startup transport closure", () => {
     it.effect(`keeps diagnostic receipt waiting interruptible on ${ending}`, () =>
       Effect.gen(function* () {
         const scope = yield* Scope.make();
-        const { events, receipt, state, driver } = yield* fakePiChild;
+        const { events, receipt, state, spawn } = yield* fakePiChild;
         let failure: SubagentError | undefined;
-        const backend = yield* driver
-          .spawn(backendLaunch())
-          .pipe(Effect.provideService(Scope.Scope, scope));
+        const backend = yield* spawn.pipe(Effect.provideService(Scope.Scope, scope));
         yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
         const initializing = yield* backend.controls.initialize.pipe(
           Effect.flip,
@@ -72,7 +64,7 @@ describe("local Pi startup transport closure", () => {
           expect(error.message).toContain("code 1");
         } else {
           yield* Scope.close(scope, Exit.void);
-          expect((yield* Fiber.join(initializing))._tag).toBe("SubagentProcessError");
+          expect(yield* Fiber.join(initializing)).toBeInstanceOf(SubagentProcessError);
         }
       }),
     );

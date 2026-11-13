@@ -40,14 +40,13 @@ const InputJsonSchema = Schema.fromJsonString(Schema.Array(JsonObjectSchema));
 const COVERED_CONFIGURATION_UPDATE_EFFORT = "medium";
 
 function leadingInstructionCount(input: readonly unknown[]): number {
-  const end = Option.getOrElse(
+  return Option.getOrElse(
     Arr.findFirstIndex(
       input,
       (item) => !Predicate.isObject(item) || (item.role !== "system" && item.role !== "developer"),
     ),
-    () => -1,
+    () => input.length,
   );
-  return end < 0 ? input.length : end;
 }
 
 /** The pi-ai versions behind Pi's provider requests and behind this projection. */
@@ -72,7 +71,7 @@ const isConfigurationUpdate = Schema.is(
   Schema.Struct({ type: Schema.Literal("configuration_update") }),
 );
 
-export interface CoveredProjectionOptions {
+interface CoveredProjectionOptions {
   /** Pi's provider sent thinking levels as `configuration_update` items (`supportsMidConvoEffort`). */
   readonly configurationUpdates?: boolean;
 }

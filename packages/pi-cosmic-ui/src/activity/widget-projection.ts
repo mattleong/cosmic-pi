@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import { activityAttention, needsYou } from "./attention.ts";
 import type { ActivityRow } from "./model.ts";
 import { groupedActivityTree, type GroupedActivityRow } from "./grouped-tree.ts";
@@ -27,14 +28,9 @@ export interface ActivityWidgetSection {
 const isFailedEntry = (entry: GroupedActivityRow): boolean =>
   entry.type === "member" && entry.row.status === "failed";
 
-const checklists = new WeakMap<readonly ActivityRow[], readonly GroupedActivityRow[]>();
-const checklist = (rows: readonly ActivityRow[]): readonly GroupedActivityRow[] => {
-  const cached = checklists.get(rows);
-  if (cached) return cached;
-  const tree = groupedActivityTree(rows, { hideHistory: true });
-  checklists.set(rows, tree);
-  return tree;
-};
+const checklist = Fn.memoize((rows: readonly ActivityRow[]): readonly GroupedActivityRow[] =>
+  groupedActivityTree(rows, { hideHistory: true }),
+);
 
 /** A question open on screen offers no way back to it, unlike a hidden one that offers Resume. */
 const onScreenQuestion = (row: ActivityRow): boolean =>
@@ -42,19 +38,15 @@ const onScreenQuestion = (row: ActivityRow): boolean =>
   activityAttention(row) === "user" &&
   !Arr.some(row.actions ?? [], (action) => action.id === "resume");
 
-const offScreen = new WeakMap<readonly ActivityRow[], readonly ActivityRow[]>();
+const offScreenRows = Fn.memoize((rows: readonly ActivityRow[]): readonly ActivityRow[] =>
+  Arr.filter(rows, (row) => !onScreenQuestion(row)),
+);
 /** The rows the widget shows; those an input dock already presents are left to it. */
 export const widgetRows = (
   rows: readonly ActivityRow[],
   inputDockVisible: boolean | undefined,
-): readonly ActivityRow[] => {
-  if (!inputDockVisible || !Arr.some(rows, onScreenQuestion)) return rows;
-  const cached = offScreen.get(rows);
-  if (cached) return cached;
-  const shown = Arr.filter(rows, (row) => !onScreenQuestion(row));
-  offScreen.set(rows, shown);
-  return shown;
-};
+): readonly ActivityRow[] =>
+  inputDockVisible && Arr.some(rows, onScreenQuestion) ? offScreenRows(rows) : rows;
 
 const RECENT_FAILURE_MS = 10 * 60_000;
 
@@ -100,7 +92,7 @@ export const widgetFailuresExpire = (
   );
 
 export function activityWidgetHeight(rows: readonly ActivityRow[], terminalRows: number): number {
-  const failures = Arr.filter(checklist(rows), isFailedEntry).length;
+  const failures = Arr.countBy(checklist(rows), isFailedEntry);
   return Math.max(1, Math.min(Math.floor(terminalRows / 2), Math.max(8, failures + 4)));
 }
 
@@ -131,7 +123,7 @@ export function activityWidgetSections(
     },
   );
   const budget = Math.max(0, maxRows - (options.reserved ?? Number(needsYou(rows).length > 0)));
-  let used = Arr.filter(slots, (slot) => slot.offered.length > 0).length;
+  let used = Arr.countBy(slots, (slot) => slot.offered.length > 0);
   while (true) {
     let changed = false;
     for (const slot of slots) {

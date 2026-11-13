@@ -4,19 +4,21 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import {
   expandedArguments,
+  expandedBody,
   expandedDetails,
   expandedFields,
-  headingShowedSubject,
   type ExpandedField,
 } from "pi-code-previews";
 import { formatDuration } from "pi-cosmic-core/display";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../task/bounds.ts";
+import { subjectAwareComponent } from "../ui/subject-aware.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
 /** One labeled request fact; a multi-line command keeps its line breaks. */
@@ -52,22 +54,7 @@ const RequestArgumentsSchema = Schema.Struct({
 type RequestArguments = typeof RequestArgumentsSchema.Type;
 type RequestField = keyof RequestArguments;
 
-const REQUEST_FIELDS: ReadonlyArray<RequestField> = [
-  "action",
-  "command",
-  "cwd",
-  "name",
-  "timeoutSeconds",
-  "notify",
-  "id",
-  "state",
-  "until",
-  "contains",
-  "afterCursor",
-  "tailLines",
-  "waitSeconds",
-  "force",
-];
+const REQUEST_FIELDS = Rec.keys(RequestArgumentsSchema.fields);
 
 const decodeExactRequest = Schema.decodeUnknownOption(RequestArgumentsSchema, {
   onExcessProperty: "error",
@@ -152,12 +139,6 @@ function waitTarget(args: RequestArguments): string | undefined {
   return quoted.length === 1 ? last : `${Arr.join(quoted.slice(0, -1), ", ")} or ${last}`;
 }
 
-/** The request's arguments as rows, and whether those rows show every argument. */
-export interface BackgroundTaskRequestView {
-  readonly rows: ReadonlyArray<LabeledRow>;
-  readonly complete: boolean;
-}
-
 function requestRows(args: RequestArguments, subjectShown: boolean): ReadonlyArray<LabeledRow> {
   const rows: LabeledRow[] = args.action === "start" ? startRows(args, subjectShown) : [];
   const cwd = textValue(args.cwd);
@@ -217,10 +198,7 @@ function fieldShown(args: RequestArguments, field: RequestField): boolean {
  * left out, and a start's command only when `subjectShown` reports the heading drew it whole; the
  * view is incomplete when an argument couldn't be shown this way.
  */
-export function backgroundTaskRequestRows(
-  args: unknown,
-  subjectShown = false,
-): BackgroundTaskRequestView {
+export function backgroundTaskRequestRows(args: unknown, subjectShown: boolean) {
   const exact = decodeExactRequest(args);
   const known = Option.isSome(exact) ? exact : decodeKnownRequest(args);
   if (Option.isNone(known)) return { rows: [], complete: false };
@@ -267,25 +245,13 @@ export function renderBackgroundTaskRequest(
   settled: boolean,
   headingState?: WeakKey,
 ): Component {
-  let built: { readonly subjectShown: boolean; readonly children: Component[] } | undefined;
-  const build = (subjectShown: boolean): Component[] => {
+  return subjectAwareComponent(headingState, (subjectShown) => {
     const { rows, complete } = backgroundTaskRequestRows(args, subjectShown);
-    const children: Component[] = [];
-    if (rows.length > 0) children.push(expandedFields(theme, rows));
-    if (!complete) children.push(expandedArguments(theme, args));
     const id = settled ? undefined : requestTaskId(args);
-    if (id !== undefined) children.push(expandedDetails(theme, [id]));
-    return children;
-  };
-  return {
-    render: (width) => {
-      const subjectShown = headingState !== undefined && headingShowedSubject(headingState);
-      if (built?.subjectShown !== subjectShown)
-        built = { subjectShown, children: build(subjectShown) };
-      return Arr.flatMap(built.children, (child) => child.render(width));
-    },
-    invalidate: () => {
-      for (const child of built?.children ?? []) child.invalidate();
-    },
-  };
+    return expandedBody(
+      rows.length > 0 ? expandedFields(theme, rows) : undefined,
+      complete ? undefined : expandedArguments(theme, args),
+      id === undefined ? undefined : expandedDetails(theme, [id]),
+    );
+  });
 }

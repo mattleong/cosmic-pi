@@ -8,7 +8,6 @@ import {
 } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
@@ -21,6 +20,7 @@ import {
 } from "./list-detail-shell.ts";
 import { clipToWidth, INLINE_SEPARATOR, joinInline, wrapWords } from "./chrome.ts";
 import { FullScreenKeymap, pageSteps, type FullScreenAction } from "./keymap.ts";
+import { isListMotion, nextListMotionIndex } from "./list-navigation.ts";
 import {
   framedKeyHintBar,
   keyHint,
@@ -103,19 +103,6 @@ export const wrapWithHangingIndent = (line: string, width: number): ReadonlyArra
     wrapPlainFacts(Str.trimStart(line), Math.max(1, safeWidth - lead), wrapWidth),
     (part, index) => (index === 0 ? `${leading}${part}` : `${indent}${part}`),
   );
-};
-
-type PanelMotion = "up" | "down" | "page-up" | "page-down" | "first" | "last";
-
-const PANEL_MOTIONS: Partial<Record<FullScreenAction, PanelMotion>> = {
-  up: "up",
-  down: "down",
-  "half-page-up": "page-up",
-  "full-page-up": "page-up",
-  "half-page-down": "page-down",
-  "full-page-down": "page-down",
-  first: "first",
-  last: "last",
 };
 
 const CLOSE_ACTIONS: ReadonlySet<FullScreenAction> = new Set(["cancel", "quit", "back"]);
@@ -217,23 +204,12 @@ export class TextPanelComponent implements Component {
       this.helpExpanded = !this.helpExpanded;
       return;
     }
-    const motion = PANEL_MOTIONS[action];
-    if (!motion) return;
-    const { page, half } = pageSteps(this.bodyHeight);
-    this.scroll = Math.max(
-      0,
-      Math.min(
-        this.maxScroll,
-        Match.value(motion).pipe(
-          Match.when("up", () => this.scroll - 1),
-          Match.when("down", () => this.scroll + 1),
-          Match.when("page-up", () => this.scroll - (action === "half-page-up" ? half : page)),
-          Match.when("page-down", () => this.scroll + (action === "half-page-down" ? half : page)),
-          Match.when("first", () => 0),
-          Match.when("last", () => this.maxScroll),
-          Match.exhaustive,
-        ),
-      ),
+    if (!isListMotion(action)) return;
+    this.scroll = nextListMotionIndex(
+      action,
+      this.scroll,
+      this.maxScroll + 1,
+      pageSteps(this.bodyHeight),
     );
   }
 

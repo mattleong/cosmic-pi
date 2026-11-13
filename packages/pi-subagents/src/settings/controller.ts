@@ -2,7 +2,6 @@ import type { DoctorCheck } from "../application/doctor.ts";
 import * as Arr from "effect/Array";
 import type * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -33,6 +32,7 @@ import type {
 } from "../profiles/session-overrides.ts";
 import type { ProfileSettingsInspection } from "./profile-route-editor.ts";
 import { SUBAGENT_SETTINGS_COMMAND } from "./subagent-settings-options.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 interface SessionProfileSetSnapshotWrite extends Omit<
   SubagentCreateProfileSetFromSnapshotPatch,
@@ -160,10 +160,8 @@ export function registerSubagentManagerCommand(
         },
         handler: (args, ctx) =>
           invoke(ctx, (invocation, isCurrent) => {
-            const parts = Fn.pipe(args, Str.trim, Str.split(/\s+/u), Arr.filter(Boolean));
-            const profile = Option.getOrUndefined(
-              Arr.findFirst(PROFILE_IDS, (id) => id === parts[0]),
-            );
+            const parts = Fn.pipe(args, Str.trim, Str.split(/\s+/u), Arr.filter(Str.isNonEmpty));
+            const profile = findOrUndefined(PROFILE_IDS, (id) => id === parts[0]);
             if (parts.length > 1 || (parts.length === 1 && !profile)) {
               notifyAtHostBoundary(
                 invocation,

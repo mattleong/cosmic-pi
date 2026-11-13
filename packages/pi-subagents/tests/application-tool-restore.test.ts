@@ -1,4 +1,4 @@
-import { tmpdir } from "node:os";
+import { nodeTemporaryRoot } from "pi-cosmic-core/platform/node-builtins";
 import * as Effect from "effect/Effect";
 import {
   recordingExtensionHost,
@@ -39,7 +39,8 @@ const restoringApplication = (pending: ReadonlyArray<string>) =>
     const loadout = piToolLoadout(pending);
     const host = recordingExtensionHost({}, loadout.overrides);
     registerSubagentApplication(host.pi, {
-      getAgentDirectory: () => nodePath.join(tmpdir(), "pi-subagents-tool-restore-tests"),
+      getAgentDirectory: () =>
+        nodePath.join(nodeTemporaryRoot(), "pi-subagents-tool-restore-tests"),
       loadSettings: () => Promise.resolve(),
     });
     const ctx = sessionContextFixture({ isProjectTrusted: () => false }, "tool-restore-session");

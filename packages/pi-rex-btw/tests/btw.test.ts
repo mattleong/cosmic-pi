@@ -11,7 +11,7 @@ const REQUEST: BtwRequest = {
   prompt: "why?",
   model: undefined,
   thinkingLevel: undefined,
-  parent: undefined,
+  parent: { id: "019fd4cd-4c88-7564-8b67-3b917b42df51", path: "/sessions/parent.jsonl" },
 };
 
 interface FakeRex {

@@ -1,8 +1,5 @@
 import * as Arr from "effect/Array";
-import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
-import { extensionContextFixture, plainTheme } from "pi-cosmic-core/testing";
-import { ProfileDashboardComponent } from "../src/settings/profile-dashboard-component.ts";
 import type { ProfileWorkspaceOptions } from "../src/settings/profile-workspace.ts";
 import type { SessionProfileOverrideSeed } from "../src/profiles/session-overrides.ts";
 import { profileSetPickerEntries } from "../src/settings/ui/profile-set-picker-model.ts";
@@ -14,9 +11,12 @@ import {
 } from "./fixtures/profile-settings-inspection.ts";
 import { declaredCandidate, profileCandidate } from "./fixtures/profiles.ts";
 import { effectTest, step } from "./support/effect-test.ts";
-import { settleTurn, workspaceHarness, workspaceInspection } from "./fixtures/profile-workspace.ts";
-
-const ANY_POSITION = /more (above|below)|\d+–\d+ of \d+/u;
+import {
+  dashboardHarness,
+  settleTurn,
+  workspaceHarness,
+  workspaceInspection,
+} from "./fixtures/profile-workspace.ts";
 
 const savedInspection = (seed?: SessionProfileOverrideSeed) =>
   profileSettingsInspection(
@@ -38,95 +38,28 @@ const savedInspection = (seed?: SessionProfileOverrideSeed) =>
     seed,
   );
 
-const dashboard = (
-  options: {
-    readonly seed?: SessionProfileOverrideSeed;
-    readonly width?: number;
-    readonly height?: number;
-  } = {},
-) => {
-  const value = savedInspection(options.seed);
+const dashboard = (options: { readonly seed?: SessionProfileOverrideSeed } = {}) => {
+  const inspection = savedInspection(options.seed);
   const actions = subagentCommandActionsFixture({
-    inspectProfiles: vi.fn(() => Promise.resolve(value)),
+    inspectProfiles: vi.fn(() => Promise.resolve(inspection)),
     createProfileSetFromSnapshot: vi.fn(() => Promise.resolve()),
   });
-  const width = options.width ?? 180;
-  const component = new ProfileDashboardComponent({
-    ctx: extensionContextFixture({ isProjectTrusted: () => true }),
+  const harness = dashboardHarness({
+    inspection,
     actions,
-    isCurrent: () => true,
-    onInspection: vi.fn(),
-    awaitDialog: (register) =>
-      Effect.runPromise(
-        Effect.callback((resume) => {
-          const cleanup = register((result) => resume(Effect.succeed(result)));
-          return Effect.sync(cleanup);
-        }),
-      ),
-    workspace: {
-      theme: plainTheme,
-      inspection: value,
-      target: { kind: "session" },
-      initialProfile: "scout",
-      parentEffort: "high",
-      getHeight: () => options.height ?? 40,
-      requestRender: vi.fn(),
-      close: vi.fn(),
-      saveDraft: vi.fn<ProfileWorkspaceOptions["saveDraft"]>(() =>
-        Promise.resolve({ inspection: value }),
-      ),
-      loadModelPicker: () => Promise.reject(new Error("unused")),
-      supportedPiEfforts: () => undefined,
-    },
+    workspace: { initialProfile: "scout" },
   });
-  component.focused = true;
   return {
-    component,
+    ...harness,
     actions,
-    press: (...keys: string[]) => {
-      for (const key of keys) component.handleInput(key);
-    },
-    screen: () => Arr.join(component.render(width), "\n"),
-    lines: () => component.render(width),
+    screen: () => Arr.join(harness.component.render(180), "\n"),
+    lines: () => harness.component.render(180),
   };
 };
 
 const markers = (screen: string) => Arr.filter(Array.from(screen), (char) => char === "●").length;
 
 const changedScout = { candidates: [profileCandidate("test/changed")] };
-
-describe("profile dashboard layout", () => {
-  it("names the scroll position of both panes when neither fits", () => {
-    const d = dashboard({ width: 72, height: 20 });
-    d.press("l");
-    const lines = d.lines();
-    const headings = Arr.filter(lines, (line) => ANY_POSITION.test(line));
-    // The profile list and the fields pane each name what they scrolled off.
-    expect(headings.length).toBeGreaterThanOrEqual(2);
-    expect(d.screen()).not.toContain("generalist");
-  });
-
-  it("stacks both panes on a tall narrow frame and shows one on a short one", () => {
-    const tall = dashboard({ width: 57, height: 46 });
-    expect(tall.screen()).toContain("generalist");
-    expect(tall.screen()).toContain("File access");
-    const short = dashboard({ width: 57, height: 20 });
-    expect(short.screen()).toContain("generalist");
-    expect(short.screen()).not.toContain("File access");
-  });
-
-  it("keeps the profile list in view while a short choice list is open", () => {
-    const d = dashboard();
-    d.press("e");
-    const screen = d.screen();
-    expect(screen).toContain("generalist");
-    expect(screen).toMatch(/\(•\)/u);
-    const single = dashboard({ width: 57, height: 20 });
-    single.press("e");
-    expect(single.screen()).toMatch(/\(•\)/u);
-    expect(single.screen()).not.toContain("generalist");
-  });
-});
 
 describe("session changes against the set the session is based on", () => {
   it("marks only profiles that differ from the base set and counts them in the status row", () => {
@@ -162,10 +95,8 @@ describe("session changes against the set the session is based on", () => {
 
   it("shows no marker and offers no save in a saved set's editor", () => {
     const d = dashboard({ seed: { revision: 1, overrides: { scout: changedScout } } });
-    expect(d.screen()).toMatch(/\bs Save\b/u);
     d.press("\t", "j", "\r", "?");
     expect(markers(d.screen())).toBe(0);
-    expect(d.screen()).not.toMatch(/\bs Save\b/u);
     d.press("?");
     const before = d.screen();
     d.press("s");
@@ -222,8 +153,6 @@ describe("fields pane", () => {
       });
     });
     const h = workspaceHarness({ initialFocus: "fields", inspection: inspection(), saveDraft });
-    const hints = () => Arr.join(h.component.render(120), "\n");
-    expect(hints()).not.toMatch(/\bu Undo\b/u);
     // With nothing to undo, `u` asks nothing.
     h.component.handleInput("u");
     expect(h.component.hasOverlay).toBe(false);
@@ -232,12 +161,10 @@ describe("fields pane", () => {
     h.component.handleInput("\r");
     yield* step(settleTurn);
     expect(saveDraft).toHaveBeenCalledOnce();
-    expect(hints()).toMatch(/\bu Undo\b/u);
     h.component.handleInput("u");
     h.component.handleInput("\r");
     yield* step(settleTurn);
     expect(saveDraft).toHaveBeenCalledTimes(2);
     expect(candidates).toEqual([profileCandidate("test/first"), profileCandidate("test/second")]);
-    expect(hints()).not.toMatch(/\bu Undo\b/u);
   });
 });

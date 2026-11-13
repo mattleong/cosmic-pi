@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Effect from "effect/Effect";
 import type { CanonicalWriterCwd, WriterLeaseContract } from "../boundary/writer-lease.ts";
+import { DEFAULT_MAX_ACTIVE_RUNS, type SubagentNestingPolicy } from "../config/schema.ts";
 import {
   failureFields,
   type GuidedText,
@@ -38,7 +39,7 @@ const holdsChildSlot = (record: RunRecord, parentRunId: string): boolean => {
   );
 };
 
-export const processCapacityError = (
+const processCapacityError = (
   records: ReadonlyMap<string, RunRecord>,
   parentRunId: string,
   limit: number,
@@ -63,7 +64,7 @@ export const processCapacityError = (
 };
 
 /** Caps active subagent processes across the whole tree, whatever their parent. */
-export const treeCapacityError = (
+const treeCapacityError = (
   records: ReadonlyMap<string, RunRecord>,
   limit: number,
   excluded?: RunRecord,
@@ -85,6 +86,20 @@ export const treeCapacityError = (
     ),
   });
 };
+
+/**
+ * The direct-child limit of `parentRunId`, then the tree's. `held` counts launch slots that no
+ * record owns yet.
+ */
+export const capacityError = (
+  records: ReadonlyMap<string, RunRecord>,
+  parentRunId: string,
+  nesting: SubagentNestingPolicy,
+  excluded?: RunRecord,
+  held: { readonly direct: number; readonly tree: number } = { direct: 0, tree: 0 },
+): SubagentCapacityError | undefined =>
+  processCapacityError(records, parentRunId, nesting.maxDirectChildren, excluded, held.direct) ??
+  treeCapacityError(records, nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS, excluded, held.tree);
 
 export const writerConflictError = (
   records: ReadonlyMap<string, RunRecord>,

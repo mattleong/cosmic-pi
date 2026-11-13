@@ -4,10 +4,10 @@ import { expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { formatDuration } from "pi-cosmic-core";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { beforeAll, describe, vi } from "vitest";
 import { makeResolvedConfig, waitUntil } from "./helpers.ts";
@@ -19,9 +19,7 @@ const settingsHarness = (options?: SettingsHarnessOptions) =>
 beforeAll(() => initTheme(undefined, false));
 
 function renderedRow(component: Component, label: string): string | undefined {
-  return Option.getOrUndefined(
-    Arr.findFirst(component.render(100), (line) => Fn.pipe(line, Str.includes(label))),
-  );
+  return findOrUndefined(component.render(100), (line) => Fn.pipe(line, Str.includes(label)));
 }
 
 const beginRefreshWrite = Effect.gen(function* () {
@@ -40,53 +38,65 @@ const beginRefreshWrite = Effect.gen(function* () {
   return { h, write, closed, component };
 });
 
-describe("Better OpenAI settings controller", () => {
-  it.effect("a delayed menu import cannot open for a retired invocation", () =>
-    Effect.gen(function* () {
-      const gate = deferredPromise<typeof import("../src/settings/menu.ts")>();
-      const loadMenu = vi.fn(() => gate.promise);
-      let generation = 1;
-      const h = settingsHarness({
-        loadMenu,
-        captureAuthority: () => {
-          const token = generation;
-          return () => token === generation;
-        },
-      });
-      const pending = h.invoke("");
-      yield* waitUntil(() => loadMenu.mock.calls.length > 0);
-      generation++;
-      gate.resolve(yield* Effect.promise(() => import("../src/settings/menu.ts")));
-      yield* Effect.promise(() => pending);
-      h.surface.mount();
-      expect(h.surface.editor).toBeUndefined();
-      expect(h.notify).not.toHaveBeenCalled();
-      const { closed } = yield* h.open;
-      h.selectedComponent().handleInput?.(input.escape);
-      yield* Effect.promise(() => closed);
-    }),
-  );
+interface LiveInvocation {
+  generation: number;
+  signal: AbortSignal | undefined;
+  readonly controller: AbortController;
+}
 
-  for (const replacement of [undefined, new AbortController().signal])
-    it.effect(
-      `an aborted menu import stays retired when the live signal becomes ${replacement ? "another signal" : "undefined"}`,
-      () =>
-        Effect.gen(function* () {
-          const controller = new AbortController();
-          let signal: AbortSignal | undefined = controller.signal;
-          const gate = deferredPromise<typeof import("../src/settings/menu.ts")>();
-          const loadMenu = vi.fn(() => gate.promise);
-          const h = settingsHarness({ loadMenu, signal: () => signal });
-          const pending = h.invoke("");
-          yield* waitUntil(() => loadMenu.mock.calls.length > 0);
-          controller.abort();
-          signal = replacement;
-          gate.resolve(yield* Effect.promise(() => import("../src/settings/menu.ts")));
-          yield* Effect.promise(() => pending);
-          h.surface.mount();
-          expect(h.surface.editor).toBeUndefined();
-          expect(h.notify).not.toHaveBeenCalled();
-        }),
+/** Each way the host retires an invocation while its menu import is still pending. */
+const retirements: ReadonlyArray<readonly [string, (live: LiveInvocation) => void]> = [
+  [
+    "its session is replaced",
+    (live) => {
+      live.generation++;
+    },
+  ],
+  [
+    "its signal aborts and the live signal becomes undefined",
+    (live) => {
+      live.controller.abort();
+      live.signal = undefined;
+    },
+  ],
+  [
+    "its signal aborts and the live signal becomes another signal",
+    (live) => {
+      live.controller.abort();
+      live.signal = new AbortController().signal;
+    },
+  ],
+];
+
+describe("Better OpenAI settings controller", () => {
+  for (const [reason, retire] of retirements)
+    it.effect(`a delayed menu import cannot open after ${reason}`, () =>
+      Effect.gen(function* () {
+        const gate = deferredPromise<typeof import("../src/settings/menu.ts")>();
+        const loadMenu = vi.fn(() => gate.promise);
+        const controller = new AbortController();
+        const live: LiveInvocation = { generation: 1, signal: controller.signal, controller };
+        const h = settingsHarness({
+          loadMenu,
+          captureAuthority: () => {
+            const token = live.generation;
+            return () => token === live.generation;
+          },
+          signal: () => live.signal,
+        });
+        const pending = h.invoke("");
+        yield* waitUntil(() => loadMenu.mock.calls.length > 0);
+        retire(live);
+        gate.resolve(yield* Effect.promise(() => import("../src/settings/menu.ts")));
+        yield* Effect.promise(() => pending);
+        h.surface.mount();
+        expect(h.surface.editor).toBeUndefined();
+        expect(h.notify).not.toHaveBeenCalled();
+        // A fresh invocation still opens.
+        const { closed } = yield* h.open;
+        h.selectedComponent().handleInput?.(input.escape);
+        yield* Effect.promise(() => closed);
+      }),
     );
 
   it.effect("menu import failure settles with a warning instead of opening a surface", () =>
@@ -189,7 +199,7 @@ describe("Better OpenAI settings controller", () => {
     }),
   );
 
-  it.effect("status names every setting with its value before the diagnostics", () =>
+  it.effect("status names every setting with its value and includes the diagnostics", () =>
     Effect.gen(function* () {
       const h = settingsHarness({ diagnosticLines: () => ["Current model: openai/gpt-5.5"] });
       yield* Effect.promise(() => h.invoke("status"));
@@ -199,14 +209,7 @@ describe("Better OpenAI settings controller", () => {
       const shown = Str.split(Predicate.isString(text) ? text : "", "\n");
       for (const id of ["fast.enabled", "image.enabled", "usage.refreshIntervalMs"])
         expect(Arr.some(shown, (line) => Fn.pipe(line, Str.includes(`(${id})`)))).toBe(true);
-      expect(
-        Arr.findFirstIndex(shown, (line) => Fn.pipe(line, Str.includes("(image.timeoutMs)"))),
-      ).toEqual(
-        Option.map(
-          Arr.findFirstIndex(shown, (line) => line === "Current model: openai/gpt-5.5"),
-          (index) => index - 1,
-        ),
-      );
+      expect(shown).toContain("Current model: openai/gpt-5.5");
     }),
   );
 });

@@ -1,11 +1,17 @@
-import { routeRequest as request } from "./support/questionnaire.ts";
+import {
+  acquireService,
+  forkNow,
+  hostile,
+  keyedRequest as keyed,
+  routeRequest as request,
+  submitted,
+} from "./support/questionnaire.ts";
 import { afterEach, expect, vi } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import * as ManagedRuntime from "effect/ManagedRuntime";
 import { makeSessionCapabilityProtocol } from "pi-cosmic-core";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
@@ -26,10 +32,7 @@ import {
 } from "../src/protocol.ts";
 import { AskUserHostError, AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 
-const answer: AskUserOutcome = {
-  outcome: "submitted",
-  answers: [{ key: "route", kind: "choices", values: ["a"], labels: ["A"] }],
-};
+const answer = submitted({ key: "route", kind: "choices", values: ["a"], labels: ["A"] });
 const owner = { runId: "run-1", assignmentEpoch: 0, requestId: "request-1" };
 // Discovered callbacks are foreign, so their results settle as untrusted values.
 const rootCapability = (bus: QuestionnaireEvents) => {
@@ -60,21 +63,10 @@ it("decodes bounded structured transport data and rejects hostile or semanticall
   for (const input of [
     { questions: Array(10000).fill(request.questions[0]) },
     { questions: [request.questions[0], request.questions[0]] },
-    {
-      get questions() {
-        throw new Error("private");
-      },
-    },
+    hostile({}, "questions"),
   ])
     expect(decodeQuestionnaireRequest(input)).toBeUndefined();
-  for (const input of [
-    { outcome: "cancelled", answers: answer.answers },
-    {
-      get answers() {
-        throw new Error("private");
-      },
-    },
-  ])
+  for (const input of [{ outcome: "cancelled", answers: answer.answers }, hostile({}, "answers")])
     expect(decodeQuestionnaireOutcome(input)).toBeUndefined();
 });
 
@@ -196,14 +188,12 @@ it.effect(
       const entered = yield* Deferred.make<void>();
       const cleanupEntered = yield* Deferred.make<void>();
       const cleanup = yield* Deferred.make<void>();
-      const runtime = ManagedRuntime.make(
-        AskUserService.layer(() =>
-          Deferred.succeed(entered, undefined).pipe(
-            Effect.andThen(Effect.never),
-            Effect.ensuring(
-              Deferred.succeed(cleanupEntered, undefined).pipe(
-                Effect.andThen(Deferred.await(cleanup)),
-              ),
+      const service = yield* acquireService(() =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(
+            Deferred.succeed(cleanupEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(cleanup)),
             ),
           ),
         ),
@@ -216,7 +206,9 @@ it.effect(
         isCurrent: () => true,
         run: (effect, ownerSignal) => {
           signal = ownerSignal;
-          return runtime.runPromise(effect, { signal: ownerSignal });
+          return Effect.runPromise(effect.pipe(Effect.provideService(AskUserService, service)), {
+            signal: ownerSignal,
+          });
         },
       });
       const capability = rootCapability(bus);
@@ -240,7 +232,6 @@ it.effect(
       expect(acknowledged).toBe(true);
       yield* Effect.tryPromise(() => capability.cancel(owner));
       dispose();
-      yield* Effect.tryPromise(() => runtime.dispose());
     }),
 );
 
@@ -318,26 +309,23 @@ it.effect("caller cancellation reaches a relayed questionnaire", () =>
   }),
 );
 
-const keyed = (key: string) => ({ questions: [{ ...request.questions[0]!, key }] });
-
 it.effect("an owned questionnaire reports shown once it opens, not while it is queued", () =>
   Effect.gen(function* () {
     const bus = createEventBus();
     const firstOpen = yield* Deferred.make<void>();
     const firstAnswer = yield* Deferred.make<AskUserOutcome>();
-    const runtime = ManagedRuntime.make(
-      AskUserService.layer((input) =>
-        input.questions[0]!.key === "first"
-          ? Deferred.succeed(firstOpen, undefined).pipe(Effect.andThen(Deferred.await(firstAnswer)))
-          : Effect.succeed(answer),
-      ),
+    const service = yield* acquireService((input) =>
+      input.questions[0]!.key === "first"
+        ? Deferred.succeed(firstOpen, undefined).pipe(Effect.andThen(Deferred.await(firstAnswer)))
+        : Effect.succeed(answer),
     );
     const dispose = registerQuestionnaireCapability({
       events: bus,
       sessionId: "root",
       generation: "one",
       isCurrent: () => true,
-      run: (effect, signal) => runtime.runPromise(effect, { signal }),
+      run: (effect, signal) =>
+        Effect.runPromise(effect.pipe(Effect.provideService(AskUserService, service)), { signal }),
     });
     const capability = queryQuestionnaireCapability(bus, "root")!;
     const shown: string[] = [];
@@ -360,7 +348,6 @@ it.effect("an owned questionnaire reports shown once it opens, not while it is q
     expect(yield* Effect.promise(() => Promise.all([first, second]))).toEqual([answer, answer]);
     expect(shown).toEqual(["first", "second"]);
     dispose();
-    yield* Effect.promise(() => runtime.dispose());
   }),
 );
 
@@ -378,11 +365,10 @@ it.effect("a relayed questionnaire reports shown once, when the root says it ope
       },
     });
     let shown = 0;
-    const asking = yield* Effect.forkChild(
+    const asking = yield* forkNow(
       askAtQuestionnaireBoundary(bus, "child", request, () => {
         shown++;
       }).pipe(Effect.provide(AskUserService.layer(() => Effect.succeed(answer)))),
-      { startImmediately: true },
     );
     expect(shown).toBe(0);
     report?.();

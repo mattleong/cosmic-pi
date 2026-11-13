@@ -1,7 +1,6 @@
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import type { JsonValue } from "pi-cosmic-core";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const DISALLOWED_LAUNCH_OVERRIDE_FIELDS = [
   "execution",
@@ -22,10 +21,8 @@ type LaunchSpecFields = Readonly<
 export const firstDisallowedLaunchOverride = (
   value: LaunchSpecFields,
 ): DisallowedLaunchOverrideField | undefined =>
-  Option.getOrUndefined(
-    Arr.findFirst(DISALLOWED_LAUNCH_OVERRIDE_FIELDS, (field) =>
-      Rec.has<string, unknown>(value, field),
-    ),
+  findOrUndefined(DISALLOWED_LAUNCH_OVERRIDE_FIELDS, (field) =>
+    Rec.has<string, unknown>(value, field),
   );
 
 export const disallowedLaunchOverrideMessage = (

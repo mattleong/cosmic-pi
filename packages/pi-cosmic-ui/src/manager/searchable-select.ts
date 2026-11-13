@@ -18,12 +18,14 @@ import {
 import { clipToWidth, INLINE_SEPARATOR } from "./chrome.ts";
 import {
   FRAME_GUTTER,
+  firstLines,
   framedBodyWithHints,
   framedFill,
   framedGutter,
   framedScreen,
   listDetailFrame,
 } from "./list-detail-shell.ts";
+import { listWindowStart } from "./list-detail.ts";
 import { isListMotion, nextListMotionIndex } from "./list-navigation.ts";
 import {
   FULL_SCREEN_NAVIGATION_SHORTCUTS,
@@ -53,7 +55,7 @@ const COMPACT_BELOW = 8;
 // A title and subtitle longer than this together read as a sentence, so they keep two lines.
 const SHARED_HEADING_WIDTH = 60;
 
-const singleLine = (text: string): string => Str.trim(Str.replace(/[\r\n]+/g, " ")(text));
+const singleLine = (text: string): string => Str.trim(Fn.pipe(text, Str.replace(/[\r\n]+/g, " ")));
 
 export interface SearchableSelectPageChoice<A> {
   readonly value: string;
@@ -81,31 +83,19 @@ type ListRow<A> =
       readonly choice: SearchableSelectPageChoice<A>;
     };
 
-interface IndexedChoice<A> {
-  readonly choice: SearchableSelectPageChoice<A>;
-  readonly index: number;
-}
-
 /** Ungrouped choices first, then each group together, in the order the groups first appear. */
 const groupChoices = <A>(
   choices: ReadonlyArray<SearchableSelectPageChoice<A>>,
   order: ReadonlyMap<string, number>,
-): ReadonlyArray<SearchableSelectPageChoice<A>> => {
-  if (order.size === 0) return choices;
-  const byGroup = Order.combine(
-    Order.mapInput(Order.Number, ({ choice }: IndexedChoice<A>) =>
-      choice.group === undefined ? -1 : (order.get(choice.group) ?? 0),
-    ),
-    Order.mapInput(Order.Number, ({ index }: IndexedChoice<A>) => index),
-  );
-  return Arr.map(
-    Arr.sort(
-      Arr.map(choices, (choice, index) => ({ choice, index })),
-      byGroup,
-    ),
-    ({ choice }) => choice,
-  );
-};
+): ReadonlyArray<SearchableSelectPageChoice<A>> =>
+  order.size === 0
+    ? choices
+    : // The sort is stable, so the choices of one group keep their order.
+      Arr.sortWith(
+        choices,
+        (choice) => (choice.group === undefined ? -1 : (order.get(choice.group) ?? 0)),
+        Order.Number,
+      );
 
 const groupOrder = <A>(
   choices: ReadonlyArray<SearchableSelectPageChoice<A>>,
@@ -300,7 +290,7 @@ export class SearchableSelectPage<A> implements Component, Focusable {
       Arr.findFirstIndex(rows, (row) => row.kind === "choice" && row.index === this.selectedIndex),
       () => 0,
     );
-    const start = Math.max(0, Math.min(selected - Math.floor(height / 2), rows.length - height));
+    const start = listWindowStart(rows.length, selected, height);
     const shown = rows.slice(start, start + height);
     const [first, second] = shown;
     if (
@@ -524,15 +514,10 @@ export class SearchableSelectPage<A> implements Component, Focusable {
 
   private fullBody(bodyHeight: number, width: number, activeNotice: string | undefined): string[] {
     const theme = this.options.theme;
-    const limitedWrap = (value: string, maximumLines: number): ReadonlyArray<string> => {
-      const lines = wrapTextWithAnsi(value, Math.max(1, width));
-      if (lines.length <= maximumLines) return lines;
-      const shown = lines.slice(0, maximumLines);
-      shown[maximumLines - 1] = `${clipToWidth(shown[maximumLines - 1] ?? "", width - 1, "")}…`;
-      return shown;
-    };
     const noticeLines = activeNotice
-      ? Arr.map(limitedWrap(activeNotice, 2), (line) => theme.fg("warning", line))
+      ? Arr.map(firstLines(wrapTextWithAnsi(activeNotice, Math.max(1, width)), 2, width), (line) =>
+          theme.fg("warning", line),
+        )
       : [];
     // The footer carries the search keys; the body shows only the query.
     const searchLines = this.searchMode ? this.inputLines(width) : [];

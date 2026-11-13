@@ -6,7 +6,7 @@ import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
-import { clipToWidth } from "./chrome.ts";
+import { clipToWidth, INLINE_SEPARATOR, joinInline } from "./chrome.ts";
 import type { FullScreenSelectionKeybindingId } from "./keymap.ts";
 
 const SPECIAL_KEY_LABELS = new Map<string, string>(
@@ -121,7 +121,7 @@ export const TEXT_INPUT_KEY_LABELS: ReadonlySet<string> = new Set([
  * - A run of digit keys reads as one range with an en dash, `1–9 Actions` (`keyRangeLabel`).
  */
 
-export const KEY_HINT_SEPARATOR = " · ";
+export const KEY_HINT_SEPARATOR = INLINE_SEPARATOR;
 
 export type KeyHintPart = string | false | null | undefined;
 
@@ -132,8 +132,7 @@ const presentHints = (parts: ReadonlyArray<KeyHintPart>): ReadonlyArray<string> 
 export const keyHint = (key: string, verb: string): string => `${key} ${verb}`;
 
 /** Joins hint pairs with the suite separator, skipping empty or disabled parts. */
-export const joinKeyHints = (parts: ReadonlyArray<KeyHintPart>): string =>
-  Arr.join(presentHints(parts), KEY_HINT_SEPARATOR);
+export const joinKeyHints: (parts: ReadonlyArray<KeyHintPart>) => string = joinInline;
 
 /** `top` closes the surface, `nested` returns one level, `decision` cancels a pending choice. */
 export type SurfaceExitLevel = "top" | "nested" | "decision";
@@ -397,13 +396,7 @@ export const configuredKeyLabels = (
   const movement = keybindingLabel
     ? movementKeyLabel(primary("tui.select.up", "↑"), primary("tui.select.down", "↓"))
     : undefined;
-  return {
-    key,
-    binding,
-    primary,
-    movement,
-    navigation: movement ? `j/k · ${movement}` : "j/k",
-  };
+  return { key, binding, primary, movement };
 };
 
 const piSelectKeyLabel = (id: FullScreenSelectionKeybindingId, fallback: string): string =>

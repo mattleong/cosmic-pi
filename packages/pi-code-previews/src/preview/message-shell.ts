@@ -1,10 +1,10 @@
 import type { MessageRenderer, MessageRenderOptions, Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, type Component } from "@earendil-works/pi-tui";
-import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
+import { contentText } from "pi-cosmic-core/message-text";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
 import type { ToolCallCollapsedStyle } from "../config/schema";
 import { sharedPresentation, type SharedPresentation } from "../config/state";
@@ -81,20 +81,15 @@ const decodeContent = Schema.decodeUnknownOption(
   Schema.Struct({ content: Schema.Union([Schema.String, Schema.Array(Schema.Unknown)]) }),
   { onExcessProperty: "ignore" },
 );
-const isTextPart = Schema.is(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }));
 
 /** The message's own text, which a drawing failure shows instead of its frame. */
-const fallbackText = (message: unknown): string => {
-  const content = Option.getOrUndefined(decodeContent(message))?.content;
-  if (content === undefined) return "";
-  const text = Predicate.isString(content)
-    ? content
-    : Arr.join(
-        Arr.map(Arr.filter(content, isTextPart), (part) => part.text),
-        "\n",
-      );
-  return escapeControlChars(Str.replaceAll("\r\n", "\n")(text));
-};
+const fallbackText = (message: unknown): string =>
+  escapeControlChars(
+    Fn.pipe(
+      contentText(Option.getOrUndefined(decodeContent(message))?.content),
+      Str.replaceAll("\r\n", "\n"),
+    ),
+  );
 
 const plainMessage = (text: string, outputPad: number): Component => new Text(text, outputPad, 0);
 
@@ -183,47 +178,38 @@ class MessageShell implements Component {
     const status = compactStatus("settled", summary);
     const compact = policy.toolCallCollapsedStyle === "compact";
     // A collapsed heading is one row, laid out beside the tag `tag` names.
-    const headingRows = (width: number, tag: string | undefined): string[] => {
+    const layoutHeading = (width: number, tag: string | undefined) => {
       const title = message.label ?? message.name;
-      if (!compact && !expanded) {
-        const { row, subjectComplete } = layoutTaggedHeading(
-          tag,
+      if (expanded && compact)
+        return layoutExpandedCompactHeading(
+          {
+            name: message.name,
+            phase: "settled",
+            summary,
+            expanded,
+            collapsedWidth: this.renderWidth,
+            collapsedExpandLabel: this.collapsedTag(),
+          },
           theme,
           width,
-          (room, subjectMinimum) =>
-            layoutPreviewHeadingRow(title, summary, false, theme, room, subjectMinimum),
         );
-        recordHeadingSubject(this.headingState, subjectComplete, [row]);
-        return [row];
-      }
       // An expanded preview heading wraps rather than clips, so the body may leave out its subject.
-      if (!compact) {
-        const { rows, subjectComplete } = wrappedPreviewHeading(title, summary, theme, width);
-        recordHeadingSubject(this.headingState, subjectComplete, rows);
-        return rows;
-      }
-      if (!expanded) {
-        const { row, subjectComplete } = layoutTaggedCompactRow(
-          { name: message.name, phase: "settled", summary },
-          theme,
-          width,
-          tag,
-        );
-        recordHeadingSubject(this.headingState, subjectComplete, [row]);
-        return [row];
-      }
-      const { rows, subjectComplete } = layoutExpandedCompactHeading(
-        {
-          name: message.name,
-          phase: "settled",
-          summary,
-          expanded,
-          collapsedWidth: this.renderWidth,
-          collapsedExpandLabel: this.collapsedTag(),
-        },
-        theme,
-        width,
-      );
+      if (expanded)
+        return { rows: wrappedPreviewHeading(title, summary, theme, width), subjectComplete: true };
+      const { row, subjectComplete } = compact
+        ? layoutTaggedCompactRow(
+            { name: message.name, phase: "settled", summary },
+            theme,
+            width,
+            tag,
+          )
+        : layoutTaggedHeading(tag, theme, width, (room, subjectMinimum) =>
+            layoutPreviewHeadingRow(title, summary, false, theme, room, subjectMinimum),
+          );
+      return { rows: [row], subjectComplete };
+    };
+    const headingRows = (width: number, tag: string | undefined): string[] => {
+      const { rows, subjectComplete } = layoutHeading(width, tag);
       recordHeadingSubject(this.headingState, subjectComplete, rows);
       return rows;
     };
@@ -240,9 +226,7 @@ class MessageShell implements Component {
       ]);
     // A collapsed compact message is one row and its problems; its words wait for expansion.
     const content = expanded
-      ? message.expanded
-        ? message.expanded(this.headingState)
-        : message.collapsed?.(this.headingState)
+      ? (message.expanded ?? message.collapsed)?.(this.headingState)
       : compact
         ? undefined
         : message.collapsed?.(this.headingState);

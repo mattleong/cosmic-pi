@@ -14,10 +14,14 @@ import {
   type CompactAnimationScheduler,
 } from "pi-code-previews";
 import { failureMessage } from "pi-cosmic-core/message-text";
-import { invokeHostCallback, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import {
+  capturedHostSignal,
+  invokeHostCallback,
+  notifyAtHostBoundary,
+} from "pi-cosmic-core/host-session";
 import { registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
 import { type ExtensionCommand } from "pi-cosmic-core/host-command";
-import { containCommandFailure, safeHostSignal } from "../boundary/host-ui.ts";
+import { containCommandFailure } from "../boundary/host-ui.ts";
 import {
   imageCompactSummaryFor,
   imageGenerationCause,
@@ -118,7 +122,7 @@ export function registerOpenAIImage(
       notifyAtHostBoundary(ctx, "Requesting an image from OpenAI…", "info");
       updateContext(ctx);
       noteCwd(ctx);
-      const signal = safeHostSignal(ctx);
+      const signal = capturedHostSignal(ctx);
       const canDeliver = () => isCurrent() && !signal?.aborted;
       const request = containCommandFailure(
         generateEffect({ prompt }),

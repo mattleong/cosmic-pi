@@ -8,10 +8,11 @@ import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import { hasCustomSurface, openCommandSurface } from "pi-cosmic-ui/boundary/host-surface";
 import { TextPanelComponent } from "pi-cosmic-ui/manager/panel";
 import { wrapNoticeText } from "pi-cosmic-ui/boundary/host-settings-command";
+import type { CodePreviewEditableSettingId } from "../config/schema";
 import { codePreviewSettings, codePreviewSettingsProblems } from "../config/state";
-import { formatOnOff } from "../config/values";
+import { formatOnOff, formatSettingValue } from "../config/values";
 import { describeSettingsProblem, getSettingsPath } from "../config/store";
-import { SETTING_ITEM_DEFINITIONS, type SettingsUiItemId } from "../settings/ui/registry";
+import { SETTING_ITEM_DEFINITIONS } from "../settings/ui/registry";
 import { getShikiStatus } from "../syntax/render";
 import { getEnabledCodePreviewTools } from "../tools/selection";
 import { ALL_CODE_PREVIEW_TOOLS } from "../tools/names";
@@ -52,37 +53,40 @@ function toolRows(): string[] {
   });
 }
 
-/** A setting's health row, named as its settings row is. */
-const settingLine = (id: SettingsUiItemId, value: string, note?: string): string =>
-  `  ${SETTING_ITEM_DEFINITIONS[id].label}: ${value}${note === undefined ? "" : ` · ${note}`}`;
+/** A setting's health row, named and valued as its settings row is. */
+const settingLine = (id: CodePreviewEditableSettingId, note?: string): string =>
+  `  ${SETTING_ITEM_DEFINITIONS[id].label}: ${formatSettingValue(codePreviewSettings, id)}${note === undefined ? "" : ` · ${note}`}`;
+
+const OUTPUT_PREVIEW_SETTINGS = [
+  "readContentPreview",
+  "writeContentPreview",
+  "editDiffPreview",
+  "grepResultPreview",
+  "findResultPreview",
+  "lsResultPreview",
+  "bashResultPreview",
+  "wordEmphasis",
+] as const satisfies readonly CodePreviewEditableSettingId[];
 
 function healthLines(cwd: string): string[] {
   const status = getShikiStatus();
-  const settings = codePreviewSettings;
   return [
     "Code Previews health",
     "Syntax highlighting",
-    settingLine("syntaxHighlighting", formatOnOff(settings.syntaxHighlighting)),
-    settingLine("shikiTheme", settings.shikiTheme),
+    settingLine("syntaxHighlighting"),
+    settingLine("shikiTheme"),
     `  Highlighter: ${status.initialized ? "ready" : "not started"}`,
     `  Languages: ${status.loadedLanguages} loaded · ${status.pendingLanguages} pending`,
     `  Cache: ${status.cacheSize} of ${countLabel(status.cacheLimit, "entry", "entries")}`,
     `  Size limit: ${countLabel(status.maxHighlightChars, "character")} per preview`,
     "Tool rows",
-    settingLine("toolCallCollapsedStyle", settings.toolCallCollapsedStyle, RELOAD),
-    settingLine("toolCallBackground", settings.toolCallBackground, RELOAD),
-    settingLine("toolCallTiming", formatOnOff(settings.toolCallTiming)),
-    settingLine("pathIcons", settings.pathIcons),
+    settingLine("toolCallCollapsedStyle", RELOAD),
+    settingLine("toolCallBackground", RELOAD),
+    settingLine("toolCallTiming"),
+    settingLine("pathIcons"),
     // Named as the settings group is; expanded rows always show full content.
     "Output previews",
-    settingLine("readContentPreview", formatOnOff(settings.readContentPreview)),
-    settingLine("writeContentPreview", formatOnOff(settings.writeContentPreview)),
-    settingLine("editDiffPreview", formatOnOff(settings.editDiffPreview)),
-    settingLine("grepResultPreview", formatOnOff(settings.grepResultPreview)),
-    settingLine("findResultPreview", formatOnOff(settings.findResultPreview)),
-    settingLine("lsResultPreview", formatOnOff(settings.lsResultPreview)),
-    settingLine("bashResultPreview", formatOnOff(settings.bashResultPreview)),
-    settingLine("wordEmphasis", settings.wordEmphasis),
+    ...Arr.map(OUTPUT_PREVIEW_SETTINGS, (id) => settingLine(id)),
     "Tools",
     ...toolRows(),
     `  MCP calls: ${isNativeMcpRendererAvailable() ? "previewed" : "not available"}`,

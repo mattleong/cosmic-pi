@@ -21,7 +21,6 @@ import {
   startToolSessionEvent,
 } from "./session-events.ts";
 import {
-  addUsage,
   captureOutputText,
   clipWithMarker,
   MAX_ERROR_CHARS,
@@ -142,7 +141,6 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
             now,
           ),
         }),
-        usage: addUsage(current.usage, event.usage),
       };
     });
   };
@@ -199,10 +197,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
     record: RunRecord,
     event: HandledBackendEvent,
   ): Effect.Effect<unknown, SubagentError> => {
-    if (event.type !== "exit" && isInactiveRunRecord(record))
-      return event.type === "assistant_message"
-        ? settlement.mergeLateUsage(record, event.assignmentEpoch, event.usage)
-        : Effect.void;
+    if (event.type !== "exit" && isInactiveRunRecord(record)) return Effect.void;
     switch (event.type) {
       case "run_started":
         return settlement.runStartedFromBackend(record, event.assignmentEpoch);

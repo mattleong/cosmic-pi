@@ -257,59 +257,45 @@ describe("persisted subagent details version 2", () => {
     expect(decodeStartAwaitCardDetails([])).toBeUndefined();
   });
 
-  it("persists a worktree writer's workspace outcome", () => {
-    const outcomes = [
-      { status: "auto-discarded" },
-      { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 },
-    ] as const;
-    for (const workspaceOutcome of outcomes) {
+  it("persists a worktree writer's workspace outcome, keeping a diffstat's totals when condensed", () => {
+    const diffStat = {
+      addedLines: 5,
+      deletedLines: 1,
+      files: [
+        { path: "src/a.ts", addedLines: 5, deletedLines: 1 },
+        { path: "logo.png", addedLines: 0, deletedLines: 0, binary: true },
+      ],
+    } as const;
+    const outcomes: ReadonlyArray<{
+      readonly outcome: NonNullable<SubagentRunView["workspaceOutcome"]>;
+      /** What an oversized batch keeps, when that is less than the outcome. */
+      readonly condensed?: NonNullable<SubagentRunView["workspaceOutcome"]>;
+    }> = [
+      { outcome: { status: "auto-discarded" } },
+      { outcome: { status: "proposal", changedFileCount: 3, uncapturedFileCount: 1 } },
+      {
+        outcome: { status: "proposal", changedFileCount: 2, diffStat },
+        condensed: {
+          status: "proposal",
+          changedFileCount: 2,
+          diffStat: { ...diffStat, files: [] },
+        },
+      },
+    ];
+    for (const { outcome, condensed = outcome } of outcomes) {
       const writer: SubagentRunView = {
         ...run(),
         writeIntent: "writer",
         writerWorkspaceMode: "worktree",
         workspaceId: "ws-1",
-        workspaceOutcome,
+        workspaceOutcome: outcome,
       };
-      for (const runs of [[writer], oversizedBatch(writer)]) {
-        const details = compactToolDetails({ action: "stop", runs });
-        const decoded = decodeCompactToolDetails(details);
-        expect(
-          decoded?.action === "models" ? undefined : decoded?.cards[0]?.workspaceOutcome,
-        ).toEqual(workspaceOutcome);
-      }
+      const persisted = Arr.map([[writer], oversizedBatch(writer)], (runs) => {
+        const decoded = decodeCompactToolDetails(compactToolDetails({ action: "stop", runs }));
+        return decoded && runCards(decoded)[0]?.workspaceOutcome;
+      });
+      expect(persisted).toEqual([outcome, condensed]);
     }
-  });
-});
-
-describe("proposal diffstat evidence", () => {
-  it("persists a proposal's bounded diffstat, keeping its totals when condensed", () => {
-    const workspaceOutcome = {
-      status: "proposal",
-      changedFileCount: 2,
-      diffStat: {
-        addedLines: 5,
-        deletedLines: 1,
-        files: [
-          { path: "src/a.ts", addedLines: 5, deletedLines: 1 },
-          { path: "logo.png", addedLines: 0, deletedLines: 0, binary: true },
-        ],
-      },
-    } as const;
-    const writer: SubagentRunView = {
-      ...run(),
-      writeIntent: "writer",
-      writerWorkspaceMode: "worktree",
-      workspaceId: "ws-1",
-      workspaceOutcome,
-    };
-    const outcomes = Arr.map([[writer], oversizedBatch(writer)], (runs) => {
-      const decoded = decodeCompactToolDetails(compactToolDetails({ action: "stop", runs }));
-      return decoded?.action === "models" ? undefined : decoded?.cards[0]?.workspaceOutcome;
-    });
-    expect(outcomes).toEqual([
-      workspaceOutcome,
-      { ...workspaceOutcome, diffStat: { addedLines: 5, deletedLines: 1, files: [] } },
-    ]);
   });
 });
 

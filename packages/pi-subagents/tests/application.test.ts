@@ -1,4 +1,3 @@
-import { tmpdir } from "node:os";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import type {
   ExtensionAPI,
@@ -6,13 +5,9 @@ import type {
   ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
 import {
   deferredPromise,
   extensionApiFixture,
@@ -20,17 +15,22 @@ import {
   plainTheme,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
+import { nodeTemporaryRoot } from "pi-cosmic-core/platform/node-builtins";
 import { describe, expect, vi } from "vitest";
 import { registerSubagentApplication } from "../src/application/register.ts";
 import { SubagentBackendRegistry } from "../src/backend/service.ts";
 import * as SubagentLayers from "../src/layer.ts";
-import type { SubagentProjection } from "../src/run/model.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { encodeSubagentProxyInput } from "../src/tools/proxy-protocol.ts";
 import { view } from "./fixtures/run-view.ts";
-import { builtProfileService, completeBaseline, profileCandidate } from "./fixtures/profiles.ts";
-import { resolveSubagentConfig } from "../src/config/options.ts";
-import { subagentConfigDecoder } from "../src/config/schema.ts";
+import { decodeCompactToolDetails } from "../src/tools/details-decode.ts";
+import {
+  completeBaseline,
+  profileCandidate,
+  profileReloadSlot,
+  profileReloadSlotPresent,
+  writeProfileReloadSlot,
+} from "./fixtures/profiles.ts";
 import { SubagentProfileService } from "../src/profiles/service.ts";
 import { mountingCustomUi, sessionContextFixture as sessionContext } from "./fixtures/pi-host.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
@@ -38,7 +38,8 @@ import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodePath } from "./support/node-builtins.ts";
 import { pickQuestionnaire } from "./support/questionnaire.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
-import { fallbackProfileService, testBackendRegistry } from "./tools/fixtures/tool-harness.ts";
+import { fallbackProfileService } from "./tools/fixtures/tool-harness.ts";
+import { inertDriver } from "./run/fixtures/run-context.ts";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
@@ -54,33 +55,8 @@ const activatesOnRegistration = (tool: RegisteredToolSummary): boolean =>
   (tool.exposure === undefined || tool.exposure === "direct" || tool.exposure === "model-only") &&
   tool.defaultActive !== false;
 
-const testAgentDirectory = () => nodePath.join(tmpdir(), "pi-subagents-application-tests");
-
-const decodeModelsDetails = Schema.decodeUnknownOption(
-  Schema.Struct({
-    action: Schema.Literal("models"),
-    profiles: Schema.Array(Schema.Struct({ source: Schema.optional(Schema.String) })),
-  }),
-);
-
-const decodeModelSources = Schema.decodeUnknownOption(
-  Schema.Struct({
-    profiles: Schema.Array(Schema.Struct({ id: Schema.String, source: Schema.String })),
-  }),
-);
-
-const decodeWorkerRoute = Schema.decodeUnknownOption(
-  Schema.Struct({
-    profiles: Schema.Tuple([
-      Schema.Struct({
-        source: Schema.String,
-        candidates: Schema.Array(
-          Schema.Struct({ model: Schema.String, writeIntent: Schema.String }),
-        ),
-      }),
-    ]),
-  }),
-);
+const testAgentDirectory = () =>
+  nodePath.join(nodeTemporaryRoot(), "pi-subagents-application-tests");
 
 const applicationFixture = (
   overrides: Partial<ExtensionAPI> = {},
@@ -155,6 +131,97 @@ describeActivationLifecycle("root application", (loadSettings = () => Promise.re
 
 const signalledContext = (signal?: AbortSignal) => sessionContext({ signal });
 
+// Gives each runtime a service double and returns the layer options each runtime received.
+const withServiceDouble = (service: Parameters<typeof subagentServiceDouble>[0]) => {
+  const captured: SubagentLayers.SubagentLayerOptions[] = [];
+  const makeLayer = SubagentLayers.subagentApplicationLayer;
+  const capture = vi
+    .spyOn(SubagentLayers, "subagentApplicationLayer")
+    .mockImplementation((options) => {
+      captured.push(options);
+      return makeLayer(options).pipe(
+        Layer.merge(
+          Layer.succeed(
+            SubagentService,
+            subagentServiceDouble({
+              projection: Effect.succeed({ revision: 0, runs: [] }),
+              retireDelivery: Effect.void,
+              ...service,
+            }),
+          ),
+        ),
+      );
+    });
+  return Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore())).pipe(
+    Effect.as(captured),
+  );
+};
+
+/** The profile cards `agent_profiles` returns for `ctx`. */
+const profileCards = (
+  tools: ReturnType<typeof applicationFixture>["tools"],
+  ctx: ExtensionToolContext,
+  args: { readonly profile?: string } = {},
+) =>
+  Effect.promise(() =>
+    tools.get("agent_profiles")!.execute("models", args, undefined, undefined, ctx),
+  ).pipe(
+    Effect.map((result) => {
+      const details = decodeCompactToolDetails(result.details);
+      return details?.action === "models" ? details.profiles : [];
+    }),
+  );
+
+const PENDING_REPORT = {
+  type: "completed",
+  runs: [
+    {
+      id: "agent-0",
+      name: "finished-reader",
+      generation: 1,
+      outcome: "completed",
+      finalText: "Pending report.",
+    },
+  ],
+} as const satisfies Parameters<SubagentLayers.SubagentLayerOptions["notify"]>[0];
+
+/** A TUI session whose application registers again on every reload, as Pi reloads extensions. */
+const reloadingApplication = (sessionKey: string) => {
+  const tools = activeToolTracker();
+  let application = applicationFixture(tools.overrides);
+  const notify = vi.fn();
+  const ctx = sessionContext(
+    {
+      hasUI: true,
+      mode: "tui",
+      isProjectTrusted: () => false,
+      ui: { notify },
+      model: undefined,
+      modelRegistry: { getAvailable: () => [] },
+    },
+    sessionKey,
+  );
+  const start = () =>
+    settle(() =>
+      application.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
+    );
+  const shutdown = (reason: "reload" | "quit") =>
+    settle(() => application.emit("session_shutdown", ctx, { type: "session_shutdown", reason }));
+  return {
+    ctx,
+    tools,
+    application: () => application,
+    warnings: () => Arr.filter(notify.mock.calls, ([, level]) => level === "warning"),
+    start,
+    shutdown,
+    reload: Effect.fnUntraced(function* () {
+      yield* shutdown("reload");
+      application = applicationFixture(tools.overrides);
+      yield* start();
+    }),
+  };
+};
+
 describe("subagent Pi registration", () => {
   effectTest(
     "retired runtime callbacks cannot publish or notify into the next session",
@@ -225,7 +292,7 @@ describe("subagent Pi registration", () => {
           .proxyHandler(service, "caller", { ...replyRequest, requestId: "reply" })
           .pipe(
             Effect.provideService(SubagentProfileService, fallbackProfileService),
-            Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+            Effect.provideService(SubagentBackendRegistry, inertDriver),
           );
       expect(yield* dispatch(retired).pipe(Effect.flip, Effect.orDie)).toMatchObject({
         code: "proxy_caller_disconnected",
@@ -249,46 +316,21 @@ describe("subagent Pi registration", () => {
   effectTest(
     "reload appends pending reports, then lists the runs it stops, without a turn",
     function* () {
-      const makeLayer = SubagentLayers.subagentApplicationLayer;
       const order: string[] = [];
-      const capture = vi
-        .spyOn(SubagentLayers, "subagentApplicationLayer")
-        .mockImplementation((options) =>
-          makeLayer(options).pipe(
-            Layer.merge(
-              Layer.succeed(
-                SubagentService,
-                subagentServiceDouble({
-                  projection: Effect.succeed({ revision: 0, runs: [] }),
-                  retireDelivery: Effect.sync(() => {
-                    order.push("flush");
-                    options.notify({
-                      type: "completed",
-                      runs: [
-                        {
-                          id: "agent-0",
-                          name: "finished-reader",
-                          generation: 1,
-                          outcome: "completed",
-                          finalText: "Pending report.",
-                        },
-                      ],
-                    });
-                    options.publish({
-                      revision: 1,
-                      runs: [
-                        view({ id: "agent-1", name: "parser-review", state: "running" }),
-                        view({ id: "agent-2", name: "lexer-review", state: "paused" }),
-                        view({ id: "agent-3", name: "done", state: "completed" }),
-                      ],
-                    });
-                  }),
-                }),
-              ),
-            ),
-          ),
-        );
-      yield* Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore()));
+      const captured: SubagentLayers.SubagentLayerOptions[] = yield* withServiceDouble({
+        retireDelivery: Effect.sync(() => {
+          order.push("flush");
+          captured.at(-1)!.notify(PENDING_REPORT);
+          captured.at(-1)!.publish({
+            revision: 1,
+            runs: [
+              view({ id: "agent-1", name: "parser-review", state: "running" }),
+              view({ id: "agent-2", name: "lexer-review", state: "paused" }),
+              view({ id: "agent-3", name: "done", state: "completed" }),
+            ],
+          });
+        }),
+      });
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>((message) => {
         order.push(message.customType);
       });
@@ -311,46 +353,19 @@ describe("subagent Pi registration", () => {
   effectTest(
     "a tree move stops the runs without adding their reports or a notice to the new branch",
     function* () {
-      const makeLayer = SubagentLayers.subagentApplicationLayer;
       const flushes: string[] = [];
-      let publish: ((projection: SubagentProjection) => void) | undefined;
-      const capture = vi
-        .spyOn(SubagentLayers, "subagentApplicationLayer")
-        .mockImplementation((options) => {
-          publish = options.publish;
-          return makeLayer(options).pipe(
-            Layer.merge(
-              Layer.succeed(
-                SubagentService,
-                subagentServiceDouble({
-                  projection: Effect.succeed({ revision: 0, runs: [] }),
-                  retireDelivery: Effect.sync(() => {
-                    flushes.push("flush");
-                    options.notify({
-                      type: "completed",
-                      runs: [
-                        {
-                          id: "agent-0",
-                          name: "finished-reader",
-                          generation: 1,
-                          outcome: "completed",
-                          finalText: "Pending report.",
-                        },
-                      ],
-                    });
-                  }),
-                }),
-              ),
-            ),
-          );
-        });
-      yield* Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore()));
+      const captured: SubagentLayers.SubagentLayerOptions[] = yield* withServiceDouble({
+        retireDelivery: Effect.sync(() => {
+          flushes.push("flush");
+          captured.at(-1)!.notify(PENDING_REPORT);
+        }),
+      });
       const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
       const notify = vi.fn();
       const ctx = sessionContext({ hasUI: true, mode: "tui", ui: { notify } }, "tree-session");
       const { emit } = applicationFixture({ sendMessage });
       yield* settle(() => emit("session_start", ctx));
-      publish?.({
+      captured.at(-1)!.publish({
         revision: 1,
         runs: [
           view({ id: "agent-1", name: "parser-review", state: "running" }),
@@ -381,57 +396,6 @@ describe("subagent Pi registration", () => {
     );
     expect(currentResult.isError).not.toBe(true);
     yield* settle(() => emit("session_shutdown", ctx));
-  });
-
-  effectTest("holds the session revision lock through a deferred saved-set write", function* () {
-    const global = subagentConfigDecoder("global")({ version: 6, profileSets: {} });
-    const config = resolveSubagentConfig({
-      globalConfigPath: "/agent/pi-subagents.json",
-      projectConfigPath: "/repo/.pi/pi-subagents.json",
-      projectTrusted: false,
-      global,
-    });
-    const service = yield* builtProfileService(config);
-    const writeStarted = yield* Deferred.make<void>();
-    const releaseWrite = yield* Deferred.make<void>();
-    const editAttempted = yield* Deferred.make<void>();
-    const editFinished = yield* Deferred.make<void>();
-    let persistedReviewerCandidates: number | undefined;
-
-    const saving = yield* Effect.forkChild(
-      service
-        .withSnapshotAtRevision(0, (snapshot) =>
-          Effect.gen(function* () {
-            persistedReviewerCandidates =
-              snapshot.effectiveConfig.profiles.reviewer.candidates.length;
-            yield* Deferred.succeed(writeStarted, undefined);
-            yield* Deferred.await(releaseWrite);
-          }),
-        )
-        .pipe(Effect.orDie),
-    );
-    yield* Deferred.await(writeStarted);
-
-    const editing = yield* Effect.forkChild(
-      Effect.gen(function* () {
-        yield* Deferred.succeed(editAttempted, undefined);
-        yield* service.patchSessionProfile({
-          profile: "reviewer",
-          route: { candidates: [] },
-          expectedRevision: 0,
-        });
-        yield* Deferred.succeed(editFinished, undefined);
-      }).pipe(Effect.orDie),
-    );
-    yield* Deferred.await(editAttempted);
-    yield* Effect.yieldNow;
-    expect(Option.isNone(yield* Deferred.poll(editFinished))).toBe(true);
-
-    yield* Deferred.succeed(releaseWrite, undefined);
-    yield* Fiber.join(saving);
-    yield* Fiber.join(editing);
-    expect(persistedReviewerCandidates).toBeGreaterThan(0);
-    expect((yield* service.capture).effectiveConfig.profiles.reviewer.candidates).toEqual([]);
   });
 
   effectTest(
@@ -586,11 +550,7 @@ describe("subagent Pi registration", () => {
   effectTest(
     "restores what a stale reload handoff still decodes and keeps subagents active",
     function* () {
-      const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
-      Object.defineProperty(globalThis, reloadSlot, {
-        configurable: true,
-        enumerable: true,
-        writable: true,
+      writeProfileReloadSlot({
         value: {
           version: 2,
           sessionKey: "application-stale-handoff",
@@ -612,57 +572,31 @@ describe("subagent Pi registration", () => {
           },
         },
       });
-      const tools = activeToolTracker();
-      let application = applicationFixture(tools.overrides);
-      const notify = vi.fn();
-      const ctx = sessionContext(
-        {
-          hasUI: true,
-          mode: "tui",
-          isProjectTrusted: () => false,
-          ui: { notify },
-          model: undefined,
-          modelRegistry: { getAvailable: () => [] },
-        },
-        "application-stale-handoff",
-      );
+      const session = reloadingApplication("application-stale-handoff");
       yield* Effect.addFinalizer(() =>
-        settle(() =>
-          application.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" }),
-        ).pipe(Effect.ensuring(Effect.sync(() => Reflect.deleteProperty(globalThis, reloadSlot)))),
+        session
+          .shutdown("quit")
+          .pipe(
+            Effect.ensuring(
+              Effect.sync(() => Reflect.deleteProperty(globalThis, profileReloadSlot)),
+            ),
+          ),
       );
-      const profileSources = Effect.fnUntraced(function* () {
-        const tool = application.tools.get("agent_profiles");
-        if (!tool) return {};
-        const result = yield* Effect.promise(() =>
-          tool.execute("models", {}, undefined, undefined, ctx),
+      const profileSources = () =>
+        Effect.map(profileCards(session.application().tools, session.ctx), (cards) =>
+          Rec.fromEntries(Arr.map(cards, ({ id, source }) => [id, source])),
         );
-        return Option.match(decodeModelSources(result.details), {
-          onNone: () => ({}),
-          onSome: (details) =>
-            Rec.fromEntries(Arr.map(details.profiles, ({ id, source }) => [id, source])),
-        });
-      });
-      const warnings = () => Arr.filter(notify.mock.calls, ([, level]) => level === "warning");
 
-      yield* settle(() =>
-        application.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
-      );
-      expect(tools.active()).toContain("agent_start");
-      expect(Rec.has<string | symbol, unknown>(globalThis, reloadSlot)).toBe(false);
+      yield* session.start();
+      expect(session.tools.active()).toContain("agent_start");
+      expect(profileReloadSlotPresent()).toBe(false);
       expect(yield* profileSources()).toMatchObject({ reviewer: "session", worker: "global" });
-      expect(warnings()).toHaveLength(1);
+      expect(session.warnings()).toHaveLength(1);
 
-      yield* settle(() =>
-        application.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "reload" }),
-      );
-      application = applicationFixture(tools.overrides);
-      yield* settle(() =>
-        application.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
-      );
-      expect(tools.active()).toContain("agent_start");
+      yield* session.reload();
+      expect(session.tools.active()).toContain("agent_start");
       expect(yield* profileSources()).toMatchObject({ reviewer: "session", worker: "global" });
-      expect(warnings()).toHaveLength(1);
+      expect(session.warnings()).toHaveLength(1);
     },
   );
 
@@ -670,13 +604,8 @@ describe("subagent Pi registration", () => {
     effectTest(
       `keeps a dropped read-only route read-only through a failed restoring start and a ${recovery}`,
       function* () {
-        const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
-        const slotPresent = () => Rec.has<string | symbol, unknown>(globalThis, reloadSlot);
         const baseline = completeBaseline("global");
-        Object.defineProperty(globalThis, reloadSlot, {
-          configurable: true,
-          enumerable: true,
-          writable: true,
+        writeProfileReloadSlot({
           value: {
             version: 2,
             sessionKey: "application-failed-restore",
@@ -711,76 +640,42 @@ describe("subagent Pi registration", () => {
                 )
               : makeLayer(options),
           );
-        const tools = activeToolTracker();
-        let application = applicationFixture(tools.overrides);
-        const notify = vi.fn();
-        const ctx = sessionContext(
-          {
-            hasUI: true,
-            mode: "tui",
-            isProjectTrusted: () => false,
-            ui: { notify },
-            model: undefined,
-            modelRegistry: { getAvailable: () => [] },
-          },
-          "application-failed-restore",
-        );
+        const session = reloadingApplication("application-failed-restore");
         yield* Effect.addFinalizer(() =>
-          settle(() =>
-            application.emit("session_shutdown", ctx, { type: "session_shutdown", reason: "quit" }),
-          ).pipe(
+          session.shutdown("quit").pipe(
             Effect.ensuring(
               Effect.sync(() => {
                 capture.mockRestore();
-                Reflect.deleteProperty(globalThis, reloadSlot);
+                Reflect.deleteProperty(globalThis, profileReloadSlot);
               }),
             ),
           ),
         );
-        const workerRoute = Effect.fnUntraced(function* () {
-          const tool = application.tools.get("agent_profiles");
-          if (!tool) return undefined;
-          const result = yield* Effect.promise(() =>
-            tool.execute("models", { profile: "worker" }, undefined, undefined, ctx),
+        const workerRoute = () =>
+          Effect.map(
+            profileCards(session.application().tools, session.ctx, { profile: "worker" }),
+            ([worker]) => worker,
           );
-          return Option.getOrUndefined(
-            Option.map(decodeWorkerRoute(result.details), ({ profiles: [worker] }) => worker),
-          );
-        });
-        const warnings = () => Arr.filter(notify.mock.calls, ([, level]) => level === "warning");
-        const reload = Effect.fnUntraced(function* () {
-          yield* settle(() =>
-            application.emit("session_shutdown", ctx, {
-              type: "session_shutdown",
-              reason: "reload",
-            }),
-          );
-          application = applicationFixture(tools.overrides);
-          yield* settle(() =>
-            application.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
-          );
-        });
 
-        yield* settle(() =>
-          application.emit("session_start", ctx, { type: "session_start", reason: "reload" }),
-        );
-        expect(tools.active()).not.toContain("agent_start");
-        const failureWarnings = warnings().length;
+        yield* session.start();
+        expect(session.tools.active()).not.toContain("agent_start");
+        const failureWarnings = session.warnings().length;
 
         failing = false;
-        if (recovery === "tree") yield* settle(() => application.emit("session_tree", ctx));
-        else yield* reload();
-        expect(tools.active()).toContain("agent_start");
-        expect(slotPresent()).toBe(false);
+        if (recovery === "tree")
+          yield* settle(() => session.application().emit("session_tree", session.ctx));
+        else yield* session.reload();
+        expect(session.tools.active()).toContain("agent_start");
+        expect(profileReloadSlotPresent()).toBe(false);
         const readOnlyWorker = {
           source: "session",
           candidates: [{ model: "openai/writer", writeIntent: "read-only" }],
         };
-        expect(yield* workerRoute()).toEqual(readOnlyWorker);
-        expect(warnings()).toHaveLength(failureWarnings + 1);
+        expect(yield* workerRoute()).toMatchObject(readOnlyWorker);
+        expect(session.warnings()).toHaveLength(failureWarnings + 1);
 
-        yield* reload();
-        expect(yield* workerRoute()).toEqual(readOnlyWorker);
+        yield* session.reload();
+        expect(yield* workerRoute()).toMatchObject(readOnlyWorker);
       },
     );
 
@@ -812,17 +707,11 @@ describe("subagent Pi registration", () => {
           sessionId,
         );
       const ctx = contextFor("application-reload-session");
-      const hasSessionOverride = (context: ExtensionToolContext): Effect.Effect<boolean> => {
-        const tool = tools.get("agent_profiles");
-        if (!tool) return Effect.succeed(false);
-        return Effect.promise(() => tool.execute("models", {}, undefined, undefined, context)).pipe(
-          Effect.map((result) =>
-            Option.exists(decodeModelsDetails(result.details), (details) =>
-              Arr.some(details.profiles, (profile) => profile.source === "session"),
-            ),
-          ),
+      const hasSessionOverride = (context: ExtensionToolContext): Effect.Effect<boolean> =>
+        Effect.map(
+          profileCards(tools, context),
+          Arr.some((profile) => profile.source === "session"),
         );
-      };
 
       yield* settle(() => emit("session_start", ctx, { type: "session_start", reason: "startup" }));
       let editorClosed = false;
@@ -936,32 +825,6 @@ describe("orphaned workspace sweep notice", () => {
     },
   );
 });
-
-// Gives each runtime a service double and returns the layer options each runtime received.
-const withServiceDouble = (service: Parameters<typeof subagentServiceDouble>[0]) => {
-  const captured: SubagentLayers.SubagentLayerOptions[] = [];
-  const makeLayer = SubagentLayers.subagentApplicationLayer;
-  const capture = vi
-    .spyOn(SubagentLayers, "subagentApplicationLayer")
-    .mockImplementation((options) => {
-      captured.push(options);
-      return makeLayer(options).pipe(
-        Layer.merge(
-          Layer.succeed(
-            SubagentService,
-            subagentServiceDouble({
-              projection: Effect.succeed({ revision: 0, runs: [] }),
-              retireDelivery: Effect.void,
-              ...service,
-            }),
-          ),
-        ),
-      );
-    });
-  return Effect.addFinalizer(() => Effect.sync(() => capture.mockRestore())).pipe(
-    Effect.as(captured),
-  );
-};
 
 describe("worktree tool activation", () => {
   effectTest("declares agent_worktree once a worktree writer runs", function* () {

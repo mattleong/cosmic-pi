@@ -8,12 +8,11 @@ import { compactPlainText } from "../preview/compact-row";
 import { expandedArguments, expandedSection } from "../preview/expanded-section";
 import { previewHeadingText } from "../preview/heading-wrap";
 import { previewIssuesSlot } from "../preview/preview-issues";
-import { renderHiddenPreviewExpandHint } from "../preview/bordered-tool-call";
 import { hostContainer, hostValue, type HostValue } from "../shared/untrusted-value";
 import { withCodePreviewRenderers } from "./cooperative-tools";
 import type { RenderCall, RendererState, RenderResult } from "./renderers/shared/types";
 import { getFallbackResultText } from "./data/results";
-import { plainRows, runningLine, safeContent } from "./native-safe-content";
+import { hiddenResult, plainRows, runningLine, safeContent } from "./native-safe-content";
 import {
   nativeToolSearchReceipt,
   nativeToolSearchSubject,
@@ -77,14 +76,8 @@ export function createNativeToolSearchRenderers(
     const receipt = context.isError
       ? undefined
       : nativeToolSearchReceipt(hostContainer(result.details));
-    if (!receipt) {
-      // Without a receipt the collapsed row hides the whole result, which its tag names.
-      const hidden = context.isError ? "error" : "output";
-      return safeContent(
-        () => renderHiddenPreviewExpandHint(context, theme, hidden),
-        plainRows(`▸ ${hidden}`, 1),
-      );
-    }
+    // Without a receipt the collapsed row hides the whole result, which its tag names.
+    if (!receipt) return hiddenResult(context.isError ? "error" : "output", theme, context);
     // The receipt's count stands in for the listed tools where they would be.
     const label = `${countLabel(receipt.loaded.length, "tool")} listed`;
     return safeContent(

@@ -1,86 +1,45 @@
-import type {
-  ExtensionAPI,
-  ExtensionFactory,
-  ToolDefinition,
-} from "@earendil-works/pi-coding-agent";
-import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
-import * as Str from "effect/String";
-import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
+import type { ExtensionFactory, ToolDefinition, ToolInfo } from "@earendil-works/pi-coding-agent";
+import { animationSchedulerProbe } from "../../src/testing/tool-presentation";
+import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 
-type Definition = ToolDefinition;
-const Input = Schema.Struct({ mode: Schema.optionalKey(Schema.String) });
+/** The header Pi puts before native output it truncated. */
+export const NATIVE_TRUNCATION_HEADER =
+  "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n";
 
+/** Native MCP renderers for a definition, with no downstream renderer. */
+export const styleNativeMcp = (
+  definition: Pick<ToolInfo, "name" | "namespace">,
+  schedule = animationSchedulerProbe().schedule,
+) =>
+  createNativeMcpRenderers(definition.name, definition, undefined, { scheduleAnimation: schedule });
+
+/** A stand-in native MCP manager: the `mcp` command and one `mcp__docs__lookup` tool. */
 export function nativeManagerFixture() {
-  let api: ExtensionAPI | undefined;
-  let closed = 0;
-  let executions = 0;
-  let started = false;
-  const definitions = new Map<string, Definition>();
-  const make = (server: string, tool: string): Definition => ({
-    name: `mcp__${server}__${tool}`,
-    label: `${server}/${tool}`,
+  const definition: ToolDefinition = {
+    name: "mcp__docs__lookup",
+    label: "docs/lookup",
     description: "Owned native definition fixture",
-    parameters: { type: "object", properties: { mode: { type: "string" } } },
+    parameters: { type: "object", properties: {} },
     outputSchema: { type: "object" },
     exposure: "direct",
-    namespace: { name: `mcp__${server}` },
+    namespace: { name: "mcp__docs" },
     annotations: { readOnlyHint: true, openWorldHint: true },
-    execute: (_id, args, signal) => {
-      const { mode } = Schema.decodeUnknownSync(Input)(args);
-      executions++;
-      if (mode === "abort") return Effect.runPromise(Effect.never, { signal });
-      return Promise.resolve({
+    execute: () =>
+      Promise.resolve({
         content: [
-          { type: "text", text: mode === "error" ? "Owned request failed" : "TEXT_RETAINED" },
+          { type: "text", text: "TEXT_RETAINED" },
           { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
         ],
         structuredContent: { retained: true },
-        isError: mode === "error",
-        details: { server, tool },
-      });
-    },
-  });
-  const catalog = (server: string, names: string[]) => {
-    if (!api) throw new Error("Fixture has not loaded");
-    for (const [name, previous] of definitions) {
-      if (
-        previous.namespace?.name === `mcp__${server}` &&
-        !names.includes(Fn.pipe(previous.label, Str.slice(server.length + 1)))
-      ) {
-        api.registerTool({ ...previous, exposure: "hidden" });
-        definitions.delete(name);
-      }
-    }
-    for (const name of names) {
-      const fresh = make(server, name);
-      definitions.set(fresh.name, fresh);
-      api.registerTool(fresh);
-    }
-  };
-  const syncServers = () => {
-    if (!api) return;
-    const servers = Arr.map(api.getMcpServers(), (server) => server.name);
-    for (const definition of definitions.values()) {
-      const server =
-        definition.namespace && Fn.pipe(definition.namespace.name, Str.slice("mcp__".length));
-      if (server && !servers.includes(server)) catalog(server, []);
-    }
-    for (const server of servers) catalog(server, ["lookup"]);
+        isError: false,
+        details: { server: "docs", tool: "lookup" },
+      }),
   };
   const factory: ExtensionFactory = (pi) => {
-    api = pi;
     pi.registerCommand("mcp", { handler: () => Promise.resolve() });
     pi.on("session_start", () => {
-      started = true;
-      syncServers();
-    });
-    pi.on("mcp_servers_change", syncServers);
-    pi.on("session_shutdown", () => {
-      if (started) closed++;
-      started = false;
+      pi.registerTool(definition);
     });
   };
-  return { factory, catalog, definitions, closed: () => closed, executions: () => executions };
+  return { factory, definition };
 }

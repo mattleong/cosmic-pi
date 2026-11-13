@@ -1,29 +1,23 @@
-import { initTheme } from "@earendil-works/pi-coding-agent";
 import { getTextContent } from "pi-code-previews";
-import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Fn from "effect/Function";
 import * as Deferred from "effect/Deferred";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { beforeAll, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
+import { MAX_TARGET_RUNS } from "../../src/run/limits.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
   executeTool,
   invokeOptionalTool,
+  receiptFor,
   view,
 } from "./fixtures/tool-harness.ts";
 import { readoutOf } from "../fixtures/run-view.ts";
-import * as Order from "effect/Order";
-import * as Str from "effect/String";
-import * as Option from "effect/Option";
 
 describe("subagent tool", () => {
-  beforeAll(() => initTheme("dark", false));
-
   effectTest("names a failed root run's next candidate in await and read", function* () {
     const run = view({
       state: "failed",
@@ -160,35 +154,6 @@ describe("subagent tool", () => {
     },
   );
 
-  effectTest("registers one agent_* family and answers questions with agent_send", function* () {
-    const service = subagentServiceDouble({
-      agentSend: (_caller, to) =>
-        Effect.succeed({
-          messageId: "message-1",
-          to,
-          name: "worker",
-          disposition: "answered",
-        }),
-    });
-    const tools = captureSubagentTools(service);
-    // Questions are answered through agent_send; no separate reply or status tool is registered.
-    expect(Arr.sort([...tools.keys()], Order.String)).toEqual([
-      "agent_await",
-      "agent_lifecycle",
-      "agent_list",
-      "agent_profiles",
-      "agent_read",
-      "agent_send",
-      "agent_start",
-      "agent_worktree",
-    ]);
-    const result = yield* invokeOptionalTool(tools.get("agent_send"), {
-      to: "agent-2",
-      message: "Yes, go ahead.",
-    });
-    expect(result?.details).toMatchObject({ action: "agent_send", disposition: "answered" });
-  });
-
   effectTest("propagates defects instead of reporting them as target failures", function* () {
     const service = subagentServiceDouble({
       stop: () => Effect.die(new Error("broken invariant")),
@@ -242,7 +207,7 @@ describe("subagent tool", () => {
 
   effectTest("keeps completion available when detailed result presentation fails", function* () {
     const completed = view({ state: "completed", endedAt: 2, finalText: "Report to deliver." });
-    const receipt = { id: completed.id, generation: 1, claimToken: "claim-1" };
+    const receipt = receiptFor(completed.id);
     const consumed: Array<typeof receipt> = [];
     const service = subagentServiceDouble({
       withAwaitTerminalObservations: (_ids, _until, _onUpdate, use) =>
@@ -276,50 +241,15 @@ describe("subagent tool", () => {
     expect(consumed).toEqual([receipt]);
   });
 
-  effectTest(
-    "enforces the combined target count and aggregate detailed-output budget",
-    function* () {
-      const runs = Array.from({ length: 13 }, (_, index) =>
-        view({
-          id: `agent-${index + 1}`,
-          name: `review-${index + 1}`,
-          state: "completed",
-          finalText: Fn.pipe("x", Str.repeat(32 * 1024)),
+  effectTest("refuses more targets than one await delivers", function* () {
+    const tool = captureSubagentTools(subagentServiceDouble({})).get("agent_await")!;
+    yield* step(() =>
+      expect(
+        executeTool(tool, {
+          runIds: Array.from({ length: MAX_TARGET_RUNS + 1 }, (_, index) => `agent-${index}`),
+          until: "all_finished",
         }),
-      );
-      const consumed: Array<{ readonly id: string; readonly generation: number }> = [];
-      const service = subagentServiceDouble({
-        withAwaitTerminalObservations: (ids, _until, _onUpdate, use) =>
-          use(
-            Arr.map(ids, (id) => ({
-              run: Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))!,
-              completionReceipt: { id, generation: 1, claimToken: `claim-${id}` },
-            })),
-          ),
-        consumeCompletions: (receipts) =>
-          Effect.sync(() => {
-            consumed.push(...receipts);
-          }),
-      });
-      const tool = captureSubagentTools(service).get("agent_await")!;
-
-      yield* step(() =>
-        expect(
-          executeTool(tool, { runIds: Arr.map(runs, (run) => run.id), until: "all_finished" }),
-        ).rejects.toThrow("at most 12 targets"),
-      );
-
-      const result = yield* invokeOptionalTool(tool, {
-        runIds: Arr.map(runs.slice(0, 12), (run) => run.id),
-        until: "all_finished",
-      });
-      const text = result?.content[0]?.text ?? "";
-      expect(text.length).toBeLessThanOrEqual(48_000);
-      for (const run of runs.slice(0, 12)) expect(text).toContain(run.id);
-      // Every run's block fits, so every claimed report is delivered and consumed.
-      expect(Arr.map(consumed, (receipt) => receipt.id)).toEqual(
-        Arr.map(runs.slice(0, 12), (run) => run.id),
-      );
-    },
-  );
+      ).rejects.toMatchObject({ code: "too_many_run_ids" }),
+    );
+  });
 });

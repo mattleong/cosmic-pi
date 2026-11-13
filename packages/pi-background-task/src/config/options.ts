@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
@@ -149,7 +150,7 @@ export const parseDuration = (value: string, unit: number): number => {
   if (WHOLE_NUMBER.test(text)) return Number(text);
   if (!DURATION.test(text)) return Number.NaN;
   let milliseconds = 0;
-  for (const [, amount = "", part = ""] of Str.matchAll(DURATION_PART)(text))
+  for (const [, amount = "", part = ""] of Fn.pipe(text, Str.matchAll(DURATION_PART)))
     milliseconds +=
       Number(amount) *
       (part === "ms" || part === "s" || part === "m" || part === "h"
@@ -163,7 +164,7 @@ export const parseDuration = (value: string, unit: number): number => {
 const commandValue = (kind: BackgroundTaskSettingKind, value: number): string => {
   if (kind === "bytes")
     return value % 1024 ** 2 === 0 ? `${value / 1024 ** 2}MB` : `${value / 1024}KB`;
-  return Str.replaceAll(" ", "")(formatSettingValue(kind, value));
+  return Fn.pipe(formatSettingValue(kind, value), Str.replaceAll(" ", ""));
 };
 
 const NUMBER_INPUT = {

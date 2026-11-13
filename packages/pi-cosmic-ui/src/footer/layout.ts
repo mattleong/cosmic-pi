@@ -1,6 +1,4 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import { formatTokens } from "pi-cosmic-core/display";
 import type { CosmicFooterTextContribution, CosmicFooterTheme } from "../protocol/protocol.ts";
 import {
@@ -11,6 +9,7 @@ import {
 } from "./contributions.ts";
 import { contextConsumptionTone, progressBar } from "./meter.ts";
 import { clipToWidth } from "../manager/chrome.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 function contextUsageCandidates(
   usage: { contextWindow?: number; tokens?: number | null; percent?: number | null } | undefined,
@@ -49,9 +48,8 @@ export function renderModelContextLine(
   const contextBudget = leftRaw ? Math.max(1, width - leftWidth - 2) : width;
   const candidates = contextUsageCandidates(usage, theme, compact);
   const context =
-    Option.getOrUndefined(
-      Arr.findFirst(candidates, (candidate) => visibleWidth(candidate) <= contextBudget),
-    ) ?? clipToWidth(candidates.at(-1) ?? "", width, "");
+    findOrUndefined(candidates, (candidate) => visibleWidth(candidate) <= contextBudget) ??
+    clipToWidth(candidates.at(-1) ?? "", width, "");
   const contextWidth = visibleWidth(context);
   const leftBudget = Math.max(0, width - contextWidth - (leftRaw ? 2 : 0));
   const left = modelIdentity.length

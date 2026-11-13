@@ -14,7 +14,7 @@ import {
   type LocalPiIpcPort,
 } from "../src/boundary/local-pi-ipc.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 type IpcMessage = Parameters<NodeChildProcess["send"]>[0];
 const childFixture = fileURLToPath(new URL("./fixtures/local-pi-ipc-child.ts", import.meta.url));
@@ -175,7 +175,7 @@ describe("Local Pi IPC boundary", () => {
         });
 
       const initial = yield* takeUntil(hasMessage("child-ready"), isQuestion);
-      const question = Option.getOrUndefined(Arr.findFirst(initial, isQuestion));
+      const question = findOrUndefined(initial, isQuestion);
       if (question?.type !== "contact_request")
         return yield* Effect.die(new Error("The real IPC child did not ask its question."));
 

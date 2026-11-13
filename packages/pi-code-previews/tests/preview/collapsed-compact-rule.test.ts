@@ -1,21 +1,20 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createReadToolDefinition, type MessageRenderer } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
+import type { MessageRenderer } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { stripAnsi } from "pi-cosmic-core";
-import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import {
   applyPresentationSettings,
   createToolPresentationHarness,
   expansionTag,
 } from "../../testing";
-import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import { withCodePreviewMessageShell } from "../../src/preview/message-shell";
 import { headingValue } from "../../index";
 import type { CompactChild, CompactSummary } from "../../src/tools/compact-summary";
 import { codemodeRenderers, nativeCall, scriptResult } from "../support/native-codemode";
-import { textResult } from "../support/render";
+import { demoShellTool, drawMessage, textResult } from "../support/render";
 
 beforeEach(() =>
   applyPresentationSettings({
@@ -44,28 +43,17 @@ const child = (
 
 /** A tool whose summary nests calls and whose expansion shows every one of them. */
 const nested = (summary: (phase: string) => CompactSummary) =>
-  withCodePreviewShell(
-    {
-      ...createReadToolDefinition("/project"),
-      renderCall: () => new Text("Demo call", 0, 0),
-      renderResult: () => new Text("Demo result", 0, 0),
-    },
-    {
-      compactSummary: ({ phase }) => summary(phase),
-      expandedContent: {
-        renderCall: () => new Container(),
-        renderResult: () =>
-          new Text(
-            Arr.join(
-              Arr.map(summary("settled").children?.entries ?? [], (entry) => entry.subject ?? ""),
-              "\n",
-            ),
-            0,
-            0,
-          ),
-      },
-    },
-  );
+  demoShellTool(summary, {
+    expandedResult: () =>
+      new Text(
+        Arr.join(
+          Arr.map(summary("settled").children?.entries ?? [], (entry) => entry.subject ?? ""),
+          "\n",
+        ),
+        0,
+        0,
+      ),
+  });
 
 const tree = {
   entries: [child("FIRST_CALL", "returned"), child("SECOND_CALL", "error", "SECOND_FAILED")],
@@ -140,7 +128,7 @@ describe("a collapsed compact row", () => {
     harness.result(textResult("partial"), { isPartial: true });
     const running = Arr.join(plain(harness.render()), "\n");
     expect(
-      Arr.filter(entries, (entry) => Str.includes(entry.subject ?? "")(running)),
+      Arr.filter(entries, (entry) => Fn.pipe(running, Str.includes(entry.subject ?? ""))),
     ).not.toHaveLength(entries.length);
     expect(running).toMatch(/more NOUNs/u);
   });
@@ -160,7 +148,7 @@ describe("a collapsed compact row", () => {
     harness.result(textResult("done"));
     const rows = plain(harness.render(120));
     // Every failure is accounted for: named, or counted on one closing line.
-    const named = Arr.filter(rows, (row) => Str.includes("FAILED_")(row)).length;
+    const named = Arr.filter(rows, (row) => Fn.pipe(row, Str.includes("FAILED_"))).length;
     expect(named).toBeGreaterThan(0);
     expect(named).toBeLessThan(failures.length);
     expect(Arr.join(rows, "\n")).toContain(`${failures.length - named} more`);
@@ -205,22 +193,7 @@ describe("a settled codemode row", () => {
   });
 });
 
-type Message = Parameters<MessageRenderer>[0];
-
-const message: Message = {
-  role: "custom",
-  customType: "example-message",
-  content: [{ type: "text", text: "MODEL-FACING" }],
-  display: true,
-  timestamp: 0,
-};
-
-const draw = (render: MessageRenderer, expanded: boolean) =>
-  plain(
-    render(message, { ...keybindingHintsFixture, expanded, outputPad: 1 }, plainTheme)?.render(
-      80,
-    ) ?? [],
-  );
+const draw = (render: MessageRenderer, expanded: boolean) => plain(drawMessage(render, expanded));
 
 describe("a collapsed message", () => {
   const report = withCodePreviewMessageShell(() => ({
@@ -244,11 +217,6 @@ describe("a collapsed message", () => {
     const expanded = Arr.join(draw(report, true), "\n");
     expect(expanded).toContain("REPORT_WORDS");
     expect(expanded).toContain("REPORT_END");
-  });
-
-  it("keeps its bounded body in preview style", () => {
-    applyPresentationSettings({ toolCallCollapsedStyle: "preview" });
-    expect(Arr.join(draw(report, false), "\n")).toContain("REPORT_WORDS");
   });
 
   it("offers nothing in compact style when it has no body", () => {

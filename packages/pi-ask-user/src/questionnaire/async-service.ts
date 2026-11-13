@@ -7,6 +7,7 @@ import * as Queue from "effect/Queue";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Str from "effect/String";
@@ -19,8 +20,10 @@ import {
   AskUserValidationError,
   asyncBusy,
 } from "./errors.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import {
   MAX_RETAINED_REQUESTS,
+  PendingPresentationSchema,
   type AsyncQuestionnaireSnapshot,
   type PendingPresentation,
 } from "./async-model.ts";
@@ -47,7 +50,9 @@ interface Entry {
   readonly deliveryAttempts: number;
 }
 
-export type PresentationObserver = (presentation: PendingPresentation) => Effect.Effect<void>;
+type PresentationObserver = (presentation: PendingPresentation) => Effect.Effect<void>;
+
+const isPendingPresentation = Schema.is(PendingPresentationSchema);
 
 /** Where a pending questionnaire stands for the user; opening and settled ones report nothing. */
 const pendingPresentationOf = (
@@ -55,13 +60,11 @@ const pendingPresentationOf = (
 ): PendingPresentation | undefined => {
   if (snapshot?.status !== "pending") return undefined;
   const { presentation } = snapshot;
-  return presentation === "open" || presentation === "hidden" || presentation === "queued"
-    ? presentation
-    : undefined;
+  return isPendingPresentation(presentation) ? presentation : undefined;
 };
 
 const findEntry = (entries: ReadonlyArray<Entry>, id: string): Entry | undefined =>
-  Option.getOrUndefined(Arr.findFirst(entries, (item) => item.snapshot.requestId === id));
+  findOrUndefined(entries, (item) => item.snapshot.requestId === id);
 
 const notFound = () =>
   AskUserAsyncError.make({
@@ -230,7 +233,7 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
       )
     ) {
       return yield* AskUserValidationError.make({
-        message: "Work descriptions must be nonblank and at most 500 characters.",
+        message: `Work descriptions must be nonblank and at most ${MAX_WORK_DESCRIPTION_LENGTH} characters.`,
       });
     }
     const admittedRequest = yield* admission.withPermit(
@@ -261,14 +264,12 @@ export const acquireAsyncQuestionnaires = Effect.fn("AskUserService.acquireAsync
           const admitted = yield* SubscriptionRef.modify(state, (entries) => {
             const evict =
               entries.length >= MAX_RETAINED_REQUESTS
-                ? Option.getOrUndefined(
-                    Arr.findFirst(
-                      entries,
-                      (item) =>
-                        !item.waiter &&
-                        item.snapshot.status !== "pending" &&
-                        ["sent", "waiter"].includes(item.snapshot.delivery),
-                    ),
+                ? findOrUndefined(
+                    entries,
+                    (item) =>
+                      !item.waiter &&
+                      item.snapshot.status !== "pending" &&
+                      ["sent", "waiter"].includes(item.snapshot.delivery),
                   )
                 : undefined;
             if (entries.length >= MAX_RETAINED_REQUESTS && !evict)

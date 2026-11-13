@@ -19,6 +19,7 @@ import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import type { CompactSummary, CompactSummaryProvider } from "../../src/tools/compact-summary";
 import type { ToolRenderContext } from "../../src/tools/renderers/shared/types";
 import { plainTheme, textResult as result } from "../support/render";
+import { inertCapability } from "../support/renderer-host";
 import { SPINNER_FRAME_MS } from "pi-cosmic-ui/manager";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -51,16 +52,16 @@ afterEach(() => clearCodePreviewSessionCapability());
 
 function installRecordingScheduler() {
   const scheduled = new Set<() => void>();
-  installCodePreviewSessionCapability({
-    run: () => Promise.reject(new Error("not used")),
-    defer: () => () => undefined,
-    schedule: (_interval, task) => {
-      scheduled.add(task);
-      return () => {
-        scheduled.delete(task);
-      };
-    },
-  });
+  installCodePreviewSessionCapability(
+    inertCapability({
+      schedule: (_interval, task) => {
+        scheduled.add(task);
+        return () => {
+          scheduled.delete(task);
+        };
+      },
+    }),
+  );
   return scheduled;
 }
 
@@ -247,10 +248,7 @@ it.effect(
         yield* Effect.scoped(
           Effect.gen(function* () {
             const scheduler = yield* CodePreviewSchedulerService;
-            installCodePreviewSessionCapability({
-              ...scheduler,
-              run: () => Promise.reject(new Error("not used")),
-            });
+            installCodePreviewSessionCapability(inertCapability(scheduler));
             yield* Effect.addFinalizer(() => Effect.sync(clearCodePreviewSessionCapability));
             const h = harness(summarize, "off", { timing });
             h.call({ invalidate: () => ticks++ });

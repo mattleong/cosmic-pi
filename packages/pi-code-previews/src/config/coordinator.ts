@@ -11,7 +11,7 @@ export interface SettingsAdmission {
 
 export interface SettingsCoordinator {
   /** Publishes a load and its resolution baseline unless a later admission already published. */
-  readonly publishIfCurrent: (baseline: CodePreviewSettings, publish: () => void) => boolean;
+  readonly publishIfCurrent: (baseline: CodePreviewSettings, publish: () => void) => void;
   /** Whether a later admission already published an edit to one of these keys. */
   readonly isSuperseded: (keys: readonly SettingKey[]) => boolean;
   /**
@@ -52,10 +52,9 @@ export function withSettingsCoordinator<A, E, R>(
       };
       return use({
         publishIfCurrent: (baseline, publish) => {
-          if (!isCurrent()) return false;
+          if (!isCurrent()) return;
           publish();
           advance(baseline);
-          return true;
         },
         isSuperseded: (keys) =>
           Arr.some(keys, (key) => (latestKeyEdits.get(key) ?? 0) > admission.sequence),

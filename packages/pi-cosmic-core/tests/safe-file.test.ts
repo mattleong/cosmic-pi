@@ -4,7 +4,6 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Result from "effect/Result";
 import { vi } from "vitest";
 import { SafeFile } from "../index.ts";
 import { nodeFsPromises, nodePath } from "../src/platform/node-builtins.ts";
@@ -15,6 +14,7 @@ import {
   provideBuiltLayer,
   temporaryDirectory,
 } from "../testing.ts";
+import { scopedSpy } from "./support/spies.ts";
 
 const fs = nodeFsPromises;
 const fixtureRoot = temporaryDirectory("cosmic-safe-file-").pipe(
@@ -30,10 +30,7 @@ const openedFile = (content = "safe") =>
       Effect.promise(() => nodeFsPromises.open(file, "r")),
       (opened) => Effect.promise(() => opened.close()),
     );
-    yield* Effect.acquireRelease(
-      Effect.sync(() => vi.spyOn(nodeFsPromises, "open").mockResolvedValue(handle)),
-      (spy) => Effect.sync(() => spy.mockRestore()),
-    );
+    yield* scopedSpy(() => vi.spyOn(nodeFsPromises, "open").mockResolvedValue(handle));
     return { root, file, handle };
   });
 
@@ -62,12 +59,8 @@ for (const change of ["growth", "read failure"])
           }),
       );
       const safeFile = yield* SafeFile;
-      const result = yield* Effect.result(safeFile.readContainedRegularFile(file, root, 4));
-      expect(result._tag).toBe("Failure");
-      if (Result.isFailure(result)) {
-        expect(result.failure._tag).toBe("SafeFileError");
-        expect(String(result.failure)).not.toContain(root);
-      }
+      const failure = yield* Effect.flip(safeFile.readContainedRegularFile(file, root, 4));
+      expect(String(failure)).not.toContain(root);
       expect(largestBuffer).toBe(4);
       expect(transferred).toBeLessThanOrEqual(5);
       expect(handle.fd).toBe(-1);
@@ -92,8 +85,7 @@ it.live(
         }),
       );
       const safeFile = yield* SafeFile;
-      const result = yield* Effect.result(safeFile.readContainedRegularFile(file, root, 4));
-      expect(result._tag).toBe("Failure");
+      yield* Effect.flip(safeFile.readContainedRegularFile(file, root, 4));
       expect(handle.fd).toBe(-1);
     }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
 );
@@ -157,11 +149,7 @@ it.live("rejects symlinked roots, leaf symlinks, and files outside the containme
       safeFile.readContainedRegularFile(outside, workspace, 32),
       safeFile.readContainedRegularFile(file, rootLink, 32),
     ]) {
-      const result = yield* Effect.result(attempt);
-      expect(result._tag).toBe("Failure");
-      if (Result.isFailure(result)) {
-        expect(String(result.failure)).not.toContain(root);
-      }
+      expect(String(yield* Effect.flip(attempt))).not.toContain(root);
     }
   }).pipe(provideBuiltLayer(SafeFile.layer.pipe(Layer.provide(NodePath.layer)))),
 );

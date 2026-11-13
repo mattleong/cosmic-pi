@@ -1,7 +1,9 @@
 import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
+import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
@@ -11,7 +13,6 @@ import {
   IMAGE_OUTPUT_FORMATS,
   IMAGE_SAVE_MODES,
   ImageOutputFormatSchema,
-  type ImageOutputFormat,
 } from "../config/schema.ts";
 
 export const IMAGE_MODELS = ["gpt-image-2.5-sunburst", "gpt-image-2.5-flare"] as const;
@@ -94,21 +95,6 @@ export type ImageInput = {
   readonly data: string;
   readonly mimeType: string;
 };
-export type CodexImageResult = {
-  id: string;
-  status: string;
-  prompt: string;
-  revisedPrompt?: string;
-  data: string;
-  mimeType: string;
-  savedPath?: string;
-  model: string;
-  imageModel?: string;
-  action: ImageAction;
-  outputFormat: ImageOutputFormat;
-  /** Why the result differs from the request, such as a different returned format. */
-  note?: string;
-};
 export const CodexImageDetailsSchema = Schema.Struct({
   id: Schema.String,
   status: Schema.String,
@@ -120,9 +106,11 @@ export const CodexImageDetailsSchema = Schema.Struct({
   imageModel: Schema.optional(Schema.String),
   action: Schema.Literals(IMAGE_ACTIONS),
   outputFormat: ImageOutputFormatSchema,
+  /** Why the result differs from the request, such as a different returned format. */
   note: Schema.optional(Schema.String),
 });
 export type CodexImageDetails = typeof CodexImageDetailsSchema.Type;
+export type CodexImageResult = CodexImageDetails & { readonly data: string };
 
 export type ExtractedImageResult = Omit<
   CodexImageResult,
@@ -161,3 +149,8 @@ export const generationFailure = (operation: OpenAIImageOperation, cause: string
   fail(operation, `${GENERATION_FAILED}: ${cause}`);
 export const failWith = (operation: OpenAIImageOperation, message: string) => () =>
   fail(operation, message);
+
+/** Eight random lowercase hex digits, for provider-id fallbacks and file nonces. */
+export const randomHex8 = Effect.map(Random.nextIntBetween(0, 0xffff_ffff), (value) =>
+  Fn.pipe(value.toString(16), Str.padStart(8, "0")),
+);

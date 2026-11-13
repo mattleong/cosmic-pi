@@ -1,155 +1,48 @@
-import {
-  createEventBus,
-  type AgentBeforeSettleEvent,
-  type ExtensionAPI,
-  type ExtensionCommandContext,
-  type ExtensionContext,
-  type ExtensionToolContext,
-  type ExtensionUIContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
-import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import {
-  deferredPromise,
-  extensionContextFixture,
-  recordingExtensionHost,
-  type DefaultedEventName,
-} from "pi-cosmic-core/testing";
-import {
-  JsonDocumentStore,
-  nodeFilePlatformLayer,
-  signalProcess,
-  type JsonObject,
-} from "pi-cosmic-core";
+import { deferredPromise, extensionContextFixture, pollUntil } from "pi-cosmic-core/testing";
+import { signalProcess } from "pi-cosmic-core";
 import { fakeActivityHost } from "pi-cosmic-ui/activity/testing";
 import { afterEach, vi } from "vitest";
-import {
-  registerBackgroundTaskApplication,
-  type BackgroundTaskApplicationBoundaries,
-} from "../src/application.ts";
-import { BackgroundTaskDetailsSchema } from "../src/task/schema.ts";
 import type { BackgroundTaskToolInput } from "../src/tools/schema.ts";
-
-const context = (cwd: string) =>
-  extensionContextFixture({
-    cwd,
-    signal: undefined,
-    isProjectTrusted: () => false,
-    hasUI: false,
-    mode: "rpc",
-  });
-
-const decodeDetails = Schema.decodeUnknownSync(BackgroundTaskDetailsSchema);
-
-const completedSettle: AgentBeforeSettleEvent = {
-  type: "agent_before_settle",
-  outcome: "completed",
-  entries: [],
-  continue: false,
-  context: {
-    contextEntries: [],
-    contextMessages: [],
-    llmMessages: [],
-    pendingMessages: [],
-    canContinue: true,
-  },
-};
+import { applicationHost, decodeDetails, sessionContext } from "./support/application-host.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const useAgentDirectory = (directory: string) =>
-  Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", directory));
-
-/**
- * Registers the application against a scoped temporary agent directory, so the real runtime
- * never reads the developer's settings or writes to their package log.
- */
-const harness = (
-  loadSettings: BackgroundTaskApplicationBoundaries["loadSettings"],
-  options: {
-    readonly events?: ExtensionAPI["events"];
-    readonly settings?: JsonObject;
-    readonly host?: Partial<ExtensionAPI>;
-    /** Registers as a subagent's own Pi session, whatever session runs the tests. */
-    readonly subagentChild?: boolean;
-  } = {},
-) =>
+/** The guidelines a session's background_task registration carries. */
+const registeredGuidelines = (subagentChild: boolean) =>
   Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const documents = yield* JsonDocumentStore;
-    const agentDirectory = yield* fs.makeTempDirectoryScoped({
-      prefix: "pi-background-application-",
-    });
-    const settingsPath = path.join(agentDirectory, "extensions", "pi-background-task.json");
-    if (options.settings) yield* documents.writeObject(settingsPath, options.settings);
-    yield* useAgentDirectory(agentDirectory);
-    vi.stubEnv("PI_SUBAGENT_CHILD", options.subagentChild ? "1" : undefined);
-    // A regular file where the agent directory belongs makes session startup fail.
-    const blocker = path.join(agentDirectory, "not-a-directory");
-    const host = recordingExtensionHost(
-      {},
-      { ...options.host, events: options.events ?? createEventBus() },
-    );
-    registerBackgroundTaskApplication(host.pi, { loadSettings });
-    return {
-      tools: host.registrations,
-      execute: (
-        input: BackgroundTaskToolInput,
-        ctx: ExtensionToolContext,
-        signal = new AbortController().signal,
-      ) => {
-        const tool = Option.getOrUndefined(
-          Arr.findLast(host.registrations, ({ name }) => name === "background_task"),
-        );
-        if (!tool) return Promise.reject(new Error("background_task was not registered"));
-        return tool.execute("call", input, signal, undefined, ctx);
-      },
-      command: (args: string, ctx: ExtensionCommandContext) => {
-        const tasks = host.commands.get("tasks");
-        if (!tasks) return Promise.reject(new Error("/tasks was not registered"));
-        return Promise.resolve(tasks.handler(args, ctx));
-      },
-      emit: (name: DefaultedEventName, ctx: ExtensionContext) => host.emit(name, ctx),
-      modelContext: host.modelContext,
-      /** Settles a completed run through every handler, chaining their results as Pi does. */
-      settle: (ctx: ExtensionContext) =>
-        Arr.reduce(
-          host.handlers.get("agent_before_settle"),
-          Promise.resolve(completedSettle),
-          (previous, handler) =>
-            previous.then((event) =>
-              Promise.resolve(handler(event, ctx)).then((result) => ({
-                ...event,
-                entries: result?.entries ?? event.entries,
-                continue: result?.continue ?? event.continue,
-              })),
-            ),
+    const app = yield* applicationHost(() => Promise.resolve(), { subagentChild });
+    const ctx = sessionContext();
+    return yield* Effect.promise(() => app.emit("session_start", ctx)).pipe(
+      Effect.map(() =>
+        Option.match(
+          Arr.findLast(app.tools, ({ name }) => name === "background_task"),
+          {
+            onNone: () => [],
+            onSome: (tool) => tool.promptGuidelines ?? [],
+          },
         ),
-      globalSettings: documents.readObject(settingsPath),
-      breakAgentDirectory: documents
-        .writeObject(blocker, {})
-        .pipe(Effect.andThen(useAgentDirectory(blocker))),
-      restoreAgentDirectory: useAgentDirectory(agentDirectory),
-    };
-  }).pipe(Effect.provide(nodeFilePlatformLayer));
+      ),
+      Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))),
+    );
+  });
 
 describe("background-task Pi lifecycle", () => {
   it.effect.each([false, true])(
     "marks its notices as automated in model requests only (subagent child: %s)",
     (subagentChild) =>
       Effect.gen(function* () {
-        const app = yield* harness(() => Promise.resolve(), { subagentChild });
+        const app = yield* applicationHost(() => Promise.resolve(), { subagentChild });
         const notice = {
           role: "custom" as const,
           customType: "pi-background-task-finished",
@@ -160,7 +53,7 @@ describe("background-task Pi lifecycle", () => {
         };
         const typed = { role: "user" as const, content: "Run the tests.", timestamp: 2 };
         const sent = yield* Effect.promise(() =>
-          app.modelContext(context(process.cwd()), [typed, notice]),
+          app.modelContext(sessionContext(), [typed, notice]),
         );
         expect(sent[0]).toEqual(typed);
         expect(sent[1]).toMatchObject({ customType: notice.customType, details: notice.details });
@@ -180,16 +73,16 @@ describe("background-task Pi lifecycle", () => {
         const secondCwd = `${process.cwd()}/second-ready`;
         const entered = deferredPromise();
         let firstSignal: AbortSignal | undefined;
-        const app = yield* harness((cwd, _trusted, signal) => {
+        const app = yield* applicationHost((cwd, _trusted, signal) => {
           if (cwd !== firstCwd) return Promise.resolve();
           firstSignal = signal;
           entered.resolve();
           return Promise.race([]);
         });
 
-        const firstStart = app.emit("session_start", context(firstCwd));
+        const firstStart = app.emit("session_start", sessionContext({ cwd: firstCwd }));
         yield* Effect.promise(() => entered.promise);
-        const secondContext = context(secondCwd);
+        const secondContext = sessionContext({ cwd: secondCwd });
         const secondStart = app.emit(event, secondContext);
         yield* Effect.promise(() => Promise.all([firstStart, secondStart]));
 
@@ -206,12 +99,12 @@ describe("background-task Pi lifecycle", () => {
         const entered = deferredPromise();
         const replacement = deferredPromise();
         let loadCount = 0;
-        const app = yield* harness(() => {
+        const app = yield* applicationHost(() => {
           if (++loadCount === 1) return Promise.resolve();
           entered.resolve();
           return replacement.promise;
         });
-        const ctx = context(process.cwd());
+        const ctx = sessionContext();
         yield* Effect.promise(() => app.emit("session_start", ctx));
         const tool = app.tools[0];
         if (!tool) throw new Error("background tool registration was not captured");
@@ -251,35 +144,18 @@ describe("background-task Pi lifecycle", () => {
     () =>
       Effect.gen(function* () {
         const activity = fakeActivityHost("tree-session");
-        const app = yield* harness(() => Promise.resolve(), { events: activity.events });
-        const ctx = extensionContextFixture({
-          cwd: process.cwd(),
-          signal: undefined,
-          isProjectTrusted: () => false,
-          hasUI: false,
-          mode: "rpc",
-          sessionManager: {
-            getSessionId: () => "tree-session",
-            getSessionFile: () => undefined,
-          },
-        });
+        const app = yield* applicationHost(() => Promise.resolve(), { events: activity.events });
+        const ctx = sessionContext({ sessionId: "tree-session" });
         yield* Effect.gen(function* () {
           yield* Effect.promise(() => app.emit("session_start", ctx));
           for (let navigation = 0; navigation < 2; navigation += 1) {
             const execute = (input: BackgroundTaskToolInput) => app.execute(input, ctx);
-            const started = yield* Effect.promise(() =>
-              execute({
-                action: "start",
-                command:
-                  `node -e "const {spawn}=require('node:child_process'); ` +
-                  `const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); ` +
-                  `console.log('ready:'+process.pid+':'+child.pid+':end'); setInterval(()=>{},1000)"`,
-              }),
-            );
-            const startedDetails = decodeDetails(started.details);
-            if (startedDetails.action !== "start")
-              throw new Error("start returned the wrong action");
-            const taskId = startedDetails.snapshot.id;
+            const taskId = yield* app.startTask(ctx, {
+              command:
+                `node -e "const {spawn}=require('node:child_process'); ` +
+                `const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); ` +
+                `console.log('ready:'+process.pid+':'+child.pid+':end'); setInterval(()=>{},1000)"`,
+            });
             const ready = yield* Effect.promise(() =>
               execute({
                 action: "wait",
@@ -319,10 +195,10 @@ describe("background-task Pi lifecycle", () => {
             yield* Effect.promise(() => app.emit("session_tree", ctx));
 
             // Signalled processes can take a while to be reaped on loaded runners.
-            for (let attempt = 0; attempt < 1_000; attempt += 1) {
-              if (Arr.every(pids, (pid) => signalProcess(pid, 0) === "absent")) break;
-              yield* Effect.sleep("10 millis");
-            }
+            yield* pollUntil(
+              () => Arr.every(pids, (pid) => signalProcess(pid, 0) === "absent"),
+              1_000,
+            );
             for (const pid of pids) expect(signalProcess(pid, 0)).toBe("absent");
             expect(activity.get()?.items).toEqual([]);
             expect(yield* Effect.promise(() => execute({ action: "list" }))).toMatchObject({
@@ -343,29 +219,17 @@ describe("background-task Pi lifecycle", () => {
     ({ subagentChild }) =>
       Effect.gen(function* () {
         const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
-        const app = yield* harness(() => Promise.resolve(), {
+        const app = yield* applicationHost(() => Promise.resolve(), {
           // Tasks run with the shell settings Pi's bash tool uses.
           host: { sendMessage, getSettings: () => ({ shellCommandPrefix: "greeting=hello" }) },
           subagentChild,
         });
-        const ctx = context(process.cwd());
-        const start = (command: string) =>
-          Effect.promise(() => app.execute({ action: "start", command, notify: "exit" }, ctx)).pipe(
-            Effect.map((result) => {
-              const details = decodeDetails(result.details);
-              if (details.action !== "start") throw new Error("start returned the wrong action");
-              return details.snapshot.id;
-            }),
-          );
+        const ctx = sessionContext();
+        const start = (command: string) => app.startTask(ctx, { command, notify: "exit" });
         yield* Effect.gen(function* () {
           yield* Effect.promise(() => app.emit("session_start", ctx));
           const id = yield* start('echo "$greeting"; exit 3');
-          for (
-            let attempt = 0;
-            attempt < 1_000 && sendMessage.mock.calls.length === 0;
-            attempt += 1
-          )
-            yield* Effect.sleep("10 millis");
+          yield* pollUntil(() => sendMessage.mock.calls.length > 0, 1_000);
           expect(sendMessage.mock.calls).toHaveLength(1);
           const [message, options] = sendMessage.mock.calls[0] ?? [];
           expect(message).toMatchObject({
@@ -387,25 +251,6 @@ describe("background-task Pi lifecycle", () => {
     30_000,
   );
 
-  /** The guidelines a session's background_task registration carries. */
-  const registeredGuidelines = (subagentChild: boolean) =>
-    Effect.gen(function* () {
-      const app = yield* harness(() => Promise.resolve(), { subagentChild });
-      const ctx = context(process.cwd());
-      return yield* Effect.promise(() => app.emit("session_start", ctx)).pipe(
-        Effect.map(() =>
-          Option.match(
-            Arr.findLast(app.tools, ({ name }) => name === "background_task"),
-            {
-              onNone: () => [],
-              onSome: (tool) => tool.promptGuidelines ?? [],
-            },
-          ),
-        ),
-        Effect.ensuring(Effect.promise(() => app.emit("session_shutdown", ctx))),
-      );
-    });
-
   it.live(
     "adds guidance to the tool only in a subagent's own session",
     () =>
@@ -426,22 +271,18 @@ describe("background-task Pi lifecycle", () => {
     "reminds a settling run of the tasks its end would stop only in $session",
     ({ subagentChild }) =>
       Effect.gen(function* () {
-        const app = yield* harness(() => Promise.resolve(), { subagentChild });
-        const ctx = context(process.cwd());
+        const app = yield* applicationHost(() => Promise.resolve(), { subagentChild });
+        const ctx = sessionContext();
         yield* Effect.gen(function* () {
           yield* Effect.promise(() => app.emit("session_start", ctx));
-          const started = yield* Effect.promise(() =>
-            app.execute({ action: "start", command: "sleep 30" }, ctx),
-          );
-          const details = decodeDetails(started.details);
-          if (details.action !== "start") throw new Error("start returned the wrong action");
+          const id = yield* app.startTask(ctx, { command: "sleep 30" });
           const settled = yield* Effect.promise(() => app.settle(ctx));
           const reminder = Arr.findFirst(
             settled.entries,
             (entry) =>
               entry.type === "custom_message" &&
               Predicate.isString(entry.content) &&
-              Str.includes(details.snapshot.id)(entry.content),
+              Fn.pipe(entry.content, Str.includes(id)),
           );
           expect(Option.isSome(reminder)).toBe(subagentChild);
           expect(settled.continue).toBe(subagentChild);
@@ -454,12 +295,12 @@ describe("background-task Pi lifecycle", () => {
     Effect.gen(function* () {
       const entered = deferredPromise();
       let loaderSignal: AbortSignal | undefined;
-      const app = yield* harness((_cwd, _trusted, signal) => {
+      const app = yield* applicationHost((_cwd, _trusted, signal) => {
         loaderSignal = signal;
         entered.resolve();
         return Promise.race([]);
       });
-      const ctx = context(process.cwd());
+      const ctx = sessionContext();
 
       const starting = app.emit("session_start", ctx);
       yield* Effect.promise(() => entered.promise);
@@ -471,16 +312,6 @@ describe("background-task Pi lifecycle", () => {
     }),
   );
 });
-
-const settingsContext = (ui: Partial<ExtensionUIContext>) =>
-  extensionContextFixture({
-    cwd: process.cwd(),
-    signal: undefined,
-    isProjectTrusted: () => false,
-    hasUI: true,
-    mode: "rpc",
-    ui,
-  });
 
 describe("background-task settings in a session", () => {
   it.live.each([
@@ -496,9 +327,9 @@ describe("background-task settings in a session", () => {
     "$name in the global file governs the footer and task admission",
     ({ settings, footer, admits }) =>
       Effect.gen(function* () {
-        const app = yield* harness(() => Promise.resolve(), { settings });
+        const app = yield* applicationHost(() => Promise.resolve(), { settings });
         const setStatus = vi.fn<ExtensionUIContext["setStatus"]>();
-        const ctx = settingsContext({ setStatus });
+        const ctx = sessionContext({ ui: { setStatus } });
         const shown = () => Arr.filter(setStatus.mock.calls, ([, text]) => text !== undefined);
         yield* Effect.gen(function* () {
           yield* Effect.promise(() => app.emit("session_start", ctx));
@@ -522,20 +353,9 @@ describe("background-task settings in a session", () => {
   it.live("the footer line steps aside while Activity lists running tasks", () =>
     Effect.gen(function* () {
       const activity = fakeActivityHost("footer-session");
-      const app = yield* harness(() => Promise.resolve(), { events: activity.events });
+      const app = yield* applicationHost(() => Promise.resolve(), { events: activity.events });
       const setStatus = vi.fn<ExtensionUIContext["setStatus"]>();
-      const ctx = extensionContextFixture({
-        cwd: process.cwd(),
-        signal: undefined,
-        isProjectTrusted: () => false,
-        hasUI: true,
-        mode: "rpc",
-        ui: { setStatus },
-        sessionManager: {
-          getSessionId: () => "footer-session",
-          getSessionFile: () => undefined,
-        },
-      });
+      const ctx = sessionContext({ ui: { setStatus }, sessionId: "footer-session" });
       yield* Effect.gen(function* () {
         yield* Effect.promise(() => app.emit("session_start", ctx));
         yield* Effect.promise(() => app.execute({ action: "start", command: "sleep 30" }, ctx));
@@ -549,16 +369,13 @@ describe("background-task settings in a session", () => {
   it.live("an aborted wait ends before the hour maxWaitSeconds allows and leaves the task", () => {
     const call = new AbortController();
     return Effect.gen(function* () {
-      const app = yield* harness(() => Promise.resolve(), { settings: { maxWaitSeconds: 3_600 } });
-      const ctx = settingsContext({});
+      const app = yield* applicationHost(() => Promise.resolve(), {
+        settings: { maxWaitSeconds: 3_600 },
+      });
+      const ctx = sessionContext({ ui: {} });
       yield* Effect.gen(function* () {
         yield* Effect.promise(() => app.emit("session_start", ctx));
-        const started = yield* Effect.promise(() =>
-          app.execute({ action: "start", command: "sleep 30" }, ctx),
-        );
-        const details = decodeDetails(started.details);
-        if (details.action !== "start") throw new Error("start returned the wrong action");
-        const { id } = details.snapshot;
+        const id = yield* app.startTask(ctx, { command: "sleep 30" });
 
         const waiting = app.execute({ action: "wait", id, until: "exit" }, ctx, call.signal);
         let settled = false;
@@ -579,11 +396,11 @@ describe("background-task settings in a session", () => {
 
   it.effect("/tasks settings writes the session's global file only while the runtime runs", () =>
     Effect.gen(function* () {
-      const app = yield* harness(() => Promise.resolve(), {
+      const app = yield* applicationHost(() => Promise.resolve(), {
         settings: { stopGraceMs: 1_000, unrelated: true },
       });
       const notify = vi.fn<ExtensionUIContext["notify"]>();
-      const ctx = settingsContext({ notify });
+      const ctx = sessionContext({ ui: { notify } });
 
       yield* Effect.promise(() => app.command("settings maxRunning 4", ctx));
       expect(notify).toHaveBeenCalled();
@@ -604,7 +421,7 @@ describe("background-task settings in a session", () => {
 
   it.effect("/tasks explains a runtime that isn't running or a missing Activity view", () =>
     Effect.gen(function* () {
-      const app = yield* harness(() => Promise.resolve());
+      const app = yield* applicationHost(() => Promise.resolve());
       const notify = vi.fn<ExtensionUIContext["notify"]>();
       const terminal = (signal?: AbortSignal) =>
         extensionContextFixture({

@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { originFromDetails, registerMessageOrigins } from "pi-cosmic-core/host-message-origin";
-import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AsyncDelivery } from "../questionnaire/async-service.ts";
@@ -33,8 +32,6 @@ export const registerAskUserMessageOrigins = (pi: ExtensionAPI): void =>
       ),
     },
   });
-
-export const createQuestionnaireGeneration = (): string => synchronousRandomUuid();
 
 export const captureHistoricalDeliveries = (ctx: ExtensionContext): ReadonlySet<string> => {
   try {

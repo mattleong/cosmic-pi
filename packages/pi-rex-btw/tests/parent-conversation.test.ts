@@ -2,6 +2,7 @@ import { it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import type * as Schema from "effect/Schema";
@@ -11,7 +12,7 @@ import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
 import { describe, expect, vi } from "vitest";
 import { registerParentConversation } from "../src/parent/application.ts";
-import { PARENT_TOOL } from "../src/parent/contract.ts";
+import { countedMessages, PARENT_TOOL } from "../src/parent/contract.ts";
 import { ParentTranscript } from "../src/parent/reader.ts";
 import {
   MAX_PARENT_MESSAGES,
@@ -106,7 +107,7 @@ describe("parent conversation", () => {
   });
 
   it("names each call by the argument a person recognizes, even when its input is clipped", () => {
-    const long = `pnpm test ${Str.repeat(300)("x")}`;
+    const long = `pnpm test ${Fn.pipe("x", Str.repeat(300))}`;
     const call = assistant(null, [
       {
         type: "toolCall",
@@ -152,11 +153,31 @@ describe("parent conversation", () => {
     expect(conversation.earlier).toBe(true);
   });
 
+  it("returns as many messages as asked beside a branch summary", () => {
+    const first = user(null, "First question");
+    const second = user(first.id, "Second question");
+    const summary = entry(second.id, {
+      type: "branch_summary",
+      fromId: second.id,
+      summary: "An abandoned attempt at the deploy.",
+    });
+    const third = user(summary.id, "Third question");
+    const conversation = parentConversation(
+      PARENT_ID,
+      jsonl([first, second, summary, third]),
+      false,
+      2,
+    );
+    expect(Arr.map(conversation.items, (item) => item.role)).toEqual(["user", "summary", "user"]);
+    expect(countedMessages(conversation)).toBe(2);
+    expect(conversation.earlier).toBe(true);
+  });
+
   it("skips a cut first line and malformed lines, and notes the branch continues before the window", () => {
     const { entries } = branchedSession();
     const text = jsonl(entries);
-    const cut = Option.getOrElse(Str.indexOf(entries[5]?.line ?? "")(text), () => 0) + 10;
-    const window = Str.slice(cut)(text);
+    const cut = Option.getOrElse(Fn.pipe(text, Str.indexOf(entries[5]?.line ?? "")), () => 0) + 10;
+    const window = Fn.pipe(text, Str.slice(cut));
     const conversation = parentConversation(PARENT_ID, `${window}not json\n`, true, 15);
     expect(Arr.map(conversation.items, (item) => item.role)).toEqual(["note", "assistant"]);
     expect(conversation.earlier).toBe(true);
@@ -214,12 +235,16 @@ const child = (flags: Record<string, string | boolean | undefined>) => {
     hasUI: true,
     ui: { notify, setWidget },
   });
+  const start = () => host.emit("session_start", ctx);
+  const shutdown = () => host.emit("session_shutdown", ctx);
   return {
     notify,
     setWidget,
     tools: host.tools,
-    start: () => host.emit("session_start", ctx),
-    shutdown: () => host.emit("session_shutdown", ctx),
+    start,
+    shutdown,
+    /** Starts the session and shuts it down when the test's scope closes, even after a failure. */
+    started: Effect.acquireRelease(Effect.promise(start), () => Effect.promise(shutdown)),
   };
 };
 
@@ -234,7 +259,7 @@ describe("BTW child registration", () => {
           "rex-btw-parent": PARENT_ID,
           "rex-btw-parent-file": file,
         });
-        yield* Effect.promise(h.start);
+        yield* h.started;
         // A widget, not a notice: Pi replaces a notice with the next one.
         expect(h.setWidget).toHaveBeenCalledOnce();
         expect(h.notify).not.toHaveBeenCalled();
@@ -253,7 +278,6 @@ describe("BTW child registration", () => {
         );
         expect(getTextContent(result.content)).toContain("Fixed `cart.test.ts`.");
         expect(getTextContent(result.content)).not.toContain(file);
-        yield* Effect.promise(h.shutdown);
       }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
   );
 
@@ -272,11 +296,10 @@ describe("BTW child registration", () => {
         yield* Effect.promise(blind.shutdown);
 
         const ordinary = child({});
-        yield* Effect.promise(ordinary.start);
+        yield* ordinary.started;
         expect(ordinary.setWidget).not.toHaveBeenCalled();
         expect(ordinary.notify).not.toHaveBeenCalled();
         expect(ordinary.tools.has(PARENT_TOOL)).toBe(false);
-        yield* Effect.promise(ordinary.shutdown);
       }),
   );
 });

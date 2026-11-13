@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import { isQuestionnaireComplete } from "../questionnaire/reducer.ts";
-import type { QuestionnaireState } from "../questionnaire/model.ts";
+import type { QuestionDraft, QuestionnaireState } from "../questionnaire/model.ts";
 import {
   MAX_CUSTOM_ANSWER_LENGTH,
   MAX_NOTE_LENGTH,
@@ -100,8 +100,6 @@ function renderHeading(model: QuestionnaireRenderModel, width: number): string[]
     );
   return lines;
 }
-
-type QuestionDraft = QuestionnaireState["drafts"][number];
 
 /** Every question prompt, and the note editor's heading in its place, reads the same way. */
 const promptText = (model: QuestionnaireRenderModel, text: string): string =>

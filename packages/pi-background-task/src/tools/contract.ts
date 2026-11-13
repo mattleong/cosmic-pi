@@ -24,7 +24,7 @@ import {
   type BackgroundTaskTasksActionContract,
   type BackgroundTaskWaitContract,
 } from "./contract-schema.ts";
-import { pageLogSlice, pageOmission } from "./log-page.ts";
+import { pageLogSlice } from "./log-page.ts";
 
 const envelope = {
   contract: BACKGROUND_TASK_CONTRACT_ID,
@@ -98,7 +98,7 @@ export const logsContract = (
     state: slice.state,
     finished: isFinished(slice.state),
     output: page.output,
-    truncated: pageOmission(slice, direction, page) !== undefined,
+    truncated: page.omission !== undefined,
     nextCursor: page.nextCursor,
     earliestAvailableCursor: slice.earliestAvailableCursor,
     droppedBytes: slice.droppedBytes,

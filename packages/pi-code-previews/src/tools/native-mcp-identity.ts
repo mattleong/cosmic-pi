@@ -37,8 +37,13 @@ export type NativeMcpIdentity =
       readonly namespace?: string;
     };
 
+/** Whether the name is in an MCP server's `mcp__` namespace, as a tool or as the namespace itself. */
+export function isNativeMcpNamespaced(name: string): boolean {
+  return /^mcp__[A-Za-z0-9_]+$/.test(name);
+}
+
 export function isNativeMcpName(name: string): boolean {
-  return isNativeMcpResourceTool(name) || /^mcp__[A-Za-z0-9_]+$/.test(name);
+  return isNativeMcpResourceTool(name) || isNativeMcpNamespaced(name);
 }
 
 export function nativeMcpIdentity(

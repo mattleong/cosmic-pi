@@ -38,7 +38,7 @@ import {
   decodeAgentToolDetails,
   type AgentCallEvidence,
 } from "./compact-agent-summary.ts";
-import { CONTRACT_SCHEMAS } from "./contract-schema.ts";
+import { CONTRACT_SCHEMAS, isSubagentContractTool } from "./contract-schema.ts";
 import type { AgentToolDetails } from "./details-schema.ts";
 import { hasRecordedFailure, rejectedFailureText } from "./failure-details.ts";
 import { renderListResult, renderReadResult, renderSendResult } from "./render-agents.ts";
@@ -103,12 +103,6 @@ type AgentToolInputs = {
   ) => AgentToolInput;
 };
 
-type AgentArgumentPreparers = {
-  readonly [N in AgentToolName]: NonNullable<
-    ToolDefinition<AgentToolParameters<N>>["prepareArguments"]
-  >;
-};
-
 const TOOL_SPECS: AgentToolSpecs = {
   [AGENT_TOOL_NAME.list]: {
     label: "List Agents",
@@ -143,12 +137,6 @@ const TOOL_INPUTS: AgentToolInputs = {
   [AGENT_TOOL_NAME.list]: (args) => ({ tool: AGENT_TOOL_NAME.list, args }),
   [AGENT_TOOL_NAME.send]: (args) => ({ tool: AGENT_TOOL_NAME.send, args }),
   [AGENT_TOOL_NAME.read]: (args) => ({ tool: AGENT_TOOL_NAME.read, args }),
-};
-
-const ARGUMENT_PREPARERS: AgentArgumentPreparers = {
-  [AGENT_TOOL_NAME.list]: agentArgumentPreparer(AGENT_TOOL_NAME.list),
-  [AGENT_TOOL_NAME.send]: agentArgumentPreparer(AGENT_TOOL_NAME.send),
-  [AGENT_TOOL_NAME.read]: agentArgumentPreparer(AGENT_TOOL_NAME.read),
 };
 
 /** The root's script namespace, shared by the agent tools and the read-only management tools. */
@@ -206,17 +194,12 @@ const rememberRecipient = (
   if (details?.action === AGENT_TOOL_NAME.send)
     context.state.piSubagentsRecipient =
       details.to === MAIN_AGENT_ID ? "main" : sanitizeTerminalLine(details.name);
-  // Read facts are optional, while a listed agent's Details line falls back to its ID.
   const named =
     details?.action === AGENT_TOOL_NAME.read
       ? Arr.filter(details.agents, (agent) => showsAgentId(agent.id, agent.name, agent.facts ?? []))
       : details?.action === AGENT_TOOL_NAME.list
-        ? Arr.filter(details.entries ?? [], (entry) =>
-            showsAgentId(
-              entry.id,
-              entry.name,
-              entry.kind === "main" ? [] : [entry.facts ?? entry.id],
-            ),
+        ? Arr.filter(details.entries, (entry) =>
+            showsAgentId(entry.id, entry.name, entry.kind === "main" ? [] : [entry.facts]),
           )
         : [];
   // The row's not-found issue names every requested agent the result didn't find.
@@ -271,7 +254,8 @@ export function registerAgentTools(
 ): void {
   const buildTool = <N extends AgentToolName>(name: N) => {
     const { title, ...spec }: AgentToolSpec<N> = TOOL_SPECS[name];
-    const scriptable = name !== AGENT_TOOL_NAME.send;
+    // The contract tools, list and read, are the script-callable ones.
+    const scriptable = isSubagentContractTool(name);
     // Read when the shell is: a collapsed compact row hides the listing and the words read, and its
     // heading names the agent a single read is about.
     const collapsedStyle = captureCodePreviewPresentationPolicy().toolCallCollapsedStyle;
@@ -294,15 +278,12 @@ export function registerAgentTools(
       }),
       name,
       exposure: scriptable ? "direct" : "model-only",
-      ...(name === AGENT_TOOL_NAME.list && {
-        outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[AGENT_TOOL_NAME.list]),
+      ...(scriptable && {
+        outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[name]),
+        namespace: runtime.nested ? NESTED_NAMESPACE : ROOT_SCRIPT_NAMESPACE,
       }),
-      ...(name === AGENT_TOOL_NAME.read && {
-        outputSchema: toPiToolOutputSchema(CONTRACT_SCHEMAS[AGENT_TOOL_NAME.read]),
-      }),
-      ...(scriptable && { namespace: runtime.nested ? NESTED_NAMESPACE : ROOT_SCRIPT_NAMESPACE }),
       parameters: AGENT_TOOL_SCHEMAS[name],
-      prepareArguments: ARGUMENT_PREPARERS[name],
+      prepareArguments: agentArgumentPreparer(name),
       execute: (id, args, signal) =>
         runtime
           .execute(TOOL_INPUTS[name](args), runtime.isScripted?.(id) ?? false, signal)

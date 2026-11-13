@@ -19,9 +19,11 @@ import {
   SubagentModelsDetailsSchema,
   SubagentStartAwaitCardDetailsSchema,
   SubagentStartDetailsSchema,
+  type CompactSubagentToolDetails,
   type SubagentAwaitDetails,
   type SubagentCardFailure,
   type SubagentRunCard,
+  type SubagentStartAwaitCardDetails,
   type SubagentStartDetails,
 } from "./details-schema.ts";
 
@@ -181,7 +183,6 @@ const validReportOmission = (details: {
 const validAwaitRelationships = (details: SubagentAwaitDetails): boolean => {
   if (!validReportOmission(details)) return false;
   const awaitedRunIds = details.awaitedRunIds;
-  if (!awaitedRunIds) return true;
   const uniqueTargets = new Set(awaitedRunIds);
   if (uniqueTargets.size !== awaitedRunIds.length) return false;
   if (details.cards.length === 0) return true;
@@ -228,26 +229,28 @@ const safeDecoder = <S extends Schema.ConstraintDecoder<unknown>>(
   };
 };
 
-const validStartAwaitDetails = (details: typeof SubagentStartAwaitCardDetailsSchema.Type) =>
+const validStartAwaitDetails = (details: SubagentStartAwaitCardDetails) =>
   details.action === "start" ? validStartRelationships(details) : validAwaitRelationships(details);
 
-const validCompactDetails = (details: typeof CompactSubagentToolDetailsSchema.Type) =>
+const validCompactDetails = (details: CompactSubagentToolDetails) =>
   details.action === "models" || validReportOmission(details);
 
-export const decodeStartAwaitCardDetails = safeDecoder(
-  SubagentStartAwaitCardDetailsSchema,
-  validStartAwaitDetails,
-);
+const carriesRunCards = (details: SubagentStartAwaitCardDetails | CompactSubagentToolDetails) =>
+  details.action === "start" || details.action === "await";
 
-export const decodeCompactToolDetails = safeDecoder(
-  CompactSubagentToolDetailsSchema,
-  validCompactDetails,
-);
-
+/** Every outcome's details under one cache, so a published object decodes once for all readers. */
 export const decodeOutcomeDetails = safeDecoder(
   Schema.Union([SubagentStartAwaitCardDetailsSchema, CompactSubagentToolDetailsSchema]),
   (details) =>
-    details.action === "start" || details.action === "await"
-      ? validStartAwaitDetails(details)
-      : validCompactDetails(details),
+    carriesRunCards(details) ? validStartAwaitDetails(details) : validCompactDetails(details),
+);
+
+/** A start's or an await's details, which carry run cards. */
+export const decodeStartAwaitCardDetails = Fn.flow(decodeOutcomeDetails, (details) =>
+  details !== undefined && carriesRunCards(details) ? details : undefined,
+);
+
+/** Profile routes' or a lifecycle action's details. */
+export const decodeCompactToolDetails = Fn.flow(decodeOutcomeDetails, (details) =>
+  details === undefined || carriesRunCards(details) ? undefined : details,
 );

@@ -96,7 +96,7 @@ describe("local Pi startup deadline", () => {
           stderr: `\u001b[31mFailed to load extension: missing entrypoint\u001b[0m token=secret-credential\n${Fn.pipe("x", Str.repeat(MAX_ERROR_CHARS * 2))}`,
         });
         const failure = yield* Fiber.join(starting);
-        expect(failure._tag).toBe("SubagentProcessError");
+        expect(failure).toBeInstanceOf(SubagentProcessError);
         expectDiagnostic(failure.message);
         const run = projections.at(-1)!.runs[0]!;
         expect(run.state).toBe("failed");

@@ -37,6 +37,8 @@ const waitingLine = (theme: Parameters<typeof toolRunningLine>[0]): string =>
   toolStatusLine(theme, "waiting", "Waiting for reply");
 
 export const CONTACT_PARENT_LABEL = "Contact parent";
+/** Leads the result a child reads when its parent answers a question. */
+export const PARENT_REPLY_PREFIX = "Parent reply: ";
 
 const ContactSchema = Schema.Struct({
   kind: Schema.Literals(["progress", "warning", "question"]),
@@ -55,7 +57,7 @@ const ReceiptSchema = singleTextResult(Schema.String.check(Schema.isMaxLength(25
 const ReplySchema = singleTextResult(
   Schema.String.check(
     Schema.isMaxLength(MAX_TOOL_OUTPUT_CHARS),
-    Schema.isPattern(/^Parent repl(?:y|ied): /u),
+    Schema.isStartingWith(PARENT_REPLY_PREFIX),
   ),
 );
 
@@ -165,8 +167,18 @@ const MESSAGE_LABELS = { progress: "Progress", warning: "Warning", question: "Qu
 
 /** The parent's reply without the prefix the child reads, or undefined for another result. */
 const replyWords = Fn.flow(parentReplyText, (text) =>
-  text === undefined ? undefined : Str.replace(/^Parent repl(?:y|ied): /u, "")(text),
+  text === undefined ? undefined : Fn.pipe(text, Str.slice(PARENT_REPLY_PREFIX.length)),
 );
+
+/** An open question its issue quotes whole shows only there. */
+const openQuestionQuotedWhole = (
+  request: typeof ContactSchema.Type,
+  context: { readonly executionStarted: boolean; readonly isPartial: boolean },
+): boolean =>
+  request.kind === "question" &&
+  context.executionStarted &&
+  context.isPartial &&
+  !questionQuote(stripTerminalControls(request.message)).cut;
 
 export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["expandedContent"]> =
   {
@@ -175,13 +187,7 @@ export const contactParentExpandedContent: NonNullable<CodePreviewShellOptions["
       // A warning's words are its issue, unless the call failed before the warning was sent, and so
       // are an open question's while its quote holds all of it.
       if (!request || (request.kind === "warning" && !context.isError)) return new Container();
-      if (
-        request.kind === "question" &&
-        context.executionStarted &&
-        context.isPartial &&
-        !questionQuote(stripTerminalControls(request.message)).cut
-      )
-        return new Container();
+      if (openQuestionQuotedWhole(request, context)) return new Container();
       return expandedAuthoredText(theme, MESSAGE_LABELS[request.kind], request.message);
     },
     renderResult: (result, options, theme, context) => {
@@ -205,14 +211,10 @@ const COLLAPSED_REPLY_LINES = 4;
 export const contactParentRenderers = {
   renderCall: rejectionAwareCall(CONTACT_PARENT_LABEL, (args, theme, context) => {
     const request = contactRequest(args);
-    // An open question its issue quotes whole shows only there.
-    const quotedWhole =
-      request?.kind === "question" &&
-      context.executionStarted &&
-      context.isPartial &&
-      !questionQuote(stripTerminalControls(request.message)).cut;
     const message =
-      request && request.kind !== "warning" && !quotedWhole ? request.message : undefined;
+      request && request.kind !== "warning" && !openQuestionQuotedWhole(request, context)
+        ? request.message
+        : undefined;
     const container = new Container();
     container.addChild(
       previewHeading({ title: CONTACT_PARENT_LABEL, subtitle: request?.kind }, theme),

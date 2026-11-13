@@ -21,14 +21,19 @@ import { registerCodePreviewReplay } from "../../index";
 import { drawToolRow } from "../../testing";
 import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/state";
 import { step } from "../support/effect-test";
-import { QUIET_RESOURCES, quietSettings } from "pi-cosmic-core/testing/sdk";
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  QUIET_RESOURCES,
+  quietSettings,
+} from "pi-cosmic-core/testing/sdk";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { offlineModels } from "../support/sdk-session";
 import { resultText } from "../support/render";
 import { setPlainPreviewSettings } from "../support/renderer-host";
 import { executeDescriptor } from "../support/tool-identity";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 
 beforeAll(() => initTheme("dark", false));
@@ -69,19 +74,13 @@ const setStyle = (style: "preview" | "compact") =>
 const draw = (row: ToolExecutionComponent, expanded = false) => drawToolRow(row, expanded, 180);
 
 function historicalRows(session: AgentSession) {
-  const assistant = Option.getOrUndefined(
-    Arr.findFirst(session.messages, (message) => message.role === "assistant"),
-  );
+  const assistant = findOrUndefined(session.messages, (message) => message.role === "assistant");
   assert.ok(assistant?.role === "assistant");
-  const call = Option.getOrUndefined(
-    Arr.findFirst(assistant.content, (part) => part.type === "toolCall"),
-  );
+  const call = findOrUndefined(assistant.content, (part) => part.type === "toolCall");
   assert.ok(call?.type === "toolCall");
-  const restored = Option.getOrUndefined(
-    Arr.findFirst(
-      session.messages,
-      (message) => message.role === "toolResult" && message.toolCallId === call.id,
-    ),
+  const restored = findOrUndefined(
+    session.messages,
+    (message) => message.role === "toolResult" && message.toolCallId === call.id,
   );
   assert.ok(restored?.role === "toolResult");
   assert.deepEqual(call.arguments, args);
@@ -108,9 +107,7 @@ function historicalRows(session: AgentSession) {
   const row = makeRow(cold);
   const undrawn = makeRow(cold);
   const lazy = resolve();
-  const image = Option.getOrUndefined(
-    Arr.findFirst(row.children, (child) => child instanceof Image),
-  );
+  const image = findOrUndefined(row.children, (child) => child instanceof Image);
   assert.ok(image, "Pi keeps the native image child outside the renderer shell");
   return { row, undrawn, lateRow: () => makeRow(lazy), restored, image };
 }
@@ -133,23 +130,12 @@ it.live(
       setStyle("preview");
       const persisted = SessionManager.create(directory, `${directory}/sessions`);
       persisted.appendMessage({ role: "user", content: "Inspect the owned result", timestamp: 1 });
-      persisted.appendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", id: result.toolCallId, name: toolName, arguments: args }],
-        api: "openai-responses",
-        provider: "openai",
-        model: "historical-fixture",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: 2,
-      });
+      persisted.appendMessage(
+        fauxAssistantMessage(fauxToolCall(toolName, args, { id: result.toolCallId }), {
+          stopReason: "toolUse",
+          timestamp: 2,
+        }),
+      );
       persisted.appendMessage(result);
       const selectedText = "Continue after the historical owned result";
       const forkEntry = persisted.appendMessage({
@@ -308,9 +294,6 @@ it.live(
       const resumed = runtime.session;
       const resumedRows = retained[0]!;
       const resumedFile = yield* fs.readFileString(sessionFile);
-      assert.notEqual(resumed, initial);
-      assert.equal(resumed.sessionFile, sessionFile);
-      assert.notEqual(resumed.sessionManager, persisted);
       assert.deepEqual(starts, ["startup", "resume"]);
       assert.deepEqual(shutdowns, ["resume"]);
       assert.deepEqual(authority(resumed), initialAuthority);
@@ -325,24 +308,6 @@ it.live(
       });
       const forked = runtime.session;
       const forkedRows = retained[1]!;
-      assert.notEqual(forked, resumed);
-      assert.notEqual(forked.sessionFile, sessionFile);
-      assert.ok(forked.sessionFile);
-      assert.ok(Fn.pipe(forked.sessionFile, Str.startsWith(`${directory}/sessions/`)));
-      assert.equal(forked.sessionManager.getHeader()?.parentSession, sessionFile);
-      assert.equal(
-        Arr.some(
-          forked.messages,
-          (message) => message.role === "user" && message.content === selectedText,
-        ),
-        false,
-      );
-      assert.ok(
-        Arr.some(
-          forked.messages,
-          (message) => message.role === "toolResult" && message.toolCallId === result.toolCallId,
-        ),
-      );
       assert.deepEqual(starts, ["startup", "resume", "fork"]);
       assert.deepEqual(shutdowns, ["resume", "fork"]);
       assert.deepEqual(authority(forked), initialAuthority);

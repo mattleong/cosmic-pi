@@ -1,7 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
@@ -19,11 +18,11 @@ import {
   type PersistentProfileSetRef,
 } from "../profile-route-editor.ts";
 import { countLabel } from "pi-cosmic-core/display";
+import { joinInline } from "pi-cosmic-ui/manager";
 
 interface ProfileSetPreviewProfile {
   readonly id: ProfileId;
   readonly source: ProfileRouteSource;
-  readonly inherited: boolean;
   readonly status: "configured" | "disabled" | "invalid";
   readonly candidates: ReadonlyArray<ProfileCandidate>;
 }
@@ -69,7 +68,8 @@ export const profileSourceLabel = (source: ProfileRouteSource): string => {
       : `from ${scope}`;
 };
 
-const ownSource = (scope: SubagentConfigScope, source: ProfileRouteSource): boolean =>
+/** Whether a set of `scope` declares the profile itself, validly or not. */
+export const ownSource = (scope: SubagentConfigScope, source: ProfileRouteSource): boolean =>
   source === scope || source === `${scope}-invalid`;
 
 /** What a set holds: `all built-in`, `2 profiles set here, rest built-in`, or `all 7 set here`. */
@@ -113,23 +113,20 @@ const scopeEntries = (
       const scopeDefault = decoded.file.defaultProfileSet === name;
       const origin = inspection.session.baseline.origin;
       const inUse = origin.scope === scope && origin.name === name;
-      const status = Arr.filter(
-        [
-          scopeDefault ? "default for new sessions" : undefined,
-          inUse ? "in use" : undefined,
-          invalid
-            ? repairable
-              ? `${countLabel(invalidProfileCount, "invalid profile")}, fix before use`
-              : "invalid structure, delete and create a new set"
-            : profileSet
-              ? setContents(
-                  scope,
-                  Arr.map(PROFILE_IDS, (id) => resolved.profileSources[id]),
-                )
-              : undefined,
-        ],
-        Predicate.isNotUndefined,
-      );
+      const status = joinInline([
+        scopeDefault && "default for new sessions",
+        inUse && "in use",
+        invalid
+          ? repairable
+            ? `${countLabel(invalidProfileCount, "invalid profile")}, fix before use`
+            : "invalid structure, delete and create a new set"
+          : profileSet
+            ? setContents(
+                scope,
+                Arr.map(PROFILE_IDS, (id) => resolved.profileSources[id]),
+              )
+            : undefined,
+      ]);
       return {
         kind: "set",
         key: `${scope}:${name}`,
@@ -145,7 +142,6 @@ const scopeEntries = (
           return {
             id,
             source,
-            inherited: source !== scope && source !== `${scope}-invalid`,
             status: resolved.invalidProfiles.includes(id)
               ? "invalid"
               : candidates.length === 0
@@ -155,7 +151,7 @@ const scopeEntries = (
           };
         }),
         label: name,
-        description: Arr.join(status, " · "),
+        description: status,
       };
     }),
   );

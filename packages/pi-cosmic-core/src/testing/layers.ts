@@ -23,9 +23,7 @@ import {
 } from "../platform/streaming-http.ts";
 
 interface InMemoryDocumentMap {
-  readonly size: number;
   readonly get: (path: string) => JsonObject | undefined;
-  readonly has: (path: string) => boolean;
   readonly set: (path: string, document: JsonObject) => void;
   readonly values: () => IterableIterator<JsonObject>;
 }
@@ -58,14 +56,10 @@ const cloneInitialDocument = (document: JsonObject): JsonObject => {
 };
 
 const documentView = (stored: Map<string, JsonObject>): InMemoryDocumentMap => ({
-  get size() {
-    return stored.size;
-  },
   get: (path) => {
     const document = stored.get(path);
     return document === undefined ? undefined : cloneInitialDocument(document);
   },
-  has: (path) => stored.has(path),
   set: (path, document) => void stored.set(path, cloneInitialDocument(document)),
   values: () => Array.from(stored.values(), cloneInitialDocument).values(),
 });

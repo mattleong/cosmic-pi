@@ -9,22 +9,23 @@ import {
   installCodePreviewSessionCapability,
 } from "../../../src/application/capability";
 import { builtinRenderers, textResult } from "../../support/render";
+import { inertCapability } from "../../support/renderer-host";
 
 let queued: Array<() => void> = [];
 
 beforeEach(() => {
   queued = [];
   applyPresentationSettings({ toolCallTiming: false, toolCallCollapsedStyle: "preview" });
-  installCodePreviewSessionCapability({
-    run: () => Promise.reject(new Error("not used")),
-    defer: (task) => {
-      queued.push(task);
-      return () => {
-        queued = Arr.filter(queued, (entry) => entry !== task);
-      };
-    },
-    schedule: () => () => undefined,
-  });
+  installCodePreviewSessionCapability(
+    inertCapability({
+      defer: (task) => {
+        queued.push(task);
+        return () => {
+          queued = Arr.filter(queued, (entry) => entry !== task);
+        };
+      },
+    }),
+  );
 });
 afterEach(() => clearCodePreviewSessionCapability());
 

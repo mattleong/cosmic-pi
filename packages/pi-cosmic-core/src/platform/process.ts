@@ -132,7 +132,7 @@ const sweepExitedProcessTree = (
       : confirmProcessGroupExit(Number(handle.pid), timeoutMillis);
   });
 
-export const confirmEffectProcessClose = Effect.fn("BoundedProcess.confirmClose")(
+const confirmEffectProcessClose = Effect.fn("BoundedProcess.confirmClose")(
   function* (handle: ChildProcessSpawner.ChildProcessHandle, timeoutMillis: number) {
     const running = yield* handle.isRunning;
     if (!running) return true;

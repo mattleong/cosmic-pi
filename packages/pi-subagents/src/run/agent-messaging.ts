@@ -384,29 +384,20 @@ export const runReadout = (record: RunRecord, projected: SubagentRunView): Agent
     reportGeneration: view.reportGeneration,
     run: projected,
   };
-  if (view.state === "completed" && view.reportArchive) {
-    const retained = boundedText(view.finalText, MAX_RUN_READ_CHARS);
+  const report = (text: string | undefined) => {
+    const bounded = boundedText(text, MAX_RUN_READ_CHARS);
     return {
       ...base,
-      ...retained,
-      truncated: retained.truncated || view.finalTextTruncation !== undefined,
-      source: "report",
-      reportFile: view.reportArchive,
+      ...bounded,
+      truncated: bounded.truncated || view.finalTextTruncation !== undefined,
+      source: "report" as const,
     };
-  }
+  };
+  if (view.state === "completed" && view.reportArchive)
+    return { ...report(view.finalText), reportFile: view.reportArchive };
   // A completed report without a file is read inline, led by the note its notice carries.
-  if (view.state === "completed" && view.finalText !== undefined && Str.trim(view.finalText)) {
-    const report = boundedText(
-      `${unsavedReportNote(view.finalTextTruncation)}\n\n${view.finalText}`,
-      MAX_RUN_READ_CHARS,
-    );
-    return {
-      ...base,
-      ...report,
-      truncated: report.truncated || view.finalTextTruncation !== undefined,
-      source: "report",
-    };
-  }
+  if (view.state === "completed" && view.finalText !== undefined && Str.trim(view.finalText))
+    return report(`${unsavedReportNote(view.finalTextTruncation)}\n\n${view.finalText}`);
   // `truncated` also covers text that capture already cut below what the run produced.
   const assistant = boundedText(record.latestAssistantText, MAX_RUN_READ_CHARS);
   if (assistant.textStatus === "text")
@@ -417,14 +408,8 @@ export const runReadout = (record: RunRecord, projected: SubagentRunView): Agent
       source: "assistant",
     };
   if (!isTerminalRunState(view.state)) return { ...base, ...assistant };
-  const report = boundedText(view.finalText, MAX_RUN_READ_CHARS);
-  if (report.textStatus === "text")
-    return {
-      ...base,
-      ...report,
-      truncated: report.truncated || view.finalTextTruncation !== undefined,
-      source: "report",
-    };
+  const final = report(view.finalText);
+  if (final.textStatus === "text") return final;
   const error = boundedText(view.error, MAX_RUN_READ_CHARS);
   return error.textStatus === "text"
     ? { ...base, ...error, source: "error" }

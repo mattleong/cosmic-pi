@@ -4,6 +4,7 @@ import { git } from "../../src/boundary/git-worktree-process.ts";
 import {
   exists,
   io,
+  prepareIntegration,
   readText,
   workspaceTarget,
   workspaceTests,
@@ -14,12 +15,18 @@ import * as Order from "effect/Order";
 
 const test = workspaceTests([
   ["src/main.ts", "baseline\n"],
-  [".gitignore", "ignored.log\n"],
+  [".gitignore", "ignored.log\nnode_modules/\n"],
 ]);
 
 test("reports no changes for an untouched worker, ignoring gitignored files", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "ignored.log"), "noise\n");
+  // Such as dependencies a writer installed.
+  yield* io(() => fs.mkdir(path.join(handle.cwd, "node_modules/left-pad"), { recursive: true }));
+  yield* writeFile(
+    path.join(handle.cwd, "node_modules/left-pad/index.js"),
+    "module.exports = 1;\n",
+  );
   expect(yield* service.inspectWorkerChanges(workspaceTarget(handle))).toEqual({
     changedPaths: [],
     uncapturedPaths: [],
@@ -70,21 +77,13 @@ test("leaves writer-created credential files out, keeping credential-named sourc
     Arr.sort(CREDENTIAL_FILES, Order.String),
   );
   // They never block: the revision prepares and integrates without them.
-  const revision = yield* service.freeze(workspaceTarget(handle));
+  const { revision, integration } = yield* prepareIntegration(service, handle);
   expect(Arr.sort(revision.changedPaths, Order.String)).toEqual(CREDENTIAL_NAMED_SOURCES);
   assert(revision.uncapturedPaths !== undefined);
   expect(Arr.sort(revision.uncapturedPaths, Order.String)).toEqual(
     Arr.sort(CREDENTIAL_FILES, Order.String),
   );
-  const prepared = yield* service.prepare({
-    ...workspaceTarget(handle),
-    revisionId: revision.revisionId,
-  });
-  yield* service.integrate({
-    ...workspaceTarget(handle),
-    revisionId: revision.revisionId,
-    preparationId: prepared.preparationId,
-  });
+  yield* service.integrate(integration);
   for (const name of CREDENTIAL_NAMED_SOURCES)
     expect(yield* readText(root, name)).toBe(`${name}\n`);
   for (const name of CREDENTIAL_FILES) expect(yield* exists(path.join(root, name))).toBe(false);
@@ -101,22 +100,6 @@ test("keeps capturing a credential-named file the baseline tracks", function* (s
   });
 });
 
-test("ignores dependencies a writer installed in an ignored directory", function* (service, root) {
-  yield* writeFile(path.join(root, ".gitignore"), "ignored.log\nnode_modules/\n");
-  yield* git(root, ["add", "--", ".gitignore"]);
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* io(() => fs.mkdir(path.join(handle.cwd, "node_modules/left-pad"), { recursive: true }));
-  yield* writeFile(
-    path.join(handle.cwd, "node_modules/left-pad/index.js"),
-    "module.exports = 1;\n",
-  );
-  expect(yield* service.inspectWorkerChanges(workspaceTarget(handle))).toEqual({
-    changedPaths: [],
-    uncapturedPaths: [],
-    diffStat: [],
-  });
-});
-
 test("counts binary, deleted, and mode-only changes", function* (service, root) {
   const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   yield* writeFile(path.join(handle.cwd, "image.bin"), new Uint8Array([0, 1, 2, 3]));
@@ -124,7 +107,7 @@ test("counts binary, deleted, and mode-only changes", function* (service, root) 
   yield* io(() => fs.unlink(path.join(handle.cwd, ".gitignore")));
   const changes = yield* service.inspectWorkerChanges(workspaceTarget(handle));
   expect(changes.diffStat).toEqual([
-    { path: ".gitignore", change: "deleted", binary: false, addedLines: 0, deletedLines: 1 },
+    { path: ".gitignore", change: "deleted", binary: false, addedLines: 0, deletedLines: 2 },
     { path: "image.bin", change: "added", binary: true, addedLines: 0, deletedLines: 0 },
     {
       path: "src/main.ts",

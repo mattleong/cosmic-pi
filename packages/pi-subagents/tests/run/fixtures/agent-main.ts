@@ -1,14 +1,20 @@
 import type {
+  AgentCaller,
   AgentMainCapabilities,
   AgentMainDelivery,
   AgentMainState,
   AgentMessageFrame,
 } from "../../../src/run/agent-messaging.ts";
+import type { SubagentRunView } from "../../../src/run/model.ts";
+
+export const MAIN: AgentCaller = { kind: "main" };
+export const asRun = (run: SubagentRunView): AgentCaller => ({ kind: "run", runId: run.id });
+/** A nesting policy deep enough for a run's children to start their own. */
+export const nesting = { maxDirectChildren: 12, maxDepth: 3 };
 
 export interface FakeAgentMainControl {
   state: AgentMainState;
   text: string;
-  truncated: boolean;
   /** Holds wakes, as after the user interrupts a run. */
   held: boolean;
   /** The session retired, so the host refuses delivery. */
@@ -31,7 +37,6 @@ export function fakeAgentMain(
   const control: FakeAgentMainControl = {
     state: initial.state ?? "idle",
     text: initial.text ?? "",
-    truncated: false,
     held: false,
     retired: false,
     continuing: false,
@@ -46,7 +51,7 @@ export function fakeAgentMain(
       control.continuing = true;
       return "busy";
     },
-    read: () => ({ text: control.text, truncated: control.truncated, state: control.state }),
+    read: () => ({ text: control.text, truncated: false, state: control.state }),
   };
   return { capabilities, control, delivered };
 }

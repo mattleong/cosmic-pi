@@ -1,7 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Schema from "effect/Schema";
+import type * as Schema from "effect/Schema";
 import { ProjectionError } from "pi-cosmic-core";
 import {
   capturedTelemetrySnapshot,
@@ -24,6 +24,7 @@ import {
   type SubagentProfileLayerOptions,
 } from "../src/profiles/service.ts";
 import {
+  jsonObject,
   resolveTestConfig,
   type ConfigDocumentValue,
 } from "./fixtures/profile-settings-inspection.ts";
@@ -53,15 +54,13 @@ describe("Pi catalog selector classification", () => {
   });
 });
 
-const decodeDocument = Schema.decodeUnknownSync(Schema.Record(Schema.String, Schema.MutableJson));
-
 const document = (value?: {
   readonly [key: string]: ConfigDocumentValue;
 }): Schema.MutableJsonObject => {
   const root = { version: 6, ...value };
-  if (!("profiles" in root) || root.profiles === undefined) return decodeDocument(root);
+  if (!("profiles" in root) || root.profiles === undefined) return jsonObject(root);
   const { profiles, ...rest } = root;
-  return decodeDocument({
+  return jsonObject({
     ...rest,
     defaultProfileSet: "default",
     profileSets: { default: { profiles } },

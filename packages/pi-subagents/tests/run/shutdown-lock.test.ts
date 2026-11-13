@@ -39,6 +39,6 @@ describe("session shutdown", () => {
       yield* Fiber.join(holder);
       yield* Fiber.join(shutdown);
       expect(record.stoppedByParent).toBe(true);
-    }).pipe(Effect.scoped),
+    }),
   );
 });

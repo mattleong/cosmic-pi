@@ -6,7 +6,6 @@ import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import { clipText } from "pi-cosmic-core/display";
-import { safeTextPrefix } from "pi-cosmic-core/text";
 import {
   sanitizeDiagnosticError,
   sanitizeTerminalLine,
@@ -25,7 +24,13 @@ import {
 } from "../run/model.ts";
 import { failureFileText, reportFileText, reportTruncationText } from "../run/state.ts";
 import { runStateLabel } from "../ui/run-state.ts";
-import { nextCandidateText, proposalGuidance, runProfileLabel, runStallSign } from "./format.ts";
+import {
+  nextCandidateText,
+  proposalGuidance,
+  runProfileLabel,
+  runStallSign,
+  warningLine,
+} from "./format.ts";
 
 /**
  * Multi-run model-facing output (await, lifecycle, and completion notices) gives each run one
@@ -187,13 +192,6 @@ const outcomeLines = (id: string, outcome: RunBlockOutcome): OutcomeLines => {
   return Fn.absurd(outcome);
 };
 
-const warningLine = (id: string, warning: string): string => {
-  const pointer = ` … (cut; agent_read ${id} has the full warning)`;
-  const whole = freeText(warning, Number.MAX_SAFE_INTEGER);
-  const room = MAX_BLOCK_LINE_CHARS - "Warning: ".length;
-  return `Warning: ${whole.length <= room ? whole : `${Str.trimEnd(safeTextPrefix(whole, room - pointer.length))}${pointer}`}`;
-};
-
 /** One run's block, within `MAX_RUN_BLOCK_CHARS` by construction. */
 export const formatRunBlock = ({ id, name, facts, outcome, actions }: RunBlock): string => {
   const identity = Arr.join(
@@ -215,7 +213,10 @@ export const formatRunBlock = ({ id, name, facts, outcome, actions }: RunBlock):
         const action = actions[kind];
         if (!action) return [];
         return [
-          clipLine(kind === "warning" ? warningLine(id, action) : action, MAX_BLOCK_LINE_CHARS),
+          clipLine(
+            kind === "warning" ? warningLine(id, action, MAX_BLOCK_LINE_CHARS) : action,
+            MAX_BLOCK_LINE_CHARS,
+          ),
         ];
       }),
     ],
@@ -254,12 +255,12 @@ export const formatRunBlocks = (
   formatted: ReadonlyArray<string> = [],
 ): string => {
   const heading = clipText(
-    Fn.pipe(header, Arr.filter(Boolean), Arr.join("\n")),
+    Fn.pipe(header, Arr.filter(Str.isNonEmpty), Arr.join("\n")),
     MAX_RESULT_HEADER_CHARS,
   );
   return Fn.pipe(
     [heading, ...Arr.map(blocks, formatRunBlock), ...formatted],
-    Arr.filter(Boolean),
+    Arr.filter(Str.isNonEmpty),
     Arr.join(RUN_BLOCK_SEPARATOR),
   );
 };
@@ -310,7 +311,7 @@ export const withInlineReports = (
   }
   return Fn.pipe(
     [blocks, ...Arr.filter(sections, (section) => shown.has(section))],
-    Arr.filter(Boolean),
+    Arr.filter(Str.isNonEmpty),
     Arr.join(RUN_BLOCK_SEPARATOR),
   );
 };

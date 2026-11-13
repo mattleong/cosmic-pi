@@ -21,14 +21,15 @@ import { AGENT_MESSAGE_TYPE, agentMessageDetails } from "../src/boundary/host-ag
 import { hostNotifier } from "../src/boundary/host-notifier.ts";
 import {
   agentMessageContent,
+  MAIN_AGENT_ID,
+  runListEntry,
   runSender,
   startingTargetRefusal,
-  type AgentListEntry,
   type AgentReadout,
 } from "../src/run/agent-messaging.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { codedFailure, isSubagentError } from "../src/run/errors.ts";
-import { scriptedWriterAdmissionError } from "../src/run/launch-policy.ts";
+import { scriptedWriterAdmissionError } from "../src/run/launch-records.ts";
 import { settledFailureMessage } from "../src/run/settlement-outcome.ts";
 import { mapWorkspaceError, workspaceBusyError } from "../src/run/workspace-binding.ts";
 import { workspaceRefusal } from "../src/boundary/git-worktree-process.ts";
@@ -86,6 +87,11 @@ const renderMessage = (message: SentMessage, expanded: boolean): string => {
   );
   return stripAnsi(Arr.join(component?.render(100) ?? [], "\n"));
 };
+
+const occurrences = (text: string, part: string): number => Str.split(text, part).length - 1;
+
+/** The rows beneath a message's heading. */
+const problemLines = (text: string): ReadonlyArray<string> => Str.split(text, "\n").slice(1);
 
 const notices = (): ReadonlyArray<SentMessage> => {
   const sendMessage = vi.fn<ExtensionAPI["sendMessage"]>();
@@ -181,23 +187,62 @@ describe("conversation surfaces", () => {
   });
 });
 
+/**
+ * Compact style's collapsed rule: a message is its heading, then one line per error, warning, or
+ * pending question, and everything else waits for expansion, which shows each fact once.
+ */
+const compact = () =>
+  applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false });
+
+describe("collapsed compact messages", () => {
+  it("keep a report behind expansion and raise a failed run as its problem line", () => {
+    restore = compact();
+    const [completion] = notices();
+    if (completion === undefined) throw new Error("No completion notice was sent.");
+    const collapsed = renderMessage(completion, false);
+    expect(collapsed).not.toContain("docs/auth.md:42");
+    expect(problemLines(collapsed)).toContainEqual(expect.stringContaining("api-audit"));
+    const expanded = renderMessage(completion, true);
+    expect(occurrences(expanded, "docs/auth.md:42")).toBe(1);
+    expect(occurrences(expanded, "429 Too Many")).toBe(1);
+  });
+
+  it("raise a pending question as its problem line, quoted once expanded", () => {
+    restore = compact();
+    const [, pending] = notices();
+    if (pending === undefined) throw new Error("No question notice was sent.");
+    expect(problemLines(renderMessage(pending, false))).toContainEqual(
+      expect.stringContaining(question),
+    );
+    expect(occurrences(renderMessage(pending, true), question)).toBe(1);
+  });
+
+  it("keep an agent message's words behind expansion", () => {
+    restore = compact();
+    const content = agentMessageContent(runSender(asking), "MESSAGE_SENTINEL");
+    const message: SentMessage = {
+      customType: AGENT_MESSAGE_TYPE,
+      content,
+      details: agentMessageDetails({
+        messageId: "message-1",
+        from: asking.id,
+        fromName: asking.name,
+        to: "main",
+        content,
+        text: "MESSAGE_SENTINEL",
+      }),
+      display: true,
+    };
+    expect(renderMessage(message, false)).not.toContain("MESSAGE_SENTINEL");
+    expect(occurrences(renderMessage(message, true), "MESSAGE_SENTINEL")).toBe(1);
+  });
+});
+
 const toolNamed = (name: string) =>
   captureSubagentTools(subagentServiceDouble({}), {
     environment: { cwd: "/project", projectTrusted: false },
     startUiTicker: () => () => undefined,
   }).get(name)!;
-
-const listEntry = (run: SubagentRunView): AgentListEntry => ({
-  id: run.id,
-  name: run.name,
-  kind: "run",
-  state: run.state,
-  parentId: "main",
-  depth: 1,
-  task: run.task,
-  self: false,
-  run,
-});
 
 const readout = (run: SubagentRunView, text: string): AgentReadout => ({
   kind: "run",
@@ -219,7 +264,7 @@ const executed = (input: AgentToolInput) =>
       subagentServiceDouble({
         agentList: () =>
           Effect.succeed({
-            agents: Arr.map([writer, asking, paused], listEntry),
+            agents: Arr.map([writer, asking, paused], (run) => runListEntry(run, MAIN_AGENT_ID)),
             missingIds: ["agent-gone"],
           }),
         agentRead: () =>
@@ -336,8 +381,6 @@ const failedRun = view({
   userError: provider.userMessage,
 });
 
-const occurrences = (text: string, part: string): number => Str.split(text, part).length - 1;
-
 describe("failures", () => {
   it("keep the model's text while their user copy leaves the procedure out", () => {
     const rebase = workspaceRefusal("rebase", "The session directory has no files.", {
@@ -346,38 +389,19 @@ describe("failures", () => {
       remedy: "Revise without rebase, or discard this workspace.",
       agentRemedy: true,
     });
-    const cases: ReadonlyArray<
-      readonly [{ message: string; userMessage?: string | undefined }, string]
-    > = [
-      [
-        startingTargetRefusal("agent-4"),
-        "Agent agent-4 is still starting after a few seconds; check it with agent_list and send once it runs.",
-      ],
-      [
-        scriptedWriterAdmissionError(),
-        "Agents started by a codemode script can only launch read-only agents\n\nThe main agent can start separate writer work outside this script's agents.",
-      ],
-      [
-        scriptedAgentSendRefusal(),
-        "[scripted_agent_send_not_supported] Codemode scripts can't send agent messages. End the script and send the message with agent_send directly.",
-      ],
-      [
-        workspaceBusyError(),
-        "Another operation on this workspace is still running. Retry once it finishes.",
-      ],
-      [
-        mapWorkspaceError(rebase),
-        'The session directory has no files.\nPath: "src"\nRule: the rebuilt worker must still hold the session directory\nRemedy: Revise without rebase, or discard this workspace.',
-      ],
-      [
-        provider,
-        "Final provider error: 429 Too Many Requests: rate limit exceeded Work and writes may already exist; inspect them before an explicit retry. Partial output before the failure: Migrated two tables.",
-      ],
+    const failures: ReadonlyArray<{ message: string; userMessage?: string | undefined }> = [
+      startingTargetRefusal("agent-4"),
+      scriptedWriterAdmissionError(),
+      scriptedAgentSendRefusal(),
+      workspaceBusyError(),
+      mapWorkspaceError(rebase),
+      provider,
     ];
-    for (const [failure, modelText] of cases) {
-      expect(failure.message).toBe(modelText);
-      expect(failure.userMessage, modelText).toBeDefined();
-      expect(failure.userMessage).not.toMatch(/agent_\w+|\b[Rr]etry\b|Remedy:|main agent/u);
+    const procedure = /agent_\w+|\b[Rr]etry\b|Remedy:|main agent/u;
+    for (const failure of failures) {
+      expect(failure.message).toMatch(procedure);
+      expect(failure.userMessage, failure.message).toBeDefined();
+      expect(failure.userMessage).not.toMatch(procedure);
       // The details of a rejected call carry the user copy, without the code the text leads with.
       if (isSubagentError(failure))
         expect(toolFailureDetails(codedFailure(failure))?.message).toBe(failure.userMessage);

@@ -36,19 +36,25 @@ const responseBody = Stream.make(
   ),
 );
 
-function imageServiceLayer(options: {
-  readonly context: ReturnType<typeof testContext>;
-  readonly config: ResolvedConfig;
-  readonly body: Parameters<typeof streamingHttpResponse>[1];
-  readonly requests?: StreamingHttpTestRequest[];
-  readonly decodedFormats?: readonly string[];
-  readonly decodes?: Uint8Array[];
-  readonly status?: number;
-}) {
+/** Defaults: a signed-in context, the default configuration, and one completed image. */
+function imageServiceLayer(
+  options: {
+    readonly context?: ReturnType<typeof testContext>;
+    readonly config?: ResolvedConfig;
+    readonly body?: Parameters<typeof streamingHttpResponse>[1];
+    readonly requests?: StreamingHttpTestRequest[];
+    readonly decodedFormats?: readonly string[];
+    readonly decodes?: Uint8Array[];
+    readonly status?: number;
+  } = {},
+) {
+  const context = options.context ?? testContext({ token: registryToken });
+  const config = options.config ?? makeResolvedConfig();
+  const body = options.body ?? responseBody;
   let decodeIndex = 0;
   const http = streamingHttpTestLayer((request) => {
     options.requests?.push(request);
-    return Effect.succeed(streamingHttpResponse(options.status ?? 200, options.body));
+    return Effect.succeed(streamingHttpResponse(options.status ?? 200, body));
   });
   const sharp = Layer.succeed(
     SharpAdapter,
@@ -61,8 +67,8 @@ function imageServiceLayer(options: {
     }),
   );
   return OpenAIImageService.layer({
-    context: MutableRef.make(options.context),
-    config: () => options.config,
+    context: MutableRef.make(context),
+    config: () => config,
   }).pipe(
     Layer.provide(Layer.merge(sharp, SafeFile.layer)),
     Layer.provide(Layer.mergeAll(nodePlatformLayer, http, AgentDirectory.layer("/agent"))),
@@ -86,13 +92,7 @@ describe("OpenAIImageService", () => {
         throw new Error("hostile");
       },
     });
-    const context = testContext({ token: registryToken });
-    const layer = imageServiceLayer({
-      context,
-      config: makeResolvedConfig(),
-      body: responseBody,
-      requests,
-    });
+    const layer = imageServiceLayer({ requests });
     return Effect.gen(function* () {
       const service = yield* OpenAIImageService;
       const extraKey = { prompt: "extra key", detail: "high" };
@@ -117,8 +117,6 @@ describe("OpenAIImageService", () => {
     const requests: StreamingHttpTestRequest[] = [];
     const layer = imageServiceLayer({
       context: testContext({ token: registryToken, model: () => unrelatedModel }),
-      config: makeResolvedConfig(),
-      body: responseBody,
       requests,
     });
     return Effect.gen(function* () {
@@ -146,12 +144,7 @@ describe("OpenAIImageService", () => {
           service.generate({ prompt: "rejected request", save: "none" }),
         ).pipe(
           provideBuiltLayer(
-            imageServiceLayer({
-              context: testContext({ token: registryToken }),
-              config: makeResolvedConfig(),
-              body: Stream.make(encoder.encode(body)),
-              status: 400,
-            }),
+            imageServiceLayer({ body: Stream.make(encoder.encode(body)), status: 400 }),
           ),
           Effect.flip,
         );
@@ -179,14 +172,7 @@ describe("OpenAIImageService", () => {
       const failure = yield* OpenAIImageService.use((service) =>
         service.generate({ prompt: "stalled rejection", save: "none" }),
       ).pipe(
-        provideBuiltLayer(
-          imageServiceLayer({
-            context: testContext({ token: registryToken }),
-            config: makeResolvedConfig(),
-            body,
-            status: 503,
-          }),
-        ),
+        provideBuiltLayer(imageServiceLayer({ body, status: 503 })),
         Effect.flip,
         Effect.forkScoped({ startImmediately: true }),
       );
@@ -212,16 +198,7 @@ describe("OpenAIImageService", () => {
           save: "custom",
           saveDir: directory,
         }),
-      ).pipe(
-        provideBuiltLayer(
-          imageServiceLayer({
-            context: testContext({ token: registryToken }),
-            config: makeResolvedConfig(),
-            body: responseBody,
-            decodedFormats: ["webp"],
-          }),
-        ),
-      );
+      ).pipe(provideBuiltLayer(imageServiceLayer({ decodedFormats: ["webp"] })));
       expect(result).toMatchObject({ outputFormat: "webp", mimeType: "image/webp" });
       expect(result.savedPath).toMatch(/\.webp$/u);
       expect(yield* fs.exists(result.savedPath ?? "")).toBe(true);
@@ -248,8 +225,6 @@ describe("OpenAIImageService", () => {
         provideBuiltLayer(
           imageServiceLayer({
             context: { ...testContext({ token: registryToken }), cwd: workspace },
-            config: makeResolvedConfig(),
-            body: responseBody,
             requests,
             decodes,
           }),

@@ -73,6 +73,17 @@ describe("ignore rules", () => {
     expect(yield* exists(path.join(handle.cwd, "global-only.md"))).toBe(false);
   });
 
+  test("resolves a relative global excludes file in the checkout", function* (service, root) {
+    yield* userConfig("[core]\n\texcludesFile = .private-ignore\n");
+    yield* writeFile(path.join(root, ".private-ignore"), "**/local-notes.md\n");
+    yield* writeFile(path.join(root, "local-notes.md"), "private notes\n");
+    yield* writeFile(path.join(root, "notes.md"), "shared notes\n");
+    const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
+    yield* userConfig("");
+    expect(yield* exists(path.join(handle.cwd, "notes.md"))).toBe(true);
+    expect(yield* exists(path.join(handle.cwd, "local-notes.md"))).toBe(false);
+  });
+
   test("applies the repository's info/exclude to worker captures and setup checks", function* (service, root) {
     const exclude = path.join(root, ".git", "info", "exclude");
     yield* io(() => fs.mkdir(path.dirname(exclude), { recursive: true }));
@@ -109,7 +120,7 @@ describe("baselines", () => {
       expect(yield* exists(path.join(handle.cwd, left))).toBe(false);
     const baseline = (yield* service.inspect(workspaceTarget(handle))).baseline;
     const files = yield* git(root, ["ls-tree", "-r", "--name-only", baseline]);
-    expect(Arr.sort(Arr.filter(Str.split(files, "\n"), Boolean), Order.String)).toEqual([
+    expect(Arr.sort(Arr.filter(Str.split(files, "\n"), Str.isNonEmpty), Order.String)).toEqual([
       "..notes/plan.md",
       ".gitignore",
       "docs/guide.md",

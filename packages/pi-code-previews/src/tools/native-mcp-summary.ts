@@ -1,32 +1,30 @@
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Predicate from "effect/Predicate";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { countLabel } from "pi-cosmic-core/display";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { failureMessage, isAgentGuidance } from "pi-cosmic-core/message-text";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";
-import { argumentFailureIssue } from "./argument-failure";
 import { getBoundedTextContent } from "./data/results";
 import type { CompactIssue } from "./compact-issues";
 import type { CompactSummary, CompactSummaryProvider } from "./compact-summary";
 import type { RendererState } from "./renderers/shared/types";
 import { nativeMcpReceiptMatches, type NativeMcpIdentity } from "./native-mcp-identity";
 import { nativeMcpArgumentText, nativeMcpHeading } from "./native-mcp-subject";
-import { visibleDiagnosticLine } from "./native-safe-content";
+import { EvidenceText, nativeFailureIssue, visibleDiagnosticLine } from "./native-safe-content";
 import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-truncation";
 
-const Text = Schema.String.check(Schema.isMaxLength(4096));
 const Evidence = Schema.Struct({
-  server: Text,
-  tool: Text,
-  fullOutputPath: Schema.optionalKey(Text),
+  server: EvidenceText,
+  tool: EvidenceText,
+  fullOutputPath: Schema.optionalKey(EvidenceText),
 });
 const decodeEvidence = decodeUnknownOrUndefined(Evidence);
 export type NativeMcpEvidence = typeof Evidence.Type;
@@ -140,20 +138,6 @@ function listingFailureIssues(listing: NativeMcpListing): CompactIssue[] {
   return issues;
 }
 
-export function nativeMcpHasRecoverableClipping(
-  identity: NativeMcpIdentity,
-  result: AgentToolResult<unknown>,
-  args: HostContainer | undefined,
-): boolean {
-  const first = result.content[0];
-  return Boolean(
-    nativeMcpReceipt(identity, result, args)?.fullOutputPath &&
-    first?.type === "text" &&
-    parseNativeTruncatedOutput(first.text)?.footer === "saved" &&
-    !Arr.some(result.content.slice(1), (part) => part.type === "text"),
-  );
-}
-
 function outputIssues(
   result: AgentToolResult<unknown>,
   evidence: NativeMcpEvidence,
@@ -183,13 +167,7 @@ export function nativeMcpErrorIssue(
   );
   const fallback =
     identity.kind === "tool" ? "The MCP tool reported an error" : "The resource request failed";
-  return (
-    argumentFailureIssue(text) ?? {
-      severity: "error",
-      code: "mcp-error",
-      message: isAgentGuidance(text) ? fallback : failureMessage(text, fallback),
-    }
-  );
+  return nativeFailureIssue(text, "mcp-error", fallback);
 }
 
 function contentCounters(result: AgentToolResult<unknown>): string[] {
@@ -204,9 +182,7 @@ function contentCounters(result: AgentToolResult<unknown>): string[] {
 }
 
 export function nativeMcpProgress(result: AgentToolResult<unknown> | undefined): string {
-  const part =
-    result &&
-    Option.getOrUndefined(Arr.findFirst(result.content, (entry) => entry.type === "text"));
+  const part = result && findOrUndefined(result.content, (entry) => entry.type === "text");
   const text = part?.type === "text" ? Fn.pipe(part.text, Str.slice(0, 1024)) : "";
   for (const line of Str.split(text, "\n")) {
     const visible = visibleDiagnosticLine(line, 80);

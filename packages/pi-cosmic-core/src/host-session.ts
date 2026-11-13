@@ -25,10 +25,6 @@ type HostNotifierContext = {
   };
 };
 
-type HostModelRegistry<Model> = {
-  readonly isUsingOAuth: (model: Model) => boolean;
-};
-
 export type CapturedHostSignal = Data.TaggedEnum<{
   Captured: { readonly signal: AbortSignal | undefined };
   Unavailable: Record<never, never>;
@@ -87,19 +83,18 @@ export function invokeHostCallback<A>(callback: () => A, fallback: A): A {
   }
 }
 
-export function isUsingOAuthAtHostBoundary<Model>(
-  registry: HostModelRegistry<Model>,
-  model: Model,
-): boolean {
-  return invokeHostCallback(() => registry.isUsingOAuth(model), false);
-}
-
 export function captureHostSignal(ctx: HostSessionContext): CapturedHostSignal {
   try {
     return CapturedHostSignal.Captured({ signal: ctx.signal });
   } catch {
     return CapturedHostSignal.Unavailable();
   }
+}
+
+/** The host's abort signal, or `undefined` when there is none or the context can't be read. */
+export function capturedHostSignal(ctx: HostSessionContext): AbortSignal | undefined {
+  const captured = captureHostSignal(ctx);
+  return Predicate.isTagged(captured, "Captured") ? captured.signal : undefined;
 }
 
 export function captureSessionHost(ctx: HostSessionContext): CapturedSessionHost {

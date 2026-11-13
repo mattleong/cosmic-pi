@@ -40,7 +40,7 @@ import {
   type ProcessTransportRuntime,
   type ProcessWireEvent,
 } from "./process-transport.ts";
-import { nodeErrorCode } from "./harness-shared.ts";
+import { nodeErrorCode } from "pi-cosmic-core/platform/errors";
 import { recordPrivateStateOwner, SUBAGENT_STATE_ROOT } from "./private-state.ts";
 import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
 import {

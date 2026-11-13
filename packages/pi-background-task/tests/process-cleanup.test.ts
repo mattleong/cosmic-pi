@@ -9,7 +9,8 @@ import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
 import { vi } from "vitest";
 import { signalProcessGroup } from "pi-cosmic-core";
-import { spawnIpcChild, provideBuiltLayer } from "pi-cosmic-core/testing";
+import { findOrUndefined } from "pi-cosmic-core/array";
+import { pollUntil, spawnIpcChild, provideBuiltLayer } from "pi-cosmic-core/testing";
 import { BackgroundTaskService } from "../src/task/service.ts";
 import { realServiceLayer } from "./support/real-service.ts";
 
@@ -18,15 +19,7 @@ vi.setConfig({ testTimeout: 60_000 });
 const hostScript = fileURLToPath(new URL("./fixtures/abrupt-exit-host.ts", import.meta.url));
 
 // Polls until a deadline generous enough for loaded runners; a gone group returns at once.
-const groupGone = (pid: number) =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + 10_000;
-    while ((yield* Clock.currentTimeMillis) < deadline) {
-      if (signalProcessGroup(pid, 0) === "absent") return true;
-      yield* Effect.sleep("10 millis");
-    }
-    return signalProcessGroup(pid, 0) === "absent";
-  });
+const groupGone = (pid: number) => pollUntil(() => signalProcessGroup(pid, 0) === "absent", 1_000);
 
 const killGroupsAfterward = (pids: ReadonlyArray<number>) =>
   Effect.addFinalizer(() =>
@@ -42,10 +35,8 @@ describe("real process cleanup", () => {
       // loaded CI runners.
       const host = yield* spawnIpcChild(hostScript, [], { timeout: "40 seconds" });
       yield* host.wait("ready");
-      const announced = Option.getOrUndefined(
-        Arr.findFirst(Arr.filter(host.messages, Predicate.isString), (message) =>
-          Fn.pipe(message, Str.startsWith("group:")),
-        ),
+      const announced = findOrUndefined(Arr.filter(host.messages, Predicate.isString), (message) =>
+        Fn.pipe(message, Str.startsWith("group:")),
       );
       const pid = Number(announced && Fn.pipe(announced, Str.slice("group:".length)));
       expect(Number.isSafeInteger(pid) && pid > 0).toBe(true);

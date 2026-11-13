@@ -3,6 +3,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   ExtensionUIContext,
+  ModelSelectEvent,
   SourceInfo,
 } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
@@ -13,6 +14,8 @@ import {
   extensionContextFixture,
   recordingExtensionHost,
   type DefaultedEventName,
+  type ExtensionEventName,
+  type ExtensionEventNamed,
 } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
@@ -27,6 +30,13 @@ export const ownerSource: SourceInfo = {
   scope: "user",
   origin: "top-level",
 };
+
+export const modelSelectEvent = (source: ModelSelectEvent["source"] = "set"): ModelSelectEvent => ({
+  type: "model_select",
+  model: testModel(),
+  previousModel: undefined,
+  source,
+});
 
 const encodeConfigDocument = (overrides: JsonObject): string =>
   JSON.stringify({ persistState: false, usage: {}, image: { enabled: false }, ...overrides });
@@ -96,5 +106,11 @@ export const extensionHarness = (
       getFlag,
       emit: (name: DefaultedEventName, useCtx: ExtensionContext = ctx) =>
         Effect.promise(() => host.emit(name, useCtx)),
+      /** Delivers an explicit event to every handler registered for it, in order, as Pi does. */
+      deliver: <Name extends ExtensionEventName>(
+        name: Name,
+        event: ExtensionEventNamed<Name>,
+        useCtx: ExtensionContext = ctx,
+      ) => Effect.promise(() => host.emit(name, useCtx, event)),
     };
   });

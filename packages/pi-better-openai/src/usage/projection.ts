@@ -1,14 +1,15 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
-import { isUsingOAuthAtHostBoundary } from "pi-cosmic-core/host-session";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { ResolvedConfig } from "../config/schema.ts";
 import type { UsageSnapshot } from "./format.ts";
 
-export interface UsageProjectionBase<Resolved, Snapshot> {
-  readonly config: Resolved | undefined;
+export interface OpenAIProjection {
+  readonly config: ResolvedConfig | undefined;
   readonly eligible: boolean;
-  readonly snapshot: Snapshot | undefined;
+  readonly snapshot: UsageSnapshot | undefined;
   readonly statusLine: string | undefined;
   readonly statusText: string;
   readonly error: string | undefined;
@@ -16,12 +17,10 @@ export interface UsageProjectionBase<Resolved, Snapshot> {
   readonly updatedAt: number | undefined;
   readonly authPath: string | undefined;
   readonly authFound: boolean;
+  readonly accountId: string | undefined;
 }
 
-export const initialUsageProjection = <Resolved, Snapshot>(): UsageProjectionBase<
-  Resolved,
-  Snapshot
-> => ({
+export const initialProjection = (): OpenAIProjection => ({
   config: undefined,
   eligible: false,
   snapshot: undefined,
@@ -32,30 +31,16 @@ export const initialUsageProjection = <Resolved, Snapshot>(): UsageProjectionBas
   updatedAt: undefined,
   authPath: undefined,
   authFound: false,
+  accountId: undefined,
 });
 
-type UsageVisibilityFields = {
-  readonly eligible: boolean;
-  readonly snapshot: unknown;
-  readonly statusLine: string | undefined;
-  readonly error: string | undefined;
-  readonly updatedAt: number | undefined;
-  readonly statusText: string;
-};
-
-interface UsageEligibilityStatusTexts {
-  readonly hiddenStatusText: string;
-  readonly unavailableStatusText?: string;
-}
-
-export function withUsageEligibility<T extends UsageVisibilityFields>(
-  current: T,
+function withUsageEligibility(
+  current: OpenAIProjection,
   eligible: boolean,
   clearUsage: boolean,
-  options: UsageEligibilityStatusTexts,
-): T {
-  const unavailable = options.unavailableStatusText ?? "Usage unavailable";
-  const statusText = eligible ? unavailable : options.hiddenStatusText;
+  hiddenStatusText: string,
+): OpenAIProjection {
+  const statusText = eligible ? "Usage unavailable" : hiddenStatusText;
   return {
     ...current,
     eligible,
@@ -73,15 +58,6 @@ export function withUsageEligibility<T extends UsageVisibilityFields>(
   };
 }
 
-export interface OpenAIProjection extends UsageProjectionBase<ResolvedConfig, UsageSnapshot> {
-  readonly accountId: string | undefined;
-}
-
-export const initialProjection = (): OpenAIProjection => ({
-  ...initialUsageProjection<ResolvedConfig, UsageSnapshot>(),
-  accountId: undefined,
-});
-
 export const usageProjectionRef = (): MutableRef.MutableRef<OpenAIProjection> =>
   MutableRef.make(freezeSnapshot(initialProjection()));
 
@@ -98,52 +74,27 @@ export function usageConfigChanged(left: ResolvedConfig, right: ResolvedConfig):
 }
 
 export function isOpenAISubscriptionModel(ctx: ExtensionContext, cfg: ResolvedConfig): boolean {
-  const model = ctx.model;
+  const model: Model<Api> | undefined = ctx.model;
   if (!model || (model.provider !== "openai" && model.provider !== "openai-codex")) return false;
   return (
-    !cfg.usage.showOnlyOnSubscriptionModels || isUsingOAuthAtHostBoundary(ctx.modelRegistry, model)
+    !cfg.usage.showOnlyOnSubscriptionModels ||
+    invokeHostCallback(() => ctx.modelRegistry.isUsingOAuth(model), false)
   );
 }
 
 export const HIDDEN_USAGE_STATUS_TEXT = "Switch to an OpenAI subscription model to see usage";
-
-interface OpenAIUsageDecision {
-  readonly eligible: boolean;
-  readonly clearUsage: boolean;
-  readonly statusTexts: UsageEligibilityStatusTexts;
-}
-
-function openAIUsageDecision(
-  state: OpenAIProjection,
-  ctx: ExtensionContext,
-  clearUsageRequested: boolean,
-): OpenAIUsageDecision {
-  try {
-    const eligible = state.config ? isOpenAISubscriptionModel(ctx, state.config) : false;
-    return {
-      eligible,
-      clearUsage: clearUsageRequested,
-      statusTexts: { hiddenStatusText: HIDDEN_USAGE_STATUS_TEXT },
-    };
-  } catch {
-    return {
-      eligible: false,
-      clearUsage: true,
-      statusTexts: {
-        hiddenStatusText: "Usage unavailable",
-        unavailableStatusText: "Usage unavailable",
-      },
-    };
-  }
-}
 
 export function synchronizedProjection(
   state: OpenAIProjection,
   ctx: ExtensionContext,
   clearUsage: boolean,
 ): OpenAIProjection {
-  const decision = openAIUsageDecision(state, ctx, clearUsage);
-  return withUsageEligibility(state, decision.eligible, decision.clearUsage, decision.statusTexts);
+  try {
+    const eligible = state.config ? isOpenAISubscriptionModel(ctx, state.config) : false;
+    return withUsageEligibility(state, eligible, clearUsage, HIDDEN_USAGE_STATUS_TEXT);
+  } catch {
+    return withUsageEligibility(state, false, true, "Usage unavailable");
+  }
 }
 
 export function visibleStatusLine(

@@ -4,16 +4,15 @@ import * as Fiber from "effect/Fiber";
 import { vi } from "vitest";
 import {
   createPrivateDirectory,
-  createPrivateFile,
   ensurePrivateDirectory,
   readPrivateFile,
   removeOwnEntry,
-  removePrivateDirectory,
   removePrivateTree,
   replacePrivateFile,
 } from "../index.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../src/platform/node-builtins.ts";
 import { deferredPromise, temporaryDirectory } from "../testing.ts";
+import { scopedSpy } from "./support/spies.ts";
 
 const root = temporaryDirectory("cosmic-private-file-");
 const io = <A>(evaluate: () => Promise<A>) => Effect.promise(evaluate);
@@ -28,6 +27,8 @@ const exists = (entry: string) =>
   );
 const reasonOf = <A>(effect: Effect.Effect<A, { readonly reason: string }>) =>
   Effect.flip(effect).pipe(Effect.map((error) => error.reason));
+const writePrivate = (file: string, source: string) =>
+  replacePrivateFile(file, `${file}.tmp`, source);
 
 it.live("creates private directories and tightens an existing one of this user", () =>
   Effect.gen(function* () {
@@ -56,33 +57,12 @@ it.live("refuses a link where a private directory belongs and leaves its target 
     yield* io(() => fs.symlink(target, link));
 
     expect(yield* reasonOf(ensurePrivateDirectory(link))).toBe("unsafe");
-    expect(yield* reasonOf(removePrivateDirectory(link))).toBe("unsafe");
     expect(yield* modeOf(target)).toBe(0o755);
     expect(yield* exists(target)).toBe(true);
   }),
 );
 
-it.live("creates a private file exclusively and never replaces or follows an existing entry", () =>
-  Effect.gen(function* () {
-    const directory = yield* root;
-    const file = path.join(directory, "config.toml");
-    yield* createPrivateFile(file, "first");
-    expect(yield* modeOf(file)).toBe(0o600);
-    expect(yield* readPrivateFile(file, 64)).toBe("first");
-
-    expect(yield* reasonOf(createPrivateFile(file, "second"))).toBe("exists");
-    expect(yield* readPrivateFile(file, 64)).toBe("first");
-
-    const outside = path.join(directory, "outside");
-    yield* io(() => fs.writeFile(outside, "outside"));
-    const link = path.join(directory, "planted");
-    yield* io(() => fs.symlink(outside, link));
-    expect(yield* reasonOf(createPrivateFile(link, "leak"))).toBe("exists");
-    expect(yield* io(() => fs.readFile(outside, "utf8"))).toBe("outside");
-  }),
-);
-
-it.live("replaces a file by rename and keeps a temporary path someone else holds", () =>
+it.live("replaces a file by rename and never replaces or follows a held temporary path", () =>
   Effect.gen(function* () {
     const directory = yield* root;
     const target = path.join(directory, "record.json");
@@ -96,6 +76,13 @@ it.live("replaces a file by rename and keeps a temporary path someone else holds
     yield* io(() => fs.writeFile(temporary, "someone else's"));
     expect(yield* reasonOf(replacePrivateFile(target, temporary, "three"))).toBe("exists");
     expect(yield* io(() => fs.readFile(temporary, "utf8"))).toBe("someone else's");
+
+    const outside = path.join(directory, "outside");
+    yield* io(() => fs.writeFile(outside, "outside"));
+    const link = path.join(directory, "planted");
+    yield* io(() => fs.symlink(outside, link));
+    expect(yield* reasonOf(replacePrivateFile(target, link, "leak"))).toBe("exists");
+    expect(yield* io(() => fs.readFile(outside, "utf8"))).toBe("outside");
     expect(yield* readPrivateFile(target, 64)).toBe("two");
   }),
 );
@@ -122,14 +109,11 @@ it.live("an interruption during the rename cannot undo the committed replacement
     const renaming = deferredPromise();
     const proceed = deferredPromise();
     const rename = fs.rename.bind(fs);
-    yield* Effect.acquireRelease(
-      Effect.sync(() =>
-        vi.spyOn(fs, "rename").mockImplementation((from, to) => {
-          renaming.resolve();
-          return proceed.promise.then(() => rename(from, to));
-        }),
-      ),
-      (spy) => Effect.sync(() => spy.mockRestore()),
+    yield* scopedSpy(() =>
+      vi.spyOn(fs, "rename").mockImplementation((from, to) => {
+        renaming.resolve();
+        return proceed.promise.then(() => rename(from, to));
+      }),
     );
 
     const writer = yield* Effect.forkChild(replacePrivateFile(target, temporary, "committed"));
@@ -151,7 +135,7 @@ it.live("reads only bounded private regular files without following links", () =
   Effect.gen(function* () {
     const directory = yield* root;
     const file = path.join(directory, "owner.json");
-    yield* createPrivateFile(file, "owner");
+    yield* writePrivate(file, "owner");
     expect(yield* reasonOf(readPrivateFile(file, 3))).toBe("unsafe");
 
     yield* io(() => fs.chmod(file, 0o640));
@@ -168,7 +152,7 @@ it.live("removes own entries but refuses directories, and treats a missing entry
   Effect.gen(function* () {
     const directory = yield* root;
     const file = path.join(directory, "socket-owner");
-    yield* createPrivateFile(file, "");
+    yield* writePrivate(file, "");
     yield* removeOwnEntry(file);
     expect(yield* exists(file)).toBe(false);
     yield* removeOwnEntry(file);
@@ -189,9 +173,8 @@ it.live("removes a private tree a process left without owner access", () =>
     yield* io(() => fs.writeFile(path.join(locked, "file"), "data"));
     yield* io(() => fs.chmod(locked, 0o000));
 
-    yield* removePrivateDirectory(tree);
+    yield* removePrivateTree(tree);
     expect(yield* exists(tree)).toBe(false);
     yield* removePrivateTree(tree);
-    expect(yield* reasonOf(removePrivateDirectory(tree))).toBe("missing");
   }),
 );

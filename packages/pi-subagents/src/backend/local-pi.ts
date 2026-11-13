@@ -12,9 +12,10 @@ import {
   type ChildWireEvent,
 } from "../boundary/child-process.ts";
 import {
-  InvalidSubagentRequestError,
+  invalidRequest,
   isOutcomeUncertain,
   processError,
+  type InvalidSubagentRequestError,
   SubagentProcessError,
   withGuidance,
   withGuidanceClause,
@@ -79,10 +80,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   let latestTerminal: BackendAssistantTerminal | undefined;
   let transportFailure: SubagentError | undefined;
 
-  const { events, offer, release, acknowledge } = yield* localCliEventIngress(
-    child.acknowledge,
-    "local-Pi",
-  );
+  const { events, offer, release, acknowledge } = yield* localCliEventIngress(child.acknowledge);
 
   const awaitExit = child.awaitExit.pipe(
     Effect.map((exit) => {
@@ -102,11 +100,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       return {
         ...toBackendExit(exit),
         diagnostic,
-        failure: SubagentProcessError.make({
-          operation: "run",
-          code: "pi_model_not_found",
-          message: diagnostic,
-        }),
+        failure: processError("run", "pi_model_not_found", diagnostic),
       };
     }),
     Effect.tapError((error) =>
@@ -227,9 +221,9 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       const envelope = oversizedRpcEnvelope(event);
       return envelope
         ? consumeEnvelope(envelope, event).pipe(
-            Effect.catch(() => offer(oversizedLineError("Subagent", event), event)),
+            Effect.catch(() => offer(oversizedLineError(event), event)),
           )
-        : offer(oversizedLineError("Subagent", event), event);
+        : offer(oversizedLineError(event), event);
     }
     if (event.type === "parent_contact") {
       const contact = event.value;
@@ -408,12 +402,11 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             requestId,
           }),
           () =>
-            SubagentProcessError.make({
-              operation: "await turn-input barrier acknowledgment from",
-              code: "turn_input_barrier_unconfirmed",
-              message:
-                "Subagent did not acknowledge the turn-input barrier; queue clearing and abort were not sent.",
-            }),
+            processError(
+              "await turn-input barrier acknowledgment from",
+              "turn_input_barrier_unconfirmed",
+              "Subagent did not acknowledge the turn-input barrier; queue clearing and abort were not sent.",
+            ),
         );
         yield* rpc({ type: "clear_queue" });
         yield* rpc({ type: "abort" });
@@ -431,12 +424,11 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             message,
           }),
           () =>
-            SubagentProcessError.make({
-              operation: "await parent reply acknowledgment from",
-              code: "reply_outcome_uncertain",
-              message:
-                "Subagent did not acknowledge the parent reply; it may already have applied.",
-            }),
+            processError(
+              "await parent reply acknowledgment from",
+              "reply_outcome_uncertain",
+              "Subagent did not acknowledge the parent reply; it may already have applied.",
+            ),
         ),
       ),
     notifyPeers: (message: string, details?: Schema.Json) =>
@@ -460,12 +452,11 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
             ...(details !== undefined && { details }),
           }),
           () =>
-            SubagentProcessError.make({
-              operation: "await descendant notification acknowledgment from",
-              code: "transport_outcome_uncertain",
-              message:
-                "Subagent did not acknowledge the descendant notification; it may already be queued.",
-            }),
+            processError(
+              "await descendant notification acknowledgment from",
+              "transport_outcome_uncertain",
+              "Subagent did not acknowledge the descendant notification; it may already be queued.",
+            ),
         ),
       ),
   };
@@ -487,15 +478,14 @@ export const localPiBackendDriver = (
   // Children run on Pi's Node binary; a fake child boundary that never starts Node replaces the check.
   nodeExecutableCheck: Effect.Effect<void, InvalidSubagentRequestError> = requireNodeExecutable(),
 ): BackendDriver => ({
-  supportsContext: (context) => context === "fresh" || context === "fork",
-  preflight: (request) =>
-    isSafeNativeModelSelector(request.model)
+  preflight: (model) =>
+    isSafeNativeModelSelector(model)
       ? nodeExecutableCheck
       : Effect.fail(
-          InvalidSubagentRequestError.make({
-            code: "pi_model_unsupported",
-            message: "Pi model selector is empty, excessive, or unsafe.",
-          }),
+          invalidRequest(
+            "pi_model_unsupported",
+            "Pi model selector is empty, excessive, or unsafe.",
+          ),
         ),
   spawn: Effect.fn("LocalPiBackend.spawn")(function* (request: BackendLaunchRequest) {
     const { resumeToken, ...launch } = request;

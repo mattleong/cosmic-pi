@@ -10,6 +10,7 @@ import {
 } from "../../testing";
 import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import type { CodePreviewRendererPresentation } from "../../src/application/renderer-contract";
+import { applyRowStyle } from "../support/render";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -24,8 +25,6 @@ const session = (
   selfShell: true,
   enabledTools: [],
 });
-const settings = (style: "preview" | "compact", background: "off" | "on" | "border" = "off") =>
-  applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
 beforeEach(() => applyPresentationSettings({ syntaxHighlighting: false, toolCallTiming: false }));
 
 const native: ToolRenderers = {
@@ -43,7 +42,7 @@ const native: ToolRenderers = {
 };
 
 test("native call failure still preserves exact expanded input", () => {
-  settings("compact");
+  applyRowStyle("compact");
   const renderers = createNativeMcpRenderers(
     name,
     metadata(),
@@ -86,7 +85,7 @@ test("renderer-only downstream never needs labels, schemas or execution fields",
       },
     },
   );
-  settings("preview");
+  applyRowStyle("preview");
   const h = createToolPresentationHarness(
     createNativeMcpRenderers(name, metadata(), downstream, session()),
   );
@@ -95,7 +94,7 @@ test("renderer-only downstream never needs labels, schemas or execution fields",
 });
 
 test("retired scheduling admission never borrows the replacement owner", () => {
-  settings("preview");
+  applyRowStyle("preview");
   const origin = animationSchedulerProbe();
   const replacement = animationSchedulerProbe();
   let live = true;

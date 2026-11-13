@@ -122,7 +122,7 @@ const store = makeScopedConfigStore({
   resolve: resolveConfigFiles,
 });
 
-export const { configPaths, readConfig, readRawConfig, resolveConfig, writeConfig } = store;
+export const { readConfig, readRawConfig, resolveConfig } = store;
 
 interface ConfigChange {
   readonly previous: ResolvedConfig;
@@ -134,17 +134,6 @@ interface ConfigConsumer {
   readonly commit: (change: ConfigChange) => Effect.Effect<void>;
   readonly settled?: (change: ConfigChange) => Effect.Effect<void>;
 }
-
-const settle = ({
-  change,
-  listeners,
-}: {
-  readonly change: ConfigChange;
-  readonly listeners: ReadonlyArray<ConfigConsumer>;
-}) =>
-  Effect.forEach(listeners, (consumer) => consumer.settled?.(change) ?? Effect.void, {
-    discard: true,
-  });
 
 interface OpenAIConfigServiceOptions {
   readonly cwd: string;
@@ -200,7 +189,7 @@ export class OpenAIConfigService extends Context.Service<OpenAIConfigService>()(
           Ref.get(state).pipe(Effect.flatMap((config) => readRawConfig(config.configPath))),
         ),
         observe: (consumer: ConfigConsumer) =>
-          Effect.acquireRelease(Effect.void, () =>
+          Effect.addFinalizer(() =>
             Ref.get(consumers).pipe(
               Effect.flatMap((current) =>
                 current.includes(consumer)
@@ -231,7 +220,11 @@ export class OpenAIConfigService extends Context.Service<OpenAIConfigService>()(
                   load.pipe(Effect.flatMap((fresh) => modify(fresh, update, "setting"))),
                 ),
               ),
-              Effect.flatMap(settle),
+              Effect.flatMap(({ change, listeners }) =>
+                Effect.forEach(listeners, (consumer) => consumer.settled?.(change) ?? Effect.void, {
+                  discard: true,
+                }),
+              ),
             ),
           ),
         persistFast: (desiredActive: boolean, afterCommit: Effect.Effect<void>) =>

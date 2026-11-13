@@ -2,14 +2,8 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
-import { captureHostSignal, notifyAtHostBoundary } from "pi-cosmic-core/host-session";
+import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { sanitizeDiagnosticError } from "pi-cosmic-core/security";
-
-export function safeHostSignal(ctx: ExtensionContext): AbortSignal | undefined {
-  const captured = captureHostSignal(ctx);
-  return Predicate.isTagged(captured, "Captured") ? captured.signal : undefined;
-}
 
 export const containCommandFailure = <A, E extends { readonly message: string }, R>(
   effect: Effect.Effect<A, E, R>,

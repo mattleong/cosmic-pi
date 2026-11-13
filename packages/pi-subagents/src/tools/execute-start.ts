@@ -235,15 +235,8 @@ export const executeStartBatch = Effect.fn("SubagentTools.start")(function* (
         }),
       );
     });
-  const resolveRequest = (spec: SubagentStartSpec) =>
-    resolveProfileStart(input.pi, spec, input.ctx, environment, profileSnapshot).pipe(
-      Effect.map((request) => ({
-        ...request,
-        nestingPolicy: profileSnapshot.effectiveConfig.nesting,
-      })),
-    );
   const launchOne = (spec: SubagentStartSpec, index: number) =>
-    resolveRequest(spec).pipe(
+    resolveProfileStart(input.pi, spec, input.ctx, environment, profileSnapshot).pipe(
       Effect.flatMap((request) => {
         const rejected = admissionError(request, input.readOnly === true);
         return (rejected ? Effect.fail(rejected) : input.startOwned(request)).pipe(
@@ -282,17 +275,12 @@ export const resolveRecordedLaunch = Effect.fn("SubagentTools.resolveRecordedLau
   InvalidSubagentRequestError,
   SubagentProfileService | SubagentBackendRegistry
 > {
-  const profileSnapshot = yield* (yield* SubagentProfileService).capture;
   const route = launch.agent === undefined ? { profile: launch.profile } : { agent: launch.agent };
-  const request = yield* resolveProfileStart(
+  return yield* resolveProfileStart(
     pi,
     { task, ...route, name: launch.name, isolation: "worktree" },
     ctx,
-    {
-      ...environment,
-      parentContext: environment.parentContext ?? (yield* captureHostParentContext(pi, ctx)),
-    },
-    profileSnapshot,
+    environment,
   ).pipe(
     Effect.catchIf(
       (error) => error.code === "agent_unknown" || error.code === "agent_invalid",
@@ -305,5 +293,4 @@ export const resolveRecordedLaunch = Effect.fn("SubagentTools.resolveRecordedLau
         ),
     ),
   );
-  return { ...request, nestingPolicy: profileSnapshot.effectiveConfig.nesting };
 });

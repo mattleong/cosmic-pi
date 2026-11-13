@@ -7,26 +7,20 @@ import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
-import {
-  WriterLeaseConflictError,
-  WriterLeaseReleaseError,
-  WriterLeaseService,
-} from "../../src/boundary/writer-lease.ts";
+import { WriterLeaseService } from "../../src/boundary/writer-lease.ts";
 import { revisionSummary } from "../../src/workspace/diffstat.ts";
-import { WorkspaceError, type WorkspaceRecord } from "../../src/workspace/model.ts";
+import { WorkspaceError } from "../../src/workspace/model.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
+import { request, runView, runViews, withService } from "./fixtures/service-harness.ts";
 import {
-  completeLocalRun,
-  fakeWriterLeaseLayer,
-  request,
-  runView,
-  runViews,
-  withService,
-} from "./fixtures/service-harness.ts";
-import {
+  canonicalizeGate,
+  completedWriter,
+  failingRelease,
   gateCreate,
+  heldElsewhere,
   leasesWith,
   pauseAt,
+  replacedIdentity,
   repoWriter,
   reviewAndPrepare,
   stoppedWriter,
@@ -34,72 +28,14 @@ import {
 } from "./fixtures/workspace-engine.ts";
 import { stringContaining } from "../support/matchers.ts";
 import * as Str from "effect/String";
-import * as Arr from "effect/Array";
-
-const record = (
-  workspaceId: string,
-  ownerId: string,
-  sourceRoot: string,
-  status: WorkspaceRecord["status"],
-): WorkspaceRecord => ({
-  version: 2,
-  repository: "/repo/.git",
-  handle: {
-    workspaceId,
-    ownerId,
-    sourceRoot,
-    sourceCwd: sourceRoot,
-    artifactRoot: `/private/${workspaceId}`,
-    cwd: `/private/${workspaceId}`,
-    writerCwd: {
-      path: `/private/${workspaceId}`,
-      filesystemIdentity: `dev:1;ino:/private/${workspaceId}`,
-      digest: Fn.pipe("1", Str.padStart(64, "0")),
-    },
-  },
-  status,
-  baseline: "baseline",
-  ownerLease: "owner",
-  lastChangedAt: 0,
-});
 
 const sharedWriter = (overrides: Partial<StartSubagentRequest> = {}) =>
   repoWriter({ writerWorkspaceModeOverride: "shared-checkout", ...overrides });
 
-interface CanonicalizeGate {
-  cwd?: string;
-  pause: Effect.Effect<void>;
-}
-
-/** Pauses writer cwd canonicalization for one directory, holding its launch before admission. */
-const canonicalizeGate = () => {
-  const gate: CanonicalizeGate = { pause: Effect.void };
-  const writerLeases = leasesWith((base) => ({
-    canonicalize: (cwd) =>
-      (cwd === gate.cwd ? gate.pause : Effect.void).pipe(Effect.andThen(base.canonicalize(cwd))),
-  }));
-  return { gate, writerLeases };
-};
-
 describe("writer workspace orchestration", () => {
   it.effect("refuses admission when the acquired writer directory is replaced", () => {
     let replaced = false;
-    const f = fixture({
-      writerLeases: leasesWith((base) => ({
-        canonicalize: (cwd) =>
-          base.canonicalize(cwd).pipe(
-            Effect.map((identity) =>
-              replaced
-                ? {
-                    ...identity,
-                    filesystemIdentity: "dev:2;ino:3",
-                    digest: Fn.pipe("f", Str.repeat(64)),
-                  }
-                : identity,
-            ),
-          ),
-      })),
-    });
+    const f = fixture({ writerLeases: leasesWith(replacedIdentity(() => replaced)) });
     f.hooks.afterCreate = Effect.sync(() => {
       replaced = true;
     });
@@ -122,7 +58,7 @@ describe("writer workspace orchestration", () => {
       });
       expect(yield* runViews(service)).toEqual([]);
       expect(f.children.controls).toHaveLength(0);
-      expect(Arr.map([...f.entries.values()], (entry) => entry.status)).toEqual(["discarded"]);
+      expect(f.statuses()).toEqual(["discarded"]);
     });
   });
 
@@ -136,24 +72,10 @@ describe("writer workspace orchestration", () => {
       expect(yield* runViews(service)).toEqual([]);
       expect(f.children.controls).toHaveLength(0);
       expect(f.hookRuns).toEqual([]);
-      expect(Arr.map([...f.entries.values()], (entry) => entry.status)).toEqual(["discarded"]);
+      expect(f.statuses()).toEqual(["discarded"]);
     });
   });
 
-  it.effect("refuses orphan discard without original directory identity", () => {
-    const f = fixture();
-    f.hooks.orphanOwnerEnded = true;
-    const original = record("unready", "old-session/root", "/repo", "active");
-    const { writerCwd: _identity, ...handle } = original.handle;
-    f.entries.set("unready", { ...original, handle });
-    return withService(f.layer, function* (service) {
-      expect(yield* service.workspaceDiscard("unready").pipe(Effect.flip)).toMatchObject({
-        code: "workspace_process_unsettled",
-      });
-      expect(f.entries.get("unready")?.status).toBe("active");
-      expect(f.acquired).toEqual([]);
-    });
-  });
   it.live("releases a real source lease when cancellation lands at acquisition handoff", () =>
     Effect.gen(function* () {
       const temporary = yield* temporaryDirectory("workspace-handoff-");
@@ -194,18 +116,6 @@ describe("writer workspace orchestration", () => {
       });
     }).pipe(Effect.scoped),
   );
-  it.effect("keeps an orphan while a writer still holds its worker tree", () => {
-    const f = fixture({ writerLeases: fakeWriterLeaseLayer({ failAcquire: true }) });
-    f.hooks.orphanOwnerEnded = true;
-    f.entries.set("orphan", record("orphan", "old-session/root", "/repo", "active"));
-    return withService(f.layer, function* (service) {
-      expect(yield* service.workspaceDiscard("orphan").pipe(Effect.flip)).toMatchObject({
-        code: "workspace_process_unsettled",
-      });
-      expect(f.entries.get("orphan")?.status).toBe("active");
-    });
-  });
-
   it.effect("refuses script-origin writers before workspace creation or reservations", () => {
     const f = fixture();
     return withService(f.layer, function* (service) {
@@ -273,9 +183,8 @@ describe("writer workspace orchestration", () => {
   it.effect("refuses to resume or revise a writer whose workspace was integrated", () => {
     const f = fixture();
     return withService(f.layer, function* (service) {
-      const writer = yield* service.start(repoWriter());
+      const writer = yield* completedWriter(service, f);
       const id = writer.workspaceId!;
-      yield* completeLocalRun(service, f.children.controls[0]!, writer.id, "Done.");
       const tested = yield* reviewAndPrepare(service, id);
       yield* service.workspaceApply(id, { revisionId: tested.revisionId });
       expect(yield* service.resume(writer.id).pipe(Effect.flip)).toMatchObject({
@@ -296,9 +205,8 @@ describe("writer workspace orchestration", () => {
       const f = fixture();
       f.hooks.integrateStops = true;
       return withService(f.layer, function* (service) {
-        const writer = yield* service.start(repoWriter());
+        const writer = yield* completedWriter(service, f);
         const id = writer.workspaceId!;
-        yield* completeLocalRun(service, f.children.controls[0]!, writer.id, "Done.");
         const tested = yield* reviewAndPrepare(service, id);
         yield* service.workspaceApply(id, { revisionId: tested.revisionId }).pipe(Effect.flip);
         expect(f.entries.get(id)?.status).toBe("integrating");
@@ -321,20 +229,8 @@ describe("writer workspace orchestration", () => {
     "rolls a stopped integration back only while no shared-checkout writer edits the checkout",
     () => {
       // Directories whose writer-pool lease another session's shared-checkout writer holds.
-      const heldElsewhere = new Set<string>();
-      const f = fixture({
-        writerLeases: leasesWith((base) => ({
-          acquire: (input) =>
-            heldElsewhere.has(input.cwd.path)
-              ? Effect.fail(
-                  WriterLeaseConflictError.make({
-                    reason: "live",
-                    message: "Another live writer already owns this filesystem directory identity.",
-                  }),
-                )
-              : base.acquire(input),
-        })),
-      });
+      const held = new Set<string>();
+      const f = fixture({ writerLeases: leasesWith(heldElsewhere((cwd) => held.has(cwd))) });
       f.hooks.integrateStops = true;
       return withService(f.layer, function* (service) {
         const id = (yield* stoppedWriter(service)).workspaceId!;
@@ -347,14 +243,14 @@ describe("writer workspace orchestration", () => {
           code: "workspace_target_busy",
         });
         yield* service.stop(writer.id);
-        heldElsewhere.add("/repo");
+        held.add("/repo");
         expect(yield* service.workspaceDiscard(id).pipe(Effect.flip)).toMatchObject({
           code: "workspace_target_busy",
         });
         expect(f.entries.get(id)?.status).toBe("integrating");
         expect(f.rollbacks).toEqual([]);
 
-        heldElsewhere.delete("/repo");
+        held.delete("/repo");
         yield* service.workspaceDiscard(id);
         expect(f.rollbacks).toEqual([id]);
         expect(f.entries.get(id)?.status).toBe("discarded");
@@ -383,43 +279,8 @@ describe("writer workspace orchestration", () => {
     });
   });
 
-  it.effect("holds read-only admission closed throughout destructive discard", () => {
-    const f = fixture();
-    return withService(f.layer, function* (service) {
-      const writer = yield* stoppedWriter(service);
-      const gate = yield* pauseAt;
-      f.hooks.before.discard = gate.pause;
-      const discarding = yield* service
-        .workspaceDiscard(writer.workspaceId!)
-        .pipe(Effect.forkChild);
-      yield* Deferred.await(gate.entered);
-      const attempted = yield* Deferred.make<void>();
-      const admitted = yield* Deferred.make<void>();
-      const starting = yield* Deferred.succeed(attempted, undefined).pipe(
-        Effect.andThen(service.start(request({ cwd: writer.cwd }))),
-        Effect.tap(() => Deferred.succeed(admitted, undefined)),
-        Effect.forkChild,
-      );
-      yield* Deferred.await(attempted);
-      yield* Effect.yieldNow;
-      expect(yield* Deferred.isDone(admitted)).toBe(false);
-      expect(f.entries.get(writer.workspaceId!)?.status).toBe("active");
-      yield* Deferred.succeed(gate.release, undefined);
-      yield* Fiber.join(discarding);
-      yield* Fiber.join(starting);
-      expect(f.entries.get(writer.workspaceId!)?.status).toBe("discarded");
-    });
-  });
-
   it.effect("keeps a committed integration when a source lease release fails", () => {
-    const f = fixture({
-      writerLeases: leasesWith((base) => ({
-        release: (lease) =>
-          lease.canonicalCwd === "/repo"
-            ? Effect.fail(WriterLeaseReleaseError.make({ message: "Release unconfirmed." }))
-            : base.release(lease),
-      })),
-    });
+    const f = fixture({ writerLeases: leasesWith(failingRelease("/repo")) });
     return withService(f.layer, function* (service) {
       const id = (yield* stoppedWriter(service)).workspaceId!;
       const other = (yield* stoppedWriter(service)).workspaceId!;

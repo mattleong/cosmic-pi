@@ -4,7 +4,7 @@ import * as Order from "effect/Order";
 import * as Str from "effect/String";
 import { codeUnitAt, indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { clipToWidth } from "pi-cosmic-ui/manager";
+import { clipToWidth, wrapWords } from "pi-cosmic-ui/manager";
 
 // Bound once: Pi's loader routes each imported-helper call through an interop proxy.
 const codeAt = codeUnitAt;
@@ -26,6 +26,19 @@ export function escapeLineControlChars(line: string): string {
   );
 }
 
+/**
+ * A plain line without line breaks, wrapped to `width` between words; a word wider than a row,
+ * such as a long path, breaks after `/`, then after `-`, `_`, or `.`, then anywhere. Its indent
+ * stays on the first row when the row's first words fit beside it.
+ */
+export function wrapIndentedLine(line: string, width: number): string[] {
+  const rest = Str.trimStart(line);
+  const indent = Fn.pipe(line, Str.slice(0, line.length - rest.length));
+  const lead = visibleWidth(indent);
+  const [first = "", ...more] = wrapWords(rest, Math.max(1, width - lead), width);
+  return [visibleWidth(first) + lead <= width ? `${indent}${first}` : first, ...more];
+}
+
 const PRINTABLE_ASCII_RE = /^[ -~]*$/;
 
 export function matchSgrSequence(text: string, index: number): string | undefined {
@@ -41,11 +54,10 @@ export function matchSgrSequence(text: string, index: number): string | undefine
 export function replaceSgrSequences(
   text: string,
   replace: (sequence: string, parameters: string) => string,
-  match: (text: string, index: number) => string | undefined = matchSgrSequence,
 ): string {
   let out = "";
   for (let index = 0; index < text.length; ) {
-    const sequence = match(text, index);
+    const sequence = matchSgrSequence(text, index);
     if (sequence) {
       out += replace(sequence, Fn.pipe(sequence, Str.slice(2, -1)));
       index += sequence.length;

@@ -50,7 +50,7 @@ import {
   waitContract,
 } from "./contract.ts";
 import type { BackgroundTaskContract } from "./contract-schema.ts";
-import { pageLogSlice, pageOmission, recentOutput, type LogPageOmission } from "./log-page.ts";
+import { pageLogSlice, recentOutput, type LogPageOmission } from "./log-page.ts";
 import type { BackgroundTaskToolInput } from "./schema.ts";
 
 export type BackgroundTaskToolDetails = typeof BackgroundTaskDetailsSchema.Type;
@@ -319,7 +319,7 @@ const formatLogs = (slice: BackgroundLogSlice, request: ReadBackgroundLogs, maxB
     maxBytes: Math.max(0, maxBytes - reserved),
     maxLines: DEFAULT_MAX_LINES - LOG_HEADER_LINES,
   });
-  const truncation = pageOmission(slice, direction, page);
+  const truncation = page.omission;
   const notice = truncation ? pageNotice(truncation, page.cut?.cursor) : "";
   const loss = lossNotice(page.skipped, request.afterCursor);
   const text = `${header(page.nextCursor)}${loss}${notice}${page.output || NO_NEW_OUTPUT}`;

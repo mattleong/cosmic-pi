@@ -1,12 +1,33 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
+import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { clipProse } from "./display.ts";
+import { decodeUnknownOrUndefined } from "./schema/decode.ts";
 import { sanitizeTerminalLine } from "./security.ts";
 import { codeUnitAt, indexOfFrom } from "./text-scan.ts";
 
 export const MESSAGE_TEXT_LIMIT = 240;
+
+// Stored and replayed parts are foreign objects, so one whose fields throw when read is skipped.
+const textPart = decodeUnknownOrUndefined(
+  Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+);
+
+/** A message's text: string content as is, or its text parts joined by lines; other parts are ignored. */
+export const contentText = (content: string | ReadonlyArray<unknown> | undefined): string =>
+  Predicate.isString(content)
+    ? content
+    : Fn.pipe(
+        content ?? [],
+        Arr.flatMap((part) => {
+          const text = textPart(part)?.text;
+          return text === undefined ? [] : [text];
+        }),
+        Arr.join("\n"),
+      );
 
 const ERROR_PREFIX =
   /^(?:Uncaught(?: exception)?(?::?\s+|:$)|(?:[A-Z][A-Za-z]*)?Error(?: \[[A-Z0-9_]+\])?:(?:\s+|$)|\[[A-Z][a-z]+(?:[A-Z][a-z]+)+\]\s+)/u;

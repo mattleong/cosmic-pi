@@ -22,12 +22,12 @@ import {
   isProjectTrusted,
   notifyAtHostBoundary,
 } from "pi-cosmic-core/host-session";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
 import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
 import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
 import {
   acceptsAsyncMessage,
   captureHistoricalDeliveries,
-  createQuestionnaireGeneration,
   hostAsyncDelivery,
   registerAskUserMessageOrigins,
 } from "./boundary/host-delivery.ts";
@@ -224,7 +224,7 @@ export function askUserWithDependencies(
         ctx,
         cwd: captured.cwd,
         projectTrusted: isProjectTrusted(ctx),
-        generation: createQuestionnaireGeneration(),
+        generation: synchronousRandomUuid(),
         publishesReplay,
         active: false,
       })

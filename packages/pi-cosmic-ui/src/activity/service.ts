@@ -4,7 +4,6 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
@@ -21,10 +20,11 @@ import {
   type ActivityItem,
 } from "./protocol.ts";
 import { decodeActivityDetail, plainActivityDetail } from "./detail.ts";
-import { retainActivity, type ActivityRow } from "./model.ts";
+import { retainActivity, type ActivityAction, type ActivityRow } from "./model.ts";
 import { detachActivityItem } from "./detach.ts";
 import { ACTIVITY_LIMITS } from "./limits.ts";
 import { SPINNER_FRAME_MS } from "../manager/chrome.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export class ActivityError extends Schema.TaggedError<
   ActivityError,
@@ -129,7 +129,6 @@ const decodeSnapshot = (event: ActivityEnvelope): DecodedSnapshot | undefined =>
   if (items === undefined || starting === undefined) return undefined;
   return consistentSnapshot(items) ? { items, starting } : undefined;
 };
-type ActivityAction = NonNullable<ActivityItem["actions"]>[number];
 // Each `satisfies` fails to compile when the protocol gains a field, so comparison covers it.
 const ITEM_FIELDS = {
   id: true,
@@ -282,15 +281,13 @@ const admit = Effect.fnUntraced(function* (old: State, event: ActivityEnvelope) 
 });
 const startingWork = (item: ActivityItem) => item.kind === "agent" && item.status === "pending";
 const currentRow = (rows: readonly ActivityRow[], request: ActivityDetailRequest) =>
-  Option.getOrUndefined(
-    Arr.findFirst(
-      rows,
-      (row) =>
-        row.key === request.key &&
-        !row.retained &&
-        row.generation === request.generation &&
-        row.revision === request.revision,
-    ),
+  findOrUndefined(
+    rows,
+    (row) =>
+      row.key === request.key &&
+      !row.retained &&
+      row.generation === request.generation &&
+      row.revision === request.revision,
   );
 export class ActivityService extends Context.Service<ActivityService, ActivityServiceContract>()(
   "pi-cosmic-ui/activity/service/ActivityService",
@@ -304,7 +301,7 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
           [...value.providers.values()],
           0,
           (count, provider) =>
-            count + (provider.starting || Arr.filter(provider.items, startingWork).length),
+            count + (provider.starting || Arr.countBy(provider.items, startingWork)),
         ),
       }),
       (view) => options.publish(view.rows, view.starting),
@@ -338,10 +335,10 @@ export class ActivityService extends Context.Service<ActivityService, ActivitySe
       function* (event: ActivityEnvelope) {
         const [notices, updated] = yield* state
           .transition<readonly [readonly Acknowledgement[], boolean], ActivityError, never>((old) =>
-            Effect.gen(function* () {
-              const [acknowledgements, next] = yield* admit(old, event);
-              return [[acknowledgements, next !== old], next] as const;
-            }),
+            Effect.map(
+              admit(old, event),
+              ([acknowledgements, next]) => [[acknowledgements, next !== old], next] as const,
+            ),
           )
           .pipe(Effect.mapError(asActivityError));
         for (const [provider, available] of notices) {

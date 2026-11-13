@@ -1,11 +1,10 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
-import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type { JsonObject, JsonValue } from "pi-cosmic-core";
+import { isJsonObject } from "pi-cosmic-core/platform/json-document";
 import {
   replacementField,
   toolArgumentPreparer,
@@ -44,6 +43,7 @@ import {
   type SubagentToolName,
 } from "../run/tool-policy.ts";
 import { formatCount } from "pi-cosmic-core/display";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 // Parents trained on other harnesses send these field names; name the replacement instead of
 // only rejecting the key.
@@ -59,9 +59,6 @@ export const SUBAGENT_FIELD_ALIASES: ToolFieldAliases = {
   workspaceMode: "isolation",
   writerWorkspaceMode: "isolation",
 };
-const decodeArgumentsObject = Schema.decodeUnknownOption(
-  Schema.Record(Schema.String, Schema.MutableJson),
-);
 
 const strictObjectOptions = { additionalProperties: false } as const;
 // Nonblank text is enforced by argument preparation: providers such as llama.cpp reject `pattern`.
@@ -281,9 +278,18 @@ const LifecycleParameters = Type.Object(
   strictObjectOptions,
 );
 
+export const WORKSPACE_ACTIONS = [
+  "list",
+  "review",
+  "prepare",
+  "apply",
+  "discard",
+  "revise",
+] as const;
+
 export const WorkspaceParameters = Type.Object(
   {
-    action: Type.Enum(["list", "review", "prepare", "apply", "discard", "revise"] as const, {
+    action: Type.Enum(WORKSPACE_ACTIONS, {
       description:
         "Every action but list needs workspaceId. prepare needs revisionId; revise needs message.",
     }),
@@ -343,16 +349,12 @@ const isPlaceholder = (value: SubagentWorkspaceInput[WorkspaceField]): boolean =
  */
 export const workspaceOperationError = (operation: SubagentWorkspaceInput): string | undefined => {
   const fields = WORKSPACE_ACTION_FIELDS[operation.action];
-  const missing = Option.getOrUndefined(
-    Arr.findFirst(fields.required, (field) => isPlaceholder(operation[field])),
-  );
+  const missing = findOrUndefined(fields.required, (field) => isPlaceholder(operation[field]));
   if (missing) return `Worktree ${operation.action} requires ${missing}.`;
   const allowed = new Set<WorkspaceField>([...fields.required, ...fields.optional]);
-  const unexpected = Option.getOrUndefined(
-    Arr.findFirst(
-      WORKSPACE_FIELDS,
-      (field) => !allowed.has(field) && !isPlaceholder(operation[field]),
-    ),
+  const unexpected = findOrUndefined(
+    WORKSPACE_FIELDS,
+    (field) => !allowed.has(field) && !isPlaceholder(operation[field]),
   );
   if (unexpected) return `Worktree ${operation.action} does not accept ${unexpected}.`;
   return undefined;
@@ -383,31 +385,19 @@ export type SubagentToolInput<N extends SubagentToolName = SubagentToolName> = {
   readonly [P in N]: { readonly tool: P; readonly args: SubagentToolArgs<P> };
 }[N];
 
-type ToolNameAction = keyof typeof SUBAGENT_TOOL_NAME;
-type ToolActions = {
-  readonly [N in SubagentToolName]: N extends typeof SUBAGENT_TOOL_NAME.lifecycle
-    ? SubagentToolArgs<N>["action"]
-    : {
-        readonly [A in ToolNameAction]: (typeof SUBAGENT_TOOL_NAME)[A] extends N ? A : never;
-      }[ToolNameAction];
-};
-export type SubagentToolAction = ToolActions[SubagentToolName];
+const NAMED_ACTIONS = {
+  [SUBAGENT_TOOL_NAME.models]: "models",
+  [SUBAGENT_TOOL_NAME.start]: "start",
+  [SUBAGENT_TOOL_NAME.await]: "await",
+  [SUBAGENT_TOOL_NAME.workspace]: "workspace",
+} as const;
 
-type ToolActionResolvers = {
-  readonly [N in SubagentToolName]: (args: SubagentToolArgs<N>) => ToolActions[N];
-};
+export type SubagentToolAction =
+  | (typeof NAMED_ACTIONS)[keyof typeof NAMED_ACTIONS]
+  | SubagentLifecycleInput["action"];
 
-const TOOL_ACTIONS: ToolActionResolvers = {
-  [SUBAGENT_TOOL_NAME.models]: () => "models",
-  [SUBAGENT_TOOL_NAME.start]: () => "start",
-  [SUBAGENT_TOOL_NAME.await]: () => "await",
-  [SUBAGENT_TOOL_NAME.lifecycle]: (args) => args.action,
-  [SUBAGENT_TOOL_NAME.workspace]: () => "workspace",
-};
-
-export const subagentToolAction = <N extends SubagentToolName>(
-  input: SubagentToolInput<N>,
-): ToolActions[N] => TOOL_ACTIONS[input.tool](input.args);
+export const subagentToolAction = (input: SubagentToolInput): SubagentToolAction =>
+  input.tool === SUBAGENT_TOOL_NAME.lifecycle ? input.args.action : NAMED_ACTIONS[input.tool];
 
 const AgentIdParameter = Type.String({
   description: `A run ID from agent_list, or "${MAIN_AGENT_ID}" for the session's main agent.`,
@@ -473,8 +463,8 @@ const START_SPEC_FIELDS: ReadonlyArray<string> = Rec.keys(StartSpecFields);
 
 const checkStartAgents = (agents: ReadonlyArray<JsonValue>): void =>
   Arr.forEach(agents, (candidate, index) => {
-    const agent = Option.getOrUndefined(decodeArgumentsObject(candidate));
-    if (!agent) return;
+    if (!isJsonObject(candidate)) return;
+    const agent: JsonObject = candidate;
     const disallowedField = firstDisallowedLaunchOverride(agent);
     if (disallowedField)
       throw new Error(

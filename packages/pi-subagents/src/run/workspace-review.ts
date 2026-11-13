@@ -3,6 +3,7 @@ import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Str from "effect/String";
+import { isHighSurrogate, isLowSurrogate } from "pi-cosmic-core/text";
 import { revisionSummary } from "../workspace/diffstat.ts";
 import type {
   WorkspacePreparation,
@@ -58,9 +59,6 @@ export interface WorkspaceReviewOptions {
 
 /** UTF-16 units per review page. */
 const REVIEW_PAGE_CHARS = 16_000;
-
-const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
-const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
 
 /**
  * Where a page starting at `offset` ends: at most one page of UTF-16 units, never between the two
@@ -357,10 +355,8 @@ export function workspaceReviewOperations(
     /** Phases a multi-step operation composes while it keeps one binding busy. */
     held: {
       hold,
-      operate,
       settledRevision,
       prepareHeld,
-      provisionHeld,
       markPrepared,
       discardHeld,
     },

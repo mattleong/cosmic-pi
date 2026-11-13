@@ -9,7 +9,11 @@ import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
 import { vi } from "vitest";
-import { guardProcessGroupAtHostExit, signalProcessGroup } from "../index.ts";
+import {
+  confirmProcessGroupExit,
+  guardProcessGroupAtHostExit,
+  signalProcessGroup,
+} from "../index.ts";
 import { spawnIpcChild } from "../src/testing/ipc-child.ts";
 
 vi.setConfig({ testTimeout: 30_000 });
@@ -17,15 +21,6 @@ vi.setConfig({ testTimeout: 30_000 });
 const childScript = fileURLToPath(
   new URL("./fixtures/process-group-exit-guard-child.ts", import.meta.url),
 );
-
-const groupAbsent = (pid: number) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      if (signalProcessGroup(pid, 0) === "absent") return true;
-      yield* Effect.sleep(10);
-    }
-    return false;
-  });
 
 const hostExit = (mode: "guarded" | "released") =>
   Effect.gen(function* () {
@@ -50,7 +45,7 @@ describe("process-group host-exit guard", () => {
   it.live("kills a guarded group when its host exits without closing scopes", () =>
     Effect.gen(function* () {
       const pid = yield* hostExit("guarded");
-      expect(yield* groupAbsent(pid)).toBe(true);
+      expect(yield* confirmProcessGroupExit(pid, 2_000)).toBe(true);
     }).pipe(Effect.scoped),
   );
 

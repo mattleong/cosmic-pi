@@ -4,7 +4,7 @@ import { CodePreviewSchedulerService } from "pi-code-previews";
 import { nodeFilePlatformLayer } from "pi-cosmic-core/platform/node-file";
 import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { localPiBackendDriver } from "./backend/local-pi.ts";
-import { backendRegistryFor, SubagentBackendRegistry } from "./backend/service.ts";
+import { SubagentBackendRegistry } from "./backend/service.ts";
 import { ChildProcess } from "./boundary/child-process.ts";
 import { sweepAbandonedPrivateState } from "./boundary/private-state.ts";
 import { pruneReportArchive, sessionReportArchive } from "./boundary/report-archive.ts";
@@ -22,9 +22,7 @@ import { SubagentService, type SubagentServiceOptions } from "./run/service.ts";
 
 const subagentBackendRegistryLayer = Layer.effect(
   SubagentBackendRegistry,
-  ChildProcess.use((children) =>
-    Effect.succeed(backendRegistryFor(localPiBackendDriver(children))),
-  ),
+  ChildProcess.useSync((children) => localPiBackendDriver(children)),
 );
 
 /** Startup housekeeping runs in the background for the runtime's lifetime and never blocks it. */

@@ -8,7 +8,12 @@ import { getSecretWarnings } from "../warnings/secrets";
 import { getWriteDiffGuard, getWriteDiffSkipReason, hasWriteDiffSizeEvidence } from "../write/diff";
 import type { BuiltinCompactPolicy } from "./builtin-projection";
 import type { CompactIssue } from "./compact-issues";
-import { isTruncated, splitReadContinuationNotice } from "./data/results";
+import {
+  isTruncated,
+  LIMIT_REACHED_FIELDS,
+  oversizedReadNotice,
+  splitReadContinuationNotice,
+} from "./data/results";
 
 const VOWEL_SOUND = new Set(["AWS secret key", "API key"]);
 const withArticle = (label: string) => `${VOWEL_SOUND.has(label) ? "an" : "a"} ${label}`;
@@ -56,8 +61,7 @@ const READ_TRUNCATED: CompactIssue = {
 };
 
 /** The issue for a first line too large to return; its detail is Pi's notice, shown only there. */
-function oversizedFirstLineIssues(output: string): CompactIssue[] | undefined {
-  const notice = /^\[([^\r\n]*)\]$/u.exec(output)?.[1] ?? output;
+function oversizedFirstLineIssues(notice: string): CompactIssue[] | undefined {
   return notice
     ? [
         {
@@ -106,9 +110,9 @@ export function readIssues(
   output: string,
   hasLimit: boolean,
 ): CompactIssue[] | undefined {
+  const oversized = oversizedReadNotice(details, output);
+  if (oversized !== undefined) return oversizedFirstLineIssues(oversized);
   const truncation = ownObject(details, "truncation");
-  if (ownField(truncation, "firstLineExceedsLimit") === true)
-    return oversizedFirstLineIssues(output);
   const truncated = isTruncated(details);
   if (!truncated && !hasLimit) return [];
   const { notice } = splitReadContinuationNotice(output);
@@ -127,7 +131,7 @@ export function readIssues(
   return truncated ? [READ_TRUNCATED] : [];
 }
 
-const OUTPUT_TRUNCATED = {
+export const OUTPUT_TRUNCATED = {
   severity: "warning",
   code: "output-truncated",
   message: "Output was cut off",
@@ -135,12 +139,6 @@ const OUTPUT_TRUNCATED = {
 
 export const hasRetainedOutput = (issues: readonly CompactIssue[]) =>
   Arr.some(issues, ({ code, severity }) => code === OUTPUT_TRUNCATED.code && severity === "info");
-
-const LIMIT_FIELDS = {
-  grep: "matchLimitReached",
-  find: "resultLimitReached",
-  ls: "entryLimitReached",
-} as const;
 
 export function outputLimitProjection(
   tool: "bash" | "grep" | "find" | "ls",
@@ -159,8 +157,7 @@ export function outputLimitProjection(
   else if (isTruncated(details))
     issues.push({ ...OUTPUT_TRUNCATED, detail: `Output truncated by ${tool}` });
   if (tool === "bash") return { issues, counters };
-  const field = LIMIT_FIELDS[tool];
-  const limit = ownField(details, field);
+  const limit = ownField(details, LIMIT_REACHED_FIELDS[tool]);
   if (Predicate.isNumber(limit) && Number.isSafeInteger(limit) && limit > 0)
     counters.push(`limit reached: ${limit}`);
   if (tool === "grep" && ownField(details, "linesTruncated") === true)

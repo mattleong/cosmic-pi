@@ -86,7 +86,7 @@ export function summarizeStart(
   summary: CompactSummary,
   issues: CompactIssue[],
 ): CompactSummary {
-  const started = Arr.filter(details.startEntries, (entry) => entry.status === "started").length;
+  const started = Arr.countBy(details.startEntries, (entry) => entry.status === "started");
   const total = details.startEntries.length;
   summary.counters = startedCounter(started, total, summary.subject);
   const named = total === 1 && Str.isNonEmpty(Str.trim(summary.subject));

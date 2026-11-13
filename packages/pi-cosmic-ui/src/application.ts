@@ -8,6 +8,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as MutableRef from "effect/MutableRef";
 import {
+  capturedHostSignal,
   captureHostSignal,
   invokeHostCallback,
   isProjectTrusted,
@@ -16,7 +17,6 @@ import {
 import { registerExtensionCommand } from "pi-cosmic-core/host-command";
 import { forwardAbortSignal, makePiManagedRuntime } from "pi-cosmic-core/runtime";
 import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
-import { capturedHostSignal } from "./boundary/host-abort-signal.ts";
 import {
   decodeCompletedAssistantOutput,
   emptyTotals,

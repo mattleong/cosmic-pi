@@ -22,7 +22,7 @@ export const samePiModel = (selected: string, required: string): boolean =>
   baseModel(selected) === baseModel(required);
 
 type PiModelResolution =
-  | { readonly kind: "resolved"; readonly provider: string; readonly id: string }
+  | ({ readonly kind: "resolved" } & PiCatalogModel)
   | { readonly kind: "ambiguous"; readonly candidates: ReadonlyArray<string> }
   | { readonly kind: "unknown"; readonly nearMatches: ReadonlyArray<string> };
 

@@ -1,6 +1,15 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
-import type { ExtensionEventNamed } from "pi-cosmic-core/testing";
+import {
+  footerDataFixture,
+  plainTheme,
+  tuiFixture,
+  type ExtensionEventNamed,
+} from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
   COSMIC_UI_HOST_QUERY,
@@ -8,35 +17,11 @@ import {
   type CosmicUiHostQuery,
 } from "../../src/protocol/protocol.ts";
 
-export function capturedSignal(
-  source = new AbortController().signal,
-  onAbortedRead = () => {},
-  throwAfterAdd = false,
-) {
-  const addEventListener = vi.fn((...args: Parameters<AbortSignal["addEventListener"]>) => {
-    source.addEventListener(...args);
-    if (throwAfterAdd) throw new Error("registered before throwing");
-  });
-  const removeEventListener = vi.fn(source.removeEventListener.bind(source));
-  const signal: AbortSignal = {
-    get aborted() {
-      onAbortedRead();
-      return source.aborted;
-    },
-    get reason() {
-      const reason: unknown = source.reason;
-      return reason;
-    },
-    get onabort() {
-      return source.onabort;
-    },
-    throwIfAborted: () => source.throwIfAborted(),
-    addEventListener,
-    removeEventListener,
-    dispatchEvent: (event) => source.dispatchEvent(event),
-  };
-  return { signal, addEventListener, removeEventListener };
-}
+export const capturedSignal = (signal = new AbortController().signal) => ({
+  signal,
+  addEventListener: vi.spyOn(signal, "addEventListener"),
+  removeEventListener: vi.spyOn(signal, "removeEventListener"),
+});
 
 export type AssistantMessage = Extract<
   ExtensionEventNamed<"message_end">["message"],
@@ -51,6 +36,45 @@ export const nativeUsage = (input: number) => ({
   totalTokens: input,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 });
+
+type SessionEntries = ReturnType<ExtensionContext["sessionManager"]["getEntries"]>;
+
+/** A persisted usage entry, as the host writes one for cache warming unless `kind` says otherwise. */
+export const usageEntry = (
+  input: number,
+  { kind = "cache_warm", usage = nativeUsage(input) } = {},
+): SessionEntries[number] => ({
+  id: "entry",
+  parentId: null,
+  timestamp: "2026-01-01T00:00:00Z",
+  type: "usage",
+  kind,
+  provider: "test",
+  model: "test",
+  usage,
+});
+
+export type FooterFactory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
+export type FooterData = Parameters<FooterFactory>[2];
+
+/** Mounts an installed footer factory on a fake TUI with one available provider. */
+export function makeFooter(
+  factory: FooterFactory | undefined,
+  data: Partial<FooterData> = {},
+  requestRender: () => void = vi.fn(),
+) {
+  if (!factory) throw new Error("Expected an installed footer factory.");
+  const component = factory(
+    tuiFixture({ requestRender }),
+    plainTheme,
+    footerDataFixture({ getAvailableProviderCount: () => 1, ...data }),
+  );
+  if (!component.dispose) throw new Error("Expected a disposable footer.");
+  return {
+    render: (width: number) => component.render(width),
+    dispose: () => component.dispose?.(),
+  };
+}
 
 export const assistantMessage = (
   usage: AssistantMessage["usage"] = nativeUsage(0),

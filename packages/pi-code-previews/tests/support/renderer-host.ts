@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
+import type { CodePreviewSessionCapability } from "../../src/application/capability";
 import {
   CodePreviewPresentationOwner,
   createCodePreviewRendererResolver,
@@ -26,6 +27,15 @@ export const builtinToolInfo = (
 });
 
 export const inertScheduler = { defer: () => () => undefined, schedule: () => () => undefined };
+
+/** A session capability that schedules nothing and rejects runtime work, except as overridden. */
+export const inertCapability = (
+  overrides: Partial<CodePreviewSessionCapability> = {},
+): CodePreviewSessionCapability => ({
+  ...inertScheduler,
+  run: () => Promise.reject(new Error("unexpected session runtime call")),
+  ...overrides,
+});
 
 export function presentationResolver(
   host: Partial<ExtensionAPI>,

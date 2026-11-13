@@ -14,6 +14,7 @@ import {
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
 import { extensionApiFixture, extensionContextFixture } from "pi-cosmic-core/testing";
 import { AskUserHostError } from "../src/questionnaire/errors.ts";
+import { hostile } from "./support/questionnaire.ts";
 
 const throwSecret = () => {
   throw new Error("secret-raw-error");
@@ -92,11 +93,7 @@ it("malformed metadata and unavailable historical branch reads fail closed", () 
       {
         role: "custom",
         customType: ASYNC_MESSAGE_TYPE,
-        details: {
-          get generation() {
-            throw new Error("hostile");
-          },
-        },
+        details: hostile({}, "generation"),
       },
       "new",
       historical,

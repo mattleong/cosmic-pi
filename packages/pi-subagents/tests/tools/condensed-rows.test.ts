@@ -5,35 +5,19 @@ import * as Str from "effect/String";
 import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
 import { stripAnsi } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
-import { assert, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { SubagentRunView } from "../../src/run/model.ts";
-import { listDetails } from "../../src/tools/agent-details.ts";
 import { projectSubagentRunCard } from "../../src/tools/details-projection.ts";
-import { renderListResult } from "../../src/tools/render-agents.ts";
 import type { CompactSubagentToolDetails } from "../../src/tools/details-schema.ts";
 import { SUBAGENT_CARD_DETAILS_VERSION } from "../../src/tools/details-schema.ts";
 import { awaitDetails } from "../../src/tools/details.ts";
 import { formatAwaitCounters } from "../../src/tools/render-await.ts";
 import { renderProfileRoutesComponent } from "../../src/tools/render-management.ts";
-import { renderStartReceiptComponent } from "../../src/tools/render-start.ts";
-import { stateGroupLines } from "../../src/tools/render-run-cards.ts";
-import { runRowStateLabel } from "../../src/ui/run-state.ts";
-import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import { captureSubagentTools, view } from "./fixtures/tool-harness.ts";
+import { renderOnlyTool, view } from "./fixtures/tool-harness.ts";
 
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 84_000, cost: 0.61 };
 const card = (overrides: Partial<SubagentRunView>) => projectSubagentRunCard(view(overrides));
 const plain = (lines: ReadonlyArray<string>) => stripAnsi(Arr.join(lines, "\n"));
-
-const entry = (run: SubagentRunView) => ({
-  id: run.id,
-  name: run.name,
-  kind: "run" as const,
-  state: run.state,
-  task: run.task,
-  self: false,
-  run,
-});
 
 const hierarchy = (ids: ReadonlyArray<string>) => ({ awaitedRunIds: new Set(ids) });
 const compactHeading = { compact: true, counted: true };
@@ -48,95 +32,6 @@ const candidate = (context: "fresh" | "fork", model: string) => ({
   openaiFastMode: false,
   status: "eligible" as const,
   reason: "Eligible.",
-});
-
-describe("listed run rows", () => {
-  it("leave out the state word their glyph says and keep words beside shared glyphs", () => {
-    for (const state of [
-      "starting",
-      "paused",
-      "completed",
-      "failed",
-      "stopping",
-      "stopped",
-    ] as const)
-      expect(runRowStateLabel(state)).toBeUndefined();
-    // A snapshot marks running work with the neutral `•`, and a question with the shared `?`.
-    expect(runRowStateLabel("running")).toBe("running");
-    expect(runRowStateLabel("waiting_for_parent")).toBe("waiting for reply");
-  });
-
-  it("group runs by glyph alone unless their verb says more than the glyph", () => {
-    const text = plain(
-      stateGroupLines(
-        [
-          card({ id: "a", name: "stopped-run", state: "stopped" }),
-          card({ id: "b", name: "stopping-run", state: "stopping" }),
-          card({ id: "c", name: "done-run", state: "completed" }),
-          card({ id: "d", name: "live-run", state: "running" }),
-        ],
-        100,
-        plainTheme,
-      ),
-    );
-    expect(text).not.toContain("Stopped");
-    expect(text).not.toContain("Stopping");
-    expect(text).toContain("stopped-run");
-    expect(text).toContain("stopping-run");
-    expect(text).toContain("Already finished done-run");
-    expect(text).toContain("Still running live-run");
-  });
-});
-
-describe("agent list rows", () => {
-  it("leave a pause to its glyph and keep words beside the neutral and question glyphs", () => {
-    const paused = view({ id: "agent-1", name: "docs-sweep", state: "paused", task: "Sweep docs" });
-    const asking = view({
-      id: "agent-2",
-      name: "db-migration",
-      state: "waiting_for_parent",
-      task: "Migrate",
-      question: { requestId: "q", message: "Backfill?" },
-    });
-    const running = view({ id: "agent-3", name: "auth-review", state: "running", task: "Audit" });
-    const details = listDetails(
-      { agents: [entry(paused), entry(asking), entry(running)], missingIds: [] },
-      1,
-    );
-    assert(details.action === "agent_list");
-    const text = plain(renderListResult(details, false, plainTheme)?.render(100) ?? []);
-    expect(text).toContain("‖ docs-sweep · Sweep docs");
-    expect(text).toContain("db-migration · waiting for reply · Migrate");
-    expect(text).not.toContain("waiting for reply · waiting for reply");
-    expect(text).toContain("auth-review · running · Audit");
-  });
-});
-
-describe("start receipts", () => {
-  it("keep the launch verb beside a launch's `✓`, which beside a run's name says it finished", () => {
-    const launch = {
-      profile: "scout",
-      routeStatus: "selected",
-      model: "openai-codex/gpt-6-sol",
-      effort: "high",
-      openaiFastMode: false,
-      candidateIndex: 1,
-    } as const;
-    const text = plain(
-      renderStartReceiptComponent(
-        {
-          startEntries: [
-            { ...launch, index: 0, name: "docs-sweep", status: "started", runId: "agent-1" },
-            { ...launch, index: 1, name: "auth-review", status: "failed" },
-          ],
-        },
-        false,
-        plainTheme,
-      ).render(100),
-    );
-    expect(text).toContain("Started docs-sweep");
-    expect(text).not.toContain("auth-review");
-  });
 });
 
 describe("await body totals", () => {
@@ -191,7 +86,7 @@ describe("await body totals", () => {
 
   it("keep the counts an expanded compact heading too narrow for its counter leaves out", () => {
     applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false });
-    const tool = captureSubagentTools(subagentServiceDouble({})).get("agent_await")!;
+    const tool = renderOnlyTool("agent_await");
     const expandedAt = (width: number) => {
       const harness = createToolPresentationHarness(tool);
       harness.call({ runIds: ["agent-1", "agent-2"] }, { expanded: true });

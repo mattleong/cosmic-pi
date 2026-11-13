@@ -25,11 +25,11 @@ it("shows the date only when an absolute time falls on another local day", () =>
   const sameDay = formatClockTime(DateTime.makeUnsafe(evening), evening + 60_000);
   const nextDay = formatClockTime(DateTime.makeUnsafe(evening), evening + 86_400_000);
   const undated = formatClockTime(DateTime.makeUnsafe(evening));
-  expect(Str.includes("Nov")(sameDay)).toBe(false);
-  expect(Str.includes("Nov")(nextDay)).toBe(true);
+  expect(Fn.pipe(sameDay, Str.includes("Nov"))).toBe(false);
+  expect(Fn.pipe(nextDay, Str.includes("Nov"))).toBe(true);
   expect(undated).toBe(nextDay);
   // No seconds on any form.
-  expect(Str.includes("41")(nextDay)).toBe(false);
+  expect(Fn.pipe(nextDay, Str.includes("41"))).toBe(false);
 });
 
 it("groups the digits of counts from 1,000", () => {

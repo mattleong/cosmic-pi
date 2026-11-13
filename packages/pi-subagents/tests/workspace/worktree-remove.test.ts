@@ -19,7 +19,7 @@ import {
 } from "./fixtures/repository.ts";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 // Hooks are fixed when the engine starts, so they log to one directory for the whole file.
 // Logs name workspaces by their unique IDs, so another run's leftovers can't match.
@@ -59,7 +59,9 @@ const removals = (workspaceId: string) =>
   readText(log).pipe(
     Effect.orElseSucceed(() => ""),
     Effect.flatMap((text) =>
-      Effect.forEach(Arr.filter(Str.split(text, "\n"), Boolean), (line) => decodeLoggedInput(line)),
+      Effect.forEach(Arr.filter(Str.split(text, "\n"), Str.isNonEmpty), (line) =>
+        decodeLoggedInput(line),
+      ),
     ),
     Effect.map((inputs) => Arr.filter(inputs, (input) => input.workspaceId === workspaceId)),
     Effect.orDie,
@@ -126,11 +128,9 @@ describe("WorktreeRemove hooks", () => {
     yield* service.discard(workspaceTarget(handle));
     expect(Arr.map(yield* removals(handle.workspaceId), (input) => input.kind)).toEqual(["worker"]);
     expect(yield* exists(handle.cwd)).toBe(false);
-    const record = Option.getOrUndefined(
-      Arr.findFirst(
-        (yield* service.listAll).records,
-        (entry) => entry.handle.workspaceId === handle.workspaceId,
-      ),
+    const record = findOrUndefined(
+      (yield* service.listAll).records,
+      (entry) => entry.handle.workspaceId === handle.workspaceId,
     );
     expect(record?.status).toBe("discarded");
   });
@@ -163,11 +163,7 @@ describe("WorktreeRemove hooks", () => {
     const record = yield* service.inspect(workspaceTarget(handle));
     expect(record.status).toBe("frozen");
     expect(record.preparation).toBeUndefined();
-    const integration = {
-      ...workspaceTarget(handle),
-      revisionId: revision.revisionId,
-      processCleanupConfirmed: true as const,
-    };
+    const integration = { ...workspaceTarget(handle), revisionId: revision.revisionId };
     expect(
       (yield* failureOf(
         service.integrate({ ...integration, preparationId: prepared.preparationId }),

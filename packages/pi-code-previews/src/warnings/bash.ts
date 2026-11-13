@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
@@ -22,8 +21,5 @@ export function getBashWarnings(command: string): string[] {
   const compact = normalizeShellCommandWhitespace(
     Fn.pipe(command, Str.replace(/\\\n/g, " "), Str.replace(/\n/g, ";")),
   );
-  return Arr.map(
-    Arr.filter(Rec.toEntries(BASH_WARNINGS), ([, pattern]) => pattern.test(compact)),
-    ([label]) => label,
-  );
+  return Rec.keys(Rec.filter(BASH_WARNINGS, (pattern) => pattern.test(compact)));
 }

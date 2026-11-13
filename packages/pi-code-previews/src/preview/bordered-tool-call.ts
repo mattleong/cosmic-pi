@@ -49,12 +49,19 @@ export function borderState(context: { readonly state: unknown }): BorderState {
 export const recordedExpandLabel = (state: BorderState): string | undefined =>
   state.codePreviewBorderResultExpandLabel ?? state.codePreviewBorderCallExpandLabel;
 
-/** Builds a slot's body so the hints it draws record their labels for the row's frame. */
-export function renderWithBorderSlot<T>(state: BorderState, slot: BorderSlot, render: () => T): T {
+/**
+ * Builds a slot's body so the hints it draws record their labels for the row's frame. Outside any
+ * slot (`undefined`), a body draws its own hints instead of labeling the border.
+ */
+export function renderWithBorderSlot<T>(
+  state: BorderState,
+  slot: BorderSlot | undefined,
+  render: () => T,
+): T {
   const previousSlot = state.codePreviewBorderCurrentSlot;
   state.codePreviewBorderCurrentSlot = slot;
   if (slot === "call") state.codePreviewBorderCallExpandLabel = undefined;
-  else state.codePreviewBorderResultExpandLabel = undefined;
+  else if (slot === "result") state.codePreviewBorderResultExpandLabel = undefined;
   try {
     return render();
   } finally {

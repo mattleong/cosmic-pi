@@ -28,19 +28,13 @@ import {
   toolRunningLine,
 } from "pi-cosmic-ui/tool";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import { workspaceReceiptLine } from "./compact-workspace-summary.ts";
-import {
-  WorkspaceToolDetailsSchema,
-  type CompactSubagentToolDetails,
-  type SubagentAwaitDetails,
-  type SubagentStartAwaitCardDetails,
-  type WorkspaceToolDetails,
+import { decodeWorkspaceToolDetails, workspaceReceiptLine } from "./compact-workspace-summary.ts";
+import type {
+  SubagentAwaitDetails,
+  SubagentStartAwaitCardDetails,
+  WorkspaceToolDetails,
 } from "./details-schema.ts";
-import {
-  decodeCompactToolDetails,
-  decodeStartAwaitCardDetails,
-  type decodeOutcomeDetails,
-} from "./details-decode.ts";
+import { decodeOutcomeDetails } from "./details-decode.ts";
 import { rejectedFailureText } from "./failure-details.ts";
 import { boundToolOutput } from "./format.ts";
 import { renderCompactResultComponent, renderProfileRoutesComponent } from "./render-management.ts";
@@ -234,7 +228,7 @@ export const renderRequestedRuns = (
   });
 
 const awaitScope = (details: SubagentAwaitDetails) => {
-  const awaitedRunIds = new Set(details.awaitedRunIds ?? Arr.map(details.cards, (card) => card.id));
+  const awaitedRunIds = new Set(details.awaitedRunIds);
   return {
     hierarchy: { awaitedRunIds, contextOmitted: details.contextOmitted },
     targets: Arr.filter(details.cards, (card) => awaitedRunIds.has(card.id)),
@@ -333,30 +327,6 @@ const renderAwaitResult = (
   );
 };
 
-const renderSettledStartAwait = (
-  details: SubagentStartAwaitCardDetails,
-  expanded: boolean,
-  theme: Theme,
-  heading?: () => AwaitHeading,
-): Component =>
-  details.action === "start"
-    ? renderStartReceiptComponent(details, expanded, theme)
-    : renderAwaitResult(details, expanded, theme, heading);
-
-const renderCompactDetails = (
-  compact: CompactSubagentToolDetails,
-  expanded: boolean,
-  theme: Theme,
-): Component =>
-  compact.action === "models"
-    ? renderProfileRoutesComponent(compact, expanded, theme)
-    : renderCompactResultComponent(
-        compact,
-        expanded,
-        theme,
-        compact.contentOmitted && OMITTED_NOTE,
-      );
-
 const COLLAPSED_TEXT_LINES = 11;
 
 /** A result's text; a failure shows its recorded user copy, or the text of one saved without it. */
@@ -373,10 +343,6 @@ const renderTextFallback = (
   if (!text && isPartial) return new Text(toolRunningLine(theme), 0, 0);
   return textResultBody(theme, text, { expanded, isError, args }, COLLAPSED_TEXT_LINES);
 };
-
-const decodeWorkspaceDisplay = decodeUnknownOrUndefined(WorkspaceToolDetailsSchema, {
-  onExcessProperty: "error",
-});
 
 /** The text a receipt's producer marked for display, or undefined when its span doesn't fit. */
 const workspaceSpanText = (
@@ -439,10 +405,6 @@ const workspaceView = (
             : undefined,
         receipt.successorRunId && `Revised by run ${receipt.successorRunId}`,
         ...Arr.map(receipt.entries ?? [], listEntryFact),
-        // A list saved before its entries were recorded marked its raw lines instead.
-        ...(receipt.operation === "list" && !receipt.entries && marked
-          ? Str.split(marked, "\n")
-          : []),
       ],
       isTextFragment,
     ),
@@ -459,7 +421,7 @@ export const rememberWorkspaceIds = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   shown: boolean,
 ): void => {
-  const receipt = shown ? decodeWorkspaceDisplay(result.details) : undefined;
+  const receipt = shown ? decodeWorkspaceToolDetails(result.details) : undefined;
   row.piSubagentsShownWorkspaceIds =
     receipt && workspaceView(receipt, result.content)
       ? new Map(
@@ -497,7 +459,7 @@ const renderWorkspaceContent = (
   result: { readonly content: ToolTextContent; readonly details?: unknown },
   theme: Theme,
 ): Component | undefined => {
-  const receipt = decodeWorkspaceDisplay(result.details);
+  const receipt = decodeWorkspaceToolDetails(result.details);
   if (!receipt) return undefined;
   const view = workspaceView(receipt, result.content);
   if (!view) return rawResultSection(result.content, theme) ?? renderComponent(() => []);
@@ -510,7 +472,7 @@ const renderWorkspacePreview = (
   theme: Theme,
   row: { readonly state: unknown } | undefined,
 ): Component | undefined => {
-  const receipt = decodeWorkspaceDisplay(result.details);
+  const receipt = decodeWorkspaceToolDetails(result.details);
   if (!receipt) return undefined;
   const line = workspaceReceiptLine(receipt);
   // The producer's display span; only a receipt without one falls back to the agent's text.
@@ -559,13 +521,22 @@ export const renderSubagentResult = (
   theme: Theme,
   options: SubagentResultRenderOptions & { readonly workspace?: false } = {},
 ): Component => {
-  const details = decodeStartAwaitCardDetails(result.details);
+  const details = decodeOutcomeDetails(result.details);
+  if (details?.action === "start" || details?.action === "await") {
+    if (isPartial) return renderPartialStartAwait(details, expanded, theme, options);
+    return details.action === "start"
+      ? renderStartReceiptComponent(details, expanded, theme)
+      : renderAwaitResult(details, expanded, theme, options.awaitHeading);
+  }
   if (details)
-    return isPartial
-      ? renderPartialStartAwait(details, expanded, theme, options)
-      : renderSettledStartAwait(details, expanded, theme, options.awaitHeading);
-  const compact = decodeCompactToolDetails(result.details);
-  if (compact) return renderCompactDetails(compact, expanded, theme);
+    return details.action === "models"
+      ? renderProfileRoutesComponent(details, expanded, theme)
+      : renderCompactResultComponent(
+          details,
+          expanded,
+          theme,
+          details.contentOmitted && OMITTED_NOTE,
+        );
   const workspace =
     options.isError || options.workspace === false
       ? undefined

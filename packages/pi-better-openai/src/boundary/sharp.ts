@@ -19,7 +19,7 @@ export class SharpError extends Schema.TaggedError<SharpError, { readonly brand:
   },
 ) {}
 
-export interface SharpMetadata {
+interface SharpMetadata {
   readonly format?: string;
 }
 

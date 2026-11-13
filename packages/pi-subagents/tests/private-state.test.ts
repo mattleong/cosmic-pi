@@ -7,7 +7,7 @@ import {
   sweepAbandonedPrivateState,
 } from "../src/boundary/private-state.ts";
 import { nodeFsPromises as fs, nodePath as path, nodeSpawn } from "./support/node-builtins.ts";
-import { temporaryDirectory } from "./workspace/fixtures/repository.ts";
+import { exists, temporaryDirectory } from "./workspace/fixtures/repository.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
@@ -18,14 +18,6 @@ const SESSION = "019fd976-b551-752b-b00e-8c8098258305";
 const DAY_MILLIS = 24 * 60 * 60 * 1000;
 
 const io = <A>(evaluate: () => Promise<A>) => Effect.promise(evaluate);
-
-const exists = (file: string) =>
-  io(() =>
-    fs.lstat(file).then(
-      () => true,
-      () => false,
-    ),
-  );
 
 /** Creates a directory with files; an owner of `undefined` writes no owner record. */
 const entry = (

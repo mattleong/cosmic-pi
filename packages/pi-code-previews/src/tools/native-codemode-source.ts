@@ -3,12 +3,13 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, type Component } from "@earendil-works/pi-tui";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { indexOfFrom } from "pi-cosmic-core/text-scan";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { expandPreviewTabs } from "../shared/helpers";
-import { escapeControlChars } from "../shared/terminal-text";
 import { renderHighlightedText, shouldSkipHighlight } from "../syntax/render";
+import { safeContent } from "./native-safe-content";
 
 interface NativeProgramContext {
   readonly expanded: boolean;
@@ -39,31 +40,18 @@ function programText(
   invalidate: () => void,
 ): Component {
   let highlighted: Text | undefined;
-  let fallback: Text | undefined;
-  let failed = false;
-  return {
-    render(width) {
-      if (!failed) {
-        try {
-          highlighted ??= new Text(
-            Arr.join(renderHighlightedText(text, lang, theme, invalidate), "\n"),
-            0,
-            0,
-          );
-          return highlighted.render(width);
-        } catch {
-          failed = true;
-          highlighted = undefined;
-        }
-      }
-      fallback ??= new Text(escapeControlChars(text), 0, 0);
-      return fallback.render(width);
-    },
-    invalidate() {
-      highlighted?.invalidate();
-      fallback?.invalidate();
-    },
-  };
+  return safeContent(
+    () => ({
+      render: (width) =>
+        (highlighted ??= new Text(
+          Arr.join(renderHighlightedText(text, lang, theme, invalidate), "\n"),
+          0,
+          0,
+        )).render(width),
+      invalidate: () => highlighted?.invalidate(),
+    }),
+    text,
+  );
 }
 
 export function renderNativeCodemodeProgram(
@@ -99,12 +87,10 @@ export function renderNativeCodemodeProgram(
       if (expanded) return [...(note?.render(width) ?? []), ...fullProgram().render(width)];
       const { rows, more } = collapsedRows(width);
       if (!more) return rows;
-      let hint: string;
-      try {
-        hint = renderExpansionAffordance("program", false, theme);
-      } catch {
-        hint = "More program on expand";
-      }
+      const hint = invokeHostCallback(
+        () => renderExpansionAffordance("program", false, theme),
+        "More program on expand",
+      );
       return [...rows.slice(0, COLLAPSED_PROGRAM_ROWS), clipToWidth(hint, width, "")];
     },
     invalidate() {

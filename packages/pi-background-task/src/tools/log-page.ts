@@ -118,21 +118,33 @@ export interface LogPageBudget {
   readonly maxLines: number;
 }
 
+/** Retained output a page leaves out, and the afterCursor that reads it. */
+export interface LogPageOmission {
+  readonly omitted: "earlier" | "later";
+  readonly omittedBytes: number;
+  readonly resumeAfterCursor: number;
+  /** Part of one event too large for the whole page; no cursor reads it. */
+  readonly cutBytes?: number;
+}
+
 export interface LogPage {
   readonly output: string;
   /** The afterCursor that continues after this output. */
   readonly nextCursor: number;
-  /** Stored bytes of the events this page includes. */
-  readonly includedBytes: number;
-  /** Events in the slice were left out to fit; paging with cursors recovers them. */
-  readonly clipped: boolean;
-  /** Stored bytes of slice events after this page, for reads that page forward. */
-  readonly laterBytes: number;
   /** A single event larger than the whole budget; this part of it cannot be shown. */
   readonly cut?: { readonly cursor: number; readonly bytes: number };
   /** Discarded output this page asked for: before or between the events it includes. */
   readonly skipped?: BackgroundOutputSkip;
+  /**
+   * The retained output this page leaves out. A forward page leaves out later events that did not
+   * fit; a tail page leaves out all retained output before it, whether its line limit or its size
+   * bound excluded that output. Text and structured results report it the same way.
+   */
+  readonly omission?: LogPageOmission;
 }
+
+const storedBytes = (events: ReadonlyArray<BackgroundLogSlice["events"][number]>): number =>
+  Arr.reduce(events, 0, (sum, event) => sum + event.bytes);
 
 const fits = (text: string, budget: LogPageBudget) =>
   utf8ByteLength(text) <= budget.maxBytes && newlineCount(text) < budget.maxLines;
@@ -172,20 +184,29 @@ export function pageLogSlice(
         ? utf8Prefix(firstLines(whole, Math.max(0, budget.maxLines - 1)), budget.maxBytes)
         : utf8Suffix(lastLines(whole, Math.max(0, budget.maxLines - 1)), budget.maxBytes)
       : whole;
+  const forward = direction === "forward";
+  const nextCursor = forward && clipped && last ? last.cursor : slice.nextCursor;
+  const cut =
+    single && output !== whole
+      ? { cursor: single.cursor, bytes: utf8ByteLength(whole) - utf8ByteLength(output) }
+      : undefined;
+  const omittedBytes = forward
+    ? storedBytes(slice.events.slice(count))
+    : Math.max(0, slice.retainedBytes - storedBytes(included));
+  const omits = (forward ? clipped : omittedBytes > 0) || cut !== undefined;
   return {
     output,
-    nextCursor: direction === "forward" && clipped && last ? last.cursor : slice.nextCursor,
-    includedBytes: Arr.reduce(included, 0, (sum, event) => sum + event.bytes),
-    clipped,
-    laterBytes:
-      direction === "forward"
-        ? Arr.reduce(slice.events.slice(count), 0, (sum, event) => sum + event.bytes)
-        : 0,
-    ...(single &&
-      output !== whole && {
-        cut: { cursor: single.cursor, bytes: utf8ByteLength(whole) - utf8ByteLength(output) },
-      }),
+    nextCursor,
+    ...(cut && { cut }),
     ...(skipped && { skipped }),
+    ...(omits && {
+      omission: {
+        omitted: forward ? "later" : "earlier",
+        omittedBytes,
+        resumeAfterCursor: forward ? nextCursor : slice.earliestAvailableCursor,
+        ...(cut && { cutBytes: cut.bytes }),
+      },
+    }),
   };
 }
 
@@ -199,43 +220,3 @@ export const recentOutput = (slice: BackgroundLogSlice): string =>
     lastLines(combinedLogOutput(slice.events), LOG_BOUNDS.recentOutputLines),
     LOG_BOUNDS.recentOutputBytes,
   );
-
-/** Retained output a page leaves out, and the afterCursor that reads it. */
-export interface LogPageOmission {
-  readonly omitted: "earlier" | "later";
-  readonly omittedBytes: number;
-  readonly resumeAfterCursor: number;
-  /** Part of one event too large for the whole page; no cursor reads it. */
-  readonly cutBytes?: number;
-}
-
-/**
- * The retained output a page leaves out. A forward page leaves out later events that did not
- * fit; a tail page leaves out all retained output before it, whether its line limit or its size
- * bound excluded that output. Text and structured results report it the same way.
- */
-export function pageOmission(
-  slice: BackgroundLogSlice,
-  direction: "forward" | "tail",
-  page: LogPage,
-): LogPageOmission | undefined {
-  const cut = page.cut && { cutBytes: page.cut.bytes };
-  if (direction === "forward")
-    return page.clipped || cut
-      ? {
-          omitted: "later",
-          omittedBytes: page.laterBytes,
-          resumeAfterCursor: page.nextCursor,
-          ...cut,
-        }
-      : undefined;
-  const earlier = Math.max(0, slice.retainedBytes - page.includedBytes);
-  return earlier > 0 || cut
-    ? {
-        omitted: "earlier",
-        omittedBytes: earlier,
-        resumeAfterCursor: slice.earliestAvailableCursor,
-        ...cut,
-      }
-    : undefined;
-}

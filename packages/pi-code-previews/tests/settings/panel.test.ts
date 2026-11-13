@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import * as NodePath from "@effect/platform-node/NodePath";
-import { SettingsList } from "@earendil-works/pi-tui";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -8,7 +7,11 @@ import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { AgentDirectory } from "pi-cosmic-core";
-import { makeInMemoryDocuments, type InMemoryDocuments } from "pi-cosmic-core/testing";
+import {
+  deferredPromise,
+  makeInMemoryDocuments,
+  type InMemoryDocuments,
+} from "pi-cosmic-core/testing";
 import { nextSettingsAdmission } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import type { CodePreviewSettings } from "../../src/config/schema";
@@ -21,6 +24,7 @@ import {
 import { createCodePreviewSettingsModel, persistSettingsChange } from "../../src/settings/panel";
 import { createSettingsCategoryItems } from "../../src/settings/ui/index";
 import { effectTest, eventLoopTurn, step } from "../support/effect-test";
+import { plainSettingsList } from "../support/settings-list";
 import * as Arr from "effect/Array";
 
 effectTest(
@@ -72,22 +76,6 @@ effectTest(
   },
 );
 
-const plainListTheme = {
-  label: (text: string) => text,
-  value: (text: string) => text,
-  description: (text: string) => text,
-  cursor: ">",
-  hint: (text: string) => text,
-};
-const listFor = (model: ReturnType<typeof createCodePreviewSettingsModel>) =>
-  new SettingsList(
-    model.items,
-    10,
-    plainListTheme,
-    () => undefined,
-    () => undefined,
-  );
-
 class DiskFull extends Schema.TaggedError<DiskFull, { readonly brand: unique symbol }>()(
   "DiskFull",
   { message: Schema.String },
@@ -96,7 +84,7 @@ class DiskFull extends Schema.TaggedError<DiskFull, { readonly brand: unique sym
 for (const operation of ["save", "reset", "failure"] as const)
   effectTest(`retired settings panels suppress delayed ${operation} follow-up`, function* () {
     setCodePreviewSettings(defaultCodePreviewSettings);
-    const pending = yield* Deferred.make<void, DiskFull>();
+    const pending = deferredPromise();
     let current = true;
     let writes = 0;
     let repaints = 0;
@@ -104,7 +92,7 @@ for (const operation of ["save", "reset", "failure"] as const)
     const notifications: string[] = [];
     const write = () => {
       writes++;
-      return Effect.runPromise(Deferred.await(pending));
+      return pending.promise;
     };
     const model = createCodePreviewSettingsModel({
       notify: (message) => notifications.push(message),
@@ -120,7 +108,7 @@ for (const operation of ["save", "reset", "failure"] as const)
         },
       },
     });
-    const list = listFor(model);
+    const list = plainSettingsList(model);
     list.updateValue = () => {
       repaints++;
     };
@@ -132,9 +120,8 @@ for (const operation of ["save", "reset", "failure"] as const)
     const initialRepaints = repaints;
     current = false;
     setCodePreviewSettings({ ...defaultCodePreviewSettings, shikiTheme: "github-dark" });
-    if (operation === "failure")
-      yield* Deferred.fail(pending, DiskFull.make({ message: "disk full" }));
-    else yield* Deferred.succeed(pending, undefined);
+    if (operation === "failure") pending.reject(DiskFull.make({ message: "disk full" }));
+    else pending.resolve();
     yield* step(eventLoopTurn);
     model.onChange("readCollapsedLines", "40", list);
     assert.equal(writes, 1);
@@ -158,7 +145,7 @@ const latestOnlyModel = (queueSave: (next: CodePreviewSettings) => Promise<void>
       initializeSyntax: () => Promise.resolve(),
     },
   });
-  return { model, list: listFor(model), warnings };
+  return { model, list: plainSettingsList(model), warnings };
 };
 
 effectTest(
@@ -167,13 +154,13 @@ effectTest(
     setCodePreviewSettings(defaultCodePreviewSettings);
     const pending: Array<{ next: CodePreviewSettings; fail: () => void; pass: () => void }> = [];
     const { model, list, warnings } = latestOnlyModel((next) => {
-      const save = Deferred.makeUnsafe<void, DiskFull>();
+      const save = deferredPromise();
       pending.push({
         next,
-        pass: () => Deferred.doneUnsafe(save, Effect.void),
-        fail: () => Deferred.doneUnsafe(save, Effect.fail(DiskFull.make({ message: "disk full" }))),
+        pass: save.resolve,
+        fail: () => save.reject(DiskFull.make({ message: "disk full" })),
       });
-      return Effect.runPromise(Deferred.await(save));
+      return save.promise;
     });
     model.onChange("readCollapsedLines", "20", list);
     model.onChange("readCollapsedLines", "40", list);
@@ -198,14 +185,9 @@ effectTest("only the latest superseded panel edit reports that it was not saved"
   setCodePreviewSettings(defaultCodePreviewSettings);
   const pending: Array<() => void> = [];
   const { model, list, warnings } = latestOnlyModel(() => {
-    const save = Deferred.makeUnsafe<void, CodePreviewSettingsSuperseded>();
-    pending.push(() =>
-      Deferred.doneUnsafe(
-        save,
-        Effect.fail(CodePreviewSettingsSuperseded.make({ message: "superseded" })),
-      ),
-    );
-    return Effect.runPromise(Deferred.await(save));
+    const save = deferredPromise();
+    pending.push(() => save.reject(CodePreviewSettingsSuperseded.make({ message: "superseded" })));
+    return save.promise;
   });
   model.onChange("readCollapsedLines", "20", list);
   model.onChange("readCollapsedLines", "40", list);
@@ -257,7 +239,7 @@ function gatedPanelSaves(service: CodePreviewSettingsServiceContract) {
       initializeSyntax: () => Promise.resolve(),
     },
   });
-  const list = listFor(model);
+  const list = plainSettingsList(model);
   const shown = new Map<string, string>();
   list.updateValue = (id, value) => void shown.set(id, value);
   const complete = (index: number) =>

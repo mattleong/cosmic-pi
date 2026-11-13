@@ -17,7 +17,12 @@ import {
 } from "pi-code-previews";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { SUITE_STATUS_GLYPHS } from "pi-cosmic-ui/manager";
-import { composeToolComponent, renderToolHeader, toolRunningLine } from "pi-cosmic-ui/tool";
+import {
+  cachedComponent,
+  composeToolComponent,
+  renderToolHeader,
+  toolRunningLine,
+} from "pi-cosmic-ui/tool";
 import {
   decodeParentToolDetails,
   entryTime,
@@ -127,39 +132,25 @@ const TOOL_STATUS = {
 >;
 
 /** The calls a message made, one per row as `✗ bash pnpm test`, wrapping beneath the call. */
-const toolRows = (tools: ReadonlyArray<ToolUse>, theme: Theme): Component => {
-  let cached: { readonly width: number; readonly rows: string[] } | undefined;
-  return {
-    render(width) {
-      if (!Number.isFinite(width) || width < 1) return [];
-      if (cached?.width === width) return cached.rows;
-      const rows = Arr.flatMap(tools, (tool) => {
-        const status = TOOL_STATUS[tool.outcome];
-        const call = sanitizeTerminalLine(
-          Str.isEmpty(tool.subject) ? tool.name : `${tool.name} ${tool.subject}`,
-        );
-        return Arr.map(wrapTextWithAnsi(call, Math.max(1, width - 2)), (part, index) =>
-          index === 0
-            ? `${theme.fg(status.color, status.glyph)} ${theme.fg(status.text, part)}`
-            : `  ${theme.fg(status.text, part)}`,
-        );
-      });
-      cached = { width, rows };
-      return rows;
-    },
-    invalidate() {
-      cached = undefined;
-    },
-  };
-};
+const toolRows = (tools: ReadonlyArray<ToolUse>, theme: Theme): Component =>
+  cachedComponent((width) =>
+    Arr.flatMap(tools, (tool) => {
+      const status = TOOL_STATUS[tool.outcome];
+      const call = sanitizeTerminalLine(
+        Str.isEmpty(tool.subject) ? tool.name : `${tool.name} ${tool.subject}`,
+      );
+      return Arr.map(wrapTextWithAnsi(call, Math.max(1, width - 2)), (part, index) =>
+        index === 0
+          ? `${theme.fg(status.color, status.glyph)} ${theme.fg(status.text, part)}`
+          : `  ${theme.fg(status.text, part)}`,
+      );
+    }),
+  );
 
-const authored = (text: string, theme: Theme, verbatim: boolean): Component => ({
-  render: (width) =>
-    Number.isFinite(width) && width > 0
-      ? authoredTextLines(text, width, theme, { expanded: true, indent: 0, verbatim })
-      : [],
-  invalidate() {},
-});
+const authored = (text: string, theme: Theme, verbatim: boolean): Component =>
+  cachedComponent((width) =>
+    authoredTextLines(text, width, theme, { expanded: true, indent: 0, verbatim }),
+  );
 
 /** One message: a muted label with its time, its words as markdown, then the tools it ran. */
 const itemSection = (item: ConversationItem, theme: Theme, now: number): Component =>

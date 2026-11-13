@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { MESSAGE_TEXT_LIMIT } from "pi-cosmic-core/message-text";
 
 export const COMPACT_ISSUE_MESSAGE_LIMIT = MESSAGE_TEXT_LIMIT;
@@ -49,9 +50,7 @@ export type CompactSignalSeverity = (typeof COMPACT_SIGNAL_SEVERITIES)[number];
 export function compactIssueSeverity(
   issues: readonly CompactIssue[] | undefined,
 ): CompactSignalSeverity | undefined {
-  return Option.getOrUndefined(
-    Arr.findFirst(COMPACT_SIGNAL_SEVERITIES, (severity) =>
-      Arr.some(issues ?? [], (issue) => issue.severity === severity),
-    ),
+  return findOrUndefined(COMPACT_SIGNAL_SEVERITIES, (severity) =>
+    Arr.some(issues ?? [], (issue) => issue.severity === severity),
   );
 }

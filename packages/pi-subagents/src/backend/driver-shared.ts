@@ -16,12 +16,12 @@ export const protocolError = (message: string): SubagentProtocolError =>
 export const omittedOutputPreview = (bytes: number): string =>
   `Output not shown: ${formatBytes(bytes)} exceeds the ${formatBytes(MAX_PROCESS_LINE_BYTES)} line limit.`;
 
-export const oversizedLineError = (source: string, line: OversizedLine): BackendEvent => {
+export const oversizedLineError = (line: OversizedLine): BackendEvent => {
   const type = jsonPrefixScalars(line.prefix).get("type");
   const event = Predicate.isString(type) ? `${type} event` : "unrecognized line";
   return {
     type: "protocol_error",
-    message: `${source} emitted a ${formatBytes(line.bytes)} ${event}, over the ${formatBytes(MAX_PROCESS_LINE_BYTES)} line limit.`,
+    message: `Subagent emitted a ${formatBytes(line.bytes)} ${event}, over the ${formatBytes(MAX_PROCESS_LINE_BYTES)} line limit.`,
   };
 };
 

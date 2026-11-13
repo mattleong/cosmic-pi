@@ -18,19 +18,22 @@ import {
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { SettingItem } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
 import * as Result from "effect/Result";
-import * as Str from "effect/String";
 import { joinInline } from "pi-cosmic-ui/manager";
-import { settingInherited, type SettingsSurfaceItem } from "pi-cosmic-ui/manager/settings-surface";
+import {
+  inheritChoiceValues,
+  isInheritedSettingValue,
+  settingInherited,
+  type SettingsSurfaceItem,
+} from "pi-cosmic-ui/manager/settings-surface";
 import { failureMessage } from "pi-cosmic-core/message-text";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import { dispatchSettingsCommand } from "pi-cosmic-core/settings-dispatch";
-import { hasCustomSurface } from "pi-cosmic-ui/boundary/host-surface";
+import { hasCustomSurface, OwnedSurfaceOutcome } from "pi-cosmic-ui/boundary/host-surface";
 import { countLabel } from "pi-cosmic-core/display";
 import {
   settingsStatusText,
@@ -131,23 +134,13 @@ const saveFailure =
       `Couldn't ${what}: ${failureMessage(error instanceof Error ? error.message : "", "unknown error")}`,
     );
 
-/** A row's choices: `inherit (value)` first, then a current value no preset names, then presets. */
-const choiceValues = (inherited: string, presets: readonly string[], currentValue: string) => [
-  inherited,
-  ...(currentValue === inherited || presets.includes(currentValue) ? [] : [currentValue]),
-  ...presets,
-];
-
 const SCOPED_SETTING_IDS: ReadonlyArray<typeof DELEGATION | NestingField> = [
   DELEGATION,
   ...NESTING_FIELD_IDS,
 ];
 
 /** `inherit (12)` and other inherited labels mean `inherit` when chosen. */
-const inheritChoice = (value: string): string =>
-  value === INHERIT || (Str.startsWith(`${INHERIT} (`)(value) && Str.endsWith(")")(value))
-    ? INHERIT
-    : value;
+const inheritChoice = (value: string): string => (isInheritedSettingValue(value) ? INHERIT : value);
 
 // Where `inherit` takes a scope's value from: the session from the files it started with, the
 // project from global settings, and global from the defaults.
@@ -157,24 +150,20 @@ const INHERITED_FROM = {
   global: "the default",
 } as const satisfies Record<ProfileSettingsScope, string>;
 
+const defaultLimit = (id: NestingField): string =>
+  String(DEFAULT_SUBAGENT_NESTING_POLICY[id] ?? DEFAULT_MAX_ACTIVE_RUNS);
+
 /** The value a scope inherits for one setting when it declares none of its own. */
 const inheritedValue = (
   inspection: ProfileSettingsInspection,
   scope: ProfileSettingsScope,
   id: typeof DELEGATION | NestingField,
 ): string => {
-  if (scope === "session") {
-    const base = inspection.session.baseConfig;
-    return id === DELEGATION
-      ? base.delegation
-      : String(base.nesting[id] ?? DEFAULT_SUBAGENT_NESTING_POLICY[id] ?? DEFAULT_MAX_ACTIVE_RUNS);
-  }
   const global = scope === "project" ? inspection.global.file : undefined;
-  return id === DELEGATION
-    ? (global?.delegation ?? DEFAULT_DELEGATION_MODE)
-    : String(
-        global?.nesting?.[id] ?? DEFAULT_SUBAGENT_NESTING_POLICY[id] ?? DEFAULT_MAX_ACTIVE_RUNS,
-      );
+  const base = scope === "session" ? inspection.session.baseConfig : global;
+  if (id === DELEGATION) return base?.delegation ?? DEFAULT_DELEGATION_MODE;
+  const limit = base?.nesting?.[id];
+  return limit === undefined ? defaultLimit(id) : String(limit);
 };
 
 const SCOPED_SETTING_LABELS = {
@@ -210,7 +199,7 @@ const scopedSettingItem = (
     label: SCOPED_SETTING_LABELS[id],
     description: `${id === DELEGATION ? DELEGATION_DESCRIPTION : NESTING_FIELDS[id].description} Inherit uses ${INHERITED_FROM[scope]}.${reloadNote}`,
     currentValue,
-    values: choiceValues(
+    values: inheritChoiceValues(
       inheritedLabel,
       id === DELEGATION ? DELEGATION_MODES : NESTING_FIELDS[id].presets,
       currentValue,
@@ -233,15 +222,8 @@ const SCOPED_SETTING_SUMMARIES = {
   maxActiveRuns: (value) => `${value} active`,
 } as const satisfies Record<typeof DELEGATION | NestingField, (value: string) => string>;
 
-/** The value an `inherit (12)` row applies, or the row's own value. */
-const appliedValue = (value: string): string =>
-  Str.startsWith(`${INHERIT} (`)(value) && Str.endsWith(")")(value)
-    ? Fn.pipe(value, Str.slice(INHERIT.length + 2, -1))
-    : value;
-
 const isDefaultLimit = (id: typeof DELEGATION | NestingField, value: string): boolean =>
-  id !== DELEGATION &&
-  value === String(DEFAULT_SUBAGENT_NESTING_POLICY[id] ?? DEFAULT_MAX_ACTIVE_RUNS);
+  id !== DELEGATION && value === defaultLimit(id);
 
 /**
  * A scope's group value: the values its settings apply, set there or inherited, such as
@@ -252,17 +234,16 @@ const scopeGroupSummary = (
   values: ReadonlyArray<readonly [typeof DELEGATION | NestingField, string]>,
 ): string =>
   joinInline(
-    Arr.filterMap(values, ([id, value]) => {
-      const applied = appliedValue(value);
-      return isDefaultLimit(id, applied)
+    Arr.filterMap(values, ([id, applied]) =>
+      isDefaultLimit(id, applied)
         ? Result.failVoid
-        : Result.succeed(SCOPED_SETTING_SUMMARIES[id](applied));
-    }),
+        : Result.succeed(SCOPED_SETTING_SUMMARIES[id](applied)),
+    ),
   );
 
-/** A saved value as its row shows it: the writer workspace by its label. */
-const shownValue = (id: string, value: string): string => {
-  const mode = id === WORKSPACE ? writerWorkspaceModeOf(value) : undefined;
+/** A saved writer workspace as its row shows it: by its label. */
+const shownWorkspace = (value: string): string => {
+  const mode = writerWorkspaceModeOf(value);
   return mode === undefined ? value : WRITER_WORKSPACE_LABELS[mode];
 };
 
@@ -461,6 +442,13 @@ function subagentSettingsCommand(
     return global === INHERIT ? inheritedValue(inspection, "global", id) : global;
   };
 
+  /** A scope's own value as last chosen, or `inherit`. */
+  const chosenValue = (
+    inspection: ProfileSettingsInspection,
+    scope: ProfileSettingsScope,
+    id: typeof DELEGATION | NestingField,
+  ): string => committed.get(rowId(id, scope)) ?? ownValue(inspection, scope, id);
+
   const scopedRow = (
     inspection: ProfileSettingsInspection,
     scope: ProfileSettingsScope,
@@ -469,18 +457,20 @@ function subagentSettingsCommand(
     scopedSettingItem(
       scope,
       id,
-      committed.get(rowId(id, scope)) ?? ownValue(inspection, scope, id),
+      chosenValue(inspection, scope, id),
       liveInherited(inspection, scope, id),
     );
 
   const shownRowValue = (id: string, scope: string | undefined): string | undefined => {
     if (id === WORKSPACE) return committed.get(WORKSPACE);
     if (opened === undefined || (id !== DELEGATION && !isNestingField(id))) return undefined;
-    return scopedRow(opened, settingScope(scope), id).currentValue;
+    const from = settingScope(scope);
+    const value = chosenValue(opened, from, id);
+    return value === INHERIT ? settingInherited(liveInherited(opened, from, id)) : value;
   };
 
   const open = (ctx: ExtensionCommandContext, session: SettingsSession<SubagentSettingValues>) => {
-    if (!actions.isAvailable()) return Promise.resolve({ _tag: "Blocked" as const });
+    if (!actions.isAvailable()) return Promise.resolve(OwnedSurfaceOutcome.Blocked());
     const trusted = isProjectTrusted(ctx);
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
@@ -509,10 +499,13 @@ function subagentSettingsCommand(
             Arr.map(SCOPED_SETTING_IDS, (id) => scopedRow(inspection, scope, id));
           const summary = () =>
             scopeGroupSummary(
-              Arr.map(
-                SCOPED_SETTING_IDS,
-                (id) => [id, scopedRow(inspection, scope, id).currentValue] as const,
-              ),
+              Arr.map(SCOPED_SETTING_IDS, (id) => {
+                const value = chosenValue(inspection, scope, id);
+                return [
+                  id,
+                  value === INHERIT ? liveInherited(inspection, scope, id) : value,
+                ] as const;
+              }),
             );
           return {
             id: `group:${scope}`,
@@ -586,7 +579,7 @@ function subagentSettingsCommand(
     // fails or can't run puts back the value it replaced, and open groups derive their rows again.
     apply: (ctx, id, value, _signal, scope) => {
       const key = rowId(id, scope);
-      const chosen = id === WORKSPACE ? shownValue(id, value) : inheritChoice(value);
+      const chosen = id === WORKSPACE ? shownWorkspace(value) : inheritChoice(value);
       const replaced = committed.get(key);
       committed.set(key, chosen);
       const restore = () => {

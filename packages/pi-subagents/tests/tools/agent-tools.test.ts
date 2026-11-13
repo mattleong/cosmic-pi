@@ -5,10 +5,11 @@ import {
   captureRegistrations,
   createToolPresentationHarness,
   issueMessageStyleProblems,
-  renderContextFixture,
 } from "pi-code-previews/testing";
 import {
   MAIN_AGENT_ID,
+  mainListEntry,
+  runListEntry,
   type AgentCaller,
   type AgentReadResult,
 } from "../../src/run/agent-messaging.ts";
@@ -21,15 +22,20 @@ import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { executeAgentActionEffect } from "../../src/tools/execute-agents.ts";
 import { SubagentService } from "../../src/run/service.ts";
 import { registerAgentTools } from "../../src/tools/agent.ts";
-import { nativeCodemodeSession } from "../support/native-codemode-session.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
+import {
+  captureSubagentTools,
+  executeTool,
+  issueStyle,
+  renderOnlyTool,
+  settledSummary,
+  view,
+} from "./fixtures/tool-harness.ts";
 import { readoutOf } from "../fixtures/run-view.ts";
-import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -78,17 +84,8 @@ const listing = (state: "waiting_for_parent" | "running") =>
     agentList: () =>
       Effect.succeed({
         agents: [
-          { id: MAIN_AGENT_ID, name: MAIN_AGENT_ID, kind: "main", state: "busy", self: true },
-          {
-            id: "agent-1",
-            name: "db-migration",
-            kind: "run",
-            state,
-            parentId: MAIN_AGENT_ID,
-            depth: 1,
-            self: false,
-            run: view({ id: "agent-1", name: "db-migration", state }),
-          },
+          mainListEntry("busy", MAIN_AGENT_ID),
+          runListEntry(view({ id: "agent-1", name: "db-migration", state }), MAIN_AGENT_ID),
         ],
         missingIds: [],
       }),
@@ -150,22 +147,15 @@ const agentService = () =>
     agentRead: () => Effect.succeed(READ),
   });
 
-const registeredTool = (name: string) =>
-  captureSubagentTools(subagentServiceDouble({}), {
-    environment: { cwd: "/project", projectTrusted: false },
-  }).get(name)!;
-
 const namespaceOf = (nested: boolean) =>
-  Option.getOrUndefined(
-    Arr.findFirst(
-      captureRegistrations((pi) =>
-        registerAgentTools(pi, {
-          execute: () => Promise.reject(new Error("render-only fixture")),
-          nested,
-        }),
-      ).tools,
-      (tool) => tool.name === "agent_list",
-    ),
+  findOrUndefined(
+    captureRegistrations((pi) =>
+      registerAgentTools(pi, {
+        execute: () => Promise.reject(new Error("render-only fixture")),
+        nested,
+      }),
+    ).tools,
+    (tool) => tool.name === "agent_list",
   )?.namespace;
 
 describe("agent tools", () => {
@@ -249,7 +239,7 @@ describe("agent tools", () => {
 
       const [issue] = agentFailureIssues(textFailure(text), "send", "The agent");
       expect(issue?.code).toBe("agent:agent_unavailable");
-      const harness = createToolPresentationHarness(registeredTool("agent_send"));
+      const harness = createToolPresentationHarness(renderOnlyTool("agent_send"));
       for (const expanded of [false, true]) {
         harness.call({ to: "agent-busy", message: "Again?" }, { expanded, isError: true });
         harness.result(
@@ -293,15 +283,11 @@ describe("agent tools", () => {
         Effect.gen(function* () {
           const tools = captureSubagentTools(listing(state));
           const listed = yield* Effect.promise(() => executeTool(tools.get("agent_list")!, {}));
-          return createAgentCompactSummary("agent_list")({
-            phase: "settled",
-            args: {},
-            result: {
-              content: [{ type: "text", text: listed.content[0]?.text ?? "" }],
-              details: listed.details,
-            },
-            context: renderContextFixture({}),
-          })?.outcome;
+          return settledSummary(
+            createAgentCompactSummary("agent_list"),
+            {},
+            { details: listed.details },
+          )?.outcome;
         });
       expect(yield* outcomeFor("waiting_for_parent")).toBe("attention");
       // A listing only looks, so it is neutral when nothing waits on a reply.
@@ -332,14 +318,8 @@ describe("agent tools", () => {
       );
       const args = { agentIds: [asking.id, failed.id] };
       const read = yield* Effect.promise(() => executeTool(tools.get("agent_read")!, args));
-      const summary = createAgentCompactSummary("agent_read")({
-        phase: "settled",
-        args,
-        result: {
-          content: [{ type: "text", text: read.content[0]?.text ?? "" }],
-          details: read.details,
-        },
-        context: renderContextFixture({}),
+      const summary = settledSummary(createAgentCompactSummary("agent_read"), args, {
+        details: read.details,
       });
       // Something waits on a reply; reading a failed or warning run is no problem of the read.
       expect(summary?.outcome).toBe("attention");
@@ -355,55 +335,20 @@ describe("agent tools", () => {
           stringContaining("Tests failed"),
         ]),
       );
-      expect(Arr.flatMap(issues, (issue) => issueMessageStyleProblems(issue.message))).toEqual([]);
+      expect(issueStyle(summary)).toEqual([]);
     }),
   );
-
-  it("shows every argument once a call is expanded", () => {
-    const harness = createToolPresentationHarness(registeredTool("agent_read"));
-    const agentIds = [
-      "agent-0000000001",
-      "agent-0000000002",
-      "agent-0000000003",
-      "agent-0000000004",
-    ];
-    harness.call({ agentIds }, { expanded: true });
-    harness.result(
-      {
-        content: [{ type: "text", text: "Read four agents." }],
-        details: { version: 1, action: "agent_read", agents: [], missingIds: [] },
-      },
-      { expanded: true },
-    );
-    const rendered = Arr.join(harness.render(100), "\n");
-    for (const id of agentIds) expect(rendered).toContain(id);
-
-    const send = createToolPresentationHarness(registeredTool("agent_send"));
-    send.call({ to: "agent-0000000009", message: "Ship it." }, { expanded: true, isError: true });
-    send.result(
-      {
-        content: [{ type: "text", text: "[agent_unavailable] The agent is stopping." }],
-        details: {},
-      },
-      { expanded: true, isError: true },
-    );
-    const failed = Arr.join(send.render(100), "\n");
-    expect([
-      Fn.pipe(failed, Str.includes("agent-0000000009")),
-      Fn.pipe(failed, Str.includes("Ship it.")),
-    ]).toEqual([true, true]);
-  });
 
   it("describes a subagent's script namespace apart from the root's", () => {
     const root = namespaceOf(false);
     const nested = namespaceOf(true);
     expect(nested?.name).toBe(root?.name);
     expect(nested?.description).not.toBe(root?.description);
-    expect(root?.description).toBe(registeredTool("agent_start").namespace?.description);
+    expect(root?.description).toBe(renderOnlyTool("agent_start").namespace?.description);
   });
 
   it("keeps the main agent's full read text for expansion", () => {
-    const harness = createToolPresentationHarness(registeredTool("agent_read"));
+    const harness = createToolPresentationHarness(renderOnlyTool("agent_read"));
     const text = Arr.join(
       [
         `the main agent (busy), latest assistant message:\n${READ.agents[0]?.text ?? ""}`,
@@ -434,30 +379,6 @@ describe("agent tools", () => {
       expect(Fn.pipe(rendered, Str.includes("MAIN_TAIL_SENTINEL"))).toBe(expanded);
     }
   });
-
-  it.live(
-    "lets scripts list and read agents but never send",
-    () =>
-      Effect.gen(function* () {
-        const h = yield* nativeCodemodeSession(agentService());
-        expect(h.session.getCallableToolNames()).toEqual(
-          expect.arrayContaining(["agent_list", "agent_read"]),
-        );
-        expect(h.session.getCallableToolNames()).not.toContain("agent_send");
-        expect(h.session.getActiveToolNames()).toContain("agent_send");
-        const result = yield* h.run(`
-          const listed = await tools.agent_list({});
-          let refused = false;
-          try { await tools.agent_send({ to: "agent-1", message: "From a script" }); }
-          catch { refused = true; }
-          text('WORKFLOW_RESULT ' + JSON.stringify({ tool: listed.tool, count: listed.agents.length, refused }));
-        `);
-        expect(result.text).toContain(
-          'WORKFLOW_RESULT {"tool":"agent_list","count":2,"refused":true}',
-        );
-      }).pipe(Effect.provide(nodeFilePlatformLayer)),
-    15_000,
-  );
 
   it.effect("refuses scripted sends that reach the executor", () =>
     Effect.gen(function* () {

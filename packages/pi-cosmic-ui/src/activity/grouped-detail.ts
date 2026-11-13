@@ -11,11 +11,9 @@ import { activityActionKeys, isSectionAction } from "./action-keys.ts";
 import { activityStatus } from "./attention.ts";
 import type { GroupedActivityRow } from "./grouped-tree.ts";
 import { summarizeGroup, workStateLabels, type GroupSummary } from "./group-summary.ts";
-import { isFinished, type ActivityRow } from "./model.ts";
+import { isFinished, type ActivityAction, type ActivityRow } from "./model.ts";
 import type { ActivityDetail, ActivityDetailField } from "./protocol.ts";
 import { activityAgentIdentity, activityElapsed, activityMark, activitySpan } from "./row-line.ts";
-
-type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
 
 /**
  * Detail content before wrapping: verbatim text, agent-authored Markdown, or a muted line of
@@ -60,6 +58,8 @@ interface GroupedDetailOptions {
   readonly actions: ReadonlyArray<ActivityAction>;
   /** A member's direct children in tree order, for its rollup. */
   readonly children: readonly ActivityRow[];
+  /** The selected member's owners from the root down, ending with the member itself. */
+  readonly ownership: readonly ActivityRow[];
 }
 
 const heading = (theme: DetailTheme, value: string, focused: boolean): string =>
@@ -159,13 +159,13 @@ const providerSections = (
 
 const technicalFields = (
   row: ActivityRow,
-  context: readonly ActivityRow[],
+  ownership: readonly ActivityRow[],
   provided: ReadonlyArray<ActivityDetailField>,
 ): ListDetailField[] => {
   const labels = new Set(Arr.map(provided, (field) => Str.toLowerCase(field.label)));
   // A field the provider already supplied is stated once, in its words.
   const shell = Arr.filter(
-    shellTechnicalFields(row, context),
+    shellTechnicalFields(row, ownership),
     (field) => !labels.has(Str.toLowerCase(field.label)),
   );
   return [...Arr.map(provided, (field) => ({ label: field.label, value: field.value })), ...shell];
@@ -173,7 +173,7 @@ const technicalFields = (
 
 const shellTechnicalFields = (
   row: ActivityRow,
-  context: readonly ActivityRow[],
+  ownership: readonly ActivityRow[],
 ): ListDetailField[] => [
   {
     label: "Source",
@@ -181,12 +181,12 @@ const shellTechnicalFields = (
     tone: managerTone.identity,
   },
   { label: "Revision", value: `${technicalIdentity(row.revision)} · generation ${row.generation}` },
-  ...(context.length
+  ...(ownership.length > 1
     ? [
         {
           label: "Ownership",
           value: Arr.join(
-            Arr.map([...context, row], (item) => item.title),
+            Arr.map(ownership, (item) => item.title),
             " › ",
           ),
         },
@@ -199,7 +199,7 @@ function sourceDetail(
   entry: Extract<GroupedActivityRow, { readonly type: "member" }>,
 ): readonly ActivityDetailBlock[] {
   const { theme } = options;
-  const { row, context } = entry;
+  const { row } = entry;
   const loaded = options.loaded ?? (row.detail ? { sections: [{ body: row.detail }] } : undefined);
   // A provider's lead section often opens with the same cause as the row summary, and live
   // progress is already in the loaded output.
@@ -235,7 +235,7 @@ function sourceDetail(
           text(theme.fg("muted", theme.bold("Technical"))),
           {
             kind: "fields" as const,
-            fields: technicalFields(row, context, loaded?.technical ?? []),
+            fields: technicalFields(row, options.ownership, loaded?.technical ?? []),
           },
         ]
       : []),

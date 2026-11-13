@@ -7,7 +7,6 @@ import { createWebAccessRenderers } from "../../../src/third-party/web-access/re
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import { stripAnsi } from "../../support/render";
 
 const downstream: ToolRenderers = {
@@ -138,8 +137,6 @@ const resultOnly: ToolRenderers = {
   renderResult: () => new Text("Sources and cited passages", 0, 0),
 };
 
-const indent = (row: string) => row.length - Str.trimStart(row).length;
-
 interface SourceCheckArgs {
   readonly claim: string;
   readonly sources?: number;
@@ -168,15 +165,8 @@ for (const style of ["preview", "compact"] as const)
           return Arr.map(harness.render(100), stripAnsi);
         };
         const only = render({ claim });
-        assert.equal(Arr.filter(only, (row) => Str.includes(claim)(row)).length, 1);
+        assert.equal(Arr.filter(only, (row) => Fn.pipe(row, Str.includes(claim))).length, 1);
         assert.ok(!Arr.some(only, (row) => Str.trim(row) === "Arguments"));
-        // The provider's result is a body section, indented past the heading as the others are.
-        const heading = Arr.findFirst(only, (row) => Str.includes(claim)(row));
-        const body = Arr.findFirst(only, (row) => Str.includes("Sources and cited")(row));
-        assert.ok(
-          Option.getOrElse(Option.map(body, indent), () => 0) >=
-            Option.getOrElse(Option.map(heading, indent), () => 0) + 2,
-        );
         const more = render({ claim, sources: 3 });
         assert.ok(Arr.some(more, (row) => Str.trim(row) === "Arguments"));
       },

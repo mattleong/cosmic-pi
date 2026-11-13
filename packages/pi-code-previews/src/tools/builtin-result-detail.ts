@@ -4,10 +4,10 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { ownField, type HostObject } from "../shared/untrusted-value";
-import { exceedsWriteDiffBytes, shouldSkipWriteDiffComplexity } from "../write/diff";
+import { getWriteDiffGuard } from "../write/diff";
 import { codePreviewPerformanceConfig } from "../config/state";
 import { getEditPreviewOperations } from "./data/args";
-import { isTruncated } from "./data/results";
+import { isTruncated, LIMIT_REACHED_FIELDS } from "./data/results";
 import { countLabel } from "pi-cosmic-core/display";
 
 const writeCounts = new WeakMap<
@@ -37,7 +37,7 @@ export function grepResultDetail(
   if (
     isTruncated(details) ||
     ownField(details, "linesTruncated") === true ||
-    ownField(details, "matchLimitReached") !== undefined
+    ownField(details, LIMIT_REACHED_FIELDS.grep) !== undefined
   )
     return undefined;
   if (Str.trim(output) === "No matches found") return "0 matching lines";
@@ -61,8 +61,8 @@ export const PATH_LIST_EMPTY_OUTPUT = {
 } as const;
 
 const PATH_LIST_RESULTS = {
-  find: { limit: "resultLimitReached", empty: PATH_LIST_EMPTY_OUTPUT.find, unit: "match" },
-  ls: { limit: "entryLimitReached", empty: PATH_LIST_EMPTY_OUTPUT.ls, unit: "entry" },
+  find: { empty: PATH_LIST_EMPTY_OUTPUT.find, unit: "match" },
+  ls: { empty: PATH_LIST_EMPTY_OUTPUT.ls, unit: "entry" },
 } as const;
 
 const PATH_LIST_PLURALS = { match: "matches", entry: "entries" } as const;
@@ -73,8 +73,9 @@ export function pathListResultDetail(
   output: string,
   details: HostObject | undefined,
 ): string | undefined {
-  const { limit, empty, unit } = PATH_LIST_RESULTS[tool];
-  if (isTruncated(details) || ownField(details, limit) !== undefined) return undefined;
+  const { empty, unit } = PATH_LIST_RESULTS[tool];
+  if (isTruncated(details) || ownField(details, LIMIT_REACHED_FIELDS[tool]) !== undefined)
+    return undefined;
   if (Str.trim(output) === empty) return tool === "ls" ? "empty" : `0 ${PATH_LIST_PLURALS[unit]}`;
   const lines = Arr.filter(Str.split(output, "\n"), (line) => Str.trim(line) !== "");
   // A trailing bracketed notice means the listing is incomplete, so its count would mislead.
@@ -108,8 +109,12 @@ export function projectWriteResultDetail(
     !Predicate.isString(previous) ||
     previous.length > 64_000 ||
     content.length > 64_000 ||
-    exceedsWriteDiffBytes([previous, content], policy.maxWriteDiffBytes) ||
-    shouldSkipWriteDiffComplexity(previous, content, policy.maxWriteDiffChangedLineCells)
+    getWriteDiffGuard(
+      previous,
+      content,
+      policy.maxWriteDiffBytes,
+      policy.maxWriteDiffChangedLineCells,
+    ) !== undefined
   )
     return undefined;
   const changes = diffLines(previous, content, { maxEditLength: 256 });

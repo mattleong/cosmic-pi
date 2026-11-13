@@ -14,7 +14,7 @@ import {
 } from "../src/settings/profile-model-catalog.ts";
 import { profileCandidate } from "./fixtures/profiles.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const piModel = (provider: string, id: string, name = id) =>
   modelFixture({
@@ -112,43 +112,35 @@ describe("profile model catalog", () => {
     }),
   );
 
-  it.effect("sanitizes Pi display text without changing selector identity", () =>
-    Effect.gen(function* () {
-      const models = [
-        piModel("openai", "gpt-old", "Parent\u001b[2J\nrenamed"),
-        piModel("openai", "gpt-next", "Next\u0007\tmodel"),
-      ];
-      const catalog = new ProfileModelCatalog({
-        getAvailable: () => models,
-        getError: () => undefined,
-        refresh: () => Promise.resolve({ aborted: false }),
-      });
-      const displayed = (picker: CandidateModelPickerData) => {
-        const choices = createModelPickerChoices(picker.choices);
-        for (const choice of choices) {
-          expect(hasTerminalControls(choice.item.label)).toBe(false);
-          expect(hasTerminalControls(choice.item.description ?? "")).toBe(false);
-          expect(hasTerminalControls(choice.searchText)).toBe(false);
-        }
-        return choices;
-      };
-      const pi = displayed(
-        yield* Effect.promise(() =>
-          loadCandidateModelPicker({
-            profile: "reviewer",
-            candidateIndex: 0,
-            candidate: profileCandidate("openai/gpt-old"),
-            piCatalog: catalog.capture(),
-            parentSelector: "openai/gpt-old",
-          }),
-        ),
-      );
-      const renamed = Option.getOrUndefined(
-        Arr.findFirst(pi, (choice) => choice.value === "openai/gpt-old"),
-      );
-      expect(renamed?.payload.selector).toBe("openai/gpt-old");
-      expect(renamed?.item.description).toContain("renamed");
-      expect(Arr.some(pi, (choice) => choice.payload.selector === "parent")).toBe(true);
-    }),
-  );
+  it("sanitizes Pi display text without changing selector identity", () => {
+    const models = [
+      piModel("openai", "gpt-old", "Parent\u001b[2J\nrenamed"),
+      piModel("openai", "gpt-next", "Next\u0007\tmodel"),
+    ];
+    const catalog = new ProfileModelCatalog({
+      getAvailable: () => models,
+      getError: () => undefined,
+      refresh: () => Promise.resolve({ aborted: false }),
+    });
+    const displayed = (picker: CandidateModelPickerData) => {
+      const choices = createModelPickerChoices(picker.choices);
+      for (const choice of choices) {
+        expect(hasTerminalControls(choice.item.label)).toBe(false);
+        expect(hasTerminalControls(choice.item.description ?? "")).toBe(false);
+        expect(hasTerminalControls(choice.searchText)).toBe(false);
+      }
+      return choices;
+    };
+    const pi = displayed(
+      loadCandidateModelPicker({
+        candidate: profileCandidate("openai/gpt-old"),
+        piCatalog: catalog.capture(),
+        parentSelector: "openai/gpt-old",
+      }),
+    );
+    const renamed = findOrUndefined(pi, (choice) => choice.value === "openai/gpt-old");
+    expect(renamed?.payload.selector).toBe("openai/gpt-old");
+    expect(renamed?.item.description).toContain("renamed");
+    expect(Arr.some(pi, (choice) => choice.payload.selector === "parent")).toBe(true);
+  });
 });

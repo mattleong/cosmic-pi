@@ -13,6 +13,7 @@ import {
   type SubagentContractTool,
 } from "../../src/tools/contract-schema.ts";
 import { view } from "../fixtures/run-view.ts";
+import { receiptFor } from "./fixtures/tool-harness.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -37,7 +38,6 @@ const observedTargets = (observations: ReadonlyArray<SubagentRunObservation>) =>
     }),
   ).targets;
 
-const receipt = (id: string) => ({ id, generation: 1, claimToken: `claim-${id}` });
 const finished = (id: string, overrides: Partial<SubagentRunView> = {}) =>
   view({ id, name: id, state: "completed", reportGeneration: 1, ...overrides });
 const recovery = (runId: string, overrides: Partial<FailedStartRecovery> = {}) =>
@@ -107,12 +107,12 @@ describe("report disposition", () => {
   it("delivers every claimed report: a saved one as its file, an unsaved one as a preview", () => {
     const reportArchive = { path: "/agent/reports/a-1.md", chars: 5, lines: 1, complete: true };
     const saved = finished("a", { finalText: "Done.", reportStatus: "available", reportArchive });
-    expect(report({ run: saved, completionReceipt: receipt("a") })).toEqual({
+    expect(report({ run: saved, completionReceipt: receiptFor("a") })).toEqual({
       status: "delivered",
       ...reportArchive,
     });
     const run = finished("a", { finalText: "Done.", reportStatus: "available" });
-    expect(report({ run, completionReceipt: receipt("a") })).toEqual({
+    expect(report({ run, completionReceipt: receiptFor("a") })).toEqual({
       status: "delivered",
       text: "Done.",
       truncated: false,
@@ -121,7 +121,7 @@ describe("report disposition", () => {
       finalText: Fn.pipe("x", Str.repeat(10_000)),
       reportStatus: "available",
     });
-    expect(report({ run: long, completionReceipt: receipt("a") })).toMatchObject({
+    expect(report({ run: long, completionReceipt: receiptFor("a") })).toMatchObject({
       status: "delivered",
       truncated: true,
     });
@@ -170,6 +170,8 @@ describe("await contract", () => {
         requestedRunIds: ["done", "old", "busy", "never-seen"],
         until: "all_finished",
         cleanup: "unconfirmed",
+        deliveryAttemptedIds: new Set(),
+        ending: "cancelled",
         now: 0,
       }),
     );
@@ -208,7 +210,7 @@ describe("await contract", () => {
       );
     const done = {
       run: finished("done", { finalText: "Report" }),
-      completionReceipt: receipt("done"),
+      completionReceipt: receiptFor("done"),
     };
     expect(contractFor([done, { run: view({ id: "busy" }) }])).toMatchObject({
       outcome: "message",

@@ -5,10 +5,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { BackgroundTaskService } from "../src/task/service.ts";
 import { nativeCodemodeSession } from "./support/native-codemode-session.ts";
 import { realServiceLayer } from "./support/real-service.ts";
@@ -17,10 +17,8 @@ import { taskServiceDouble, taskStatus, taskWait } from "./support/task-service-
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const literal = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 const output = (text: string) => {
-  const line = Option.getOrUndefined(
-    Arr.findFirst(Str.split(text, "\n"), (candidate) =>
-      Fn.pipe(candidate, Str.startsWith("WORKFLOW_RESULT ")),
-    ),
+  const line = findOrUndefined(Str.split(text, "\n"), (candidate) =>
+    Fn.pipe(candidate, Str.startsWith("WORKFLOW_RESULT ")),
   );
   expect(line, text).toBeDefined();
   return decodeOutput(Fn.pipe(line!, Str.slice("WORKFLOW_RESULT ".length)));

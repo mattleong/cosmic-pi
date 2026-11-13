@@ -4,8 +4,11 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Predicate from "effect/Predicate";
+import { yieldUntil } from "pi-cosmic-core/testing";
 import {
+  WriterLeaseConflictError,
   type WriterLeaseContract,
+  WriterLeaseReleaseError,
   WriterLeaseService,
 } from "../../../src/boundary/writer-lease.ts";
 import {
@@ -31,7 +34,7 @@ import {
 } from "./service-harness.ts";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export const repoWriter = (overrides: Partial<StartSubagentRequest> = {}) =>
   request({ cwd: "/repo", writeIntent: "writer", ...overrides });
@@ -48,13 +51,73 @@ export const reviewAndPrepare = (service: SubagentServiceContract, workspaceId: 
     return { revisionId, preparationId: prepared.preparationId };
   });
 
-export const leasesWith = (override: (base: WriterLeaseContract) => Partial<WriterLeaseContract>) =>
+export type LeaseOverride = (base: WriterLeaseContract) => Partial<WriterLeaseContract>;
+
+export const leasesWith = (override: LeaseOverride) =>
   Layer.effect(
     WriterLeaseService,
     WriterLeaseService.use((base) =>
       Effect.succeed(WriterLeaseService.of({ ...base, ...override(base) })),
     ),
   ).pipe(Layer.provide(fakeWriterLeaseLayer()));
+
+/** A directory reads as replaced by another while `when` holds for it. */
+export const replacedIdentity =
+  (when: (cwd: string) => boolean): LeaseOverride =>
+  (base) => ({
+    canonicalize: (cwd) =>
+      base.canonicalize(cwd).pipe(
+        Effect.map((identity) =>
+          when(cwd)
+            ? {
+                ...identity,
+                filesystemIdentity: "dev:2;ino:3",
+                digest: Fn.pipe("f", Str.repeat(64)),
+              }
+            : identity,
+        ),
+      ),
+  });
+
+/** Releasing the lease on `cwd` fails, leaving that release unconfirmed. */
+export const failingRelease =
+  (cwd: string): LeaseOverride =>
+  (base) => ({
+    release: (lease) =>
+      lease.canonicalCwd === cwd
+        ? Effect.fail(WriterLeaseReleaseError.make({ message: "Release unconfirmed." }))
+        : base.release(lease),
+  });
+
+/** Another session's live writer holds the lease on each directory `isHeld` names. */
+export const heldElsewhere =
+  (isHeld: (path: string) => boolean): LeaseOverride =>
+  (base) => ({
+    acquire: (input) =>
+      isHeld(input.cwd.path)
+        ? Effect.fail(
+            WriterLeaseConflictError.make({
+              reason: "live",
+              message: "Another live writer already owns this filesystem directory identity.",
+            }),
+          )
+        : base.acquire(input),
+  });
+
+interface CanonicalizeGate {
+  cwd?: string;
+  pause: Effect.Effect<void>;
+}
+
+/** Pauses writer cwd canonicalization for one directory, holding its launch before admission. */
+export const canonicalizeGate = () => {
+  const gate: CanonicalizeGate = { pause: Effect.void };
+  const writerLeases = leasesWith((base) => ({
+    canonicalize: (cwd) =>
+      (cwd === gate.cwd ? gate.pause : Effect.void).pipe(Effect.andThen(base.canonicalize(cwd))),
+  }));
+  return { gate, writerLeases };
+};
 
 type GatedOperation =
   | "create"
@@ -71,7 +134,6 @@ interface EngineHooks {
   orphanOwnerEnded?: boolean;
   /** Probing other sessions' owner leases fails, so a listing that probes them fails. */
   ownerProbeFailure?: WorkspaceError;
-  createFailure?: WorkspaceError;
   createHookFailure?: WorkspaceError | undefined;
   workerChanges: WorkspaceWorkerChanges | WorkspaceError;
   before: { [Operation in GatedOperation]?: Effect.Effect<void> | undefined };
@@ -79,8 +141,6 @@ interface EngineHooks {
   /** Integration stops partway, leaving the record integrating. */
   integrateStops?: boolean;
   revisionDiff?: string;
-  /** The changed paths each frozen revision lists. */
-  changedPaths: ReadonlyArray<string>;
   /** What a rebase reports, or how it fails; it reopens the record either way it succeeds. */
   rebase: WorkspaceRebase | WorkspaceError;
 }
@@ -120,14 +180,12 @@ const refuse = (operation: string, message: string) =>
 
 export function workspaceFixture({
   sourceCwd = "/repo",
-  canonicalize = (cwd: string) => cwd,
   writerLeases,
   children = fakeChildLayer(),
   worktreeCreate,
   serviceOptions,
 }: {
   readonly sourceCwd?: string;
-  readonly canonicalize?: (cwd: string) => string;
   readonly writerLeases?: Layer.Layer<WriterLeaseService>;
   readonly children?: ReturnType<typeof fakeChildLayer>;
   readonly worktreeCreate?: WorktreeCreateSetup;
@@ -145,7 +203,6 @@ export function workspaceFixture({
     },
     before: {},
     failDiscard: false,
-    changedPaths: ["file.ts"],
     rebase: { reappliedPaths: ["file.ts"], conflictedPaths: [] },
   };
   const gated = <A, E>(operation: GatedOperation, effect: Effect.Effect<A, E>) =>
@@ -184,13 +241,7 @@ export function workspaceFixture({
   let preparations = 0;
   const engineFor = (leases: WriterLeaseContract): WorkspaceServiceContract => {
     const create: WorkspaceServiceContract["create"] = (input) =>
-      gated(
-        "create",
-        Effect.suspend(() =>
-          hooks.createFailure ? Effect.fail(hooks.createFailure) : Effect.void,
-        ),
-      ).pipe(
-        Effect.andThen(checkoutSource(input)),
+      gated("create", checkoutSource(input)).pipe(
         Effect.flatMap((source) =>
           Effect.gen(function* () {
             const workspaceId = `workspace-${++ordinal}`;
@@ -288,7 +339,7 @@ export function workspaceFixture({
               );
             const revision = {
               revisionId: `revision-${++revisions}`,
-              changedPaths: [...hooks.changedPaths],
+              changedPaths: ["file.ts"],
             };
             const diff = hooks.revisionDiff ?? Fn.pipe("a", Str.repeat(20_000));
             diffs.set(revision.revisionId, diff);
@@ -413,7 +464,6 @@ export function workspaceFixture({
   const leaseLayer =
     writerLeases ??
     fakeWriterLeaseLayer({
-      canonicalize,
       onCanonicalize: (cwd) => canonicalized.push(cwd),
       onAcquire: (lease) => acquired.push(lease.canonicalCwd),
       onRelease: (lease) => released.push(lease.canonicalCwd),
@@ -439,10 +489,6 @@ export function workspaceFixture({
     unavailable,
     children,
     layer,
-    /** For a service over other backends: its options, writer leases, and this engine. */
-    options,
-    leaseLayer,
-    engineLayer,
     acquired,
     released,
     canonicalized,
@@ -465,12 +511,22 @@ export const completedWriter = (
     return run;
   });
 
+/** A writer whose process exited with an error, once its cleanup is confirmed. */
+export const failedWriter = (
+  service: SubagentServiceContract,
+  f: ReturnType<typeof workspaceFixture>,
+) =>
+  Effect.gen(function* () {
+    const run = yield* service.start(repoWriter());
+    const control = f.children.controls.at(-1)!;
+    control.exit(1);
+    yield* yieldUntil(() => control.released() === 1);
+    return run;
+  });
+
 export const outcomeOf = (service: SubagentServiceContract, id: string) =>
   runViews(service).pipe(
-    Effect.map(
-      (runs) =>
-        Option.getOrUndefined(Arr.findFirst(runs, (run) => run.id === id))?.workspaceOutcome,
-    ),
+    Effect.map((runs) => findOrUndefined(runs, (run) => run.id === id)?.workspaceOutcome),
   );
 
 export const settledOutcome = (service: SubagentServiceContract, id: string) =>

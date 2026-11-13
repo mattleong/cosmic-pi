@@ -122,21 +122,12 @@ interface RowMarkers {
   readonly omitted: string;
 }
 
-const rowMarkers = (row: ActivityRowVisual, interactive: boolean): RowMarkers => {
-  if (!interactive)
-    return {
-      continuations: row.continuations.slice(1),
-      awaited: row.awaited ? "◎ " : "",
-      fold: undefined,
-      omitted: "",
-    };
-  return {
-    continuations: row.continuations,
-    awaited: row.awaited ? "◎ " : "",
-    fold: row.children ? (row.expanded ? "▾" : "▸") : "",
-    omitted: row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "",
-  };
-};
+const rowMarkers = (row: ActivityRowVisual, interactive: boolean): RowMarkers => ({
+  continuations: interactive ? row.continuations : row.continuations.slice(1),
+  awaited: row.awaited ? "◎ " : "",
+  fold: interactive ? (row.children ? (row.expanded ? "▾" : "▸") : "") : undefined,
+  omitted: interactive && row.omittedChildren ? ` · ≥${row.omittedChildren} omitted` : "",
+});
 
 const joinIdentity = (profile: string | undefined, model: string): string =>
   profile ? `${profile} → ${model}` : model;
@@ -325,15 +316,4 @@ export function renderActivityRowLines(
   );
   const quiet = focusedStyle ? focusedStyle(identity) : paint("muted", identity);
   return [withStatus(title), `${paint("dim", below)}${quiet}`];
-}
-
-/** A single-line Activity row, as the widget draws it. */
-export function renderActivityRow(
-  row: ActivityRowVisual,
-  width: number,
-  theme: Pick<Theme, "fg"> | undefined,
-  presentation: "manager" | "widget",
-  focusedStyle?: (text: string) => string,
-): string {
-  return renderActivityRowLines(row, width, theme, presentation, focusedStyle)[0] ?? "";
 }

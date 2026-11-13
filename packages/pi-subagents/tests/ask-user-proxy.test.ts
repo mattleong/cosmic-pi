@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import { deferredPromise } from "pi-cosmic-core/testing";
@@ -24,6 +25,7 @@ import {
   eventBus as bus,
   pickQuestionnaire as request,
 } from "./support/questionnaire.ts";
+import { effectTest, step } from "./support/effect-test.ts";
 import { rejection } from "./support/result.ts";
 import * as Str from "effect/String";
 
@@ -61,48 +63,50 @@ const relayToRoot = (rootCapability: QuestionnaireCapability, asker: Questionnai
 };
 
 describe("structured questionnaire proxy boundary", () => {
-  it("round-trips text questions and notes through the authenticated root and rejects text with choices", () => {
-    const textRequest: AskUserRequest = {
-      questions: [{ key: "details", title: "Details", prompt: "Describe?", mode: "text" }],
-    };
-    const outcome: AskUserOutcome = {
-      outcome: "submitted",
-      answers: [{ key: "details", kind: "text", text: "bq1234\nanswer", note: "context" }],
-    };
-    const authenticated = owner("authenticated-text");
-    const { relay, detach } = relayToRoot(
-      capability({
-        cancel: (received) => {
-          expect(received).toEqual(authenticated);
-          return Promise.resolve();
-        },
-        ask: (received, receivedOwner) => {
-          expect(received).toEqual(textRequest);
-          expect(receivedOwner).toEqual(authenticated);
-          return Promise.resolve(outcome);
-        },
-      }),
-      authenticated,
-    );
-    for (const choices of [[], [{ value: "a", label: "A", description: "A" }]]) {
-      expect(
-        rejection(
-          decodeQuestionnaireProxyRequest({
-            tool: "ask_user",
-            argumentsJson: JSON.stringify({
-              questions: [{ ...textRequest.questions[0], choices }],
+  effectTest(
+    "round-trips text questions and notes through the authenticated root and rejects text with choices",
+    function* () {
+      const textRequest: AskUserRequest = {
+        questions: [{ key: "details", title: "Details", prompt: "Describe?", mode: "text" }],
+      };
+      const outcome: AskUserOutcome = {
+        outcome: "submitted",
+        answers: [{ key: "details", kind: "text", text: "bq1234\nanswer", note: "context" }],
+      };
+      const authenticated = owner("authenticated-text");
+      const { relay, detach } = relayToRoot(
+        capability({
+          cancel: (received) => {
+            expect(received).toEqual(authenticated);
+            return Promise.resolve();
+          },
+          ask: (received, receivedOwner) => {
+            expect(received).toEqual(textRequest);
+            expect(receivedOwner).toEqual(authenticated);
+            return Promise.resolve(outcome);
+          },
+        }),
+        authenticated,
+      );
+      for (const choices of [[], [{ value: "a", label: "A", description: "A" }]]) {
+        expect(
+          rejection(
+            decodeQuestionnaireProxyRequest({
+              tool: "ask_user",
+              argumentsJson: JSON.stringify({
+                questions: [{ ...textRequest.questions[0], choices }],
+              }),
             }),
-          }),
-        ),
-      ).toBeInstanceOf(InvalidSubagentRequestError);
-    }
-    return Promise.resolve<unknown>(relay.ask(textRequest, new AbortController().signal))
-      .then((answer) => {
-        expect(answer).toEqual(outcome);
-        return undefined;
-      })
-      .finally(detach);
-  });
+          ),
+        ).toBeInstanceOf(InvalidSubagentRequestError);
+      }
+      yield* Effect.addFinalizer(() => Effect.sync(detach));
+      const answer = yield* step(() =>
+        Promise.resolve<unknown>(relay.ask(textRequest, new AbortController().signal)),
+      );
+      expect(answer).toEqual(outcome);
+    },
+  );
   it("keeps questionnaire requests separate and rejects ownership injection and excess data", () => {
     const wire = { tool: "ask_user", argumentsJson: JSON.stringify(request) };
     expect(Result.getOrUndefined(decodeQuestionnaireProxyRequest(wire))).toEqual(request);
@@ -134,12 +138,11 @@ describe("structured questionnaire proxy boundary", () => {
     "replacement",
     "cleanup-rejection",
   ] as const) {
-    it(`joins exact root cleanup after ${ending}`, () => {
+    effectTest(`joins exact root cleanup after ${ending}`, function* () {
       const events = bus();
       const questionOwner = owner("q");
       const cleanup = deferredPromise();
       const cancelled = deferredPromise();
-      let finished = false;
       let generation = "g1";
       answerCapabilityQueries(events, () => ({
         version: 1,
@@ -159,28 +162,20 @@ describe("structured questionnaire proxy boundary", () => {
           });
         },
       }));
-      const result = Effect.runPromise(
+      const asking = yield* Effect.forkChild(
         Effect.result(askParentQuestionnaire(events, "root", request, questionOwner)),
-      ).then((value) => {
-        finished = true;
-        return value;
-      });
-      return cancelled.promise
-        .then(() => {
-          expect(finished).toBe(false);
-          cleanup.resolve();
-          return result;
-        })
-        .then((outcome) => {
-          expect(outcome._tag).toBe(ending === "answer" ? "Success" : "Failure");
-          if (Result.isFailure(outcome))
-            expect(outcome.failure).toBeInstanceOf(InvalidSubagentRequestError);
-          return undefined;
-        });
+      );
+      yield* step(() => cancelled.promise);
+      expect(asking.pollUnsafe()).toBeUndefined();
+      cleanup.resolve();
+      const outcome = yield* Fiber.join(asking);
+      expect(Result.isSuccess(outcome)).toBe(ending === "answer");
+      if (Result.isFailure(outcome))
+        expect(outcome.failure).toBeInstanceOf(InvalidSubagentRequestError);
     });
   }
 
-  it("does not cancel a rejected capability before ask admission", () => {
+  effectTest("does not cancel a rejected capability before ask admission", function* () {
     const events = bus();
     let entered = false;
     let cancelled = false;
@@ -196,18 +191,15 @@ describe("structured questionnaire proxy boundary", () => {
         },
       }),
     );
-    return expect(
-      Effect.runPromise(askParentQuestionnaire(events, "different-session", request, owner("q"))),
-    )
-      .rejects.toBeInstanceOf(InvalidSubagentRequestError)
-      .then(() => {
-        expect(entered).toBe(false);
-        expect(cancelled).toBe(false);
-        return undefined;
-      });
+    const outcome = yield* Effect.result(
+      askParentQuestionnaire(events, "different-session", request, owner("q")),
+    );
+    expect(rejection(outcome)).toBeInstanceOf(InvalidSubagentRequestError);
+    expect(entered).toBe(false);
+    expect(cancelled).toBe(false);
   });
 
-  it("rejects a stale root answer after capability replacement", () => {
+  effectTest("rejects a stale root answer after capability replacement", function* () {
     const events = bus();
     let generation = "g1";
     answerCapabilityQueries(events, () =>
@@ -219,7 +211,9 @@ describe("structured questionnaire proxy boundary", () => {
         },
       }),
     );
-    const result = Effect.runPromise(askParentQuestionnaire(events, "root", request, owner("q")));
-    return expect(result).rejects.toBeInstanceOf(InvalidSubagentRequestError);
+    const outcome = yield* Effect.result(
+      askParentQuestionnaire(events, "root", request, owner("q")),
+    );
+    expect(rejection(outcome)).toBeInstanceOf(InvalidSubagentRequestError);
   });
 });

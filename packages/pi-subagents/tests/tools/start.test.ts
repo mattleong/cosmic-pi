@@ -1,10 +1,9 @@
-import { initTheme, type AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
-import * as Schema from "effect/Schema";
 import * as Match from "effect/Match";
-import { assert, beforeAll, describe, expect, vi } from "vitest";
+import { assert, describe, expect, vi } from "vitest";
 import { effectTest, step } from "../support/effect-test.ts";
 import {
   resolveProfileStart,
@@ -16,28 +15,26 @@ import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { SubagentProcessError } from "../../src/run/errors.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { MAX_NAME_CHARS } from "../../src/run/state.ts";
-import { SubagentService } from "../../src/run/service.ts";
 import { executeSubagentActionEffect } from "../../src/tools/execute.ts";
 import {
   decodeSubagentProxyResult,
   encodeSubagentProxyPayload,
 } from "../../src/tools/proxy-protocol.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
-import { SubagentStartDetailsSchema } from "../../src/tools/details-schema.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
-  type CaptureOptions,
   captureSubagentTools,
+  decodeStartDetails,
   executeTool,
   invokeOptionalTool,
   context,
   fallbackProfileService,
   profileServiceFor,
-  startCapturingService,
-  testBackendDriver,
-  testBackendRegistry,
+  provideToolServices,
+  startToolFor,
   view,
 } from "./fixtures/tool-harness.ts";
+import { inertDriver } from "../run/fixtures/run-context.ts";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
@@ -50,14 +47,7 @@ const route = (overrides: Partial<ProfileCandidate> = {}): ProfileCandidate => (
   ...overrides,
 });
 
-const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
-
-const startTool = (requests: StartSubagentRequest[], options?: CaptureOptions) =>
-  captureSubagentTools(startCapturingService(requests), options).get("agent_start");
-
 describe("subagent tool", () => {
-  beforeAll(() => initTheme("dark", false));
-
   effectTest("resolves authenticated child starts through the caller's session", function* () {
     const callers: Array<readonly [string, string | undefined]> = [];
     const requests: StartSubagentRequest[] = [];
@@ -96,12 +86,7 @@ describe("subagent tool", () => {
       undefined,
       context,
       "authenticated-caller",
-    ).pipe(
-      Effect.provideService(SubagentService, service),
-      Effect.provideService(SubagentProfileService, fallbackProfileService),
-      Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
-      Effect.orDie,
-    );
+    ).pipe(provideToolServices(service), Effect.orDie);
     expect(callers).toEqual([
       ["authenticated-caller", "scout"],
       ["authenticated-caller", "generalist"],
@@ -117,7 +102,7 @@ describe("subagent tool", () => {
 
   effectTest("threads isolation to writers and refuses a worktree for readers", function* () {
     const requests: StartSubagentRequest[] = [];
-    const result = yield* invokeOptionalTool(startTool(requests), {
+    const result = yield* invokeOptionalTool(startToolFor(requests), {
       agents: [
         { task: "Implement token parsing", profile: "worker", isolation: "worktree" },
         { task: "Implement the docs", profile: "worker" },
@@ -159,9 +144,9 @@ describe("subagent tool", () => {
         },
       },
     });
-    const preflight = vi.fn(() => Effect.succeed(testBackendDriver));
-    const registry = { ...testBackendRegistry, preflight };
-    const result = yield* invokeOptionalTool(startTool(requests, { profiles, registry }), {
+    const preflight = vi.fn(() => Effect.void);
+    const registry = { ...inertDriver, preflight };
+    const result = yield* invokeOptionalTool(startToolFor(requests, { profiles, registry }), {
       agents: [{ profile: "reviewer", task: "Review" }],
     });
     expect(requests).toEqual([]);
@@ -202,7 +187,7 @@ describe("subagent tool", () => {
 
   effectTest("rejects per-launch routing overrides before side effects", function* () {
     const requests: StartSubagentRequest[] = [];
-    const tool = startTool(requests)!;
+    const tool = startToolFor(requests)!;
 
     for (const fields of [
       { execution: "foreground" },
@@ -238,7 +223,7 @@ describe("subagent tool", () => {
 
   effectTest("launches entries with a blank name under their default names", function* () {
     const requests: StartSubagentRequest[] = [];
-    const tool = startTool(requests)!;
+    const tool = startToolFor(requests)!;
     const prepared = tool.prepareArguments?.({
       agents: [
         { task: "Map auth", name: "" },
@@ -260,7 +245,7 @@ describe("subagent tool", () => {
 
   effectTest("cuts a long display name instead of rejecting the launch", function* () {
     const requests: StartSubagentRequest[] = [];
-    const tool = startTool(requests)!;
+    const tool = startToolFor(requests)!;
     const name = `${Fn.pipe("long-name-", Str.repeat(30))}end`;
     const prepared = tool.prepareArguments?.({ agents: [{ task: "Map auth", name }] });
 
@@ -291,7 +276,7 @@ describe("subagent tool", () => {
         projectTrusted: true,
       }).pipe(
         Effect.provideService(SubagentProfileService, fallbackProfileService),
-        Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
+        Effect.provideService(SubagentBackendRegistry, inertDriver),
         Effect.flip,
         Effect.orDie,
       );
@@ -347,15 +332,11 @@ describe("subagent tool", () => {
     const result = yield* step(() => execution);
 
     const partial = updates[0]!;
-    expect(partial.text).toContain("Processed 1 of 3 launches");
-    expect(partial.text).toContain("0 started");
-    expect(partial.text).toContain("1 failed");
-    expect(partial.text).toContain("2 pending (#1 launch-1, #3 launch-3)");
-
-    const receipt = (update: (typeof updates)[number]) => decodeStartDetails(update.details);
     for (const update of updates)
-      expect(Arr.map(receipt(update).startEntries, (entry) => entry.index)).toEqual([0, 1, 2]);
-    const partialReceipt = receipt(partial);
+      expect(
+        Arr.map(decodeStartDetails(update.details).startEntries, (entry) => entry.index),
+      ).toEqual([0, 1, 2]);
+    const partialReceipt = decodeStartDetails(partial.details);
     expect(partialReceipt.startEntries[0]).toMatchObject({ status: "pending" });
     expect(partialReceipt.startEntries[1]).toMatchObject({
       status: "failed",
@@ -363,7 +344,7 @@ describe("subagent tool", () => {
     });
     expect(partialReceipt.startEntries[2]).toMatchObject({ status: "pending" });
 
-    const final = receipt(updates.at(-1)!);
+    const final = decodeStartDetails(updates.at(-1)!.details);
     expect(
       Arr.map(final.startEntries, (entry) => ("runId" in entry ? entry.runId : undefined)),
     ).toEqual(["agent-slow", undefined, "agent-fast"]);

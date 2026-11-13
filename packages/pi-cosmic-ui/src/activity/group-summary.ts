@@ -2,8 +2,9 @@ import * as Arr from "effect/Array";
 import {
   activityAttentionCounts,
   activityAttentionLabels,
-  activityQueued,
+  activityAwaitingTurn,
   addAttention,
+  emptyAttention,
   type ActivityAttentionCounts,
 } from "./attention.ts";
 import { isFinished, type ActivityRow } from "./model.ts";
@@ -21,7 +22,6 @@ export interface GroupSummary {
   readonly attention: ActivityAttentionCounts;
 }
 
-const emptyAttention: ActivityAttentionCounts = { user: 0, parent: 0, blocked: 0, failed: 0 };
 export const emptyGroupSummary: GroupSummary = {
   items: 0,
   running: 0,
@@ -52,7 +52,7 @@ const rowSummary = (row: ActivityRow): GroupSummary => ({
   items: 1,
   running: Number(row.status === "running"),
   pending: Number(row.status === "pending"),
-  queued: Number(activityQueued(row) || (row.kind === "question" && row.status === "pending")),
+  queued: Number(activityAwaitingTurn(row)),
   stopping: Number(row.status === "stopping"),
   paused: Number(row.status === "paused"),
   terminal: Number(isFinished(row)),

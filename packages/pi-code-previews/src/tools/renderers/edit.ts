@@ -29,7 +29,7 @@ import {
 import { setResultDiffShown, unlessResultDiffShown } from "./shared/result-diff";
 import { editDiffShowsOperations } from "./shared/edit-diff-coverage";
 import { renderPreviewError } from "./shared/result-prelude";
-import { stateHeading } from "./shared/state-heading";
+import { previewHeadingText } from "../../preview/heading-wrap";
 import { countLabel } from "pi-cosmic-core/display";
 import { previewIssuesSlot } from "../../preview/preview-issues";
 import { hostObject } from "../../shared/untrusted-value";
@@ -54,7 +54,7 @@ export function editPreviewRenderers(cwd: string): PreviewRenderers {
       const separator = diffSummarySeparator(theme);
       const preview = new Container();
       preview.addChild(
-        stateHeading(() => {
+        previewHeadingText(() => {
           const summary = state.editSummaryText;
           return Predicate.isString(summary) && summary ? title + separator + summary : title;
         }),

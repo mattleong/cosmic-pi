@@ -3,15 +3,19 @@ import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import * as Random from "effect/Random";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Str from "effect/String";
 import * as Sse from "effect/encoding/Sse";
 import { sanitizeDiagnosticError } from "pi-cosmic-core/security";
 import { type StreamingHttpError } from "pi-cosmic-core/platform/errors";
-import { decodeImageStreamEvent } from "./protocol.ts";
-import { generationFailure, type ExtractedImageResult, type OpenAIImageError } from "./types.ts";
+import { decodeImageStreamEvent, NO_REASON } from "./protocol.ts";
+import {
+  generationFailure,
+  randomHex8,
+  type ExtractedImageResult,
+  type OpenAIImageError,
+} from "./types.ts";
 
 const MAX_IMAGE_RESPONSE_BYTES = 100 * 1024 * 1024;
 const MAX_SSE_EVENT_CHARS = 80 * 1024 * 1024;
@@ -73,7 +77,7 @@ export const httpFailure = Effect.fn("OpenAIImage.httpFailure")(function* (
   return yield* generationFailure(
     "request",
     reason
-      ? `${Str.replace(/\.$/u, "")(sanitizeDiagnosticError(reason))} (HTTP ${status}).`
+      ? `${Fn.pipe(sanitizeDiagnosticError(reason), Str.replace(/\.$/u, ""))} (HTTP ${status}).`
       : `OpenAI returned HTTP ${status}.`,
   );
 });
@@ -81,7 +85,7 @@ export const httpFailure = Effect.fn("OpenAIImage.httpFailure")(function* (
 export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   body: Stream.Stream<Uint8Array, StreamingHttpError>,
 ) {
-  const fallbackId = `ig_${Fn.pipe((yield* Random.nextIntBetween(0, 0xffff_ffff)).toString(16), Str.padStart(8, "0"))}`;
+  const fallbackId = `ig_${yield* randomHex8}`;
   let totalBytes = 0;
   let completed: ExtractedImageResult | undefined;
   let providerFailure: OpenAIImageError | undefined;
@@ -121,11 +125,7 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
         imageFailed = true;
         return true;
       },
-      ResponseFailed: ({ message }) => {
-        providerFailure = generationFailure("response", sanitizeDiagnosticError(message));
-        return false;
-      },
-      ProviderError: ({ message }) => {
+      Failed: ({ message }) => {
         providerFailure = generationFailure("response", sanitizeDiagnosticError(message));
         return false;
       },
@@ -166,6 +166,6 @@ export const parseImageSse = Effect.fn("OpenAIImage.parseSse")(function* (
   if (!completed && !providerFailure && !terminated) yield* feed("\n\n");
   if (completed) return completed;
   if (providerFailure) return yield* providerFailure;
-  if (imageFailed) return yield* generationFailure("response", "OpenAI gave no reason.");
+  if (imageFailed) return yield* generationFailure("response", NO_REASON);
   return yield* generationFailure("stream", "OpenAI returned no completed image.");
 });

@@ -8,7 +8,11 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
-import { extensionContextFixture, recordingExtensionHost } from "pi-cosmic-core/testing";
+import {
+  extensionContextFixture,
+  recordingExtensionHost,
+  sessionMessageEntryFixture,
+} from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import { AGENT_MESSAGE_TYPE, agentMainCapabilities } from "../src/boundary/host-agent-messages.ts";
 import { registerParentWake } from "../src/boundary/host-parent-wake.ts";
@@ -17,14 +21,6 @@ import { settleEvent } from "./fixtures/pi-host.ts";
 import { projectionOf } from "./fixtures/run-view.ts";
 import { localServiceFixture, request, withService } from "./run/fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
-
-const assistantEntry = (id: string, text: string): SessionEntry => ({
-  type: "message",
-  id,
-  parentId: null,
-  timestamp: "2026-01-01T00:00:00.000Z",
-  message: fauxAssistantMessage(text),
-});
 
 /** A root session whose main agent receives agent messages through the shared parent wake. */
 const rootSession = () => {
@@ -159,8 +155,8 @@ describe("agent messages to the main agent", () => {
     return withService(layer, function* (service) {
       const scout = yield* service.start(request({ name: "api-scout" }));
       root.setBranch([
-        assistantEntry("a-1", "Earlier plan."),
-        assistantEntry("a-2", "Current plan: map the API."),
+        sessionMessageEntryFixture(fauxAssistantMessage("Earlier plan."), "a-1"),
+        sessionMessageEntryFixture(fauxAssistantMessage("Current plan: map the API."), "a-2"),
       ]);
       root.setIdle(false);
       const read = yield* service.agentRead(asRun(scout.id), [MAIN_AGENT_ID]);

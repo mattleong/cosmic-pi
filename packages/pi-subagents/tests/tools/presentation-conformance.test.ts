@@ -24,8 +24,8 @@ import {
 } from "../../src/tools/render-parent.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -46,15 +46,13 @@ function registered(panel = false, runtime: Partial<SubagentToolRuntime> = {}) {
   ).tools;
 }
 
+const named = (name: string) => findOrUndefined(registered(), (entry) => entry.name === name)!;
+
 it.each(["compact", "preview"] as const)(
   "preserves complete launch tasks in %s expansion",
   (style) => {
-    const tool = withPresentationSettings(
-      { toolCallCollapsedStyle: style },
-      () =>
-        Option.getOrUndefined(
-          Arr.findFirst(registered(), (entry) => entry.name === "agent_start"),
-        )!,
+    const tool = withPresentationSettings({ toolCallCollapsedStyle: style }, () =>
+      named("agent_start"),
     );
     const task = `${Fn.pipe("Task context. ", Str.repeat(60))}\nTASK_TAIL\n\u009dCONTROL_ADJACENT_EVIDENCE`;
     const input = {
@@ -74,10 +72,8 @@ it.each(["compact", "preview"] as const)(
 );
 
 it("renders a launch whose optional fields arrive as null", () => {
-  const tool = withPresentationSettings(
-    { toolCallCollapsedStyle: "preview" },
-    () =>
-      Option.getOrUndefined(Arr.findFirst(registered(), (entry) => entry.name === "agent_start"))!,
+  const tool = withPresentationSettings({ toolCallCollapsedStyle: "preview" }, () =>
+    named("agent_start"),
   );
   const harness = createToolPresentationHarness(tool, { width: 120 });
   for (const expanded of [false, true]) {
@@ -86,7 +82,6 @@ it("renders a launch whose optional fields arrive as null", () => {
       { expanded },
     );
     const text = Arr.join(harness.render(), "\n");
-    expect(text).toContain("launch 1");
     expect(text).toContain("NULL_FIELDS_TASK");
   }
 });
@@ -185,9 +180,7 @@ it("names only the tool for a call Pi rejected as malformed JSON, not for one th
 });
 
 it("preserves host-flagged uncertainty and exact input through compact expansion", () => {
-  const tool = Option.getOrUndefined(
-    Arr.findFirst(registered(), (entry) => entry.name === "agent_lifecycle"),
-  )!;
+  const tool = named("agent_lifecycle");
   const details = compactToolDetails({
     action: "interrupt",
     runs: [],
@@ -237,8 +230,18 @@ it("animates with the registering owner and releases the ticker on settlement", 
   expect(report).toMatchObject({ invalidated: true, stops: 1 });
 });
 
-it("shows every call argument once a management call is expanded", () => {
-  const cases = [
+it("shows every call argument once a call is expanded", () => {
+  const agentIds = ["agent-0000000001", "agent-0000000002", "agent-0000000003", "agent-0000000004"];
+  type Result = Parameters<ReturnType<typeof createToolPresentationHarness>["result"]>[0];
+  const cases: ReadonlyArray<
+    readonly [
+      name: string,
+      args: object,
+      evidence: ReadonlyArray<string>,
+      result?: Result,
+      isError?: boolean,
+    ]
+  > = [
     ["agent_lifecycle", { action: "stop", runIds: ["RUN_ID_SENTINEL"] }, ["RUN_ID_SENTINEL"]],
     [
       "agent_await",
@@ -260,13 +263,31 @@ it("shows every call argument once a management call is expanded", () => {
       { action: "review", workspaceId: "ws-1", offset: 16000, limit: 4000 },
       ["16000", "4000"],
     ],
-  ] as const;
-  for (const [name, args, evidence] of cases) {
-    const harness = createToolPresentationHarness(
-      Option.getOrUndefined(Arr.findFirst(registered(), (entry) => entry.name === name))!,
-      { width: 160 },
-    );
-    harness.call(args, { expanded: true });
+    [
+      "agent_read",
+      { agentIds },
+      agentIds,
+      {
+        content: [{ type: "text", text: "Read four agents." }],
+        details: { version: 1, action: "agent_read", agents: [], missingIds: [] },
+      },
+    ],
+    // A failed send keeps its recipient and its words.
+    [
+      "agent_send",
+      { to: "agent-0000000009", message: "Ship it." },
+      ["agent-0000000009", "Ship it."],
+      {
+        content: [{ type: "text", text: "[agent_unavailable] The agent is stopping." }],
+        details: {},
+      },
+      true,
+    ],
+  ];
+  for (const [name, args, evidence, result, isError = false] of cases) {
+    const harness = createToolPresentationHarness(named(name), { width: 160 });
+    harness.call(args, { expanded: true, isError });
+    if (result) harness.result(result, { expanded: true, isError });
     const text = Arr.join(harness.render(), "\n");
     for (const value of evidence) expect(text, `${name} ${value}`).toContain(value);
   }

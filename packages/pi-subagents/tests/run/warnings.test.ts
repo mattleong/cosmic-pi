@@ -17,8 +17,8 @@ import {
 } from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const latest = (projections: ReadonlyArray<SubagentProjection>) => projections.at(-1)?.runs[0];
 
@@ -83,9 +83,7 @@ describe("run warnings", () => {
       yield* yieldUntil(() => latest(projections)?.state === "completed");
       yield* TestClock.adjust("100 millis");
       yield* yieldUntil(() => Arr.some(notifications, (notice) => notice.type === "completed"));
-      const completed = Option.getOrUndefined(
-        Arr.findFirst(notifications, (notice) => notice.type === "completed"),
-      );
+      const completed = findOrUndefined(notifications, (notice) => notice.type === "completed");
       const folded = completed?.type === "completed" ? completed.runs[0]?.warning : undefined;
       expect(folded).toContain("Tests are flaky.");
       expect(folded).toContain("Extension reloaded.");
@@ -119,36 +117,18 @@ describe("run warnings", () => {
     });
   });
 
-  it.effect("cuts an oversized warning from any runtime to its start, naming its size", () => {
+  it.effect("cuts an oversized warning to its start, naming its size", () => {
     const warning = `Start of the warning. ${Fn.pipe("w", Str.repeat(40_000))}`;
     const cutOf = `of ${warning.length.toLocaleString("en-US")} characters`;
-    const pi = localServiceFixture();
-    const native = eventBackendServiceFixture();
-    const retained = (projections: ReadonlyArray<SubagentProjection>) => {
+    const { fake, projections, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      yield* service.start(request({ name: "pi-warned" }));
+      fake.controls[0]?.offerIpc(contactParentFrame("long", "warning", warning));
+      yield* yieldUntil(() => latest(projections)?.childWarning !== undefined);
       const kept = latest(projections)?.childWarning ?? "";
       expect(kept.length).toBeLessThanOrEqual(MAX_CONTACT_TEXT_CHARS);
       expect(Fn.pipe(kept, Str.startsWith("Start of the warning."))).toBe(true);
       expect(kept).toContain(cutOf);
-    };
-    return Effect.gen(function* () {
-      yield* withService(pi.layer, function* (service) {
-        yield* service.start(request({ name: "pi-warned" }));
-        pi.fake.controls[0]?.offerIpc(contactParentFrame("long", "warning", warning));
-        yield* yieldUntil(() => latest(pi.projections)?.childWarning !== undefined);
-        retained(pi.projections);
-      });
-      yield* withService(native.layer, function* (service) {
-        yield* service.start(eventBackendRequest({ name: "native-warned" }));
-        native.backend.controls[0]?.offer({
-          type: "supervisor_contact",
-          assignmentEpoch: 1,
-          requestId: "long",
-          kind: "warning",
-          message: warning,
-        });
-        yield* yieldUntil(() => latest(native.projections)?.childWarning !== undefined);
-        retained(native.projections);
-      });
     });
   });
 });

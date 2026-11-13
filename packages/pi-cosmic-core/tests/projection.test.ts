@@ -129,11 +129,10 @@ it.effect("does not commit or publish when external publication fails", () =>
         published = snapshot.count;
       },
     );
-    const result = yield* projection
-      .transition(() => Effect.succeed([undefined, { count: 2 }] as const))
-      .pipe(Effect.result);
+    yield* Effect.flip(
+      projection.transition(() => Effect.succeed([undefined, { count: 2 }] as const)),
+    );
 
-    expect(result._tag).toBe("Failure");
     expect(published).toBe(1);
     expect(projection.getSnapshot().count).toBe(1);
     expect((yield* projection.getState).count).toBe(1);

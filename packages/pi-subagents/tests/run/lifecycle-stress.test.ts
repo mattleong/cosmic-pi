@@ -239,6 +239,6 @@ describe("SubagentService lifecycle stress", () => {
             expect(Arr.map(fake.controls, (control) => control.released())).toEqual([1, 1, 1, 1]);
           }).pipe(Effect.ensuring(Deferred.succeed(release, undefined)));
         }
-      }).pipe(Effect.scoped),
+      }),
   );
 });

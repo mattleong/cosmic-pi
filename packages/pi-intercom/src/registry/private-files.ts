@@ -16,7 +16,7 @@ export {
   PrivateFileError,
   readPrivateFile,
   removeOwnEntry,
-} from "pi-cosmic-core";
+} from "pi-cosmic-core/platform/private-file";
 
 const unsafe = () => Effect.fail(PrivateFileError.make({ reason: "unsafe" }));
 

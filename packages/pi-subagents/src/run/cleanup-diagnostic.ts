@@ -48,10 +48,9 @@ export const cleanupFailureDiagnostic = (
   return boundedCleanupDiagnostic({
     phase,
     ...(first?.code && { code: first.code }),
-    message:
-      Arr.join(
-        Arr.map(failures, (failure) => failure.message),
-        "; ",
-      ) || "Cleanup did not provide confirmation.",
+    message: Arr.join(
+      Arr.map(failures, (failure) => failure.message),
+      "; ",
+    ),
   });
 };

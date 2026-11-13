@@ -11,6 +11,7 @@ import {
 import { CodePreviewSchedulerService } from "../../../../src/application/scheduler";
 import { cachedDeferredPreview } from "../../../../src/tools/renderers/shared/cache";
 import { plainTheme } from "../../../support/render";
+import { inertCapability } from "../../../support/renderer-host";
 import { renderContextFixture } from "../../../../testing";
 import { defaultCodePreviewSettings } from "../../../../src/config/defaults";
 import { setCodePreviewSettings } from "../../../../src/config/state";
@@ -30,10 +31,7 @@ for (const transition of ["shutdown", "replacement"] as const)
       Effect.gen(function* () {
         const preview = yield* CodePreviewSchedulerService.use((scheduler) =>
           Effect.sync(() => {
-            installCodePreviewSessionCapability({
-              ...scheduler,
-              run: () => Promise.reject(new Error("not used")),
-            });
+            installCodePreviewSessionCapability(inertCapability(scheduler));
             return cachedDeferredPreview(
               {},
               "preview",
@@ -49,11 +47,12 @@ for (const transition of ["shutdown", "replacement"] as const)
         ).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer));
         clearCodePreviewSessionCapability();
         if (transition === "replacement")
-          installCodePreviewSessionCapability({
-            run: () => Promise.reject(new Error("not used")),
-            defer: () => assert.fail("a retained row cannot borrow its replacement's scheduler"),
-            schedule: () => assert.fail("a retained row cannot animate through its replacement"),
-          });
+          installCodePreviewSessionCapability(
+            inertCapability({
+              defer: () => assert.fail("a retained row cannot borrow its replacement's scheduler"),
+              schedule: () => assert.fail("a retained row cannot animate through its replacement"),
+            }),
+          );
         for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
         assert.match(Arr.join(preview.render(80), "\n"), /retained source/u);
       }).pipe(Effect.ensuring(Effect.sync(() => clearCodePreviewSessionCapability()))),
@@ -84,11 +83,7 @@ for (const { kind, draw, owned } of [
         });
         const preview = yield* CodePreviewSchedulerService.use((scheduler) =>
           Effect.sync(() => {
-            if (owned)
-              installCodePreviewSessionCapability({
-                ...scheduler,
-                run: () => Promise.reject(new Error("not used")),
-              });
+            if (owned) installCodePreviewSessionCapability(inertCapability(scheduler));
             else clearCodePreviewSessionCapability();
             const renderers =
               kind === "write-result" || kind === "write-call"
@@ -115,11 +110,12 @@ for (const { kind, draw, owned } of [
             return component;
           }),
         ).pipe(provideBuiltLayer(CodePreviewSchedulerService.layer));
-        installCodePreviewSessionCapability({
-          run: () => Promise.reject(new Error("not used")),
-          defer: () => assert.fail("retained diff borrowed replacement scheduler"),
-          schedule: () => assert.fail("retained diff borrowed replacement animation"),
-        });
+        installCodePreviewSessionCapability(
+          inertCapability({
+            defer: () => assert.fail("retained diff borrowed replacement scheduler"),
+            schedule: () => assert.fail("retained diff borrowed replacement animation"),
+          }),
+        );
         let syntaxRequests = 0;
         const request = () => {
           syntaxRequests++;

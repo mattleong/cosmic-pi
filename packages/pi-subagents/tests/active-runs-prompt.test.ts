@@ -53,8 +53,7 @@ const compactionEntry = (id: string): SessionEntry => ({
   tokensBefore: 1,
 });
 
-const promptHarness = (initial: SubagentProjection) => {
-  let projection = initial;
+const promptHarness = (projection: SubagentProjection) => {
   let branch: ReadonlyArray<SessionEntry> = [];
   const { pi, emit } = recordingExtensionHost();
   registerActiveRunsPrompt(pi, () => projection);
@@ -70,9 +69,6 @@ const promptHarness = (initial: SubagentProjection) => {
     });
   return {
     section,
-    setProjection: (next: SubagentProjection) => {
-      projection = next;
-    },
     compact: (id: string) => {
       branch = [...branch, compactionEntry(id)];
     },

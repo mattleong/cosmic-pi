@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
@@ -214,10 +215,10 @@ describe("Cosmic UI config", () => {
         expect(config.footer.enabled).toBe(true);
         expect(config.configPath).toBe(paths.project);
         expect(
-          yield* Effect.exit(updateFooterConfig(cwd, agent, { enabled: false }, true)).pipe(
-            Effect.map((exit) => exit._tag),
+          Exit.isFailure(
+            yield* Effect.exit(updateFooterConfig(cwd, agent, { enabled: false }, true)),
           ),
-        ).toBe("Failure");
+        ).toBe(true);
         expect(yield* fs.readFileString(paths.project)).toBe("{not-json");
       }),
     ),

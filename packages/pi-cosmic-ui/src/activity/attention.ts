@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import {
   managerActivityColor,
@@ -15,14 +16,9 @@ export function activityAttention(item: ActivityItem): "user" | "parent" | "bloc
 }
 
 // The widget and manager ask for each published row snapshot on every frame.
-const waitingOnUser = new WeakMap<readonly ActivityRow[], readonly ActivityRow[]>();
-export const needsYou = (rows: readonly ActivityRow[]): readonly ActivityRow[] => {
-  const cached = waitingOnUser.get(rows);
-  if (cached) return cached;
-  const waiting = Arr.filter(rows, (row) => activityAttention(row) === "user");
-  waitingOnUser.set(rows, waiting);
-  return waiting;
-};
+export const needsYou = Fn.memoize((rows: readonly ActivityRow[]): readonly ActivityRow[] =>
+  Arr.filter(rows, (row) => activityAttention(row) === "user"),
+);
 
 const blockedLabels = {
   "parent-review": "parent needs to review",
@@ -43,6 +39,10 @@ export const activityQueued = (item: ActivityItem): boolean =>
 export const activityCanFollow = (row: ActivityRow): boolean =>
   row.retained !== true && row.kind !== "question" && row.status !== "pending" && !isFinished(row);
 
+/** Queued work, or a question waiting its turn: both read and mark as queued. */
+export const activityAwaitingTurn = (item: ActivityItem): boolean =>
+  activityQueued(item) || (item.kind === "question" && item.status === "pending");
+
 export function activityStatus(item: ActivityItem): string {
   if (item.status === "needs-input")
     return item.inputTarget === "user" ? "needs your input" : "waiting for reply";
@@ -51,9 +51,7 @@ export function activityStatus(item: ActivityItem): string {
   if (item.status === "cancelled")
     return item.kind === "question" ? "cancelled" : managerActivityLabel("stopped");
   if (item.status === "pending")
-    return item.kind === "question" || activityQueued(item)
-      ? "queued"
-      : managerActivityLabel("pending");
+    return activityAwaitingTurn(item) ? "queued" : managerActivityLabel("pending");
   return managerActivityLabel(item.status);
 }
 
@@ -63,6 +61,13 @@ export interface ActivityAttentionCounts {
   readonly blocked: number;
   readonly failed: number;
 }
+
+export const emptyAttention: ActivityAttentionCounts = {
+  user: 0,
+  parent: 0,
+  blocked: 0,
+  failed: 0,
+};
 
 export function activityAttentionCounts(item: ActivityItem): ActivityAttentionCounts {
   const attention = activityAttention(item);

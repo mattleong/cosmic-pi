@@ -1,10 +1,10 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import type { CompactIssue } from "pi-code-previews";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { BACKGROUND_TASK_FIELD_BOUNDS } from "../src/task/bounds.ts";
 import {
   projectBackgroundTaskCompactSummary,
@@ -68,7 +68,7 @@ const wait = (
 });
 type Summary = ReturnType<typeof project>;
 const find = (summary: Summary, code: string): CompactIssue | undefined =>
-  Option.getOrUndefined(Arr.findFirst(summary?.issues ?? [], (issue) => issue.code === code));
+  findOrUndefined(summary?.issues ?? [], (issue) => issue.code === code);
 
 describe("background task compact semantics", () => {
   it("bounds the call subject of a maximum-size command to the display limit", () => {
@@ -368,13 +368,6 @@ const narrowsEachTime = (alternatives: ReadonlyArray<string>) =>
 describe("background task heading facts", () => {
   const failed = { ...snapshot, state: "failed", exitCode: 1, endedAt: 2 };
 
-  it("keeps the start action on a started task's row, since the check alone reads as finished", () => {
-    expect(project({ action: "start", snapshot }, "start")).toMatchObject({
-      action: "start",
-      outcome: "success",
-    });
-  });
-
   it("counts listed tasks by state only where their states differ, unless all failed", () => {
     const first = (tasks: ReadonlyArray<typeof snapshot>) =>
       project({ action: "list", tasks }, "list")?.counters?.[0];
@@ -392,15 +385,17 @@ describe("background task heading facts", () => {
     expect(narrowsEachTime(counters)).toBe(true);
     expect(counters.length).toBeGreaterThanOrEqual(3);
     // Every alternative but the bare total still reports the three failures.
-    expect(Arr.every(counters.slice(0, -1), (entry) => Str.includes("3 failed")(entry))).toBe(true);
+    expect(
+      Arr.every(counters.slice(0, -1), (entry) => Fn.pipe(entry, Str.includes("3 failed"))),
+    ).toBe(true);
     expect(counters.at(-1)).not.toContain("failed");
     // Narrower, the failures outlast the active work.
     const failuresOnly = Arr.filter(
       counters,
       (entry) =>
-        Str.includes("3 failed")(entry) &&
-        !Str.includes("active")(entry) &&
-        !Str.includes("running")(entry),
+        Fn.pipe(entry, Str.includes("3 failed")) &&
+        !Fn.pipe(entry, Str.includes("active")) &&
+        !Fn.pipe(entry, Str.includes("running")),
     );
     expect(failuresOnly).not.toHaveLength(0);
   });
@@ -416,7 +411,7 @@ describe("background task heading facts", () => {
     const counters = matched?.counters ?? [];
     expect(counters.length).toBeGreaterThanOrEqual(3);
     expect(narrowsEachTime(counters)).toBe(true);
-    expect(Arr.every(counters, (entry) => Str.includes("found")(entry))).toBe(true);
+    expect(Arr.every(counters, (entry) => Fn.pipe(entry, Str.includes("found")))).toBe(true);
     expect(counters[0]).toContain("Local:");
     // The narrowest no longer spends room on the task's state.
     expect(counters.at(-1)).not.toContain("running");

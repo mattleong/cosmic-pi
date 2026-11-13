@@ -42,59 +42,49 @@ function reviseLines(details: WorkspaceToolDetails): string[] {
       ];
 }
 
+function listCounters(details: WorkspaceToolDetails): string[] {
+  if (details.workspaceCount === undefined || details.listedCount === undefined) return [];
+  if (details.workspaceCount === 0) return ["No worktrees"];
+  const listed =
+    details.listedCount < details.workspaceCount
+      ? `${details.listedCount} of ${countLabel(details.workspaceCount, "worktree")}`
+      : countLabel(details.listedCount, "worktree");
+  const unreadable = details.unavailableCount ?? 0;
+  const adoptable = details.adoptableCount ?? 0;
+  return [
+    Arr.join(
+      [
+        listed,
+        ...(unreadable > 0 ? [`${unreadable} unreadable`] : []),
+        ...(adoptable > 0 ? [`${adoptable} adoptable`] : []),
+      ],
+      " · ",
+    ),
+  ];
+}
+
 /** A receipt's counter alternatives, widest first. */
 function workspaceCounters(details: WorkspaceToolDetails): string[] {
   switch (details.operation) {
+    case "list":
+      return listCounters(details);
     case "review":
       return reviewPositions(details);
+    case "prepare":
+      return ["ready to test"];
     case "apply":
       return applyCounters(details);
     case "revise":
       return reviseLines(details);
-    case "list":
-    case "prepare":
-    case "discard": {
-      const line = workspaceReceiptLine(details);
-      return line === undefined ? [] : [line];
-    }
+    case "discard":
+      return ["discarded"];
   }
   return Fn.absurd(details.operation);
 }
 
-export function workspaceReceiptLine(details: WorkspaceToolDetails): string | undefined {
-  switch (details.operation) {
-    case "list": {
-      if (details.workspaceCount === undefined || details.listedCount === undefined)
-        return undefined;
-      if (details.workspaceCount === 0) return "No worktrees";
-      const listed =
-        details.listedCount < details.workspaceCount
-          ? `${details.listedCount} of ${countLabel(details.workspaceCount, "worktree")}`
-          : countLabel(details.listedCount, "worktree");
-      const unreadable = details.unavailableCount ?? 0;
-      const adoptable = details.adoptableCount ?? 0;
-      return Arr.join(
-        [
-          listed,
-          ...(unreadable > 0 ? [`${unreadable} unreadable`] : []),
-          ...(adoptable > 0 ? [`${adoptable} adoptable`] : []),
-        ],
-        " · ",
-      );
-    }
-    case "review":
-      return reviewPositions(details)[0];
-    case "prepare":
-      return "ready to test";
-    case "apply":
-      return applyCounters(details)[0];
-    case "revise":
-      return reviseLines(details)[0];
-    case "discard":
-      return "discarded";
-  }
-  return Fn.absurd(details.operation);
-}
+/** A receipt's line: its widest counter. */
+export const workspaceReceiptLine = (details: WorkspaceToolDetails): string | undefined =>
+  workspaceCounters(details)[0];
 
 function validListCounts(details: WorkspaceToolDetails): boolean {
   if (
@@ -239,10 +229,6 @@ function testingStep(details: WorkspaceApplyReceipt): CompactIssue {
   return Fn.absurd(details.testing);
 }
 
-function applyIssues(details: WorkspaceApplyReceipt): CompactIssue[] {
-  return [...asWarnings(details), testingStep(details)];
-}
-
 function reviseIssues(details: WorkspaceToolDetails): CompactIssue[] {
   const conflicts = details.conflictCount ?? 0;
   return [
@@ -286,7 +272,7 @@ function operationIssues(details: WorkspaceOperationReceipt): CompactIssue[] {
     case "revise":
       return reviseIssues(details);
     case "apply":
-      return applyIssues(details);
+      return [...asWarnings(details), testingStep(details)];
     case "discard":
       return [];
   }
@@ -306,13 +292,13 @@ export function compactWorkspaceSummary(
     !validPagination(details)
   )
     return undefined;
-  const line = workspaceReceiptLine(details);
+  const counters = workspaceCounters(details);
   const issues = operationIssues(details);
   return {
     action: operation === "list" ? "inspect" : operation,
     subject: details.writerName ?? "",
-    counters: workspaceCounters(details),
-    metadata: details.operation === "list" && line === undefined ? ["worktree metadata"] : [],
+    counters,
+    metadata: details.operation === "list" && counters.length === 0 ? ["worktree metadata"] : [],
     issues,
     // Listing and reviewing only look, so they are neutral unless they raise a problem.
     outcome:

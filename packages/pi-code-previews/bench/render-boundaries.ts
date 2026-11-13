@@ -119,6 +119,7 @@ const sampleCancellation = Effect.gen(function* () {
       return new Text("unexpected", 0, 0);
     },
     () => undefined,
+    capability,
   );
   preview.cancel();
   yield* Effect.yieldNow;

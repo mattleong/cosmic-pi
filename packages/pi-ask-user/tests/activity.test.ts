@@ -4,7 +4,7 @@ import { it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { RESUME_HINT } from "../src/boundary/host-ui.ts";
 import { makeActivityFixture as fixture } from "./support/activity.ts";
 
@@ -43,9 +43,7 @@ it.effect(
       expect(resumed).toBe(0);
       const cancel = f.items()[0]!;
       expect(
-        Option.getOrUndefined(
-          Arr.findFirst(cancel.actions ?? [], (action) => action.id === "cancel"),
-        )?.confirmation,
+        findOrUndefined(cancel.actions ?? [], (action) => action.id === "cancel")?.confirmation,
       ).toBeTruthy();
       yield* f.invoke("owned", "cancel", cancel.revision);
       expect(cancelled).toBe(1);

@@ -2,7 +2,6 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
-import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -14,29 +13,19 @@ import {
 } from "pi-cosmic-ui/manager/list-detail";
 import {
   FRAME_GUTTER,
-  framedBodyWithHints,
-  framedBodyWithPrompt,
-  framedFill,
-  framedGutter,
-  framedScreen,
-  framedStackedRows,
-  framedWideRows,
-  listDetailFrame,
   listDetailHeading,
   paneHeadingText,
   type ListDetailShell,
 } from "pi-cosmic-ui/manager/list-detail-shell";
 import { focusedField, LIST_CURSOR, managerTone } from "pi-cosmic-ui/manager/style";
-import { clipToWidth, type ManagerArrangement } from "pi-cosmic-ui/manager";
-import { managerTable } from "pi-cosmic-ui/manager/table";
+import { clipToWidth } from "pi-cosmic-ui/manager";
+import { managerTable, managerTableNaturalWidth } from "pi-cosmic-ui/manager/table";
 import {
-  borderKeyHint,
   exitKeyHint,
   formatKeyIds,
   framedKeyHintBar,
   joinKeyHints,
   keyHint,
-  keyHintRows,
   moveKeyHint,
   type FramedKeyHints,
 } from "pi-cosmic-ui/manager/key-labels";
@@ -69,6 +58,7 @@ import type {
 } from "pi-cosmic-ui/manager/searchable-select";
 import { profileWorkspaceKeys } from "./profile-workspace-keys.ts";
 import type { DashboardPrompt } from "./profile-dashboard-render.ts";
+import { renderTwoPaneFrame } from "./two-pane-frame.ts";
 import { countLabel } from "pi-cosmic-core/display";
 
 export interface ProfileWorkspaceConfirmation {
@@ -92,14 +82,11 @@ interface ProfileWorkspaceRenderState {
   readonly changedProfiles: ReadonlySet<ProfileId>;
   /** Whether `u` can undo the selected profile's changes from this visit. */
   readonly canUndo: boolean;
-  /** Whether the session differs from the set it is based on, so saving it is worth offering. */
-  readonly sessionChanged: boolean;
   /** `?` expanded the hint bar to every key the editor takes. */
   readonly hintsExpanded?: boolean | undefined;
   readonly busy: boolean;
-  readonly cancellableBusy: boolean;
   /** A short choice list, drawn in the fields pane. */
-  readonly choices?: SearchableSelectPage<string> | undefined;
+  readonly choices?: Pick<SearchableSelectPage<unknown>, "renderBody" | "keyHints"> | undefined;
   readonly confirmation?: ProfileWorkspaceConfirmation | undefined;
   /** A host's pending decision, such as saving the session as a set, in a band above the border. */
   readonly prompt?: DashboardPrompt | undefined;
@@ -210,7 +197,6 @@ const profileTableRows = (
     };
   });
 
-const PROFILE_COLUMN_GAP = 2;
 const PROFILE_CURSOR_WIDTH = 2;
 
 // The model is what the list is for, so it keeps its width before the reasoning label.
@@ -220,6 +206,10 @@ const PROFILE_COLUMNS = [
   { minWidth: 4, priority: 3, header: "Reasoning" },
   { minWidth: 2, priority: 1 },
 ] as const;
+const UNHEADED_PROFILE_COLUMNS = Arr.map(PROFILE_COLUMNS, ({ minWidth, priority }) => ({
+  minWidth,
+  priority,
+}));
 
 /**
  * `+1 fallback` in its own column where the list has room. Where the model would otherwise clip,
@@ -263,23 +253,12 @@ const profileTableNaturalWidth = (
   fit: ProfileTableFit = "full",
   headed = false,
   marked = Arr.some(rows, (row) => row.changed),
-): number => {
-  const shown = Arr.filterMap(PROFILE_COLUMNS, (column, index) => {
-    const widest = Math.max(
-      0,
-      ...Arr.map(rows, (row) => visibleWidth(profileTableCells(row, marked, fit)[index] ?? "")),
-    );
-    const heading = headed && "header" in column ? column.header.length : 0;
-    return widest === 0
-      ? Result.failVoid
-      : Result.succeed(Math.max(column.minWidth, widest, heading));
-  });
-  return (
-    PROFILE_CURSOR_WIDTH +
-    Arr.reduce(shown, 0, (total, width) => total + width) +
-    PROFILE_COLUMN_GAP * Math.max(0, shown.length - 1)
+): number =>
+  PROFILE_CURSOR_WIDTH +
+  managerTableNaturalWidth(
+    Arr.map(rows, (row) => profileTableCells(row, marked, fit)),
+    headed ? PROFILE_COLUMNS : UNHEADED_PROFILE_COLUMNS,
   );
-};
 
 const profileTable = (state: ProfileWorkspaceRenderState, theme: Theme, width: number) => {
   const rows = profileTableRows(state, theme);
@@ -305,9 +284,7 @@ const profileTable = (state: ProfileWorkspaceRenderState, theme: Theme, width: n
   // The shared table leaves out a column with no cells, such as fallbacks when there are none.
   const table = managerTable(
     Arr.map(rows, (row) => profileTableCells(row, marked, fit)),
-    headed
-      ? PROFILE_COLUMNS
-      : Arr.map(PROFILE_COLUMNS, ({ minWidth, priority }) => ({ minWidth, priority })),
+    headed ? PROFILE_COLUMNS : UNHEADED_PROFILE_COLUMNS,
     width - PROFILE_CURSOR_WIDTH,
   );
   return {
@@ -336,9 +313,6 @@ const profileTable = (state: ProfileWorkspaceRenderState, theme: Theme, width: n
 // The editor pane keeps room for its labels and a model route beside the list.
 const MIN_EDITOR_WIDTH = 48;
 const MIN_LIST_WIDTH = 32;
-
-/** Text width inside a pane, between its gutters. */
-const textWidth = (paneWidth: number): number => Math.max(1, paneWidth - 2 * FRAME_GUTTER);
 
 /** Wide layouts give the list what its models need, and the editor everything else. */
 const wideListWidth = (state: ProfileWorkspaceRenderState, theme: Theme, inner: number) => {
@@ -592,12 +566,8 @@ const workspaceFooter = (
   const keys = profileWorkspaceKeys(keybindingLabel, state.busy);
   // Aliases such as C-c belong in the expanded bar, not the default one.
   const { cancel, cancelAliases } = keys;
-  // Nothing but cancelling a model load answers keys while a change is being written.
-  if (state.busy)
-    return {
-      border: state.cancellableBusy ? borderKeyHint(keyHint(cancel, "Cancel loading"), inner) : "",
-      overflow: "",
-    };
+  // No key answers while a change is being written.
+  if (state.busy) return { border: "", overflow: "" };
   const profiles = state.shell.state.pane === "list";
   const enter = profiles
     ? "Open"
@@ -607,6 +577,8 @@ const workspaceFooter = (
   const session = state.target.kind === "session";
   const other = session ? "Saved profiles" : "Current session";
   const save = session && keyHint("s", "Save as set");
+  // Saving is worth offering by default once the session differs from the set it is based on.
+  const sessionChanged = state.changedProfiles.size > 0;
   return framedKeyHintBar(
     {
       hints: [
@@ -616,7 +588,7 @@ const workspaceFooter = (
         hasCandidate && keyHint("a", "Manage"),
         count > 0 && count < MAX_PROFILE_CANDIDATES && keyHint("+", "Add fallback"),
         state.canUndo && keyHint("u", "Undo"),
-        state.sessionChanged && save,
+        sessionChanged && save,
         keyHint("Tab", other),
       ],
       // The expanded bar keeps every default pair and adds the rest of the editor's keys.
@@ -628,7 +600,7 @@ const workspaceFooter = (
         count > 1 && keyHint("[ ]", "Candidate"),
         hasCandidate && keyHint("e", "Reasoning"),
         profiles && keyHint("/", "Search"),
-        !state.sessionChanged && save,
+        !sessionChanged && save,
       ],
       exit: profiles && session ? "top" : "nested",
       exitKey: cancel,
@@ -655,121 +627,39 @@ const confirmationPrompt = (
   };
 };
 
-const horizontalRule = (width: number) => Fn.pipe("─", Str.repeat(Math.max(0, width)));
-
 export const renderProfileWorkspace = (
   state: ProfileWorkspaceRenderState,
   options: ProfileWorkspaceRenderOptions,
 ): string[] => {
-  const width = Math.max(0, Math.floor(options.width));
-  const height = Math.max(0, Math.floor(options.height));
-  if (!width || !height) return [];
-  if (width < 4) return Array.from({ length: height }, () => Fn.pipe(" ", Str.repeat(width)));
-  const inner = width - 2;
   const { theme } = options;
-  const arrangement = state.shell.syncArrangement(width, options.frameHeight);
-  const prompt =
-    state.prompt ??
-    (state.confirmation
-      ? confirmationPrompt(state.confirmation, theme, options.keybindingLabel)
-      : undefined);
-  // A pending decision holds the keys, so neither pane shows focus until it is made.
-  const frame = listDetailFrame(theme, prompt ? undefined : focusedPane(state));
-  const listWidth = arrangement === "columns" ? wideListWidth(state, theme, inner) : inner;
-  const columns =
-    arrangement === "columns" ? { listWidth, detailWidth: inner - listWidth - 1 } : undefined;
-  const footer: FramedKeyHints = prompt
-    ? { border: borderKeyHint(prompt.hint, inner), overflow: "" }
-    : state.choices
-      ? state.choices.keyHints(inner)
-      : workspaceFooter(state, options.keybindingLabel, inner);
-  const hints = keyHintRows(footer.overflow, inner, (row) => theme.fg("dim", row));
-  const panes = (bodyHeight: number) =>
-    workspacePanes(state, theme, frame, { arrangement, inner, columns, bodyHeight });
-  return framedScreen(frame, {
-    width,
-    height,
-    // The pane rule meets the top border, which a host may turn into a divider.
-    top: columns ? `${frame.outer(horizontalRule(columns.listWidth))}${frame.inner("┬")}` : "",
-    bottom: footer.border,
-    body: (fullHeight) =>
-      prompt
-        ? framedBodyWithPrompt(
-            frame,
-            { height: fullHeight, inner, prompt: prompt.text, columns },
-            panes,
-          )
-        : framedBodyWithHints(frame, { height: fullHeight, inner, hints, columns }, panes),
+  // The fields pane, or the choice list open in its place.
+  const detail = (text: number, height: number) =>
+    state.choices
+      ? state.choices.renderBody(text, height)
+      : editorLines(state, theme, text, height);
+  return renderTwoPaneFrame({
+    theme,
+    width: options.width,
+    height: options.height,
+    frameHeight: options.frameHeight,
+    shell: state.shell,
+    hasSelection: true,
+    focusedPane: () => focusedPane(state),
+    prompt:
+      state.prompt ??
+      (state.confirmation
+        ? confirmationPrompt(state.confirmation, theme, options.keybindingLabel)
+        : undefined),
+    page: state.choices,
+    footer: (inner) => workspaceFooter(state, options.keybindingLabel, inner),
+    columns: (inner) => {
+      const listWidth = wideListWidth(state, theme, inner);
+      return { listWidth, detailWidth: inner - listWidth - 1 };
+    },
+    compact: (text) => compactLines(state, theme, text),
+    stackedListHeight: (bodyHeight) => stackedListHeight(bodyHeight, PROFILE_PANE_LINES),
+    singleShowsDetail: false,
+    list: (text, height) => profileLines(state, theme, text, height),
+    detail,
   });
-};
-
-/** The fields pane, or the choice list open in its place. */
-const detailLines = (
-  state: ProfileWorkspaceRenderState,
-  theme: Theme,
-  width: number,
-  height: number,
-): ReadonlyArray<string> =>
-  state.choices
-    ? state.choices.renderBody(width, height)
-    : editorLines(state, theme, width, height);
-
-const workspacePanes = (
-  state: ProfileWorkspaceRenderState,
-  theme: Theme,
-  frame: ReturnType<typeof listDetailFrame>,
-  layout: {
-    readonly arrangement: ManagerArrangement;
-    readonly inner: number;
-    readonly columns: { readonly listWidth: number; readonly detailWidth: number } | undefined;
-    readonly bodyHeight: number;
-  },
-): ReadonlyArray<string> => {
-  const { arrangement, inner, columns, bodyHeight } = layout;
-  const text = textWidth(inner);
-  if (bodyHeight <= 4 && !state.choices)
-    return framedFill(
-      frame,
-      framedGutter(compactLines(state, theme, text), inner),
-      bodyHeight,
-      inner,
-      "list",
-    );
-  if (columns)
-    return framedWideRows(frame, {
-      left: framedGutter(
-        profileLines(state, theme, textWidth(columns.listWidth), bodyHeight),
-        columns.listWidth,
-      ),
-      right: framedGutter(
-        detailLines(state, theme, textWidth(columns.detailWidth), bodyHeight),
-        columns.detailWidth,
-      ),
-      height: bodyHeight,
-      listWidth: columns.listWidth,
-      detailWidth: columns.detailWidth,
-    });
-  if (arrangement === "stacked" && bodyHeight >= 6) {
-    const listHeight = stackedListHeight(bodyHeight, PROFILE_PANE_LINES);
-    return framedStackedRows(frame, {
-      list: framedGutter(profileLines(state, theme, text, listHeight), inner),
-      detail: framedGutter(detailLines(state, theme, text, bodyHeight - listHeight - 1), inner),
-      height: bodyHeight,
-      inner,
-    });
-  }
-  // One pane at a time: the fields, or a choice list opened from either pane, replace the list.
-  const detail = state.shell.state.details || state.choices !== undefined;
-  return framedFill(
-    frame,
-    framedGutter(
-      detail
-        ? detailLines(state, theme, text, bodyHeight)
-        : profileLines(state, theme, text, bodyHeight),
-      inner,
-    ),
-    bodyHeight,
-    inner,
-    detail ? "detail" : "list",
-  );
 };

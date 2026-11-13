@@ -19,7 +19,7 @@ import {
 import { renderHighlightedText, shouldSkipHighlight } from "../../../syntax/render";
 import { expandPreviewTabs } from "../../../shared/helpers";
 import { escapeLineControlChars } from "../../../shared/terminal-text";
-import { hangingContinuation, WrappedCodeText, type WrappedCodeRow } from "./wrapped-code-text";
+import { hangingContinuation, wrappedCodeText, type WrappedCodeRow } from "./wrapped-code-text";
 
 export const pathPreviewLanguage = (path: string, content?: string): string | undefined =>
   resolvePreviewLanguage({ path, content });
@@ -116,7 +116,7 @@ export function renderContentPreview(options: {
     Arr.filter(Str.split(footer, "\n"), Str.isNonEmpty),
     (text): WrappedCodeRow => ({ text, continuation: "" }),
   );
-  return new WrappedCodeText([...rendered.lines, ...footerRows]);
+  return wrappedCodeText([...rendered.lines, ...footerRows]);
 }
 
 export function renderSelectedOutputLines(

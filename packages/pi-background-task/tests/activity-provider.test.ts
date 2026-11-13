@@ -4,11 +4,11 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
 import { exitStatusMeaning } from "pi-code-previews";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import {
   ACTIVITY_HOST,
   ACTIVITY_LIMITS,
@@ -24,6 +24,7 @@ import {
 import { taskProjectionBridge } from "../src/boundary/host-ui.ts";
 import type { BackgroundTaskView } from "../src/task/model.ts";
 import { TerminalTextNormalizer } from "../src/task/terminal-text.ts";
+import { taskStatus } from "./support/task-service-double.ts";
 
 const detailText = (detail: ActivityDetail | undefined): string =>
   detail === undefined
@@ -37,13 +38,7 @@ const detailText = (detail: ActivityDetail | undefined): string =>
       );
 
 const task: BackgroundTaskView = {
-  id: "task",
-  command: "work",
-  cwd: "/project",
-  state: "running",
-  startedAt: 1,
-  logCursor: 1,
-  droppedLogBytes: 0,
+  ...taskStatus({ id: "task", command: "work", state: "running", logCursor: 1 }),
   logs: [{ cursor: 1, stream: "stdout", text: "private output", timestamp: 1, bytes: 14 }],
 };
 
@@ -104,8 +99,8 @@ describe("background task activity provider", () => {
     const [finished] = backgroundTaskActivityItems({
       tasks: [{ ...task, state: "exited", exitCode: 0, endedAt: 2 }],
     });
-    const clear = Arr.findFirst(finished?.actions ?? [], (action) => action.id === "clear");
-    expect(Option.getOrUndefined(clear)?.scope).toBe("section");
+    const clear = findOrUndefined(finished?.actions ?? [], (action) => action.id === "clear");
+    expect(clear?.scope).toBe("section");
     const [running] = backgroundTaskActivityItems({ tasks: [task] });
     expect(Arr.every(running?.actions ?? [], (action) => action.scope === undefined)).toBe(true);
   });

@@ -14,6 +14,7 @@ import {
   describeBuiltinCompactSubject,
   type BuiltinCompactTool,
 } from "./builtin-subject";
+import { OUTPUT_TRUNCATED } from "./builtin-issues";
 import { isTruncated } from "./data/results";
 
 export function captureBuiltinCompactPolicy(): BuiltinCompactPolicy {
@@ -65,6 +66,6 @@ export function createBuiltinCompactSummary<TArgs, TDetails, TState>(
     subject: describeBuiltinCompactSubject(tool, input, context.cwd),
     ...(builtinSubjectIsPath(tool) && { pathSubject: true }),
     outcome: "success",
-    issues: [{ severity: "warning", code: "output-truncated", message: "Output was cut off" }],
+    issues: [{ ...OUTPUT_TRUNCATED }],
   };
 }

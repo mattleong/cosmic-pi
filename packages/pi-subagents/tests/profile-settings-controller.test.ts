@@ -106,7 +106,6 @@ const setup = (
     command: commands.get("subagents")?.handler,
     settings: (args: string) =>
       commands.get("subagents")?.handler(`settings ${args}`, ctx) ?? Promise.resolve(),
-    completions: commands.get("subagents")?.getArgumentCompletions,
     ctx,
     overlays,
     ui,

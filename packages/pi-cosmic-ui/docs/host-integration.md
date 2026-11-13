@@ -10,7 +10,7 @@ A finish requested before mounting waits for the handle, because Pi disposes an 
 
 ## Live options and shared widget space
 
-Pi resolves its overlay-options callback at mount, then retains the returned object and reads its properties during rendering. [host-viewport.ts](../src/boundary/host-viewport.ts) therefore uses live getters. Pass that options object by identity: spreading or copying it freezes the dimensions and breaks resizing. [Surface tests](../tests/host-surface.test.ts) exercise a mounted view across terminal sizes.
+Pi resolves its overlay-options callback at mount, then retains the returned object and reads its properties during rendering. [host-viewport.ts](../src/boundary/host-viewport.ts) therefore uses live getters. Pass that options object by identity: spreading or copying it freezes the dimensions and breaks resizing.
 
 All above-editor widgets share Pi's shrinking layout slot. A questionnaire dock can otherwise crowd out Activity. [host-input-dock.ts](../src/boundary/host-input-dock.ts) tracks visible dock presence in a process-wide slot, because extensions can load separate module copies; Activity uses that presence to compact its widget. Unique widget keys keep late cleanup from removing another presenter. See [dock tests](../tests/input-dock.test.ts).
 

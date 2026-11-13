@@ -10,6 +10,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { vi } from "vitest";
 import { provideNodeProcess, type BoundedProcessRequest } from "../index.ts";
 import { runBoundedProcessScoped } from "../src/platform/process.ts";
+import { pollUntil } from "../src/testing/polling.ts";
+import { scopedSpy } from "./support/spies.ts";
 
 const runNode = (script: string, overrides: Partial<BoundedProcessRequest> = {}) =>
   runBoundedProcessScoped({
@@ -70,11 +72,11 @@ it.live("guards a detached process group at host exit until its sweep confirms i
       detached: true,
       sweepProcessTreeOnExit: true,
     }).pipe(Effect.forkChild);
-    let guarded = false;
-    for (let attempt = 0; attempt < 100 && !guarded; attempt += 1) {
-      guarded = process.listenerCount("exit") === baseline + 1;
-      if (!guarded) yield* Effect.sleep("5 millis");
-    }
+    const guarded = yield* pollUntil(
+      () => process.listenerCount("exit") === baseline + 1,
+      100,
+      "5 millis",
+    );
     expect(guarded).toBe(true);
     expect((yield* Fiber.join(running)).cleanupUnconfirmed).toBe(false);
     expect(process.listenerCount("exit")).toBe(baseline);
@@ -133,15 +135,12 @@ for (const outcome of ["completed", "timeout"] as const) {
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
         const sweepStarted = yield* Deferred.make<void>();
-        yield* Effect.acquireRelease(
-          Effect.sync(() =>
-            vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-              expect(pid).toBe(-123);
-              if (signal === 0) Deferred.doneUnsafe(sweepStarted, Effect.void);
-              return true;
-            }),
-          ),
-          (spy) => Effect.sync(() => spy.mockRestore()),
+        yield* scopedSpy(() =>
+          vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+            expect(pid).toBe(-123);
+            if (signal === 0) Deferred.doneUnsafe(sweepStarted, Effect.void);
+            return true;
+          }),
         );
         let running = outcome === "timeout";
         const handle = fakeHandle({

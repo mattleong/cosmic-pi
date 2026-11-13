@@ -35,7 +35,7 @@ function highlighterUseState(highlighter: ShikiHighlighter): HighlighterUseState
   return created;
 }
 
-export function disposeShikiHighlighterSafely(highlighter: ShikiHighlighter): boolean {
+function disposeShikiHighlighterSafely(highlighter: ShikiHighlighter): boolean {
   try {
     highlighter.dispose();
     return true;
@@ -112,38 +112,25 @@ export function createShikiHighlighter(
   load: () => Promise<typeof createHighlighter> = () =>
     import("shiki/bundle/full").then((module) => module.createHighlighter),
 ): Effect.Effect<ShikiHighlighter, ShikiBoundaryError> {
-  return Effect.callback<ShikiHighlighter, ShikiBoundaryError>((resume) => {
-    let cancelled = false;
-    const failInitialization = () => {
-      if (!cancelled)
-        resume(
-          Effect.fail(
-            ShikiBoundaryError.make({
-              operation: "initialize",
-              message: "Unable to initialize syntax highlighting.",
-            }),
-          ),
-        );
-    };
-    try {
-      // Import and creation are not cancellable. A retired owner must not begin creation after
-      // import, and a highlighter already being created is disposed on late settlement.
-      void load()
-        .then((create) => {
-          if (cancelled) return undefined;
-          return create({ themes: [theme], langs: [...languages] }).then((highlighter) => {
-            if (cancelled) disposeShikiHighlighterSafely(highlighter);
-            else resume(Effect.succeed(highlighter));
-            return undefined;
-          });
-        })
-        .catch(failInitialization);
-    } catch {
-      failInitialization();
-    }
-    return Effect.sync(() => {
-      cancelled = true;
+  const initializationFailure = () =>
+    ShikiBoundaryError.make({
+      operation: "initialize",
+      message: "Unable to initialize syntax highlighting.",
     });
+  // Import and creation are not cancellable. A retired owner must not begin creation after
+  // import, and a highlighter already being created is disposed on late settlement.
+  return Effect.tryPromise({
+    try: (signal) =>
+      load().then((create) =>
+        signal.aborted
+          ? // Discarded: the interrupted waiter is gone.
+            Promise.reject(initializationFailure())
+          : create({ themes: [theme], langs: [...languages] }).then((highlighter) => {
+              if (signal.aborted) disposeShikiHighlighterSafely(highlighter);
+              return highlighter;
+            }),
+      ),
+    catch: initializationFailure,
   });
 }
 
@@ -152,44 +139,28 @@ function loadShikiLanguage(
   language: string,
 ): Effect.Effect<void, ShikiBoundaryError> {
   return Effect.callback<void, ShikiBoundaryError>((resume) => {
-    const failure = () =>
-      Effect.fail(
-        ShikiBoundaryError.make({
-          operation: "language",
-          message: "Unable to load syntax language.",
-        }),
-      );
-    if (!isShikiLanguage(language) || !beginHighlighterLoad(highlighter)) {
-      resume(failure());
-      return Effect.void;
-    }
-    let cancelled = false;
-    let settled = false;
-    const settle = () => {
-      if (settled) return;
-      settled = true;
+    const failure = Effect.fail(
+      ShikiBoundaryError.make({
+        operation: "language",
+        message: "Unable to load syntax language.",
+      }),
+    );
+    if (!isShikiLanguage(language) || !beginHighlighterLoad(highlighter)) return resume(failure);
+    // The load is not cancellable: it ends, and disposal may proceed, only when its Promise
+    // settles; an interrupted waiter ignores the late result.
+    const settle = (result: Effect.Effect<void, ShikiBoundaryError>) => {
       endHighlighterLoad(highlighter);
+      resume(result);
     };
     try {
       void Promise.resolve(highlighter.loadLanguage(language))
         .then(
-          () => {
-            settle();
-            if (!cancelled) resume(Effect.void);
-            return undefined;
-          },
-          () => {
-            settle();
-            if (!cancelled) resume(failure());
-          },
+          () => settle(Effect.void),
+          () => settle(failure),
         )
         .catch(() => undefined);
     } catch {
-      settle();
-      resume(failure());
+      settle(failure);
     }
-    return Effect.sync(() => {
-      cancelled = true;
-    });
   });
 }

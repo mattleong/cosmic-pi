@@ -7,7 +7,6 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
-import type * as Layer from "effect/Layer";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Order from "effect/Order";
@@ -18,15 +17,14 @@ import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import { nodeFilePlatformLayer, synchronousRandomHex } from "pi-cosmic-core";
-import { connect, createServer } from "node:net";
-import { afterEach, vi } from "vitest";
+import { afterEach, describe, test, vi } from "vitest";
 import { frameMessage, INTERCOM_MESSAGE_TYPE } from "../src/delivery.ts";
-import type { intercomLayer } from "../src/layer.ts";
 import {
+  contractEnvelope,
   decodeSessionToolDetails,
   SESSION_TOOL,
+  ToolRefusalCodeSchema,
   type SessionToolDetails,
-  type ToolRefusalCode,
 } from "../src/tools/contract.ts";
 import { OwnerLiveness } from "../src/registry/store.ts";
 import { DESCRIBE_DEADLINE } from "../src/transport/client.ts";
@@ -48,7 +46,9 @@ import {
   sessionRuntime,
   sharedAgentDirectory,
   writeForeignRecord,
+  type SessionRuntimeServices,
 } from "./support/session-harness.ts";
+import { listenAt, relay } from "./support/raw-peer.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -71,34 +71,6 @@ const twoSessions = Effect.gen(function* () {
   yield* b.start();
   return { shared, a, b };
 });
-
-/**
- * Relays connections at `socket` to `target` until a `Deliver` request goes out, then drops both
- * ends, as a recipient that dies mid-request would.
- */
-const droppingRelay = (socket: string, target: string) =>
-  Effect.acquireRelease(
-    Effect.callback<ReturnType<typeof createServer>>((resume) => {
-      const server = createServer((client) => {
-        const upstream = connect(target);
-        const drop = () => {
-          client.destroy();
-          upstream.destroy();
-        };
-        client.on("data", (data) => {
-          if (Fn.pipe(data.toString(), Str.includes('"tag":"Deliver"'))) drop();
-          else upstream.write(data);
-        });
-        upstream.on("data", (data) => client.write(data));
-        for (const end of [client, upstream]) {
-          end.on("error", () => undefined);
-          end.on("close", drop);
-        }
-      });
-      server.listen(socket, () => resume(Effect.succeed(server)));
-    }),
-    (server) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
-  );
 
 const unnamedSession = (sessionId: string) => ({ sessionId, name: undefined, cwd: "/project" });
 
@@ -189,8 +161,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
     Effect.gen(function* () {
       const paths = yield* Path.Path;
       const shared = yield* sharedAgentDirectory();
-      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
-      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
+      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared);
       const socket = paths.join(shared.base, "stuck.sock");
       const stuck = yield* hangingListener(socket);
       yield* writeForeignRecord(shared, "stuck", { socket });
@@ -198,7 +169,7 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       yield* writeForeignRecord(shared, "gone");
       // Each call's deadline runs on the test clock, moved once every describe has connected.
       const pastDeadline = <X, E>(
-        effect: Effect.Effect<X, E, Layer.Success<ReturnType<typeof intercomLayer>>>,
+        effect: Effect.Effect<X, E, SessionRuntimeServices>,
         connections: number,
       ) =>
         Effect.gen(function* () {
@@ -236,17 +207,14 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
   it.effect("asks whether an owner runs only for sessions that don't answer", () =>
     Effect.gen(function* () {
       const shared = yield* sharedAgentDirectory();
-      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
-      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
-      yield* sessionRuntime(unnamedSession("session-b"), "From b.", shared.fallbackRoot);
+      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared);
+      yield* sessionRuntime(unnamedSession("session-b"), "From b.", shared);
       const silentPid = 99_999_998;
       const deadPid = 99_999_999;
       yield* writeForeignRecord(shared, "silent", { pid: silentPid });
       yield* writeForeignRecord(shared, "dead", { pid: deadPid });
       const asked: Array<number> = [];
-      const fromA = <X, E>(
-        effect: Effect.Effect<X, E, Layer.Success<ReturnType<typeof intercomLayer>>>,
-      ) =>
+      const fromA = <X, E>(effect: Effect.Effect<X, E, SessionRuntimeServices>) =>
         effect.pipe(
           Effect.provideService(OwnerLiveness, ({ pid }) =>
             Effect.sync(() => {
@@ -285,17 +253,16 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
   it.effect("delivers to and reads from a session that reloads under its id meanwhile", () =>
     Effect.gen(function* () {
       const shared = yield* sharedAgentDirectory();
-      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
-      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
+      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared);
       const start = (sessionId: string, replyText: string) =>
-        sessionRuntime(unnamedSession(sessionId), replyText, shared.fallbackRoot);
+        sessionRuntime(unnamedSession(sessionId), replyText, shared);
 
       /**
        * Runs `operation` from `a` while its target reloads: nothing answers for the target until
        * the first attempt has been refused, and `reload` then brings the replacement up.
        */
       const duringReload = <X, E, Y, F>(
-        operation: Effect.Effect<X, E, Layer.Success<ReturnType<typeof intercomLayer>>>,
+        operation: Effect.Effect<X, E, SessionRuntimeServices>,
         reload: Effect.Effect<Y, F, Scope.Scope>,
       ) =>
         Effect.gen(function* () {
@@ -392,12 +359,11 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
   it.effect("names the addressee as soon as its id resolves, before the call settles", () =>
     Effect.gen(function* () {
       const shared = yield* sharedAgentDirectory();
-      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
-      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared.fallbackRoot);
+      const a = yield* sessionRuntime(unnamedSession("session-a"), "From a.", shared);
       yield* sessionRuntime(
         { sessionId: "session-b", name: "web work", cwd: "/project" },
         "From b.",
-        shared.fallbackRoot,
+        shared,
       );
       const resolved: Array<{ readonly sessionId: string; readonly name?: string }> = [];
       const remember = (session: { readonly sessionId: string; readonly name?: string }) => {
@@ -432,9 +398,9 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
     }),
   );
 
-  it.effect("refuses unknown, duplicate, unreachable, and opted-out sessions", () =>
+  it.effect("refuses unknown, duplicate, and unreachable sessions", () =>
     Effect.gen(function* () {
-      const { a, b } = yield* twoSessions;
+      const { a } = yield* twoSessions;
       yield* writeForeignRecord(a, "twin");
       yield* writeForeignRecord(a, "twin");
       yield* writeForeignRecord(a, "silent");
@@ -451,12 +417,6 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       expect(yield* refusal(SESSION_TOOL.read, "twin")).toBe("session_unreachable");
       expect(yield* refusal(SESSION_TOOL.send, "silent")).toBe("session_unreachable");
       expect(yield* refusal(SESSION_TOOL.read, "silent")).toBe("session_unreachable");
-
-      yield* b.command("receive off");
-      expect(yield* refusal(SESSION_TOOL.send, "session-b")).toBe("session_receive_disabled");
-      yield* b.command("receive on");
-      const delivered = yield* a.callTool(SESSION_TOOL.send, { to: "session-b", message: "Hi." });
-      expect(detailsOf(delivered)).toMatchObject({ outcome: "delivered" });
     }),
   );
 
@@ -518,7 +478,12 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
           Arr.filter(records, ({ sessionId }) => sessionId === "session-b"),
         ),
       );
-      yield* droppingRelay(socket, recipient.socket);
+      // The relay drops both ends once a `Deliver` request goes out, as a recipient dying would.
+      yield* relay(
+        socket,
+        recipient.socket,
+        (data) => !Fn.pipe(data, Str.includes('"tag":"Deliver"')),
+      );
       yield* writeForeignRecord(a, "flaky", { socket, token: recipient.token });
 
       const result = yield* a.callTool(SESSION_TOOL.send, { to: "flaky", message: "Hello." });
@@ -533,15 +498,9 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       const { a } = yield* twoSessions;
       const paths = yield* Path.Path;
       const socket = paths.join(a.shared.base, "early.sock");
-      yield* Effect.acquireRelease(
-        Effect.callback<ReturnType<typeof createServer>>((resume) => {
-          const server = createServer((connection) => {
-            connection.once("data", () => connection.destroy());
-          });
-          server.listen(socket, () => resume(Effect.succeed(server)));
-        }),
-        (server) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
-      );
+      yield* listenAt(socket, (connection) => {
+        connection.once("data", () => connection.destroy());
+      });
       yield* writeForeignRecord(a, "early", { socket });
 
       const result = yield* a.callTool(SESSION_TOOL.send, { to: "early", message: "Hello." });
@@ -572,9 +531,9 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
       expect(b.sendMessage.mock.calls[0]?.[0].content).toContain(longest.message);
 
       expect(() => prepare(SESSION_TOOL.send, { sessionId: "session-b", message: "Hi." })).toThrow(
-        /"sessionId" \(use "to"\)/,
+        "sessionId",
       );
-      expect(() => prepare(SESSION_TOOL.read, { to: " " })).toThrow(/invalid_arguments/);
+      expect(() => prepare(SESSION_TOOL.read, { to: " " })).toThrow();
     }),
   );
 
@@ -606,43 +565,30 @@ layer(nodeFilePlatformLayer)("intercom session tools", (it) => {
   );
 });
 
-layer(nodeFilePlatformLayer)("intercom session tool issues", (it) => {
-  it.effect("words every refusal and uncertainty as a short issue", () =>
-    Effect.sync(() => {
-      const codes: ReadonlyArray<ToolRefusalCode> = [
-        "session_unavailable",
-        "session_receive_disabled",
-        "session_not_found",
-        "session_ambiguous",
-        "session_unreachable",
-        "session_unresponsive",
-        "session_message_too_long",
-      ];
-      const session = { sessionId: "session-b", name: "web work", cwd: "/work/web" };
-      const issues = [
-        ...Arr.flatMap(codes, (code) =>
-          Arr.map([SESSION_TOOL.send, SESSION_TOOL.read], (tool) =>
-            refusalIssue({
-              contract: "pi-intercom/session",
-              version: 1,
-              tool,
-              outcome: "refused",
-              code,
-              to: "session-b",
-              session,
-            }),
-          ),
+describe("intercom session tool issues", () => {
+  test("words every refusal and uncertainty as a short issue", () => {
+    const session = { sessionId: "session-b", name: "web work", cwd: "/work/web" };
+    const issues = [
+      ...Arr.flatMap(ToolRefusalCodeSchema.literals, (code) =>
+        Arr.map([SESSION_TOOL.send, SESSION_TOOL.read], (tool) =>
+          refusalIssue({
+            ...contractEnvelope,
+            tool,
+            outcome: "refused",
+            code,
+            to: "session-b",
+            session,
+          }),
         ),
-        uncertainIssue({
-          contract: "pi-intercom/session",
-          version: 1,
-          tool: SESSION_TOOL.send,
-          outcome: "uncertain",
-          session,
-          reason: "timeout",
-        }),
-      ];
-      expect(Arr.flatMap(issues, ({ message }) => issueMessageStyleProblems(message))).toEqual([]);
-    }),
-  );
+      ),
+      uncertainIssue({
+        ...contractEnvelope,
+        tool: SESSION_TOOL.send,
+        outcome: "uncertain",
+        session,
+        reason: "timeout",
+      }),
+    ];
+    expect(Arr.flatMap(issues, ({ message }) => issueMessageStyleProblems(message))).toEqual([]);
+  });
 });

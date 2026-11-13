@@ -34,7 +34,7 @@ const CANDIDATE_STARTUP_FAILURE_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /** A failed startup attempt on one candidate, and whether the launch may move past it. */
-export interface CandidateStartupFailure {
+interface CandidateStartupFailure {
   readonly failure: SkippedProfileCandidate;
   readonly fallBack: boolean;
 }

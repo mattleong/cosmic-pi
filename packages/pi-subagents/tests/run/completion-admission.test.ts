@@ -8,7 +8,7 @@ import { completionObservationOperations } from "../../src/run/completion-observ
 import { agentMessageWatches } from "../../src/run/message-watches.ts";
 import { view } from "../tools/fixtures/tool-harness.ts";
 import { makeRunContext, runRecordFixture } from "./fixtures/run-context.ts";
-import { useProbe } from "./fixtures/service-harness.ts";
+import { yieldTurns } from "./fixtures/service-harness.ts";
 
 describe("completion admission", () => {
   it.effect("cancels an await after gate acquisition while the run lock is held", () =>
@@ -44,12 +44,12 @@ describe("completion admission", () => {
         },
         messageWatches: agentMessageWatches(),
       });
-      const probe = useProbe();
+      const probe = { entered: false };
       const observe = observations.withAwaitTerminalObservations(
         [record.view.id],
         "all_finished",
         undefined,
-        probe.use,
+        () => Effect.sync(() => void (probe.entered = true)),
       );
       yield* runLock.take(1);
       yield* Effect.gen(function* () {
@@ -67,7 +67,7 @@ describe("completion admission", () => {
           ),
           Effect.forkScoped,
         );
-        for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+        yield* yieldTurns(20);
         expect(cancelled).toBe(true);
         expect(probe.entered).toBe(false);
         expect(record.completionClaims.size).toBe(0);
@@ -79,7 +79,7 @@ describe("completion admission", () => {
             }),
           )
           .pipe(Effect.forkScoped);
-        for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+        yield* yieldTurns(20);
         expect(gateReusable).toBe(true);
         yield* Fiber.join(gateProbe);
         yield* Fiber.join(cancellation);

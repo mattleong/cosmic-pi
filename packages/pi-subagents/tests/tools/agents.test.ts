@@ -1,9 +1,8 @@
-import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import type { JsonObject } from "pi-cosmic-core";
-import { describe, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { childToolPolicy } from "../../src/boundary/child-process.ts";
 import { PROFILE_DEFINITIONS } from "../../src/profiles/definitions.ts";
 import { PROFILE_IDS } from "../../src/profiles/model.ts";
@@ -13,7 +12,6 @@ import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import {
   SubagentModelsDetailsSchema,
-  SubagentStartDetailsSchema,
   type SubagentStartDetails,
 } from "../../src/tools/details-schema.ts";
 import type { TSchema } from "typebox";
@@ -23,20 +21,21 @@ import { objectContaining, stringContaining } from "../support/matchers.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
+  decodeStartDetails,
   executeTool,
   invokeOptionalTool,
+  issueStyle,
   profileServiceFor,
-  startCapturingService,
+  settledSummary,
+  startToolFor,
   view,
-  type CaptureOptions,
 } from "./fixtures/tool-harness.ts";
 import { readoutOf } from "../fixtures/run-view.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
-const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
 const decodeModelsDetails = Schema.decodeUnknownSync(SubagentModelsDetailsSchema);
 const decodeStartSchema = Schema.decodeUnknownSync(
   Schema.Struct({
@@ -62,23 +61,15 @@ const agentDefinition = (fields: JsonObject = {}): JsonObject => ({
 const servicesWith = (agents: JsonObject, reviewer: JsonObject | JsonObject[] = piParent) =>
   profileServiceFor({ profiles: { reviewer }, agents });
 
-const startWith = (requests: StartSubagentRequest[], options: CaptureOptions) =>
-  captureSubagentTools(startCapturingService(requests), options).get("agent_start");
-
-const compactIssues = (
+const summaryOf = (
   tool: "agent_start" | "agent_profiles",
   args: JsonObject,
   details: SubagentStartDetails | typeof SubagentModelsDetailsSchema.Type,
 ) =>
-  createSubagentCompactSummary(tool)({
-    phase: "settled",
-    args,
-    result: { content: [{ type: "text", text: "" }], details },
-    context: renderContextFixture({ isError: tool === "agent_start" }),
-  })?.issues ?? [];
-
-const issueStyleProblems = (issues: ReturnType<typeof compactIssues>) =>
-  Arr.flatMap(issues, (issue) => issueMessageStyleProblems(issue.message));
+  settledSummary(createSubagentCompactSummary(tool), args, {
+    details,
+    isError: tool === "agent_start",
+  });
 
 const agentProperty = (parameters: TSchema | undefined) =>
   decodeStartSchema(parameters).properties.agents.items.properties.agent;
@@ -95,7 +86,7 @@ describe("custom agent launches", () => {
           isolation: "worktree",
         }),
       });
-      const result = yield* invokeOptionalTool(startWith(requests, { profiles }), {
+      const result = yield* invokeOptionalTool(startToolFor(requests, { profiles }), {
         agents: [{ task: "Review the login flow", agent: "auth-reviewer" }],
       });
 
@@ -138,7 +129,7 @@ describe("custom agent launches", () => {
           "isolated-worker": agentDefinition({ profile: "worker", isolation: "worktree" }),
         },
       });
-      const result = yield* invokeOptionalTool(startWith(requests, { profiles }), {
+      const result = yield* invokeOptionalTool(startToolFor(requests, { profiles }), {
         agents: [
           { task: "Review", agent: "isolated" },
           { task: "Review", agent: "plain", isolation: "worktree" },
@@ -178,7 +169,7 @@ describe("custom agent launches", () => {
         allowed: agentDefinition({ tools: { allow: ["read", "session_send"] } }),
       });
       yield* invokeOptionalTool(
-        startWith(requests, {
+        startToolFor(requests, {
           profiles,
           activeTools: [
             "read",
@@ -198,8 +189,7 @@ describe("custom agent launches", () => {
         },
       );
       const toolsFor = (agent: string) =>
-        Option.getOrUndefined(Arr.findFirst(requests, (request) => request.agent === agent))
-          ?.activeTools;
+        findOrUndefined(requests, (request) => request.agent === agent)?.activeTools;
       expect(toolsFor("denied")).toEqual(["read", "grep"]);
       expect(toolsFor("allowed")).toEqual(["read"]);
       // The child launch always enables parent contact and agent coordination, and never
@@ -233,11 +223,11 @@ describe("custom agent launches", () => {
         ],
       };
       const result = yield* invokeOptionalTool(
-        startWith(requests, { profiles, activeTools: [...allow, "grep"] }),
+        startToolFor(requests, { profiles, activeTools: [...allow, "grep"] }),
         args,
       );
       const requestFor = (agent: string) =>
-        Option.getOrUndefined(Arr.findFirst(requests, (request) => request.agent === agent));
+        findOrUndefined(requests, (request) => request.agent === agent);
       expect(requestFor("reader")).toMatchObject({
         writeIntent: "read-only",
         activeTools: ["read", "bash"],
@@ -256,7 +246,7 @@ describe("custom agent launches", () => {
       }
       const details = decodeStartDetails(result?.details);
       expect(details.startEntries[0]).toMatchObject({ warning: stringContaining("edit") });
-      expect(issueStyleProblems(compactIssues("agent_start", args, details))).toEqual([]);
+      expect(issueStyle(summaryOf("agent_start", args, details))).toEqual([]);
     },
   );
 
@@ -267,7 +257,7 @@ describe("custom agent launches", () => {
       const profiles = profileServiceFor({
         agents: { ok: agentDefinition(), broken: agentDefinition({ model: "opus" }) },
       });
-      const tool = startWith(requests, { profiles });
+      const tool = startToolFor(requests, { profiles });
       const conflicting = { agents: [{ task: "Review", agent: "ok", profile: "reviewer" }] };
       expect(() => tool?.prepareArguments?.(conflicting)).toThrow(/agent_profile_conflict/u);
       // An omitted selector sent as null doesn't conflict.
@@ -286,9 +276,10 @@ describe("custom agent launches", () => {
       };
       const result = yield* invokeOptionalTool(tool, args);
       expect(requests).toEqual([]);
-      const issues = compactIssues("agent_start", args, decodeStartDetails(result?.details));
+      const summary = summaryOf("agent_start", args, decodeStartDetails(result?.details));
+      const issues = summary?.issues ?? [];
       expect(issues.length).toBeGreaterThan(0);
-      expect(issueStyleProblems(issues)).toEqual([]);
+      expect(issueStyle(summary)).toEqual([]);
       expect(result?.details).toMatchObject({
         startFailures: [
           { index: 0, code: "agent_profile_conflict" },
@@ -305,7 +296,7 @@ describe("custom agent launches", () => {
       writer: agentDefinition({ effort: "medium", writeIntent: "writer" }),
       tooled: agentDefinition({ tools: { allow: ["read"] } }),
     });
-    const result = yield* invokeOptionalTool(startWith(requests, { profiles }), {
+    const result = yield* invokeOptionalTool(startToolFor(requests, { profiles }), {
       agents: [
         {
           task: "Implement",
@@ -327,18 +318,14 @@ describe("custom agent launches", () => {
     });
   });
 
-  effectTest(
-    "lists configured agents in the root start schema only when there are some",
-    function* () {
-      const withAgents = startWith([], {
-        profiles: servicesWith({ "auth-reviewer": agentDefinition() }),
-      });
-      const withoutAgents = startWith([], {});
-      expect(agentProperty(withAgents?.parameters)).toMatchObject({ enum: ["auth-reviewer"] });
-      expect(agentProperty(withoutAgents?.parameters)).toBeUndefined();
-      yield* Effect.void;
-    },
-  );
+  it("lists configured agents in the root start schema only when there are some", () => {
+    const withAgents = startToolFor([], {
+      profiles: servicesWith({ "auth-reviewer": agentDefinition() }),
+    });
+    const withoutAgents = startToolFor([], {});
+    expect(agentProperty(withAgents?.parameters)).toMatchObject({ enum: ["auth-reviewer"] });
+    expect(agentProperty(withoutAgents?.parameters)).toBeUndefined();
+  });
 });
 
 describe("custom agent status", () => {
@@ -396,7 +383,8 @@ describe("custom agent discovery", () => {
         candidates: [expect.objectContaining({ model: "openai/missing", status: "skipped" })],
       }),
     ]);
-    const issues = compactIssues("agent_profiles", {}, details);
+    const summary = summaryOf("agent_profiles", {}, details);
+    const issues = summary?.issues ?? [];
     expect(Arr.map(issues, (issue) => issue.code)).toEqual([
       "profile:scout:unavailable",
       "agent:unrouted:unavailable",
@@ -404,7 +392,7 @@ describe("custom agent discovery", () => {
     ]);
     // Every warning names a command the user can run to recover.
     for (const issue of issues) expect(issue.detail).toMatch(/\/subagents (?:doctor|profiles)/u);
-    expect(issueStyleProblems(issues)).toEqual([]);
+    expect(issueStyle(summary)).toEqual([]);
     expect(details.invalidAgents).toEqual([{ scope: "global", name: "broken" }]);
     expect(result?.structuredContent).toMatchObject({
       agents: [{ name: "restricted", tools: { deny: ["bash"] } }, { name: "unrouted" }],
@@ -423,18 +411,19 @@ describe("route discovery headings", () => {
       { profile: "reviewer" },
     );
     const counters =
-      createSubagentCompactSummary("agent_profiles")({
-        phase: "settled",
-        args: { profile: "reviewer" },
-        result: { content: [{ type: "text", text: "" }], details: result?.details },
-        context: renderContextFixture({ isError: false }),
-      })?.counters ?? [];
+      settledSummary(
+        createSubagentCompactSummary("agent_profiles"),
+        { profile: "reviewer" },
+        { details: result?.details },
+      )?.counters ?? [];
     expect(counters[0]).toContain("openai-codex/gpt-5.6-sol");
     // A narrower alternative keeps the model without its provider.
     expect(
       Arr.some(
         counters,
-        (entry) => Str.includes("gpt-5.6-sol")(entry) && !Str.includes("openai-codex")(entry),
+        (entry) =>
+          Fn.pipe(entry, Str.includes("gpt-5.6-sol")) &&
+          !Fn.pipe(entry, Str.includes("openai-codex")),
       ),
     ).toBe(true);
   });

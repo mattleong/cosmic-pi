@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { groupedDetail, type ActivityDetailBlock } from "../src/activity/grouped-detail.ts";
 import { groupedActivityTree } from "../src/activity/grouped-tree.ts";
 import { plainTheme } from "pi-cosmic-core/testing";
@@ -22,9 +22,7 @@ describe("grouped activity detail", () => {
       revision: "revision\r\ntoken=private-value",
     });
     const blocks = groupedDetail({
-      selected: Option.getOrUndefined(
-        Arr.findFirst(groupedActivityTree([row]), (entry) => entry.type === "member"),
-      ),
+      selected: findOrUndefined(groupedActivityTree([row]), (entry) => entry.type === "member"),
       theme: plainTheme,
       focused: false,
       now: undefined,
@@ -34,6 +32,7 @@ describe("grouped activity detail", () => {
       technical: true,
       actions: [],
       children: [],
+      ownership: [row],
     });
     const text = Arr.join(Arr.map(blocks, blockText), "\n");
     expect(text).not.toContain("\u001b");
@@ -46,8 +45,9 @@ describe("grouped activity detail", () => {
 
   it("shows provider identity only behind the technical disclosure", () => {
     const row = activityRow("task", "failed", undefined, { kind: "command", title: "Build" });
-    const selected = Option.getOrUndefined(
-      Arr.findFirst(groupedActivityTree([row]), (entry) => entry.type === "member"),
+    const selected = findOrUndefined(
+      groupedActivityTree([row]),
+      (entry) => entry.type === "member",
     );
     const text = (technical: boolean) =>
       Arr.join(
@@ -66,6 +66,7 @@ describe("grouped activity detail", () => {
             technical,
             actions: [],
             children: [],
+            ownership: [row],
           }),
           blockText,
         ),

@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import type { CrossProcessLockContract, SafeFile } from "pi-cosmic-core";
-import { OPEN_WORKSPACE_STATUSES } from "../workspace/model.ts";
+import { isFinishedWorkspace, OPEN_WORKSPACE_STATUSES } from "../workspace/model.ts";
 import type {
   WorkspaceAdoptTarget,
   WorkspaceError,
@@ -146,16 +146,14 @@ export const orphanWorkspaceOperations = (engine: OrphanEngine) => {
   }, locked);
   // Unfinished records another session created whose owner lease is free right now.
   const endedOwners = (records: ReadonlyArray<WorkspaceRecord>) =>
-    Effect.forEach(records, (record) =>
-      owned.has(record.handle.workspaceId) ||
-      record.status === "integrated" ||
-      record.status === "discarded"
-        ? Effect.succeed([])
+    Effect.filter(records, (record) =>
+      owned.has(record.handle.workspaceId) || isFinishedWorkspace(record)
+        ? Effect.succeed(false)
         : ownerEnded(record.ownerLease, Effect.void).pipe(
-            Effect.map((free) => (Option.isSome(free) ? [record.handle.workspaceId] : [])),
-            Effect.orElseSucceed((): ReadonlyArray<string> => []),
+            Effect.map(Option.isSome),
+            Effect.orElseSucceed(() => false),
           ),
-    ).pipe(Effect.map((ids) => ids.flat()));
+    ).pipe(Effect.map(Arr.map((record) => record.handle.workspaceId)));
   /**
    * Records the orphan sweep may discard. A plain candidate scan: `sweepOrphan` rechecks each one
    * under its checkout's lock and owner lease.

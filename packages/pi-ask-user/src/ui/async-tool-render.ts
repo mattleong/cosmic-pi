@@ -39,12 +39,11 @@ import {
   answerOutcome,
   callTitles,
   decodeAsyncControl,
-  decodeExpandedAsyncRows,
+  decodeAsyncRows,
   decodePresentation,
   contentText,
   deliveryFacts,
   headingAnswer,
-  listedStateWords,
   isStatusList,
   requestFacts,
   isPendingState,
@@ -133,7 +132,9 @@ function questionnaireList(rows: readonly ReplayedSnapshot[], theme: Theme): Com
     const mark = state === undefined ? undefined : LISTED_GLYPHS[state];
     const name = theme.fg("toolOutput", storedTitlesLabel(row.titles) ?? row.requestId);
     const words =
-      state === undefined || mark?.says ? [] : [theme.fg("muted", listedStateWords(state))];
+      state === undefined || mark?.says
+        ? []
+        : Arr.map(stateWords(state), (word) => theme.fg("muted", word));
     const lead = mark ? `${theme.fg(mark.color, mark.glyph)} ` : "";
     return `${lead}${Arr.join([name, ...words], theme.fg("dim", INLINE_SEPARATOR))}`;
   });
@@ -153,7 +154,7 @@ export function renderAsyncContent(
   context: ResultContext = {},
 ): Component {
   const result = envelope(input);
-  const rows = decodeExpandedAsyncRows(result?.details);
+  const rows = decodeAsyncRows(result?.details);
   const list = rows?.length !== 1 || isStatusList(context.args);
   const answers = submittedAnswers(rows);
   return expandedResult(
@@ -183,7 +184,7 @@ export function renderAsyncResult(
   if (options.isPartial)
     return presentationLine(decodePresentation(envelope(input)?.details), theme);
   const result = envelope(input);
-  const decoded = decodeExpandedAsyncRows(result?.details);
+  const decoded = decodeAsyncRows(result?.details);
   const rows = decoded ?? [];
   const states = Arr.getSomes(
     Arr.map(rows, (row) => Option.fromNullishOr(questionnaireState(row))),
@@ -240,7 +241,7 @@ function collapsedRows(
   // Its issue says it is hidden and how to resume it.
   if (state === "hidden") return emptyBody();
   const answers = submittedAnswers(rows);
-  if (answers) return answersBody(answers, rowTitles(rows), theme, true, row);
+  if (answers) return answersBody(answers, rowTitles(rows), theme, row);
   return state && isPendingState(state) ? pendingState(stateWords(state)) : emptyBody();
 }
 
@@ -306,7 +307,7 @@ export const presentAsyncMessage: CodePreviewMessagePresenter = (input, options,
     // The heading names the questions, so a lone answer may leave its title to it.
     ...(answers && {
       collapsed: (headingState: WeakKey) =>
-        answersBody(answers, titles, theme, true, undefined, headingState),
+        answersBody(answers, titles, theme, undefined, headingState),
     }),
     ...(cancellation && {
       collapsed: () => cancelledLine(theme),

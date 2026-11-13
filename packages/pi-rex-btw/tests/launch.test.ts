@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import {
@@ -17,7 +18,7 @@ const launch = (overrides: Partial<ChildLaunch> = {}): ChildLaunch => ({
   prompt: undefined,
   model: undefined,
   thinkingLevel: undefined,
-  parent: undefined,
+  parent: PARENT,
   ...overrides,
 });
 
@@ -46,7 +47,6 @@ describe("child command", () => {
         launch({
           model: { provider: "anthropic", id: "claude-opus-5-5" },
           thinkingLevel: "high",
-          parent: PARENT,
         }),
       ),
     );
@@ -65,7 +65,7 @@ describe("child command", () => {
     const at = piArgs(childCommand(launch({ prompt: "@src/app.ts explain" })));
     const message = at.at(-1) ?? "";
     expect(Str.trim(message)).toBe("@src/app.ts explain");
-    expect(Str.startsWith("@")(message)).toBe(false);
+    expect(Fn.pipe(message, Str.startsWith("@"))).toBe(false);
   });
 });
 
@@ -73,7 +73,7 @@ describe("input admission", () => {
   it("rejects prompts that can't be passed as an argument", () => {
     expect(promptProblem("fine")).toBeUndefined();
     expect(promptProblem("a\0b")).toBeDefined();
-    expect(promptProblem(Str.repeat(70 * 1024)("x"))).toBeDefined();
+    expect(promptProblem(Fn.pipe("x", Str.repeat(70 * 1024)))).toBeDefined();
   });
 
   it("accepts only absolute, single-line parent files with a session ID", () => {

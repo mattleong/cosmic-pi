@@ -47,10 +47,6 @@ export interface ScopedConfigStore<File, Resolved extends ScopedConfigMetadata, 
   ) => Effect.Effect<ScopedDocumentPaths, never, Path.Path>;
   readonly readRawConfig: (path: string) => Effect.Effect<JsonObject, E, JsonDocumentStore>;
   readonly readConfig: (path: string) => Effect.Effect<File | undefined, E, JsonDocumentStore>;
-  readonly writeConfig: (
-    path: string,
-    config: JsonObject,
-  ) => Effect.Effect<void, E, JsonDocumentStore>;
   readonly modifyConfig: <A, AfterCommitR = never>(
     path: string,
     modify: (document: JsonObject) => JsonDocumentModification<A, AfterCommitR>,
@@ -93,12 +89,6 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
 
   const readConfig = Effect.fn(`${spanPrefix}.readConfig`)((path: string) =>
     readObject(path).pipe(Effect.map((raw) => (raw === undefined ? undefined : decode(raw)))),
-  );
-
-  const writeConfig = Effect.fn(`${spanPrefix}.writeConfig`)((path: string, config: JsonObject) =>
-    JsonDocumentStore.use((documents) =>
-      documents.writeObject(path, config).pipe(Effect.mapError(errorFactory("write", path))),
-    ),
   );
 
   const modifyConfig = Effect.fn(`${spanPrefix}.modifyConfig`)(
@@ -210,7 +200,6 @@ export const makeScopedConfigStore = <File, Resolved extends ScopedConfigMetadat
     configPaths,
     readRawConfig,
     readConfig,
-    writeConfig,
     modifyConfig,
     resolveConfig,
     resolveCommittedConfig,

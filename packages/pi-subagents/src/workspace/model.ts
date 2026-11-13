@@ -132,6 +132,33 @@ export const OPEN_WORKSPACE_STATUSES: ReadonlySet<WorkspaceRecord["status"]> = n
   "frozen",
   "prepared",
 ]);
+/** An open record as revise and rebase restart it: no revision, preparation, or integration state. */
+export const reopenedWorkspaceRecord = (
+  record: WorkspaceRecord,
+  baseline = record.baseline,
+): WorkspaceRecord => ({
+  version: 2,
+  handle: record.handle,
+  repository: record.repository,
+  baseline,
+  ownerLease: record.ownerLease,
+  lastChangedAt: record.lastChangedAt,
+  status: "active",
+  ...(record.launch && { launch: record.launch }),
+  ...(record.includedPaths && { includedPaths: record.includedPaths }),
+});
+/** A prepared record with its preparation withdrawn: the reviewed revision stays frozen. */
+export const unpreparedWorkspaceRecord = ({
+  preparation: _preparation,
+  parentTree: _parentTree,
+  preparedTree: _preparedTree,
+  sourceHead: _sourceHead,
+  sourceIndex: _sourceIndex,
+  ...record
+}: WorkspaceRecord): WorkspaceRecord => ({ ...record, status: "frozen" });
+/** Whether nothing is left to decide for the workspace: it was integrated or discarded. */
+export const isFinishedWorkspace = (record: Pick<WorkspaceRecord, "status">) =>
+  record.status === "integrated" || record.status === "discarded";
 
 export const UnavailableWorkspaceArtifactSchema = Schema.Struct({
   workspaceId: Schema.String,

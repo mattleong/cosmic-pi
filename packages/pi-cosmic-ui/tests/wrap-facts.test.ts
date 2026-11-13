@@ -1,6 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { wrapFacts } from "../src/manager/chrome.ts";
 
@@ -41,7 +42,7 @@ describe("wrapFacts", () => {
       expect(line).not.toMatch(/ [·→]$/u);
       expect(visibleWidth(line)).toBeLessThanOrEqual(36);
     }
-    expect(Arr.some(lines, (line) => Str.startsWith("  → ")(line))).toBe(true);
+    expect(Arr.some(lines, Str.startsWith("  → "))).toBe(true);
   });
 
   it("breaks a path after its directory before it breaks inside a name too wide for a row", () => {
@@ -60,7 +61,7 @@ describe("wrapFacts", () => {
   });
 
   it("fills each row with a name that has no part narrow enough to break after", () => {
-    const blob = `{"file.json":"${Str.repeat(60)("a")}"}`;
+    const blob = `{"file.json":"${Fn.pipe("a", Str.repeat(60))}"}`;
     const lines = wrapFacts(`Wrote out/${blob}`, 30);
 
     expect(Arr.join(Arr.map(lines, Str.trim), "")).toBe(`Wrote out/${blob}`);

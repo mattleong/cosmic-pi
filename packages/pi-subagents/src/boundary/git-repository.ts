@@ -5,6 +5,8 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { WorkspaceError } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
+import { isStrictlyInsidePath } from "pi-cosmic-core/platform/paths";
+import { hasControlCharacter } from "pi-cosmic-core/security";
 import { sha256Text } from "pi-cosmic-core/security/sha256";
 import {
   checkDirectory,
@@ -35,7 +37,7 @@ const revParse = (cwd: string, args: ReadonlyArray<string>, count: number) =>
     Effect.flatMap((output) => {
       const lines = Str.split(Fn.pipe(output, Str.replace(/\n$/u, "")), "\n");
       return lines.length === count &&
-        Arr.every(lines, (line) => line !== "" && !/\p{Cc}/u.test(line))
+        Arr.every(lines, (line) => line !== "" && !hasControlCharacter(line))
         ? Effect.succeed(lines)
         : Effect.fail(workspaceFailure("source", "Git reported unusable repository paths."));
     }),
@@ -80,7 +82,7 @@ const unsupportedRepository = Effect.fn("GitRepository.unsupportedRepository")(f
 });
 
 /** The commit HEAD names in the tree at `root`. */
-export const headCommit = (root: string) =>
+const headCommit = (root: string) =>
   git(root, ["rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}"]).pipe(
     Effect.catchIf(
       (error) => !error.cleanupUnconfirmed,
@@ -115,11 +117,7 @@ export const inspectSource = Effect.fn("GitRepository.inspectSource")(function* 
   yield* checkDirectory(gitDirectory);
   yield* checkDirectory(repository);
   const subdirectory = path.relative(sourceRoot, sourceCwd);
-  if (
-    subdirectory === ".." ||
-    Fn.pipe(subdirectory, Str.startsWith(`..${path.sep}`)) ||
-    path.isAbsolute(subdirectory)
-  )
+  if (subdirectory !== "" && !isStrictlyInsidePath(sourceRoot, sourceCwd))
     return yield* workspaceRefusal(
       "source",
       "The session directory isn't inside its Git checkout.",
@@ -157,6 +155,8 @@ export const sourceIdentity = Effect.fn("GitRepository.sourceIdentity")(function
   const branch = yield* workspaceIO("source", () => fs.readFile(headPath, "utf8"));
   const staged = yield* git(root, ["ls-files", "--stage", "-v", "-z"]);
   return {
+    /** The commit HEAD names. */
+    commit: head,
     head: `${head}\n${branch}`,
     index: sha256Text(staged),
   };

@@ -2,20 +2,13 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import { latestAssistantText } from "../src/host-transcript.ts";
-
-const entry = (message: Extract<SessionEntry, { type: "message" }>["message"]): SessionEntry => ({
-  type: "message",
-  id: "entry",
-  parentId: null,
-  timestamp: "",
-  message,
-});
+import { sessionMessageEntryFixture } from "../src/testing/session.ts";
 
 const assistant = (...args: Parameters<typeof fauxAssistantMessage>): SessionEntry =>
-  entry(fauxAssistantMessage(...args));
+  sessionMessageEntryFixture(fauxAssistantMessage(...args));
 
 const user = (text: string): SessionEntry =>
-  entry({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
+  sessionMessageEntryFixture({ role: "user", content: [{ type: "text", text }], timestamp: 0 });
 
 describe("latest assistant text", () => {
   it("joins the text parts of the latest assistant message on the branch", () => {

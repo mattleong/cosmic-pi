@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import {
@@ -33,13 +33,12 @@ export function renderCompactDetails(
   details: readonly CompactDetail[] | undefined,
   theme: Pick<Theme, "fg">,
   width: number,
-  indent = "  ",
 ): string[] {
   if (!details?.length || width <= 0) return [];
   return Arr.flatMap(details, ({ label, text, verbatim }) => {
     const value = Str.trim(compactPlainText(text));
     if (!value) return [];
-    const first = `${indent}${theme.fg("muted", compactSingleLine(label))} `;
+    const first = `  ${theme.fg("muted", compactSingleLine(label))} `;
     const pad = Fn.pipe(" ", Str.repeat(visibleWidth(first)));
     return Arr.flatMap(Str.split(value, "\n"), (line, index) =>
       wrapHanging(line, width, index === 0 ? first : pad, pad, 8, {
@@ -90,9 +89,7 @@ export function compactIssueText(
   issues: readonly CompactIssue[],
 ): { readonly text: string; readonly color: ReturnType<typeof managerNoticeColor> } | undefined {
   const severity = compactIssueSeverity(issues);
-  const primary = Option.getOrUndefined(
-    Arr.findFirst(issues, (issue) => issue.severity === severity),
-  );
+  const primary = findOrUndefined(issues, (issue) => issue.severity === severity);
   if (!primary) return undefined;
   const others = Arr.filter(issues, (issue) => issue.severity !== "info").length - 1;
   return {

@@ -1,23 +1,13 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { clipText, countLabel, formatTokens } from "pi-cosmic-core/display";
-import { failureMessage } from "pi-cosmic-core/message-text";
+import { contentText, failureMessage } from "pi-cosmic-core/message-text";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import {
-  SUBAGENT_RUN_STATES,
-  type SubagentToolActivity,
-  type SubagentToolActivityFact,
-} from "../run/model.ts";
-import {
-  AGENT_TOOL_NAMES,
-  CONTACT_PARENT_TOOL_NAME,
-  SUBAGENT_TOOL_NAMES,
-} from "../run/tool-policy.ts";
+import type { SubagentToolActivity, SubagentToolActivityFact } from "../run/model.ts";
+import { CONTACT_PARENT_TOOL_NAME, isCoordinationTool } from "../run/tool-policy.ts";
 import { savedFileFact } from "../ui/notice-facts.ts";
 import { displayName } from "../ui/notice-details.ts";
 import { projectRunRoutePresentation } from "../ui/run-presentation.ts";
@@ -33,22 +23,14 @@ import {
   type SubagentRunCard,
   type SubagentStartDetails,
 } from "./details-schema.ts";
-import { sendStatus } from "./render-agents.ts";
+import { agentStateLabel, sendStatus } from "./render-agents.ts";
+import { PARENT_REPLY_PREFIX } from "./render-parent.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
 const MAX_NAMES = 4;
 const MAX_FACTS = 8;
 const MAX_TEXT_CHARS = 1_200;
 const MAX_LINE_CHARS = 240;
-
-const OWNED_TOOL_NAMES: ReadonlySet<string> = new Set([
-  ...SUBAGENT_TOOL_NAMES,
-  ...AGENT_TOOL_NAMES,
-  CONTACT_PARENT_TOOL_NAME,
-]);
-
-/** Tools whose model-facing results are delivery envelopes rather than output a user reads. */
-export const isOwnedAgentTool = (toolName: string): boolean => OWNED_TOOL_NAMES.has(toolName);
 
 const ToolResultSchema = Schema.Struct({
   content: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
@@ -58,21 +40,8 @@ const ToolResultSchema = Schema.Struct({
 export type AgentToolResult = typeof ToolResultSchema.Type;
 export const decodeAgentToolResult = decodeUnknownOrUndefined(ToolResultSchema);
 const decodeFailureDetails = decodeUnknownOrUndefined(ToolFailureDetailsSchema);
-const TextPartSchema = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
-const isTextPart = Schema.is(TextPartSchema);
-
-const resultText = (content: AgentToolResult["content"]): string =>
-  content === undefined
-    ? ""
-    : Predicate.isString(content)
-      ? content
-      : Arr.join(
-          Arr.flatMap(content, (part) => (isTextPart(part) ? [part.text] : [])),
-          "\n",
-        );
 
 const line = (text: string): string => clipText(sanitizeTerminalLine(text), MAX_LINE_CHARS);
-const name = displayName;
 
 // A rejection's first line, without its bracketed code, as the user reads it.
 const failureLine = (text: string): string =>
@@ -93,18 +62,10 @@ const fact = (label: string, value: string): SubagentToolActivityFact => ({
   value: line(value),
 });
 
-const route = (card: {
-  readonly profile?: string | undefined;
-  readonly model: string;
-  readonly effort: string;
-  readonly openaiFastMode?: boolean | undefined;
-  readonly modelOverride?: object | undefined;
-}): string => projectRunRoutePresentation(card).model;
-
 const activity = (
   summary: string,
-  text: string | undefined,
-  facts: ReadonlyArray<SubagentToolActivityFact>,
+  text?: string,
+  facts: ReadonlyArray<SubagentToolActivityFact> = [],
 ): SubagentToolActivity => {
   const words = text === undefined ? "" : Str.trim(text);
   return {
@@ -114,13 +75,14 @@ const activity = (
   };
 };
 
+const failedName = (failure: NonNullable<SubagentStartDetails["startFailures"]>[number]): string =>
+  displayName(failure.name ?? `Launch ${failure.index + 1}`);
+
 const startActivity = (details: SubagentStartDetails): SubagentToolActivity => {
   const started = Arr.flatMap(details.startEntries, (entry) =>
     entry.status === "started" ? [entry] : [],
   );
   const failures = details.startFailures ?? [];
-  const failedName = (failure: (typeof failures)[number]): string =>
-    name(failure.name ?? `Launch ${failure.index + 1}`);
   const [onlyFailure] = failures;
   const failedPart =
     failures.length === 0
@@ -131,7 +93,7 @@ const startActivity = (details: SubagentStartDetails): SubagentToolActivity => {
   const startedPart =
     started.length === 0
       ? undefined
-      : `started ${names(Arr.map(started, (entry) => `${name(entry.name)} (${name(entry.agent ?? entry.profile)})`))}`;
+      : `started ${names(Arr.map(started, (entry) => `${displayName(entry.name)} (${displayName(entry.agent ?? entry.profile)})`))}`;
   return activity(
     Arr.join(Arr.filter([startedPart, failedPart], isTextFragment), " · ") || "started nothing",
     failures.length > 1
@@ -145,7 +107,10 @@ const startActivity = (details: SubagentStartDetails): SubagentToolActivity => {
       : undefined,
     [
       ...Arr.map(started, (entry) =>
-        fact("Started", `${entry.runId} · ${entry.name} · ${route(entry)}`),
+        fact(
+          "Started",
+          `${entry.runId} · ${entry.name} · ${projectRunRoutePresentation(entry).model}`,
+        ),
       ),
       ...Arr.flatMap(failures, (failure) =>
         failure.admittedRun?.failureFile
@@ -163,8 +128,8 @@ const startActivity = (details: SubagentStartDetails): SubagentToolActivity => {
 
 const cardPhrase = (card: SubagentRunCard): string =>
   card.state === "waiting_for_parent"
-    ? `${name(card.name)} asked a question`
-    : `${name(card.name)} ${runStateLabel(card.state)}`;
+    ? `${displayName(card.name)} asked a question`
+    : `${displayName(card.name)} ${runStateLabel(card.state)}`;
 
 /** The words a card returned: its report, its question, or its failure. */
 const cardWords = (card: SubagentRunCard): string | undefined =>
@@ -183,11 +148,8 @@ const awaitEnding = (details: SubagentAwaitDetails): string | undefined => {
 };
 
 const awaitActivity = (details: SubagentAwaitDetails): SubagentToolActivity => {
-  const awaitedIds =
-    details.awaitedRunIds === undefined ? undefined : new Set(details.awaitedRunIds);
-  const cards = awaitedIds
-    ? Arr.filter(details.cards, (card) => awaitedIds.has(card.id))
-    : details.cards;
+  const awaitedIds = new Set(details.awaitedRunIds);
+  const cards = Arr.filter(details.cards, (card) => awaitedIds.has(card.id));
   const tokens = Arr.reduce(cards, 0, (total, card) => total + card.usage.totalTokens);
   const phrases = Arr.map(cards, cardPhrase);
   const summary = Arr.join(
@@ -195,8 +157,8 @@ const awaitActivity = (details: SubagentAwaitDetails): SubagentToolActivity => {
       [
         awaitEnding(details),
         phrases.length > MAX_NAMES
-          ? `${phrases.length} subagents: ${Arr.join(phrases.slice(0, MAX_NAMES), ", ")} and ${phrases.length - MAX_NAMES} more`
-          : Arr.join(phrases, ", "),
+          ? `${phrases.length} subagents: ${names(phrases)}`
+          : names(phrases),
         tokens > 0 ? `${formatTokens(tokens)} tokens` : undefined,
       ],
       isTextFragment,
@@ -210,15 +172,17 @@ const awaitActivity = (details: SubagentAwaitDetails): SubagentToolActivity => {
       : Arr.join(
           Arr.flatMap(cards, (card) => {
             const said = cardWords(card);
-            return said === undefined ? [] : [`**${name(card.name)}**\n\n${said}`];
+            return said === undefined ? [] : [`**${displayName(card.name)}**\n\n${said}`];
           }),
           "\n\n",
         );
   return activity(summary || "waited", words, [
-    ...Arr.map(cards, (card) => fact("Awaited", `${card.id} · ${card.name} · ${route(card)}`)),
+    ...Arr.map(cards, (card) =>
+      fact("Awaited", `${card.id} · ${card.name} · ${projectRunRoutePresentation(card).model}`),
+    ),
     ...Arr.flatMap(cards, (card) =>
       card.reportArchive
-        ? [fact("Report file", savedFileFact(name(card.name), card.reportArchive))]
+        ? [fact("Report file", savedFileFact(displayName(card.name), card.reportArchive))]
         : [],
     ),
   ]);
@@ -240,8 +204,6 @@ const compactActivity = (details: CompactSubagentToolDetails): SubagentToolActiv
         ),
         " · ",
       ),
-      undefined,
-      [],
     );
   const failedIds = new Set(Arr.map(details.actionFailures ?? [], (failure) => failure.id));
   const done = Arr.filter(details.cards, (card) => !failedIds.has(card.id));
@@ -252,10 +214,10 @@ const compactActivity = (details: CompactSubagentToolDetails): SubagentToolActiv
       Arr.filter(
         [
           done.length > 0
-            ? `${LIFECYCLE_VERBS[details.action]} ${names(Arr.map(done, (card) => name(card.name)))}`
+            ? `${LIFECYCLE_VERBS[details.action]} ${names(Arr.map(done, (card) => displayName(card.name)))}`
             : undefined,
           failed.length > 0
-            ? `${LIFECYCLE_FAILURES[details.action]} ${names(Arr.map(failed, (card) => name(card.name)))}${
+            ? `${LIFECYCLE_FAILURES[details.action]} ${names(Arr.map(failed, (card) => displayName(card.name)))}${
                 failed.length === 1 && onlyFailure ? `: ${failureLine(onlyFailure.message)}` : ""
               }`
             : undefined,
@@ -268,12 +230,6 @@ const compactActivity = (details: CompactSubagentToolDetails): SubagentToolActiv
     Arr.map(details.cards, (card) => fact("Target", `${card.id} · ${card.name}`)),
   );
 };
-
-const agentStateLabel = (state: string): string =>
-  Option.match(
-    Arr.findFirst(SUBAGENT_RUN_STATES, (known) => known === state),
-    { onNone: () => state, onSome: runStateLabel },
-  );
 
 const SEND_VERBS = { answered: "answered", guided: "sent to", resumed: "resumed" } as const;
 
@@ -292,15 +248,16 @@ const agentActivity = (details: AgentToolDetails): SubagentToolActivity => {
           ],
           " · ",
         ),
-        undefined,
-        [],
       );
     }
     case "agent_send":
       return activity(
         Arr.join(
           Arr.filter(
-            [`${SEND_VERBS[details.disposition]} ${name(details.name)}`, sendStatus(details)],
+            [
+              `${SEND_VERBS[details.disposition]} ${displayName(details.name)}`,
+              sendStatus(details),
+            ],
             isTextFragment,
           ),
           " · ",
@@ -311,18 +268,16 @@ const agentActivity = (details: AgentToolDetails): SubagentToolActivity => {
     case "agent_read": {
       const [only] = details.agents;
       return activity(
-        `read ${names(Arr.map(details.agents, (agent) => name(agent.name)))}`,
+        `read ${names(Arr.map(details.agents, (agent) => displayName(agent.name)))}`,
         details.agents.length === 1 && only ? only.text : undefined,
         Arr.flatMap(details.agents, (agent) =>
-          Arr.map(agent.facts ?? [], (value) => fact(name(agent.name), value)),
+          Arr.map(agent.facts ?? [], (value) => fact(displayName(agent.name), value)),
         ),
       );
     }
   }
   return Fn.absurd(details);
 };
-
-const PARENT_REPLY = "Parent reply: ";
 
 /**
  * Phrases an owned agent tool's result from the display details its producer wrote, never from
@@ -334,14 +289,14 @@ export const agentToolActivity = (
   decoded: AgentToolResult | undefined,
   isError: boolean,
 ): SubagentToolActivity | undefined => {
-  if (!isOwnedAgentTool(toolName)) return undefined;
-  const text = resultText(decoded?.content);
+  if (!isCoordinationTool(toolName)) return undefined;
+  const text = contentText(decoded?.content);
   const failure = decodeFailureDetails(decoded?.details);
-  if (failure) return activity(failureLine(failure.message), undefined, []);
+  if (failure) return activity(failureLine(failure.message));
   if (toolName === CONTACT_PARENT_TOOL_NAME)
     return isError
-      ? activity(failureLine(text), undefined, [])
-      : activity(Str.startsWith(PARENT_REPLY)(text) ? "answered" : "delivered", undefined, []);
+      ? activity(failureLine(text))
+      : activity(Fn.pipe(text, Str.startsWith(PARENT_REPLY_PREFIX)) ? "answered" : "delivered");
   const outcome = decodeOutcomeDetails(decoded?.details);
   if (outcome?.action === "start") return startActivity(outcome);
   if (outcome?.action === "await") return awaitActivity(outcome);
@@ -349,5 +304,5 @@ export const agentToolActivity = (
   const agent = decodeAgentToolDetails(decoded?.details);
   if (agent) return agentActivity(agent);
   // A result without details is a rejection whose text is all there is; its first line says why.
-  return isError ? activity(failureLine(text), undefined, []) : undefined;
+  return isError ? activity(failureLine(text)) : undefined;
 };

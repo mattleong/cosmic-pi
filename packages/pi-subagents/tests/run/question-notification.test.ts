@@ -23,7 +23,8 @@ import {
 } from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
+import * as Exit from "effect/Exit";
 
 const questions = (items: ReadonlyArray<SubagentNotification>) =>
   Arr.filter(items, (item) => item.type === "question");
@@ -54,7 +55,7 @@ describe("question notification ownership", () => {
         if (ending === "cancel") yield* Fiber.interrupt(waiter);
         else {
           yield* Deferred.succeed(release, undefined);
-          if (ending === "defect") expect((yield* Fiber.await(waiter))._tag).toBe("Failure");
+          if (ending === "defect") expect(Exit.isFailure(yield* Fiber.await(waiter))).toBe(true);
           else expect((yield* Fiber.join(waiter))?.state).toBe("waiting_for_parent");
         }
         yield* TestClock.adjust("30 seconds");
@@ -112,10 +113,8 @@ describe("question notification ownership", () => {
       const waiting = yield* runView(service, run.id);
       const block = formatRunBlock(runViewBlock(waiting, runViewOutcome(waiting, false)));
       expect(
-        Option.getOrUndefined(
-          Arr.findFirst(Str.split(block, "\n"), (line) =>
-            Fn.pipe(line, Str.includes("Which option?")),
-          ),
+        findOrUndefined(Str.split(block, "\n"), (line) =>
+          Fn.pipe(line, Str.includes("Which option?")),
         ),
       ).toContain("Keep the schema");
 
@@ -210,7 +209,7 @@ describe("question notification ownership", () => {
       const questionKeys = (index: number) =>
         Arr.flatMap(fake.controls[index]?.ipc ?? [], (message) =>
           message.type === "proxy_notification" &&
-          Str.startsWith(`${leaf.id}:question:`)(message.key)
+          Fn.pipe(message.key, Str.startsWith(`${leaf.id}:question:`))
             ? [message.key]
             : [],
         );

@@ -61,7 +61,7 @@ describe("runSessionOwned", () => {
       yield* Deferred.succeed(release, undefined);
       yield* Deferred.await(finished);
       yield* Scope.close(ownerScope, Exit.void);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   it.effect("interrupts the commit and the waiter when the owner scope closes", () =>
@@ -81,6 +81,6 @@ describe("runSessionOwned", () => {
       yield* Deferred.await(interrupted);
       const exit = yield* Fiber.await(waiter);
       expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
-    }).pipe(Effect.scoped),
+    }),
   );
 });

@@ -1,5 +1,5 @@
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, MarkdownTheme } from "@earendil-works/pi-tui";
 import * as Schema from "effect/Schema";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import {
@@ -14,6 +14,46 @@ import {
 export const composeToolComponent = (render: (width: number) => string[]): Component => ({
   render,
   invalidate: () => undefined,
+});
+
+/**
+ * A component whose rows are drawn once per width and reused until it is invalidated. A width that
+ * is not finite or below one column draws nothing.
+ */
+export const cachedComponent = (draw: (width: number) => string[]): Component => {
+  let cached: { readonly width: number; readonly lines: string[] } | undefined;
+  return {
+    render(width) {
+      if (!Number.isFinite(width) || width < 1) return [];
+      if (cached?.width === width) return cached.lines;
+      const lines = draw(width);
+      cached = { width, lines };
+      return lines;
+    },
+    invalidate() {
+      cached = undefined;
+    },
+  };
+};
+
+const plainMarkdown = (text: string) => text;
+
+/** Pi's markdown colors, drawn with the given theme rather than the host's global one. */
+export const markdownTheme = (theme: Pick<Theme, "fg" | "bold">): MarkdownTheme => ({
+  heading: (text) => theme.fg("mdHeading", theme.bold(text)),
+  link: (text) => theme.fg("mdLink", text),
+  linkUrl: (text) => theme.fg("mdLinkUrl", text),
+  code: (text) => theme.fg("mdCode", text),
+  codeBlock: (text) => theme.fg("mdCodeBlock", text),
+  codeBlockBorder: (text) => theme.fg("mdCodeBlockBorder", text),
+  quote: (text) => theme.fg("mdQuote", text),
+  quoteBorder: (text) => theme.fg("mdQuoteBorder", text),
+  hr: (text) => theme.fg("mdHr", text),
+  listBullet: (text) => theme.fg("mdListBullet", text),
+  bold: (text) => theme.bold(text),
+  italic: plainMarkdown,
+  strikethrough: plainMarkdown,
+  underline: plainMarkdown,
 });
 
 export interface ToolHeader {

@@ -15,14 +15,15 @@ const MAX_NOTICE_NAME_CHARS = 120;
 
 const Count = Schema.Natural.check(Schema.isLessThanOrEqualTo(100_000));
 const Name = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_NOTICE_NAME_CHARS));
-const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024));
+/** A run, agent, or message ID as display details carry it. */
+export const AgentIdSchema = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024));
 const Text = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_NOTICE_TEXT_CHARS));
 const Fact = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_NOTICE_FACT_CHARS));
 const Facts = Schema.Array(Fact).check(Schema.isMaxLength(MAX_NOTICE_FACTS));
 
 /** A finished run as a notice shows it: its words, short status notes, and technical facts. */
 const NoticeRun = Schema.Struct({
-  id: Id,
+  id: AgentIdSchema,
   name: Name,
   outcome: Schema.Literals(["completed", "failed"]),
   /** The report, or the failure; a display copy bounded with the notice. */
@@ -38,7 +39,7 @@ const NoticeRun = Schema.Struct({
 });
 export type NoticeRun = typeof NoticeRun.Type;
 
-const StoppedRun = Schema.Struct({ id: Id, name: Name, state: Name });
+const StoppedRun = Schema.Struct({ id: AgentIdSchema, name: Name, state: Name });
 
 export const MAX_NOTICE_PEERS = 20;
 
@@ -50,7 +51,7 @@ const PeerNoticeDetailsSchema = Schema.Struct({
   ownership: Schema.optionalKey(Name),
   peers: Schema.Array(
     Schema.Struct({
-      id: Id,
+      id: AgentIdSchema,
       name: Name,
       ownership: Name,
       state: Name,
@@ -66,7 +67,7 @@ export const NoticeDetailsSchema = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("question"),
-    id: Schema.optionalKey(Id),
+    id: Schema.optionalKey(AgentIdSchema),
     name: Schema.optionalKey(Name),
     question: Schema.optionalKey(Text),
     questionCut: Schema.optionalKey(Schema.Literal(true)),
@@ -74,12 +75,12 @@ export const NoticeDetailsSchema = Schema.Union([
   Schema.Struct({
     version: Schema.Literal(1),
     kind: Schema.Literal("completed"),
-    ids: Schema.optionalKey(Schema.Array(Id)),
+    ids: Schema.optionalKey(Schema.Array(AgentIdSchema)),
     total: Count,
     failed: Count,
     warnings: Count,
     name: Schema.optionalKey(Name),
-    runs: Schema.optionalKey(Schema.Array(NoticeRun).check(Schema.isMaxLength(MAX_NOTICE_RUNS))),
+    runs: Schema.Array(NoticeRun).check(Schema.isMaxLength(MAX_NOTICE_RUNS)),
   }),
   Schema.Struct({
     version: Schema.Literal(1),
@@ -87,9 +88,7 @@ export const NoticeDetailsSchema = Schema.Union([
     total: Count,
     name: Schema.optionalKey(Name),
     cause: Schema.optionalKey(Schema.Literals(["reload", "session"])),
-    runs: Schema.optionalKey(
-      Schema.Array(StoppedRun).check(Schema.isMaxLength(MAX_STOPPED_NOTICE_RUNS)),
-    ),
+    runs: Schema.Array(StoppedRun).check(Schema.isMaxLength(MAX_STOPPED_NOTICE_RUNS)),
   }),
   PeerNoticeDetailsSchema,
 ]);

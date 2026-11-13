@@ -2,8 +2,8 @@ import { initTheme, type MessageRenderer } from "@earendil-works/pi-coding-agent
 import { Text, type Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { stripAnsi } from "pi-cosmic-core";
-import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   expandedAuthoredText,
@@ -15,19 +15,11 @@ import {
 } from "../../index";
 import { withPresentationSettings } from "../../testing";
 import { publishSharedPresentation } from "../../src/config/state";
-
-type Message = Parameters<MessageRenderer>[0];
+import { customMessage, drawMessage } from "../support/render";
 
 const WORDS = Arr.map(Arr.range(1, 30), (line) => `line ${line} of what the agent wrote`);
 
-const message: Message = {
-  role: "custom",
-  customType: "example-message",
-  content: [{ type: "text", text: "FULL MODEL-FACING CONTENT" }],
-  display: true,
-  details: { words: WORDS },
-  timestamp: 0,
-};
+const message = customMessage({ details: { words: WORDS } });
 
 const lines = (rows: ReadonlyArray<string>): Component => new Text(Arr.join(rows, "\n"), 0, 0);
 
@@ -40,20 +32,8 @@ const present: CodePreviewMessagePresenter = () => ({
   expandLabel: "message",
 });
 
-const draw = (
-  render: MessageRenderer,
-  expanded: boolean,
-  input: Message = message,
-  width = 80,
-): string =>
-  stripAnsi(
-    Arr.join(
-      render(input, { ...keybindingHintsFixture, expanded, outputPad: 1 }, plainTheme)?.render(
-        width,
-      ) ?? [],
-      "\n",
-    ),
-  );
+const draw = (render: MessageRenderer, expanded: boolean, input = message, width = 80): string =>
+  stripAnsi(Arr.join(drawMessage(render, expanded, input, width), "\n"));
 
 // The body repeats the subject unless the heading reports it drew the subject whole.
 const subjectBody =
@@ -149,30 +129,14 @@ describe("message shell", () => {
       },
     ));
 
-  it("keeps a compact message without a collapsed body to its heading until expanded", () =>
-    withPresentationSettings(
-      { toolCallCollapsedStyle: "compact", toolCallBackground: "border" },
-      () => {
-        const render = withCodePreviewMessageShell(() => ({
-          name: "example",
-          summary: { subject: "MESSAGE SUBJECT", outcome: "success" },
-          expanded: () => lines(WORDS),
-          expandLabel: "message",
-        }));
-        const collapsed = draw(render, false);
-        expect(collapsed).toContain("MESSAGE SUBJECT");
-        expect(collapsed).not.toContain(WORDS[0]);
-        expect(draw(render, true)).toContain(WORDS[29]);
-      },
-    ));
-
   it("lets an expanded body leave out a subject only its heading showed whole", () => {
     const long = Arr.join(Arr.replicate("word", 60), " ");
     const repeats = (style: "compact" | "preview", subject: string) =>
-      Str.includes("SUBJECT AGAIN")(
+      Fn.pipe(
         withPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: "off" }, () =>
           draw(withCodePreviewMessageShell(subjectBody(subject)), true, message, 57),
         ),
+        Str.includes("SUBJECT AGAIN"),
       );
     expect(repeats("compact", "A short subject")).toBe(false);
     // A subject too long for the heading's rows is shortened there, so the body keeps it.
@@ -184,7 +148,7 @@ describe("message shell", () => {
 
   it("keeps a subject a collapsed heading showed only in its short form", () => {
     const repeats = (style: "compact" | "preview", compactSubject?: string) =>
-      Str.includes("SUBJECT AGAIN")(
+      Fn.pipe(
         withPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: "off" }, () =>
           draw(
             withCodePreviewMessageShell(() => ({
@@ -203,6 +167,7 @@ describe("message shell", () => {
             false,
           ),
         ),
+        Str.includes("SUBJECT AGAIN"),
       );
     // Only preview style draws a collapsed body.
     expect(repeats("preview")).toBe(false);
@@ -282,10 +247,7 @@ describe("message shell", () => {
               expect(draw(render, true)).toContain("FULL MODEL-FACING CONTENT");
           },
         );
-    const hostile: Message = {
-      ...message,
-      content: [{ type: "text", text: "safe\u001b[31m text" }],
-    };
+    const hostile = customMessage({ content: [{ type: "text", text: "safe\u001b[31m text" }] });
     expect(draw(failing, false, hostile)).not.toContain("\u001b");
   });
 
@@ -310,11 +272,7 @@ describe("message shell", () => {
               attachments: [image],
             }));
             for (const expanded of [false, true]) {
-              const rows = render(
-                message,
-                { ...keybindingHintsFixture, expanded, outputPad: 1 },
-                plainTheme,
-              ).render(80);
+              const rows = drawMessage(render, expanded, message);
               expect(rows).toContain("\u001b_Gnative-image-sequence\u001b\\");
               expect(widths.at(-1)).toBe(80);
             }

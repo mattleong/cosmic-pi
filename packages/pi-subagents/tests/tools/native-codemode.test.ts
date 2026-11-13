@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { yieldUntil } from "pi-cosmic-core/testing";
+import { MAIN_AGENT_ID, mainListEntry, runListEntry } from "../../src/run/agent-messaging.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { SubagentNotFoundError } from "../../src/run/errors.ts";
 import {
@@ -25,14 +26,12 @@ import { signalAwaitEntry, subagentServiceDouble } from "./fixtures/subagent-ser
 import { startCapturingService, view } from "./fixtures/tool-harness.ts";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const decodeOutput = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const output = (text: string) => {
-  const line = Option.getOrUndefined(
-    Arr.findFirst(Str.split(text, "\n"), (entry) =>
-      Fn.pipe(entry, Str.startsWith("WORKFLOW_RESULT ")),
-    ),
+  const line = findOrUndefined(Str.split(text, "\n"), (entry) =>
+    Fn.pipe(entry, Str.startsWith("WORKFLOW_RESULT ")),
   );
   expect(line).toBeDefined();
   return decodeOutput(Fn.pipe(line!, Str.slice("WORKFLOW_RESULT ".length)));
@@ -94,8 +93,19 @@ describe("native scripted subagent workflows", () => {
                 ? Effect.fail(SubagentNotFoundError.make({ id, message: "Run not found" }))
                 : Effect.succeed(view({ id, state: "stopped" })),
             interrupt: (id) => Effect.succeed(view({ id, state: "paused" })),
+            agentList: () =>
+              Effect.succeed({
+                agents: [
+                  mainListEntry("idle", MAIN_AGENT_ID),
+                  runListEntry(view({ id: "agent-1" }), MAIN_AGENT_ID),
+                ],
+                missingIds: [],
+              }),
           });
           const h = yield* nativeCodemodeSession(service);
+          expect(h.session.getCallableToolNames()).toEqual(
+            expect.arrayContaining(["agent_list", "agent_read"]),
+          );
           for (const name of ["agent_send", "agent_worktree"])
             expect(h.session.getCallableToolNames()).not.toContain(name);
           expect(h.session.getActiveToolNames()).toContain("agent_send");
@@ -110,12 +120,18 @@ describe("native scripted subagent workflows", () => {
           catch { rejected.push(action); }
         }
         const stopped = await tools.agent_lifecycle({action:'stop',runIds:['run-1','missing']});
-        ${print("{rejected,stopped}")}
+        const listed = await tools.agent_list({});
+        let sendRefused = false;
+        try { await tools.agent_send({to:'agent-1',message:'From a script'}); }
+        catch { sendRefused = true; }
+        ${print("{rejected,stopped,listed:{tool:listed.tool,count:listed.agents.length},sendRefused}")}
       `,
             callId,
           );
           expect(output(result.text)).toMatchObject({
             rejected: ["resume", "interrupt"],
+            listed: { tool: "agent_list", count: 2 },
+            sendRefused: true,
             stopped: {
               outcome: "partial",
               results: [

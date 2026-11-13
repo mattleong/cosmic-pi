@@ -57,6 +57,12 @@ const visibleWords = (text: string): string =>
     Str.trim,
   );
 
+/** A section that draws nothing at the widths where `hidden` holds. */
+const hiddenWhen = (section: Component, hidden: (width: number) => boolean): Component => ({
+  render: (width) => (hidden(width) ? [] : section.render(width)),
+  invalidate: () => section.invalidate(),
+});
+
 /**
  * The appended raw evidence, unless the provider's own rendering already shows all of it at this
  * width; clipped or reworded provider output keeps the evidence.
@@ -67,13 +73,10 @@ function unlessShownBy(
   section: Component,
 ): Component {
   const wanted = visibleWords(evidence);
-  return {
-    render(width) {
-      const shown = original ? visibleWords(Arr.join(original.render(width), " ")) : "";
-      return wanted && Fn.pipe(shown, Str.includes(wanted)) ? [] : section.render(width);
-    },
-    invalidate: () => section.invalidate(),
-  };
+  return hiddenWhen(section, (width) => {
+    const shown = original ? visibleWords(Arr.join(original.render(width), " ")) : "";
+    return wanted !== "" && Fn.pipe(shown, Str.includes(wanted));
+  });
 }
 
 /**
@@ -95,14 +98,10 @@ function unlessHeadingShowsOnlyArgument(
     return Predicate.isString(value) ? value : undefined;
   }, undefined);
   const exact = only !== undefined && only === subject && compactSingleLine(only) === only;
-  return {
-    render(width) {
-      const shown =
-        exact && (!providerHeading || (headingShowedSubject(state) && !headingIsOwnCall(state)));
-      return shown ? [] : section.render(width);
-    },
-    invalidate: () => section.invalidate(),
-  };
+  return hiddenWhen(
+    section,
+    () => exact && (!providerHeading || (headingShowedSubject(state) && !headingIsOwnCall(state))),
+  );
 }
 
 // Built outside the render call, so the heading holds only its text, never the call's arguments.

@@ -13,13 +13,13 @@ import {
 import { step } from "../support/effect-test";
 import { offlineModels, scopedSession } from "../support/sdk-session";
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { resultText } from "../support/render";
 import { setPlainPreviewSettings } from "../support/renderer-host";
 import { drawToolRow, hostToolRow } from "../../testing";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 
 beforeAll(() => initTheme("dark", false));
 it.live(
@@ -110,8 +110,9 @@ it.live(
       assert.ok(Fn.pipe(Arr.join(retained.render(160), "\n"), Str.includes("OWNED_SUMMARY")));
       const active = session.getActiveToolNames();
       const callable = session.getCallableToolNames();
-      const originalSource = Option.getOrUndefined(
-        Arr.findFirst(session.getAllTools(), (entry) => entry.name === tool.name),
+      const originalSource = findOrUndefined(
+        session.getAllTools(),
+        (entry) => entry.name === tool.name,
       )?.sourceInfo;
       yield* step(() =>
         session.reload({

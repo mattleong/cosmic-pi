@@ -1,4 +1,4 @@
-import { expect, vi } from "vitest";
+import { expect } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -16,10 +16,12 @@ import {
   exists,
   failureOf,
   fails,
+  interruptAtRecordSave,
   io,
+  preparedTrees,
   prepareIntegration,
   readText,
-  registryOf as registryPath,
+  registryOf,
   temporaryDirectory,
   workspaceTarget,
   workspaceTests,
@@ -38,8 +40,6 @@ const test = workspaceTests([
   ["dist/bundle.js", "bundle\n"],
   [".gitignore", "coverage/\nscratch/\n"],
 ]);
-
-const registryOf = (agent: string) => io(() => fs.realpath(agent)).pipe(Effect.map(registryPath));
 
 const waitFor = (file: string, attempts = 400): Effect.Effect<void, WorkspaceError> =>
   exists(file).pipe(
@@ -177,7 +177,7 @@ test("runs WorktreeCreate hooks without holding the service permit or the checko
   );
   yield* waitFor(started);
   // Another Pi process could take the checkout lock, and this session keeps working.
-  const registry = yield* registryOf(agent);
+  const registry = registryOf(agent);
   const lease = yield* CrossProcessLock.use((locks) =>
     locks.tryAcquire(sourceLockNamespace(root)),
   ).pipe(Effect.provide(CrossProcessLock.layer({ directory: workspaceLockDirectory(registry) })));
@@ -215,39 +215,21 @@ test("removes the tree of a preparation that fails to apply", function* (service
   );
   expect(conflict.code).toBe("workspace_conflict");
   expect(conflict.detail).toContain('"src/main.ts"');
-  const artifact = path.join(yield* registryOf(agent), handle.workspaceId);
-  const names = yield* io(() => fs.readdir(artifact));
-  expect(Arr.filter(names, (name) => Fn.pipe(name, Str.startsWith("prepare-")))).toEqual([]);
+  expect(yield* preparedTrees(path.join(registryOf(agent), handle.workspaceId))).toEqual([]);
   expect((yield* service.inspect(workspaceTarget(handle))).status).toBe("frozen");
 });
 
-interface PendingInterrupt {
-  current?: () => void;
-}
-
 test("removes what an interrupted create made before acquiring the workspace", function* (service, root, agent) {
-  const rename = fs.rename;
-  const pending: PendingInterrupt = {};
   // The second creating save names the baseline; interrupt just before the worker tree is added.
-  const spy = vi.spyOn(fs, "rename").mockImplementation((from, to) =>
-    fs.readFile(from, "utf8").then((text) => {
-      if (
-        Fn.pipe(String(to), Str.endsWith("record.json")) &&
-        Fn.pipe(text, Str.includes('"status":"creating"')) &&
-        !Fn.pipe(text, Str.includes('"baseline":""'))
-      )
-        pending.current?.();
-      return rename(from, to);
-    }),
-  );
-  const launch = yield* Effect.forkChild(service.create({ sourceCwd: root, ownerId: "parent" }));
-  pending.current = () => launch.interruptUnsafe();
-  const exit = yield* Fiber.await(launch).pipe(
-    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
+  const exit = yield* interruptAtRecordSave(
+    service.create({ sourceCwd: root, ownerId: "parent" }),
+    (text) =>
+      Fn.pipe(text, Str.includes('"status":"creating"')) &&
+      !Fn.pipe(text, Str.includes('"baseline":""')),
   );
   expect(Exit.hasInterrupts(exit)).toBe(true);
   expect(yield* service.listAll).toEqual({ records: [], unavailable: [] });
-  const registry = yield* registryOf(agent);
+  const registry = registryOf(agent);
   const names = yield* io(() => fs.readdir(registry));
   expect(Arr.filter(names, (name) => /^[a-f0-9-]{36}$/u.test(name))).toEqual([]);
   expect(yield* git(root, ["worktree", "list", "--porcelain"])).not.toContain(registry);

@@ -1,7 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
 import * as Str from "effect/String";
 import { resolvePiModelSelector, type PiCatalogModel } from "../run/model-catalog.ts";
@@ -92,7 +91,8 @@ export const unsupportedEffortReason = (
   }).`;
 
 /** A sentence as a clause: without its closing period. */
-const clause = (sentence: string): string => Str.replace(/\.$/u, "")(Str.trimEnd(sentence));
+export const clause = (sentence: string): string =>
+  Fn.pipe(Str.trimEnd(sentence), Str.replace(/\.$/u, ""));
 
 export type ProfileResolution = ProfileResolutionPlan | ProfileResolutionFailure;
 
@@ -173,23 +173,17 @@ const resolveCandidate = (
             }.`,
       );
     const resolvedModel = `${resolved.provider}/${resolved.id}`;
-    const catalogModel = Option.getOrUndefined(
-      Arr.findFirst(
-        environment.availablePiModels,
-        (model) => model.provider === resolved.provider && model.id === resolved.id,
-      ),
-    );
-    const supportedEfforts = catalogModel?.supportedEfforts;
+    const { supportedEfforts, contextWindow } = resolved;
     const inherited = environment.parentContextTokens;
     if (
       candidate.context === "fork" &&
       inherited !== undefined &&
-      catalogModel?.contextWindow !== undefined &&
-      inherited > catalogModel.contextWindow * FORK_CONTEXT_HEADROOM
+      contextWindow !== undefined &&
+      inherited > contextWindow * FORK_CONTEXT_HEADROOM
     )
       return skipCandidate(
         "fork_context_too_large",
-        `Pi model ${resolvedModel} has a ${formatCount(catalogModel.contextWindow)}-token window, too small for the ${formatCount(inherited)}-token conversation a fork inherits.`,
+        `Pi model ${resolvedModel} has a ${formatCount(contextWindow)}-token window, too small for the ${formatCount(inherited)}-token conversation a fork inherits.`,
       );
     if (hardEffort !== undefined && supportedEfforts && !supportedEfforts.includes(hardEffort))
       return skipCandidate(

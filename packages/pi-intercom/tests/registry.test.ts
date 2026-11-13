@@ -1,8 +1,6 @@
-import { createServer, type Socket } from "node:net";
 import { expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -10,7 +8,6 @@ import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -22,6 +19,7 @@ import {
   nodeFilePlatformLayer,
   runBoundedProcessNode,
 } from "pi-cosmic-core";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { reusedProcessIdentity } from "pi-cosmic-core/testing";
 import {
   sessionRecord,
@@ -31,7 +29,6 @@ import {
   type SessionRecord,
   type SessionRecordInput,
 } from "../src/registry/schema.ts";
-import { writePrivateFile } from "../src/registry/private-files.ts";
 import {
   FALLBACK_NAMESPACE_PREFIX,
   IntercomRegistry,
@@ -44,7 +41,7 @@ import {
   serveIntercom,
   type IntercomInboundContract,
 } from "../src/transport/server.ts";
-import { sharedAgentDirectory } from "./support/session-harness.ts";
+import { hangingListener, sharedAgentDirectory } from "./support/session-harness.ts";
 
 const hex = (seed: string, bytes: number) =>
   Fn.pipe(seed, Str.repeat(bytes * 2), Str.slice(0, bytes * 2));
@@ -127,19 +124,6 @@ const registryHarness = (options: { readonly longAgentDirectory?: boolean } = {}
 
 const encodeOwner = (instance: string, pid: number, started: string | undefined) =>
   Schema.encodeEffect(SocketOwnerFromJson)(socketOwner(instance, pid, started));
-
-/** A listener that takes connections and never answers them. */
-const silentListener = (socket: string, onConnection: (peer: Socket) => void) =>
-  Effect.acquireRelease(
-    Effect.callback<ReturnType<typeof createServer>>((resume) => {
-      const server = createServer((peer) => {
-        peer.on("error", () => undefined);
-        onConnection(peer);
-      });
-      server.listen(socket, () => resume(Effect.succeed(server)));
-    }),
-    (server) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
-  );
 
 /**
  * A clock that stands still until told to move. A sleep, such as a probe's timeout, ends only once
@@ -249,22 +233,6 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
 
       expect(failure.operation).toBe("write");
       expect(yield* h.fs.readDirectory(h.sessions)).toEqual([`${blocked.instance}.json`]);
-    }),
-  );
-
-  it.effect("keeps an entry already at the temporary path when the exclusive create fails", () =>
-    Effect.gen(function* () {
-      const h = yield* registryHarness();
-      yield* h.fs.makeDirectory(h.sessions, { recursive: true });
-      const target = h.paths.join(h.sessions, "target.json");
-      const temporary = h.paths.join(h.sessions, ".target.json.planted.tmp");
-      yield* h.fs.writeFileString(temporary, "someone else's");
-
-      const failure = yield* Effect.flip(writePrivateFile(target, temporary, "{}"));
-
-      expect(failure.reason).toBe("exists");
-      expect(yield* h.fs.readFileString(temporary)).toBe("someone else's");
-      expect(yield* h.fs.exists(target)).toBe(false);
     }),
   );
 
@@ -473,15 +441,9 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
       const h = yield* registryHarness();
       yield* h.fs.makeDirectory(h.sockets, { recursive: true });
       const records = Arr.map(["1", "2", "3"], (seed) => h.record(seed));
-      const peers = new Set<Socket>();
-      const connected = yield* Deferred.make<void>();
-      for (const record of records) {
-        yield* h.registry.write(record);
-        yield* silentListener(record.socket, (peer) => {
-          peers.add(peer);
-          if (peers.size === records.length) Deferred.doneUnsafe(connected, Effect.void);
-        });
-      }
+      const listeners = yield* Effect.forEach(records, (record) =>
+        Effect.andThen(h.registry.write(record), hangingListener(record.socket)),
+      );
       const time = manualClock(yield* Clock.Clock);
       let asked = 0;
       const sweep = yield* h.registry.sweep().pipe(
@@ -494,11 +456,11 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
         Effect.provideService(Clock.Clock, time.clock),
         Effect.forkScoped,
       );
-      yield* Deferred.await(connected);
+      yield* Effect.forEach(listeners, (listener) => listener.arrived(1));
 
       // Every probe is in flight when the budget runs out; then each fails at once.
       time.advance(2_000);
-      for (const peer of peers) peer.destroy();
+      for (const listener of listeners) listener.drop();
       const swept = yield* Fiber.join(sweep);
 
       expect(asked).toBe(0);
@@ -573,10 +535,8 @@ layer(nodeFilePlatformLayer, { excludeTestServices: true })("intercom registry",
       expect(yield* h.fs.readDirectory(target)).toEqual(["owner.json"]);
       expect(yield* h.fs.exists(unrelated)).toBe(true);
       const remaining = yield* h.fs.readDirectory(h.namespace);
-      const claimed = Option.getOrUndefined(
-        Arr.findFirst(remaining, (name) =>
-          Fn.pipe(name, Str.startsWith(`${h.paths.basename(cluttered)}.`)),
-        ),
+      const claimed = findOrUndefined(remaining, (name) =>
+        Fn.pipe(name, Str.startsWith(`${h.paths.basename(cluttered)}.`)),
       );
       expect(claimed).toBeDefined();
       expect(

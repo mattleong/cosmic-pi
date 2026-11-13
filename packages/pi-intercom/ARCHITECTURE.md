@@ -211,8 +211,8 @@ reads. Replay is anchored to
 [Registry tests](tests/registry.test.ts) cover private atomic writes, refused links and unsafe
 records, listing diagnostics, the evidence-based sweep, and socket path reservation.
 [Transport tests](tests/transport.test.ts) cover the handshake against rogue listeners, connection
-bounds, stale sockets, oversized frames, deadlines, shutdown with answers still owed, and
-telemetry over real sockets. [Application tests](tests/application.test.ts) cover registration modes,
+bounds, stale sockets, oversized frames, deadlines, and shutdown with answers still owed.
+[Application tests](tests/application.test.ts) cover registration modes,
 rewrites, replacement, removal, a startup that doesn't wait for its sweep, and peers
 reaching live sessions. [Message tests](tests/message.test.ts) cover the inbound message and
 [presentation tests](tests/presentation.test.ts) the tool rows.
@@ -220,5 +220,6 @@ reaching live sessions. [Message tests](tests/message.test.ts) cover the inbound
 receive switch. [Tool tests](tests/tools.test.ts) cover listing, sends
 between two runtimes, a recipient reloading meanwhile, reads, refusals, uncertainty, and issue
 wording;
-[telemetry tests](tests/telemetry.test.ts) keep content out of logs and spans. User-facing
+[telemetry tests](tests/telemetry.test.ts) keep content out of logs and spans over real sockets,
+an unauthorized call included. User-facing
 behavior is in the [README](README.md).

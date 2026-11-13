@@ -11,6 +11,7 @@ import {
 } from "pi-cosmic-ui/boundary/host-settings-command";
 import { OwnedSurfaceOutcome } from "pi-cosmic-ui/boundary/host-surface";
 import * as Schema from "effect/Schema";
+import { capturedHostSignal } from "pi-cosmic-core/host-session";
 import { InvalidSettingError } from "pi-cosmic-core/settings-completion";
 import {
   formatOnOff,
@@ -19,7 +20,6 @@ import {
   OnOffSchema,
   SETTINGS_OPTION_DESCRIPTORS,
 } from "../config/options.ts";
-import { safeHostSignal } from "../boundary/host-ui.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
 import type { FastSnapshot } from "../fast/controller.ts";
 import { FastModeService } from "../fast/service.ts";
@@ -150,7 +150,7 @@ export function registerSettingsController(
     withInvocationAuthority(options.captureAuthority, (isCurrent, owner) => ({
       ...createCommand(isCurrent, owner),
       handler: (args, ctx) => {
-        const signal = safeHostSignal(ctx);
+        const signal = capturedHostSignal(ctx);
         return createCommand(() => isCurrent() && !signal?.aborted, owner, signal).handler(
           args,
           ctx,

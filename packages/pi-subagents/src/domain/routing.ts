@@ -4,9 +4,12 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
-export type SubagentContextMode = "fresh" | "fork";
-export type SubagentWriteIntent = "writer" | "read-only";
+export const SUBAGENT_CONTEXT_MODES = ["fresh", "fork"] as const;
+export type SubagentContextMode = (typeof SUBAGENT_CONTEXT_MODES)[number];
+export const SUBAGENT_WRITE_INTENTS = ["read-only", "writer"] as const;
+export type SubagentWriteIntent = (typeof SUBAGENT_WRITE_INTENTS)[number];
 
 export const SUBAGENT_EFFORTS = [
   "off",
@@ -43,8 +46,6 @@ export const decodeSubagentEffort = Fn.flow(
   (text): SubagentEffort | undefined => {
     if (text === undefined) return undefined;
     const normalized = Fn.pipe(text, Str.trim, Str.toLowerCase);
-    return Option.getOrUndefined(
-      Arr.findFirst(SUBAGENT_EFFORTS, (effort) => effort === normalized),
-    );
+    return findOrUndefined(SUBAGENT_EFFORTS, (effort) => effort === normalized);
   },
 );

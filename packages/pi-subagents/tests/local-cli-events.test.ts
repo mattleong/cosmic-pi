@@ -14,13 +14,12 @@ import {
   yieldUntil,
   provideBuiltLayer,
 } from "pi-cosmic-core/testing";
-import { backendLaunch } from "./fixtures/backend-launch.ts";
+import { piChild, spawnPi } from "./fixtures/backend-launch.ts";
 import {
   localCliEventIngress,
   makeLocalCliRawEventOwnership,
   type LocalCliRawEventOwnership,
 } from "../src/backend/local-cli-events.ts";
-import { localPiBackendDriver } from "../src/backend/local-pi.ts";
 import type { RpcCommand } from "../src/backend/local-pi-protocol.ts";
 import type { ChildProcessHandle, ChildWireEvent } from "../src/boundary/child-process.ts";
 import type { ProcessExit, ProcessWireEvent } from "../src/boundary/process-transport.ts";
@@ -53,25 +52,6 @@ const rpcResponse = (
     }),
   },
 });
-
-const piChild = (
-  events: ChildProcessHandle["events"],
-  overrides: Partial<ChildProcessHandle> = {},
-): ChildProcessHandle => ({
-  pid: 4242,
-  events,
-  awaitExit: Effect.never,
-  send: () => Effect.void,
-  acknowledge: () => {},
-  sendContactControl: () => Effect.void,
-  terminate: () => Effect.void,
-  ...overrides,
-});
-
-const spawnPi = (child: Effect.Effect<ChildProcessHandle, never, Scope.Scope>) =>
-  localPiBackendDriver({ spawn: () => child, reclaimRunState: () => Effect.void }).spawn(
-    backendLaunch(),
-  );
 
 it.effect("Pi reconciles cumulative charges before settlement without blocking RPC dispatch", () =>
   Effect.gen(function* () {
@@ -109,11 +89,10 @@ it.effect("Pi reconciles cumulative charges before settlement without blocking R
         },
       },
     });
-    expect(yield* Queue.take(backend.events)).toMatchObject({
-      type: "assistant_message",
-      text: "Final report",
-      usage: { input: 0, totalTokens: 0 },
-    });
+    // The message's own usage is never counted; session statistics carry the real figures.
+    const message = yield* Queue.take(backend.events);
+    expect(message).toMatchObject({ type: "assistant_message", text: "Final report" });
+    expect(message).not.toHaveProperty("usage");
     tokens = 110;
     yield* Queue.offer(childEvents, { type: "rpc_message", value: { type: "agent_settled" } });
     expect(yield* Queue.take(backend.events)).toMatchObject({
@@ -243,10 +222,10 @@ for (const failure of ["malformed", "rejected", "timeout"] as const)
       const initializing = yield* backend.controls.initialize.pipe(Effect.forkChild);
       yield* Deferred.await(requested);
       if (failure === "timeout") yield* TestClock.adjust("10 seconds");
-      expect((yield* Fiber.join(initializing).pipe(Effect.exit))._tag).toBe("Failure");
-      expect((yield* backend.controls.start("must not run", 1).pipe(Effect.exit))._tag).toBe(
-        "Failure",
-      );
+      expect(Exit.isFailure(yield* Fiber.join(initializing).pipe(Effect.exit))).toBe(true);
+      expect(
+        Exit.isFailure(yield* backend.controls.start("must not run", 1).pipe(Effect.exit)),
+      ).toBe(true);
       expect(commands).not.toContain("prompt");
       yield* Scope.close(scope, Exit.void);
       expect(released).toBe(true);
@@ -320,7 +299,6 @@ const withOwnership = <A, E>(
       const ownership = makeLocalCliRawEventOwnership(
         events,
         (raw: RawEvent) => void acknowledged.push(rawId(raw)),
-        "fixture",
       );
       const warnings = () => capturedTelemetrySnapshot({ entries: captured.entries });
       return yield* use({ events, acknowledged, ownership, warnings });
@@ -362,7 +340,6 @@ describe("raw event ownership", () => {
       const acknowledged: string[] = [];
       const ingress = yield* localCliEventIngress(
         (raw: RawEvent) => void acknowledged.push(rawId(raw)),
-        "fixture",
       );
       let offered = false;
       yield* Effect.forEach(

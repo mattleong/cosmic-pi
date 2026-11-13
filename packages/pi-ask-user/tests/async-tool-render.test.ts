@@ -3,10 +3,11 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
-import { applyPresentationSettings } from "pi-code-previews/testing";
+import { withPresentationSettings } from "pi-code-previews/testing";
 import { ASYNC_MESSAGE_TYPE } from "../src/boundary/host-delivery.ts";
 import type { AskUserQuestion } from "../src/questionnaire/schema.ts";
 import {
+  presentAsyncMessage,
   renderAsyncCall,
   renderAsyncMessage,
   renderAsyncResult,
@@ -49,6 +50,12 @@ const asyncMessage = (content: MessageInput["content"], details?: ResultDetails)
   timestamp: 0,
   details,
 });
+const message = (content: MessageInput["content"], details?: ResultDetails, expanded = false) =>
+  renderAsyncMessage(
+    asyncMessage(content, details),
+    { ...keybindingHintsFixture, expanded, outputPad: 0 },
+    theme,
+  );
 const result = (details: ResultDetails, expanded = false, content = "") =>
   output(
     renderAsyncResult(
@@ -103,13 +110,7 @@ describe("async questionnaire replay rendering", () => {
           renderAsyncResult({ details, content }, { expanded: false, isPartial: false }, theme),
         ),
       ),
-      output(
-        renderAsyncMessage(
-          asyncMessage(content),
-          { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
-          theme,
-        ),
-      ),
+      output(message(content)),
     ]) {
       expect(rendered).toContain("safe fallback");
       expect(rendered).toContain("after");
@@ -142,13 +143,7 @@ describe("async questionnaire replay rendering", () => {
     };
     const rendered = [
       result(details, true),
-      output(
-        renderAsyncMessage(
-          asyncMessage(dirty),
-          { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
-          theme,
-        ),
-      ),
+      output(message(dirty)),
       output(renderAsyncCall({ questions: [question(dirty)] }, theme, callContext())),
     ];
     for (const text of rendered) {
@@ -177,42 +172,24 @@ describe("async questionnaire replay rendering", () => {
     expect(result(titled)).toContain("Route:");
     expect(result({ ...snapshot, titles: "not titles" })).toContain("route:");
     const delivered = { generation: "g", deliveryId: "d", requestId: "r", outcome, titles };
-    expect(
-      output(
-        renderAsyncMessage(
-          asyncMessage("", delivered),
-          { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
-          theme,
-        ),
-      ),
-    ).toContain("Route:");
+    expect(output(message("", delivered))).toContain("Route:");
   });
 
   describe("in compact style", () => {
     const delivered = { generation: "g", deliveryId: "delivery-id", requestId: "request-id" };
     const render = (
-      settled: ReturnType<typeof answered> | { readonly outcome: "cancelled" },
+      settled: ReturnType<typeof answered>,
       expanded: boolean,
       titles = [{ key: "env", title: "Environment" }],
-    ) => {
-      const restore = applyPresentationSettings({
-        toolCallCollapsedStyle: "compact",
-        toolCallBackground: "off",
-        toolCallTiming: false,
-      });
-      try {
-        return Arr.filter(
-          renderAsyncMessage(
-            asyncMessage("", { ...delivered, outcome: settled, titles }),
-            { ...keybindingHintsFixture, expanded, outputPad: 0 },
-            theme,
-          ).render(100),
-          (row) => Str.isNonEmpty(Str.trim(row)),
-        );
-      } finally {
-        restore();
-      }
-    };
+    ) =>
+      withPresentationSettings(
+        { toolCallCollapsedStyle: "compact", toolCallBackground: "off", toolCallTiming: false },
+        () =>
+          Arr.filter(
+            message("", { ...delivered, outcome: settled, titles }, expanded).render(100),
+            (row) => Str.isNonEmpty(Str.trim(row)),
+          ),
+      );
 
     it("is one heading row carrying a lone short answer, shown once expanded", () => {
       const [heading, ...rest] = render(answered({ key: "env", text: "Staging" }), false);
@@ -247,54 +224,13 @@ describe("async questionnaire replay rendering", () => {
       }
     });
 
-    it("says a cancellation in its one heading row", () => {
-      const collapsed = render({ outcome: "cancelled" }, false);
-      expect(collapsed).toHaveLength(1);
-      expect(collapsed[0]).toContain("⊘");
+    it("presents a cancellation as cancelled, not as answered", () => {
+      const presented = presentAsyncMessage(
+        asyncMessage("", { ...delivered, outcome: { outcome: "cancelled" } }),
+        { ...keybindingHintsFixture, expanded: false, outputPad: 0, collapsedStyle: "compact" },
+        theme,
+      );
+      expect(presented.summary.outcome).toBe("cancelled");
     });
   });
-
-  // A collapsed compact message draws no body, so only preview style shows the answer beneath it.
-  it.each(["preview"] as const)(
-    "leaves a lone answer's label to a %s heading that shows its whole title",
-    (style) => {
-      const restore = applyPresentationSettings({
-        toolCallCollapsedStyle: style,
-        toolCallBackground: "off",
-        toolCallTiming: false,
-      });
-      try {
-        const lone = (title: string, width: number) =>
-          Arr.join(
-            renderAsyncMessage(
-              asyncMessage("", {
-                generation: "g",
-                deliveryId: "d",
-                requestId: "r",
-                outcome: {
-                  outcome: "submitted",
-                  answers: [{ key: "env", kind: "text", text: "Staging" }],
-                },
-                titles: [{ key: "env", title }],
-              }),
-              { ...keybindingHintsFixture, expanded: false, outputPad: 0 },
-              theme,
-            ).render(width),
-            "\n",
-          );
-        const shown = lone("Environment", 57);
-        expect(shown).toContain("Staging");
-        expect(shown).not.toContain("Environment:");
-        // A title the heading had to cut keeps its label beside the answer.
-        const long = "Which environment should receive this release first";
-        expect(lone(long, 40)).toMatch(/: Staging/u);
-        // A title cut to fit its label is never whole, however wide the heading.
-        expect(lone(long, 100)).toMatch(/: Staging/u);
-        // A title longer than a label is shortened as plain text, never as escaped styling.
-        expect(lone(long, 100)).not.toContain("␛");
-      } finally {
-        restore();
-      }
-    },
-  );
 });

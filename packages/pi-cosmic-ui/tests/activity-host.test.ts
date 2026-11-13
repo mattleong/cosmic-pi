@@ -1,143 +1,23 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import {
-  deferredPromise,
-  extensionApiFixture,
-  extensionContextFixture,
-  piKeybindingsFixture,
-  plainTheme,
-  tuiFixture,
-  yieldUntil,
-} from "pi-cosmic-core/testing";
-import {
-  ACTIVITY_EVENT,
-  ActivitySnapshotSchema,
-  activityKey,
-  registerActivityProvider,
-  type ActivityItem,
-  type ActivityProviderOptions,
-} from "../src/activity/protocol.ts";
-import type { ActivityRow } from "../src/activity/model.ts";
-import type { ActivityError } from "../src/activity/service.ts";
-import { createActivityHost } from "../src/boundary/host-activity.ts";
-import { ActivityComponent } from "../src/activity/component.ts";
-import { fakeCustomSurfaceHost } from "../src/testing/custom-surface.ts";
-import { connectedActivityService } from "./support/activity.ts";
-import { eventBus } from "./support/host.ts";
-
-type Widget = Parameters<ExtensionContext["ui"]["setWidget"]>[1];
-const item = (id = "a"): ActivityItem => ({
-  id,
-  title: "Work",
-  kind: "agent",
-  status: "running",
-  revision: "1",
-});
-function harness(
-  mode: "normal" | "deferred" | "throws-after-factory" = "normal",
-  loadComponent?: Parameters<typeof createActivityHost>[3],
-) {
-  const { events: bus, emitted } = eventBus();
-  const work: Array<Effect.Effect<void, ActivityError>> = [];
-  const host = createActivityHost(
-    extensionApiFixture({ events: bus }),
-    (effect) => {
-      work.push(effect);
-    },
-    undefined,
-    loadComponent,
-  );
-  const notifications: string[] = [];
-  const tui = tuiFixture();
-  const keybindings = piKeybindingsFixture();
-  let widget: string[] | Widget;
-  let mountedWidget: (Component & { dispose?: () => void }) | undefined;
-  const mountWidget = () => {
-    if (!Predicate.isFunction(widget)) throw new Error("No widget factory");
-    mountedWidget = widget(tui, plainTheme);
-  };
-  const surface = fakeCustomSurfaceHost({ columns: 80, rows: 24, theme: plainTheme, keybindings });
-  const ctx = extensionContextFixture({
-    mode: "tui",
-    sessionManager: { getSessionId: () => "session" },
-    ui: {
-      setWidget(_key: string, value: string[] | Widget) {
-        if (!value) {
-          mountedWidget?.dispose?.();
-          widget = undefined;
-          return;
-        }
-        widget = value;
-        if (mode !== "deferred") mountWidget();
-        if (mode === "throws-after-factory") throw new Error("installation failed after factory");
-      },
-      custom: surface.custom,
-      notify(message) {
-        notifications.push(message);
-      },
-    },
-  });
-  let rows: readonly ActivityRow[] = [];
-  const service = () =>
-    connectedActivityService(host.serviceOptions(), (next) => {
-      rows = next;
-    });
-  const drain = () =>
-    Effect.gen(function* () {
-      while (work.length) yield* work.shift()!.pipe(Effect.ignore);
-    });
-  const openManager = () =>
-    Effect.gen(function* () {
-      const open = yield* host.open(ctx).pipe(Effect.forkScoped({ startImmediately: true }));
-      yield* yieldUntil(() => surface.pendingMounts > 0);
-      surface.mount();
-      const component = surface.overlays[0];
-      if (!(component instanceof ActivityComponent))
-        throw new Error("Activity manager not mounted");
-      return { open, component };
-    });
-  return {
-    bus,
-    register: (overrides: Partial<ActivityProviderOptions> = {}) =>
-      registerActivityProvider(bus, {
-        sessionId: "session",
-        providerId: "agents",
-        snapshot: () => [item()],
-        invoke: () => Promise.resolve(),
-        ...overrides,
-      }),
-    host,
-    ctx,
-    surface,
-    envelopes: () =>
-      Arr.map(
-        Arr.filter(emitted, ({ name }) => name === ACTIVITY_EVENT),
-        ({ data }) => data,
-      ),
-    service,
-    rows: () => rows,
-    drain,
-    openManager,
-    mountWidget,
-    notifications,
-  };
-}
+import { deferredPromise, yieldUntil } from "pi-cosmic-core/testing";
+import { ACTIVITY_EVENT, ActivitySnapshotSchema, activityKey } from "../src/activity/protocol.ts";
+import { activityHostHarness as harness, activityItem as item } from "./support/activity.ts";
 
 describe("activity host lifecycle", () => {
   it.effect("does not open a retired manager after its implementation finishes loading", () =>
     Effect.gen(function* () {
       const loaded = deferredPromise<typeof import("../src/activity/component.ts")>();
       let loading = false;
-      const fixture = harness("normal", () => {
-        loading = true;
-        return loaded.promise;
+      const fixture = harness({
+        loadComponent: () => {
+          loading = true;
+          return loaded.promise;
+        },
       });
       fixture.host.activate(fixture.ctx, yield* fixture.service());
       const opening = yield* fixture.host.open(fixture.ctx).pipe(Effect.forkScoped);
@@ -157,11 +37,12 @@ describe("activity host lifecycle", () => {
   it.effect("releases failed manager loading so a subsequent invocation can open", () =>
     Effect.gen(function* () {
       let fail = true;
-      const fixture = harness("normal", () =>
-        fail
-          ? Promise.reject(new Error("module unavailable"))
-          : import("../src/activity/component.ts"),
-      );
+      const fixture = harness({
+        loadComponent: () =>
+          fail
+            ? Promise.reject(new Error("module unavailable"))
+            : import("../src/activity/component.ts"),
+      });
       fixture.host.activate(fixture.ctx, yield* fixture.service());
       const failed = yield* fixture.host.open(fixture.ctx).pipe(Effect.result);
       expect(Result.isFailure(failed)).toBe(true);
@@ -268,7 +149,7 @@ describe("activity host lifecycle", () => {
   );
   it.effect("acknowledges a mounted valid widget and immediately revokes on teardown", () =>
     Effect.gen(function* () {
-      const fixture = harness("deferred");
+      const fixture = harness({ widget: "deferred" });
       const service = yield* fixture.service();
       const availability: boolean[] = [];
       const provider = fixture.register({
@@ -290,7 +171,7 @@ describe("activity host lifecycle", () => {
   );
   it.effect("does not acknowledge a factory invoked by a failing setWidget", () =>
     Effect.gen(function* () {
-      const fixture = harness("throws-after-factory");
+      const fixture = harness({ widget: "throws-after-factory" });
       const service = yield* fixture.service();
       const provider = fixture.register();
       fixture.host.activate(fixture.ctx, service);

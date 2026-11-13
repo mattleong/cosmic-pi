@@ -29,7 +29,12 @@ import {
 } from "../boundary/git-installation.ts";
 import type { InvalidCustomAgent } from "../profiles/agents.ts";
 import { PROFILE_IDS, type SkippedProfileCandidate } from "../profiles/model.ts";
-import type { ProfileCandidateAttempt, ProfileResolution } from "../profiles/resolve.ts";
+import {
+  clause,
+  resolveProfilePlan,
+  type ProfileCandidateAttempt,
+  type ProfileResolution,
+} from "../profiles/resolve.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import type { InvalidSubagentRequestError } from "../run/errors.ts";
 import { homeDisplayPath } from "../ui/display-path.ts";
@@ -125,7 +130,7 @@ const routeOutcome = (
     : check(
         label,
         fallbacks > 0 ? "warning" : "failed",
-        `${prefix}${first.model}: ${Fn.pipe(failure, Str.trimEnd, Str.replace(/\.$/u, ""))}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
+        `${prefix}${first.model}: ${clause(failure)}${fallbacks > 0 ? "; a fallback will be tried" : ""}`,
       );
 };
 
@@ -186,12 +191,12 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
   const routes: ReadonlyArray<RouteCheck> = [
     ...Arr.map(PROFILE_IDS, (id) => ({
       label: `Profile ${id}`,
-      plan: profiles.resolve(snapshot, id, environment),
+      plan: resolveProfilePlan(id, config, environment),
       prefix: "",
     })),
     ...Arr.map(config.agents, (agent) => ({
       label: `Agent ${agent.name}`,
-      plan: profiles.resolve(snapshot, agent.profile, environment, agent),
+      plan: resolveProfilePlan(agent.profile, config, environment, agent),
       prefix: `${agent.source} · profile ${agent.profile} · `,
     })),
   ];
@@ -206,7 +211,7 @@ export const runSubagentDoctor = Effect.fn("SubagentDoctor.run")(function* (
     yield* Effect.forEach(
       probes,
       ([key, attempt]) =>
-        readinessFailure(backends, attempt, input.ctx.cwd).pipe(
+        readinessFailure(backends, attempt.model).pipe(
           Effect.map((failure) => [key, failure] as const),
         ),
       { concurrency: ROUTE_PROBE_CONCURRENCY },
@@ -331,24 +336,12 @@ export const gitProbeCheck = (probe: GitInstallationProbe, cwd: string): DoctorC
 // Readiness runs the same preflight a launch does, bounded so a hung check can't stall the report.
 const readinessFailure = (
   backends: SubagentBackendRegistry["Service"],
-  attempt: ProfileCandidateAttempt,
-  cwd: string,
+  model: string,
 ): Effect.Effect<string | undefined> =>
-  backends
-    .preflight(
-      { context: attempt.effectiveContext },
-      {
-        context: attempt.effectiveContext,
-        writeIntent: attempt.writeIntent,
-        model: attempt.model,
-        effort: attempt.effort,
-        cwd,
-      },
-    )
-    .pipe(
-      Effect.as(undefined),
-      // The panel reads as a person would; the message already says what to do.
-      Effect.catch((error) => Effect.succeed(error.message)),
-      Effect.timeoutOption(PREFLIGHT_TIMEOUT),
-      Effect.map(Option.getOrElse(() => "readiness check timed out")),
-    );
+  backends.preflight(model).pipe(
+    Effect.as(undefined),
+    // The panel reads as a person would; the message already says what to do.
+    Effect.catch((error) => Effect.succeed(error.message)),
+    Effect.timeoutOption(PREFLIGHT_TIMEOUT),
+    Effect.map(Option.getOrElse(() => "readiness check timed out")),
+  );

@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 import {
+  boundedString,
   DispositionSchema,
   LastMessageSchema,
   MAX_IDENTITY_CHARS,
@@ -35,9 +36,6 @@ const envelope = {
   contract: Schema.Literal(INTERCOM_CONTRACT_ID),
   version: Schema.Literal(INTERCOM_CONTRACT_VERSION),
 };
-
-const boundedString = (min: number, max: number) =>
-  Schema.String.check(Schema.isMinLength(min), Schema.isMaxLength(max));
 
 export const SessionViewSchema = SenderSchema;
 export type SessionView = Sender;

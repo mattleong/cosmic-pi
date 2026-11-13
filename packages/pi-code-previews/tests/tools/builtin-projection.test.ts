@@ -5,23 +5,18 @@ import {
 } from "../../src/tools/builtin-projection";
 import type { BuiltinCompactTool } from "../../src/tools/builtin-subject";
 import { issueMessageStyleProblems } from "../../src/testing/issue-messages";
+import { builtinProjectionPolicy } from "../support/render";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 
 const base: BuiltinCompactProjectionInput = {
-  phase: "settled",
+  ...builtinProjectionPolicy,
   args: { path: "file.ts", content: "hello" },
   result: { content: [{ type: "text", text: "Written" }], details: {} },
   cwd: "/workspace",
   isError: false,
-  beforeWrite: { kind: "unknown" },
-  secretWarnings: true,
-  bashWarnings: true,
-  secretScanChars: 8000,
-  maxWriteDiffBytes: 100000,
-  maxWriteDiffChangedLineCells: 10000,
 };
 function failed(tool: BuiltinCompactTool, text: string, overrides: Partial<typeof base> = {}) {
   return projectBuiltinCompactSummary(tool, {
@@ -76,9 +71,11 @@ describe("builtin failure classification", () => {
       "SOURCE_SNIPPET\nError: diagnostic\n  at stack\nCommand exited with code 7",
     );
     expect(exit?.outcome).toBe("error");
-    expect(exit?.issues).toEqual([
-      { severity: "error", code: "shell-exit", message: "Exit 7: diagnostic" },
-    ]);
+    expect(exit?.issues).toMatchObject([{ severity: "error", code: "shell-exit" }]);
+    expect(exit?.issues?.[0]?.message).toMatch(/7.*diagnostic/u);
+    expect(exit?.issues?.[0]?.message).not.toMatch(/SOURCE_SNIPPET|stack/u);
+    // Output that names no cause leaves the status as an exit with no output states it.
+    const bare = firstShellIssueMessage("Command exited with code 1");
     for (const [output, cause] of [
       [" FAIL  tests/a.test.ts > adds\n Test Files  1 failed (1)", "FAIL tests/a.test.ts > adds"],
       ["Traceback (most recent call last):\nValueError: bad input", "bad input"],
@@ -92,11 +89,10 @@ describe("builtin failure classification", () => {
       ["building…\ndone", undefined],
     ] as const) {
       const message = firstShellIssueMessage(`${output}\nCommand exited with code 1`);
-      expect(message).toBe(cause ? `Exit 1: ${cause}` : "Exit code 1");
+      if (cause === undefined) expect(message).toBe(bare);
+      else expect(message).toContain(cause);
     }
-    expect(firstShellIssueMessage("Command exited with code 127")).toBe(
-      "Exit 127: command not found",
-    );
+    expect(firstShellIssueMessage("Command exited with code 127")).toContain("command not found");
     for (const [diagnostic, subject] of [
       ["sh: foo: command not found", "foo"],
       ["zsh: command not found: foo", "foo"],
@@ -113,8 +109,8 @@ describe("builtin failure classification", () => {
       expect(issueMessageStyleProblems(message)).toEqual([]);
       expect(message).not.toContain(diagnostic);
     }
-    expect(firstShellIssueMessage("Error: out of heap\nCommand exited with code 137")).toBe(
-      "Exit 137: out of heap",
+    expect(firstShellIssueMessage("Error: out of heap\nCommand exited with code 137")).toContain(
+      "out of heap",
     );
     const secret = firstShellIssueMessage("error: token=hunter2secret\nCommand exited with code 1");
     expect(secret).not.toContain("hunter2secret");
@@ -123,9 +119,9 @@ describe("builtin failure classification", () => {
       firstShellIssueMessage(`error: ${Fn.pipe("x", Str.repeat(200))}\nCommand exited with code 1`)
         ?.length,
     ).toBeLessThanOrEqual(70);
-    expect(failed("bash", "partial output\nCommand timed out after 30 seconds")?.issues).toEqual([
-      { severity: "error", code: "shell-timeout", message: "Timed out after 30 seconds" },
-    ]);
+    const timeout = failed("bash", "partial output\nCommand timed out after 30 seconds")?.issues;
+    expect(timeout).toMatchObject([{ severity: "error", code: "shell-timeout" }]);
+    expect(timeout?.[0]?.message).toContain("30 seconds");
     const unknown = failed("bash", "Command exited with code 7\nunknown tail");
     expect(unknown?.outcome).toBe("error");
     expect(

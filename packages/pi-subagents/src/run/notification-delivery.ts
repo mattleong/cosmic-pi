@@ -1,5 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -34,12 +33,6 @@ interface RunNotificationDeliveryDependencies extends Pick<
 
 const nextRetryDelay = (delayMillis: number, reset: boolean): number =>
   reset ? COMPLETION_RETRY_INITIAL_MILLIS : Math.min(COMPLETION_RETRY_MAX_MILLIS, delayMillis * 2);
-
-type ActionDeliveryState = Data.TaggedEnum<{
-  Idle: Record<never, never>;
-  Retry: { readonly immediate: boolean; readonly delayMillis: number };
-}>;
-const ActionDeliveryState = Data.taggedEnum<ActionDeliveryState>();
 
 export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")(function* (
   dependencies: RunNotificationDeliveryDependencies,
@@ -144,94 +137,75 @@ export const notificationDelivery = Effect.fn("RunNotificationDelivery.acquire")
       takenQuestions.set(notification.id, { notification, recipientRunId });
   };
 
-  const flushPendingActions: Effect.Effect<ActionDeliveryState> = withCompletionGate(
-    withLock(
-      Effect.sync(() => {
-        Latch.closeUnsafe(actionWake);
-        const notifications = Arr.filter(
-          [...pendingActionNotifications.values()],
-          (notification) => {
+  // Resolves to the wait before the next attempt, or to nothing once no question is pending.
+  const flushPendingActions = withCompletionGate(
+    Effect.gen(function* () {
+      const notifications = yield* withLock(
+        Effect.sync(() => {
+          Latch.closeUnsafe(actionWake);
+          const relevant = Arr.filter([...pendingActionNotifications.values()], (notification) => {
             if (actionRelevant(notification)) return true;
             if (pendingActionNotifications.get(notification.id) === notification)
               pendingActionNotifications.delete(notification.id);
             return false;
-          },
-        );
-        if (notifications.length === 0) actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
-        return notifications;
-      }),
-    ).pipe(
-      Effect.flatMap((notifications) =>
-        notifications.length === 0
-          ? Effect.succeed(ActionDeliveryState.Idle())
-          : Effect.forEach(
-              notifications,
-              (notification) =>
-                notify(notification).pipe(
-                  Effect.map((delivery) => ({
-                    notification,
-                    accepted: delivery?.actionAccepted ?? true,
-                    recipientRunId: delivery?.recipientRunId,
-                  })),
-                ),
-              { concurrency: 4 },
-            ).pipe(
-              Effect.flatMap((deliveries) =>
-                withLock(
-                  Effect.sync<ActionDeliveryState>(() => {
-                    let acknowledged = 0;
-                    const attempted = new Set(
-                      Arr.map(deliveries, ({ notification }) => notification),
-                    );
-                    for (const { notification, accepted, recipientRunId } of deliveries) {
-                      if (!accepted) continue;
-                      if (pendingActionNotifications.get(notification.id) === notification)
-                        pendingActionNotifications.delete(notification.id);
-                      acknowledged += 1;
-                      if (recipientRunId !== undefined)
-                        takeQuestionLocked(notification, recipientRunId);
-                    }
-                    actionRetryDelayMillis = nextRetryDelay(
-                      actionRetryDelayMillis,
-                      pendingActionNotifications.size === 0 || acknowledged > 0,
-                    );
-                    if (pendingActionNotifications.size === 0) return ActionDeliveryState.Idle();
-                    const immediate = Arr.some(
-                      [...pendingActionNotifications.values()],
-                      (notification) =>
-                        !attempted.has(notification) && actionRelevant(notification),
-                    );
-                    return ActionDeliveryState.Retry({
-                      immediate,
-                      delayMillis: actionRetryDelayMillis,
-                    });
-                  }),
-                ),
-              ),
-            ),
-      ),
-    ),
+          });
+          if (relevant.length === 0) actionRetryDelayMillis = COMPLETION_RETRY_INITIAL_MILLIS;
+          return relevant;
+        }),
+      );
+      if (notifications.length === 0) return undefined;
+      const deliveries = yield* Effect.forEach(
+        notifications,
+        (notification) =>
+          notify(notification).pipe(
+            Effect.map((delivery) => ({
+              notification,
+              accepted: delivery?.actionAccepted ?? true,
+              recipientRunId: delivery?.recipientRunId,
+            })),
+          ),
+        { concurrency: 4 },
+      );
+      return yield* withLock(
+        Effect.sync(() => {
+          let acknowledged = 0;
+          const attempted = new Set(Arr.map(deliveries, ({ notification }) => notification));
+          for (const { notification, accepted, recipientRunId } of deliveries) {
+            if (!accepted) continue;
+            if (pendingActionNotifications.get(notification.id) === notification)
+              pendingActionNotifications.delete(notification.id);
+            acknowledged += 1;
+            if (recipientRunId !== undefined) takeQuestionLocked(notification, recipientRunId);
+          }
+          actionRetryDelayMillis = nextRetryDelay(
+            actionRetryDelayMillis,
+            pendingActionNotifications.size === 0 || acknowledged > 0,
+          );
+          if (pendingActionNotifications.size === 0) return undefined;
+          const immediate = Arr.some(
+            [...pendingActionNotifications.values()],
+            (notification) => !attempted.has(notification) && actionRelevant(notification),
+          );
+          return { immediate, delayMillis: actionRetryDelayMillis };
+        }),
+      );
+    }),
   );
 
-  const deliverPendingActions = (): Effect.Effect<void> =>
-    flushPendingActions.pipe(
-      Effect.flatMap(
-        ActionDeliveryState.$match({
-          Idle: () => Effect.void,
-          Retry: ({ immediate, delayMillis }) =>
-            (immediate
-              ? Effect.void
-              : Effect.raceFirst(
-                  Effect.sleep(Duration.millis(delayMillis)),
-                  Latch.await(actionWake),
-                )
-            ).pipe(Effect.flatMap(() => deliverPendingActions())),
-        }),
-      ),
-    );
+  const deliverPendingActions = Effect.gen(function* () {
+    while (true) {
+      const retry = yield* flushPendingActions;
+      if (!retry) return;
+      if (!retry.immediate)
+        yield* Effect.raceFirst(
+          Effect.sleep(Duration.millis(retry.delayMillis)),
+          Latch.await(actionWake),
+        );
+    }
+  });
 
   const actionWorker = Effect.forever(
-    Latch.await(actionWake).pipe(Effect.flatMap(() => deliverPendingActions())),
+    Latch.await(actionWake).pipe(Effect.andThen(deliverPendingActions)),
   );
 
   yield* Effect.forkIn(completionWorker, ownerScope, { startImmediately: true });

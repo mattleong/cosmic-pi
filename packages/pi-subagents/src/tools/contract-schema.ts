@@ -3,7 +3,6 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
-import { PROFILE_CANDIDATE_WRITE_INTENTS, PROFILE_IDS } from "../profiles/model.ts";
 import {
   MAX_AGENT_TARGETS,
   MAX_MAIN_READ_CHARS,
@@ -26,7 +25,9 @@ import {
   MAX_FAILURE_CODE_CHARS,
   ModelOverrideCardSchema,
   NonEmptyText,
+  ProfileIdSchema,
   RunCleanupSchema,
+  WriteIntentSchema,
 } from "./details-schema.ts";
 import { ModelsContractFields } from "./discovery-contract-schema.ts";
 import type { ActionFailureDisposition } from "./outcome.ts";
@@ -55,9 +56,7 @@ const count = Schema.Number.check(
 const RunIdSchema = NonEmptyText(MAX_PROTOCOL_ID_CHARS);
 const RunIdsSchema = Schema.Array(RunIdSchema).check(Schema.isMaxLength(MAX_TARGET_RUNS));
 const NameSchema = NonEmptyText(MAX_NAME_CHARS);
-const ProfileSchema = Schema.Literals(PROFILE_IDS);
 const StateSchema = Schema.Literals(SUBAGENT_RUN_STATES);
-const WriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
 const UntilSchema = Schema.Literals(AWAIT_UNTIL);
 
 const envelope = <Tool extends string>(tool: Tool) => ({ tool: Schema.Literal(tool) });
@@ -127,7 +126,7 @@ const FailureSchema = Schema.Struct({
 const runTargetFields = <Report extends Schema.Top>(report: Report, detailChars: number) => ({
   runId: RunIdSchema,
   name: NameSchema,
-  profile: Schema.optionalKey(ProfileSchema),
+  profile: Schema.optionalKey(ProfileIdSchema),
   agent: Schema.optionalKey(AgentNameSchema),
   state: StateSchema,
   finished: Schema.Boolean,
@@ -150,9 +149,6 @@ const runTargetFields = <Report extends Schema.Top>(report: Report, detailChars:
 });
 
 const RunTargetSchema = Schema.Struct(runTargetFields(ReportSchema, MAX_CONTRACT_PREVIEW_CHARS));
-const WithheldRunTargetSchema = Schema.Struct(
-  runTargetFields(WithheldReportSchema, MAX_CONTRACT_PREVIEW_CHARS),
-);
 /**
  * A read's status, the detail surface, carries the whole pending question, both retained warnings,
  * and the error, plus the run's cleanup evidence.
@@ -173,7 +169,7 @@ const StartContractSchema = Schema.Struct({
         status: Schema.Literal("started"),
         runId: RunIdSchema,
         name: NameSchema,
-        profile: Schema.optionalKey(ProfileSchema),
+        profile: Schema.optionalKey(ProfileIdSchema),
         agent: Schema.optionalKey(AgentNameSchema),
         state: StateSchema,
         writeIntent: WriteIntentSchema,
@@ -183,7 +179,7 @@ const StartContractSchema = Schema.Struct({
         index: count,
         status: Schema.Literal("failed"),
         name: Schema.optionalKey(NameSchema),
-        profile: Schema.optionalKey(ProfileSchema),
+        profile: Schema.optionalKey(ProfileIdSchema),
         agent: Schema.optionalKey(AgentNameSchema),
         failure: FailureSchema,
         admittedRun: Schema.optionalKey(
@@ -274,7 +270,7 @@ const AgentListContractSchema = Schema.Struct({
       depth: Schema.optionalKey(count),
       /** The run's model and effort, such as `provider/model:high`. */
       model: Schema.optionalKey(NonEmptyText(MAX_CONTRACT_MODEL_CHARS)),
-      profile: Schema.optionalKey(ProfileSchema),
+      profile: Schema.optionalKey(ProfileIdSchema),
       agent: Schema.optionalKey(AgentNameSchema),
       writeIntent: Schema.optionalKey(WriteIntentSchema),
       /** A worktree writer's private tree; its proposal is applied with `agent_worktree`. */
@@ -344,7 +340,6 @@ export type SubagentModelsContract = SubagentContract<typeof SUBAGENT_TOOL_NAME.
 export type AgentListContract = SubagentContract<typeof AGENT_TOOL_NAME.list>;
 export type AgentReadContract = SubagentContract<typeof AGENT_TOOL_NAME.read>;
 export type ContractRunTarget = typeof RunTargetSchema.Type;
-export type ContractWithheldRunTarget = typeof WithheldRunTargetSchema.Type;
 export type ContractReadStatus = typeof ReadStatusSchema.Type;
 export type ContractReport = typeof ReportSchema.Type;
 export type ContractWithheldReport = typeof WithheldReportSchema.Type;
@@ -357,14 +352,7 @@ export type ContractLifecycleAction = SubagentLifecycleContract["action"];
 
 const STRICT_PARSE_OPTIONS = { errors: "first", onExcessProperty: "error" } as const;
 
-export const SubagentContractSchema = Schema.Union([
-  StartContractSchema,
-  AwaitContractSchema,
-  LifecycleContractSchema,
-  ModelsContractSchema,
-  AgentListContractSchema,
-  AgentReadContractSchema,
-]);
+export const SubagentContractSchema = Schema.Union(Rec.values(CONTRACT_SCHEMAS));
 export const encodeSubagentContract = Schema.encodeSync(
   Schema.toCodecJson(SubagentContractSchema),
   STRICT_PARSE_OPTIONS,

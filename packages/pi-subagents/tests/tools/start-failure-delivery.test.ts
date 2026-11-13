@@ -9,10 +9,8 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
 import { extensionApiFixture, yieldUntil } from "pi-cosmic-core/testing";
-import { SubagentBackendRegistry } from "../../src/backend/service.ts";
 import type { SubagentNotification } from "../../src/boundary/host-notifier.ts";
 import { sessionReportArchive } from "../../src/boundary/report-archive.ts";
-import { SubagentProfileService } from "../../src/profiles/service.ts";
 import type { SubagentProjection } from "../../src/run/model.ts";
 import { SubagentService, type SubagentServiceContract } from "../../src/run/service.ts";
 import { executeSubagentActionEffect } from "../../src/tools/execute.ts";
@@ -28,7 +26,8 @@ import {
   withService,
 } from "../run/fixtures/service-harness.ts";
 import { stoppedWriter, workspaceFixture } from "../run/fixtures/workspace-engine.ts";
-import { context, fallbackProfileService, testBackendRegistry } from "./fixtures/tool-harness.ts";
+import { context, noticedRuns, provideToolServices } from "./fixtures/tool-harness.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 // A rendered cause carries stack frames and dependency paths; a run's error never does.
 const STACK_TRACE = /\n\s*at\s|node_modules|file:\/\//u;
@@ -43,16 +42,7 @@ const startTasks = (service: SubagentServiceContract, tasks: ReadonlyArray<strin
     { tool: "agent_start", args: { agents: Arr.map(tasks, (task) => ({ task })) } },
     undefined,
     context,
-  ).pipe(
-    Effect.provideService(SubagentService, service),
-    Effect.provideService(SubagentProfileService, fallbackProfileService),
-    Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
-  );
-
-const noticedRuns = (notifications: ReadonlyArray<SubagentNotification>) =>
-  Arr.flatMap(notifications, (notification) =>
-    notification.type === "completed" ? notification.runs : [],
-  );
+  ).pipe(provideToolServices(service));
 
 const failedRunCount = (projections: ReadonlyArray<SubagentProjection>) =>
   Option.match(Arr.last(projections), {
@@ -143,9 +133,7 @@ describe("agent_start failures after admission", () => {
           workspaceId: writer.workspaceId!,
           message: "Handle the empty case.",
         }).pipe(Effect.provideService(SubagentService, service), Effect.flip);
-        const successor = Option.getOrUndefined(
-          Arr.findFirst(yield* runViews(service), (run) => run.id !== writer.id),
-        );
+        const successor = findOrUndefined(yield* runViews(service), (run) => run.id !== writer.id);
         assert(successor !== undefined);
         expect(successor.state).toBe("failed");
         // The failure names the successor, since no notice follows it.

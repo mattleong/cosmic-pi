@@ -3,7 +3,14 @@ import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { WriterWorkspaceMode } from "../config/schema.ts";
-import type { WorkspaceListing, WorkspaceRecord, WorkspaceSwept } from "../workspace/model.ts";
+import {
+  isFinishedWorkspace,
+  reopenedWorkspaceRecord,
+  unpreparedWorkspaceRecord,
+  type WorkspaceListing,
+  type WorkspaceRecord,
+  type WorkspaceSwept,
+} from "../workspace/model.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
 import type { RunContext } from "./internal.ts";
 import { SUBAGENT_ROOT_RUN_ID } from "./model.ts";
@@ -139,7 +146,7 @@ function workspaceControlOperations(
     const listing = yield* engine.listRecords.pipe(Effect.mapError(mapWorkspaceError));
     return Arr.filter(
       (yield* sourceRecords(listing)).records,
-      (record) => record.status !== "integrated" && record.status !== "discarded",
+      (record) => !isFinishedWorkspace(record),
     ).length;
   });
   // Informational only: unreadable recovery records leave the count out instead of failing.
@@ -177,15 +184,7 @@ function workspaceControlOperations(
       knowledge?.kind === "reopened" &&
       (record.status === "frozen" || record.status === "prepared")
     )
-      return {
-        version: record.version,
-        handle: record.handle,
-        repository: record.repository,
-        status: "active",
-        baseline: record.baseline,
-        ownerLease: record.ownerLease,
-        lastChangedAt: record.lastChangedAt,
-      };
+      return reopenedWorkspaceRecord(record);
     // A preparation whose WorktreeCreate hooks failed or are still running cannot be integrated.
     if (
       knowledge &&
@@ -194,10 +193,8 @@ function workspaceControlOperations(
         knowledge.kind === "prepared" &&
         knowledge.preparationId === record.preparation?.preparationId
       )
-    ) {
-      const { preparation: _preparation, preparedTree: _preparedTree, ...frozen } = record;
-      return { ...frozen, status: "frozen" };
-    }
+    )
+      return unpreparedWorkspaceRecord(record);
     return record;
   };
   const workspaceList: WorkspaceCoordinatorContract["workspaceList"] = Effect.fn(

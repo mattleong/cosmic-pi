@@ -19,6 +19,7 @@ import { COMPLETION_MESSAGE_TYPE, QUESTION_MESSAGE_TYPE } from "../boundary/host
 import { QUESTION_REMINDER_MESSAGE_TYPE, WAKE_MESSAGE_TYPE } from "../boundary/host-parent-wake.ts";
 import { STOPPED_RUNS_MESSAGE_TYPE } from "../boundary/host-stopped-runs.ts";
 import { presentAgentMessage } from "../ui/agent-message.ts";
+import { AgentIdSchema } from "../ui/notice-details.ts";
 import { presentSubagentNotification } from "../ui/notification.ts";
 import type { WorkspaceSwept } from "../workspace/model.ts";
 import { homeDisplayPath } from "../ui/display-path.ts";
@@ -42,7 +43,6 @@ export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
     pi.registerMessageRenderer(type, renderSubagentMessage);
 }
 
-const AgentId = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024));
 const other = (relays: string): MessageOrigin => ({ author: "other", relays });
 const subagentList = (ids: ReadonlyArray<string>): string =>
   `${ids.length === 1 ? "subagent" : "subagents"} ${Arr.join(ids, ", ")}`;
@@ -53,17 +53,17 @@ const subagentList = (ids: ReadonlyArray<string>): string =>
  */
 const SUBAGENT_MESSAGE_ORIGINS = {
   [COMPLETION_MESSAGE_TYPE]: originFromDetails(
-    Schema.Struct({ ids: Schema.NonEmptyArray(AgentId) }),
+    Schema.Struct({ ids: Schema.NonEmptyArray(AgentIdSchema) }),
     ({ ids }) => other(`reports and outcomes from ${subagentList(ids)}`),
     other("reports and outcomes from subagents"),
   ),
   [QUESTION_MESSAGE_TYPE]: originFromDetails(
-    Schema.Struct({ id: AgentId }),
+    Schema.Struct({ id: AgentIdSchema }),
     ({ id }) => other(`a question from subagent ${id}`),
     other("a question from a subagent"),
   ),
   [AGENT_MESSAGE_TYPE]: originFromDetails(
-    Schema.Struct({ from: AgentId }),
+    Schema.Struct({ from: AgentIdSchema }),
     ({ from }) => other(`a message from agent ${from}`),
     other("a message from another agent"),
   ),

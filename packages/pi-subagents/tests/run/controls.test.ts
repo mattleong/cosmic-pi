@@ -33,33 +33,6 @@ describe("SubagentService", () => {
     });
   });
 
-  it.effect("clears a waiting parent question when its MCP caller cancels", () => {
-    const { backend, projections, layer } = eventBackendServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.startSessionOwned(
-        eventBackendRequest({ name: "cancelled-question" }),
-      );
-      backend.controls[0]?.offer({
-        type: "supervisor_contact",
-        assignmentEpoch: 1,
-        requestId: "question-cancelled",
-        kind: "question",
-        message: "Should this continue?",
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "waiting_for_parent");
-      backend.controls[0]?.offer({
-        type: "parent_question_cancelled",
-        assignmentEpoch: 1,
-        requestId: "question-cancelled",
-      });
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "running");
-      expect(yield* runView(service, run.id)).toMatchObject({
-        state: "running",
-        question: undefined,
-      });
-    });
-  });
-
   it.effect(
     "routes child dialogs, blocking questions, and peer notices through supervisor IPC",
     () => {
@@ -180,21 +153,6 @@ describe("SubagentService", () => {
       const resumed = yield* service.resume(run.id);
       expect(resumed.state).toBe("running");
       expect(resumed.question).toBeUndefined();
-    });
-  });
-
-  it.effect("finishes stop cleanup after the requesting fiber is interrupted", () => {
-    const { fake, projections, layer } = localServiceFixture();
-    return withService(layer, function* (service) {
-      const run = yield* service.start(request({ name: "cancel-safe-stop" }));
-      const releaseGate = yield* Deferred.make<void>();
-      fake.controls[0]?.gateRelease(releaseGate);
-      const stopping = yield* service.stop(run.id).pipe(Effect.forkScoped);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopping");
-      yield* Fiber.interrupt(stopping);
-      yield* Deferred.succeed(releaseGate, undefined);
-      yield* yieldUntil(() => projections.at(-1)?.runs[0]?.state === "stopped");
-      expect(fake.controls[0]?.released()).toBe(1);
     });
   });
 

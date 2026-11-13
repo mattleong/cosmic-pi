@@ -20,7 +20,7 @@ export interface BackgroundTaskSessionInput {
 export const backgroundTaskLayer = (
   input: BackgroundTaskSessionInput,
   publish: (projection: BackgroundTaskProjection) => void,
-  notify?: (notice: BackgroundTaskNotice) => void,
+  notify: (notice: BackgroundTaskNotice) => void,
 ) => {
   const platform = Layer.merge(
     nodeFilePlatformLayer,
@@ -30,7 +30,7 @@ export const backgroundTaskLayer = (
     BackgroundTaskConfigStore.layer({ cwd: input.cwd, projectTrusted: input.projectTrusted }),
     BackgroundTaskSettingsFiles.layer,
   ).pipe(Layer.provide(platform));
-  return BackgroundTaskService.layer({ publish, ...(notify && { notify }) }).pipe(
+  return BackgroundTaskService.layer({ publish, notify }).pipe(
     Layer.provideMerge(Layer.merge(config, Path.layer)),
     Layer.provide(LocalProcess.layerFor(input.shell)),
     Layer.merge(CodePreviewSchedulerService.layer),

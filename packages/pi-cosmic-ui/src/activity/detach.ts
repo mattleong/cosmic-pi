@@ -5,7 +5,8 @@ import * as Str from "effect/String";
 import { ACTIVITY_LIMITS } from "./limits.ts";
 import type { ActivityItem } from "./protocol.ts";
 
-const cleanText = (text: string, limit: number) =>
+/** One sanitized, credential-redacted line of at most `limit` characters. */
+export const cleanLine = (text: string, limit: number): string =>
   sanitizeDiagnosticContent(sanitizeTerminalLine(Fn.pipe(text, Str.slice(0, limit))), {
     maximumLength: limit,
   });
@@ -15,22 +16,22 @@ export const detachActivityItem = (
   detail: (value: string) => string,
 ): ActivityItem => ({
   ...item,
-  title: cleanText(item.title, ACTIVITY_LIMITS.title),
+  title: cleanLine(item.title, ACTIVITY_LIMITS.title),
   ...(item.parent && { parent: { ...item.parent } }),
-  ...(item.profile !== undefined && { profile: cleanText(item.profile, ACTIVITY_LIMITS.profile) }),
-  ...(item.model !== undefined && { model: cleanText(item.model, ACTIVITY_LIMITS.model) }),
+  ...(item.profile !== undefined && { profile: cleanLine(item.profile, ACTIVITY_LIMITS.profile) }),
+  ...(item.model !== undefined && { model: cleanLine(item.model, ACTIVITY_LIMITS.model) }),
   ...(item.modelDetail !== undefined && {
-    modelDetail: cleanText(item.modelDetail, ACTIVITY_LIMITS.model),
+    modelDetail: cleanLine(item.modelDetail, ACTIVITY_LIMITS.model),
   }),
-  ...(item.summary !== undefined && { summary: cleanText(item.summary, ACTIVITY_LIMITS.text) }),
+  ...(item.summary !== undefined && { summary: cleanLine(item.summary, ACTIVITY_LIMITS.text) }),
   ...(item.detail !== undefined && { detail: detail(item.detail) }),
   ...(item.actions && {
     // Copies rather than mutates: the sliced array still holds the producer's action objects.
     actions: Arr.map(item.actions.slice(0, ACTIVITY_LIMITS.actions), (action) => ({
       ...action,
-      label: cleanText(action.label, ACTIVITY_LIMITS.text),
+      label: cleanLine(action.label, ACTIVITY_LIMITS.text),
       ...(action.confirmation !== undefined && {
-        confirmation: cleanText(action.confirmation, ACTIVITY_LIMITS.text),
+        confirmation: cleanLine(action.confirmation, ACTIVITY_LIMITS.text),
       }),
     })),
   }),

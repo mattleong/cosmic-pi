@@ -18,6 +18,8 @@ import {
   type BackgroundTaskServiceContract,
 } from "../../src/task/service.ts";
 import { registerBackgroundTaskTool } from "../../src/tools/background-task.ts";
+import { executeBackgroundTaskCommand } from "../../src/tools/command.ts";
+import type { BackgroundTaskToolInput } from "../../src/tools/schema.ts";
 
 const unexpected = (method: keyof BackgroundTaskServiceContract): Effect.Effect<never> =>
   Effect.die(new Error(`Unexpected BackgroundTaskService.${method} call in test fixture.`));
@@ -39,6 +41,31 @@ export const provideTaskService =
   (service: BackgroundTaskServiceContract) =>
   <A, E>(effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>) =>
     effect.pipe(Effect.provideService(BackgroundTaskService, service), Effect.provide(Path.layer));
+
+/** Runs the shared command against a service double. */
+export const executeWith = (
+  input: BackgroundTaskToolInput,
+  service: Partial<BackgroundTaskServiceContract>,
+  { cwd = "/", maxTextBytes }: { readonly cwd?: string; readonly maxTextBytes?: number } = {},
+) =>
+  executeBackgroundTaskCommand(input, cwd, maxTextBytes).pipe(
+    provideTaskService(taskServiceDouble(service)),
+  );
+
+/** A logs call's result, with its details and contract narrowed to that action. */
+export const executeLogs = (
+  input: BackgroundTaskToolInput,
+  service: Partial<BackgroundTaskServiceContract>,
+  maxTextBytes?: number,
+) =>
+  Effect.map(
+    executeWith(input, service, maxTextBytes === undefined ? {} : { maxTextBytes }),
+    (result) => {
+      if (result.details.action !== "logs" || result.contract.action !== "logs")
+        throw new Error("logs returned another action");
+      return { ...result, details: result.details, contract: result.contract };
+    },
+  );
 
 const taskServiceRunner =
   (service: BackgroundTaskServiceContract) =>

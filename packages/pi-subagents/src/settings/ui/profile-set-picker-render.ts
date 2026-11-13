@@ -1,25 +1,15 @@
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
-import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { clipToWidth, joinInline, SUITE_STATUS_GLYPHS, wrapFacts } from "pi-cosmic-ui/manager";
+import { managerTable, managerTableNaturalWidth } from "pi-cosmic-ui/manager/table";
 import {
-  clipToWidth,
-  joinInline,
-  SUITE_STATUS_GLYPHS,
-  wrapFacts,
-  type ManagerArrangement,
-} from "pi-cosmic-ui/manager";
-import { managerTable } from "pi-cosmic-ui/manager/table";
-import {
-  borderKeyHint,
   configuredKeyLabels,
   framedKeyHintBar,
   framedKeyHints,
   keyHint,
-  keyHintRows,
   moveKeyHint,
   type FramedKeyHints,
 } from "pi-cosmic-ui/manager/key-labels";
@@ -32,15 +22,6 @@ import {
   type ListDetailPane,
 } from "pi-cosmic-ui/manager/list-detail";
 import {
-  FRAME_GUTTER,
-  framedBodyWithHints,
-  framedBodyWithPrompt,
-  framedFill,
-  framedGutter,
-  framedScreen,
-  framedStackedRows,
-  framedWideRows,
-  listDetailFrame,
   listDetailHeading,
   paneHeadingText,
   type ListDetailShell,
@@ -54,6 +35,7 @@ import { profileRouteOptionLabel, SCOPE_LABELS } from "../profile-route-editor.t
 import type { ProfileRouteSource } from "../../profiles/model.ts";
 import type { SubagentConfigScope } from "../../config/store.ts";
 import {
+  ownSource,
   profileSourceLabel,
   qualifiedProfileSetLabel,
   type ProfileSetPickerEntry,
@@ -66,6 +48,7 @@ import {
   candidateModelLabel,
 } from "./profile-workspace-model.ts";
 import type { DashboardPrompt } from "./profile-dashboard-render.ts";
+import { renderTwoPaneFrame } from "./two-pane-frame.ts";
 
 interface ProfileSetPickerRenderState {
   /** The entries the filter keeps, scope notes included, in display order. */
@@ -160,9 +143,6 @@ const footer = (
     inner,
   );
 };
-
-/** Text width inside a pane, between its gutters. */
-const textWidth = (paneWidth: number): number => Math.max(1, paneWidth - 2 * FRAME_GUTTER);
 
 // Sets sit under their scope's heading; the selected set's description hangs under its name.
 const ENTRY_INDENT = "  ";
@@ -274,10 +254,7 @@ const libraryRows = (
     return Math.max(0, count - 1);
   };
   const owners = Arr.map(lines, (_, position) => owner(position));
-  const heights = Arr.map(
-    Arr.makeBy(count, Fn.identity),
-    (entry) => Arr.filter(owners, (each) => each === entry).length,
-  );
+  const heights = Arr.makeBy(count, (entry) => Arr.filter(owners, (each) => each === entry).length);
   const windowed = (rows: number) => {
     const window =
       count > 0 ? state.shell.visibleWindow(count, rows, heights) : { start: 0, end: 0 };
@@ -319,7 +296,7 @@ const libraryRows = (
 
 /** How a profile reaches the set: `set here` when the set declares it, else where it comes from. */
 const provenance = (scope: SubagentConfigScope, source: ProfileRouteSource): string =>
-  source === scope || source === `${scope}-invalid` ? "set here" : profileSourceLabel(source);
+  ownSource(scope, source) ? "set here" : profileSourceLabel(source);
 
 /** The provenance most profiles share, stated once; a row that differs carries its own. */
 const commonProvenance = (labels: ReadonlyArray<string>): string => {
@@ -332,16 +309,15 @@ const commonProvenance = (labels: ReadonlyArray<string>): string => {
 type PreviewFit = "full" | "short" | "unlabelled";
 const PREVIEW_FITS = ["full", "short", "unlabelled"] as const satisfies ReadonlyArray<PreviewFit>;
 
-/** The width a table needs to show every cell whole, with empty columns left out. */
-const naturalTableWidth = (rows: ReadonlyArray<ReadonlyArray<string>>): number => {
-  const widths = Arr.filter(
-    Arr.map(Arr.makeBy(Math.max(0, ...Arr.map(rows, (row) => row.length)), Fn.identity), (column) =>
-      Math.max(0, ...Arr.map(rows, (row) => visibleWidth(row[column] ?? ""))),
-    ),
-    (each) => each > 0,
-  );
-  return Arr.reduce(widths, 0, (total, each) => total + each) + 2 * Math.max(0, widths.length - 1);
-};
+// An empty column, such as Primary when no profile has a fallback, takes no space.
+const PREVIEW_COLUMNS = [
+  { minWidth: 10, priority: 5 },
+  { minWidth: 7, priority: 2 },
+  { minWidth: 16, priority: 4 },
+  { minWidth: 4, priority: 3 },
+] as const;
+/** A fit is chosen by the width its cells need to show whole, before any column's minimum. */
+const PREVIEW_CELL_WIDTHS = Arr.map(PREVIEW_COLUMNS, () => ({ minWidth: 0 }));
 
 /** Every line of the selected set's preview, which the shell windows and scrolls. */
 const previewLines = (
@@ -410,21 +386,11 @@ const previewLines = (
   const rows = Option.getOrElse(
     Arr.findFirst(
       Arr.map(PREVIEW_FITS, rowsAt),
-      (candidate) => naturalTableWidth(candidate) <= width,
+      (candidate) => managerTableNaturalWidth(candidate, PREVIEW_CELL_WIDTHS) <= width,
     ),
     () => rowsAt("unlabelled"),
   );
-  // An empty column, such as Primary when no profile has a fallback, takes no space.
-  const table = managerTable(
-    rows,
-    [
-      { minWidth: 10, priority: 5 },
-      { minWidth: 7, priority: 2 },
-      { minWidth: 16, priority: 4 },
-      { minWidth: 4, priority: 3 },
-    ],
-    width,
-  );
+  const table = managerTable(rows, PREVIEW_COLUMNS, width);
   return [
     ...Arr.map(wrapFacts(note, width), (line) => theme.fg("muted", line)),
     ...Arr.map(rows, table.row),
@@ -472,100 +438,28 @@ export const renderProfileSetPicker = (
   state: ProfileSetPickerRenderState,
   options: ProfileSetPickerRenderOptions,
 ): string[] => {
-  const width = Math.max(0, Math.floor(options.width));
-  const height = Math.max(0, Math.floor(options.height));
-  if (width === 0 || height === 0) return [];
-  if (width < 4) return Array.from({ length: height }, () => Fn.pipe(" ", Str.repeat(width)));
   const { theme } = options;
-  const inner = width - 2;
-  const arrangement = state.shell.syncArrangement(width, options.frameHeight);
-  state.shell.ensureSelectionPane(state.selected !== undefined);
-  // A pending decision holds the keys, so neither pane shows focus until it is made.
-  const frame = listDetailFrame(theme, state.prompt ? undefined : focusedPane(state));
-  const columns = arrangement === "columns" ? wideListDetailGeometry(width, 30, 0.35) : undefined;
-  const hints: FramedKeyHints = state.prompt
-    ? { border: borderKeyHint(state.prompt.hint, inner), overflow: "" }
-    : state.menu
-      ? state.menu.keyHints(inner)
-      : footer(state, inner, options.keybindingLabel);
-  const hintRows = keyHintRows(hints.overflow, inner, (row) => theme.fg("dim", row));
-  const panes = (bodyHeight: number) =>
-    pickerPanes(state, theme, frame, { arrangement, inner, columns, bodyHeight });
-  return framedScreen(frame, {
-    width,
-    height,
-    // The pane rule meets the top border, which a host may turn into a divider.
-    top: columns
-      ? `${frame.outer(Fn.pipe("─", Str.repeat(columns.listWidth)))}${frame.inner("┬")}`
-      : "",
-    bottom: hints.border,
-    body: (fullHeight) =>
-      state.prompt
-        ? framedBodyWithPrompt(
-            frame,
-            { height: fullHeight, inner, prompt: state.prompt.text, columns },
-            panes,
-          )
-        : framedBodyWithHints(
-            frame,
-            { height: fullHeight, inner, hints: hintRows, columns },
-            panes,
-          ),
+  return renderTwoPaneFrame({
+    theme,
+    width: options.width,
+    height: options.height,
+    frameHeight: options.frameHeight,
+    shell: state.shell,
+    hasSelection: state.selected !== undefined,
+    focusedPane: () => focusedPane(state),
+    prompt: state.prompt,
+    page: state.menu,
+    footer: (inner) => footer(state, inner, options.keybindingLabel),
+    // The geometry takes the frame's width, borders included.
+    columns: (inner) => wideListDetailGeometry(inner + 2, 30, 0.35),
+    stackedListHeight: (bodyHeight, text) =>
+      Math.min(
+        bodyHeight - 3,
+        stackedListHeight(bodyHeight, libraryLines(state, theme, text).length + 1),
+      ),
+    // A decision about the selected set shows its preview pane.
+    singleShowsDetail: state.prompt !== undefined && state.selected !== undefined,
+    list: (text, height) => libraryRows(state, theme, text, height),
+    detail: (text, height) => previewRows(state, theme, text, height),
   });
-};
-
-const pickerPanes = (
-  state: ProfileSetPickerRenderState,
-  theme: Theme,
-  frame: ReturnType<typeof listDetailFrame>,
-  layout: {
-    readonly arrangement: ManagerArrangement;
-    readonly inner: number;
-    readonly columns: { readonly listWidth: number; readonly detailWidth: number } | undefined;
-    readonly bodyHeight: number;
-  },
-): ReadonlyArray<string> => {
-  const { arrangement, inner, columns, bodyHeight } = layout;
-  const text = textWidth(inner);
-  if (columns)
-    return framedWideRows(frame, {
-      left: framedGutter(
-        libraryRows(state, theme, textWidth(columns.listWidth), bodyHeight),
-        columns.listWidth,
-      ),
-      right: framedGutter(
-        previewRows(state, theme, textWidth(columns.detailWidth), bodyHeight),
-        columns.detailWidth,
-      ),
-      height: bodyHeight,
-      listWidth: columns.listWidth,
-      detailWidth: columns.detailWidth,
-    });
-  if (arrangement === "stacked" && bodyHeight >= 6) {
-    const listLines = libraryLines(state, theme, text).length + 1;
-    const listHeight = Math.min(bodyHeight - 3, stackedListHeight(bodyHeight, listLines));
-    return framedStackedRows(frame, {
-      list: framedGutter(libraryRows(state, theme, text, listHeight), inner),
-      detail: framedGutter(previewRows(state, theme, text, bodyHeight - listHeight - 1), inner),
-      height: bodyHeight,
-      inner,
-    });
-  }
-  // One pane at a time; a menu or a decision about the selected set shows its preview pane.
-  const detail =
-    state.shell.state.details ||
-    state.menu !== undefined ||
-    (state.prompt !== undefined && state.selected !== undefined);
-  return framedFill(
-    frame,
-    framedGutter(
-      detail
-        ? previewRows(state, theme, text, bodyHeight)
-        : libraryRows(state, theme, text, bodyHeight),
-      inner,
-    ),
-    bodyHeight,
-    inner,
-    detail ? "detail" : "list",
-  );
 };

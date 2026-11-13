@@ -55,3 +55,5 @@ export type CodePreviewEditableSettingId =
 export const CODE_PREVIEW_SETTING_KEYS = Object.freeze(
   Struct.keys(CodePreviewSettingsSchema.fields),
 );
+
+export const isCodePreviewSettingKey = Schema.is(Schema.Literals(CODE_PREVIEW_SETTING_KEYS));

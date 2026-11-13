@@ -14,12 +14,11 @@ import { nativeToolSearchReceipt } from "../../src/tools/native-tool-search-summ
 import { step } from "../support/effect-test";
 import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
 import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { drawToolRow, hostToolRow } from "../../testing";
 import { executeDescriptor } from "../support/tool-identity";
 import { hostContainer } from "../../src/shared/untrusted-value";
-import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 
 beforeAll(() => initTheme("dark", false));
@@ -110,8 +109,9 @@ for (const order of ["native-first", "previews-first"] as const)
         const callable = session.getCallableToolNames();
         assert.equal(active.includes("tool_search"), false);
         assert.equal(active.includes("nebula_fixture"), false);
-        const metadata = Option.getOrUndefined(
-          Arr.findFirst(session.getAllTools(), (tool) => tool.name === "tool_search"),
+        const metadata = findOrUndefined(
+          session.getAllTools(),
+          (tool) => tool.name === "tool_search",
         );
         assert.ok(metadata);
         assert.deepEqual(metadata.sourceInfo, {
@@ -183,8 +183,9 @@ for (const order of ["native-first", "previews-first"] as const)
 
         session.setActiveToolsByName([...active, "tool_search"]);
         assert.equal(session.getCallableToolNames().includes("tool_search"), false);
-        const search = Option.getOrUndefined(
-          Arr.findFirst(session.agent.state.tools, (tool) => tool.name === "tool_search"),
+        const search = findOrUndefined(
+          session.agent.state.tools,
+          (tool) => tool.name === "tool_search",
         );
         assert.ok(search);
         const loaded = yield* step(() =>

@@ -3,7 +3,7 @@ import type {
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, OverlayHandle, OverlayOptions } from "@earendil-works/pi-tui";
+import type { Component, OverlayHandle } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Predicate from "effect/Predicate";
 import {
@@ -37,20 +37,11 @@ export function fakeCustomSurfaceHost(
   const widgets = new Map<string, Component>();
   const faults = new Set<CustomSurfaceFault>();
   const mounts: Array<() => void> = [];
-  const size = { columns: options.columns ?? 160, rows: options.rows ?? 50 };
-  const terminal = terminalFixture({
-    get columns() {
-      return size.columns;
-    },
-    get rows() {
-      return size.rows;
-    },
-  });
+  const terminal = terminalFixture({ columns: options.columns ?? 160, rows: options.rows ?? 50 });
   const theme = options.theme ?? plainTheme;
   const keybindings = options.keybindings ?? piKeybindingsFixture();
   let doneCalls = 0;
   let renders = 0;
-  let lastOverlayOptions: OverlayOptions | undefined;
 
   const trip = (fault: CustomSurfaceFault) => {
     if (faults.delete(fault)) throw new Error(`Injected ${fault} failure`);
@@ -127,8 +118,6 @@ export function fakeCustomSurfaceHost(
             dialogs.push(created);
             return;
           }
-          const configured = customOptions?.overlayOptions;
-          lastOverlayOptions = Predicate.isFunction(configured) ? configured() : configured;
           handle = show(created, "ownedHide");
           customOptions?.onHandle?.(handle);
         } catch (cause) {
@@ -160,10 +149,6 @@ export function fakeCustomSurfaceHost(
     custom,
     tui,
     terminal,
-    resize: (columns: number, rows: number) => {
-      size.columns = columns;
-      size.rows = rows;
-    },
     mount: () => mounts.shift()?.(),
     get pendingMounts() {
       return mounts.length;
@@ -187,9 +172,6 @@ export function fakeCustomSurfaceHost(
     },
     get renders() {
       return renders;
-    },
-    get overlayOptions() {
-      return lastOverlayOptions;
     },
   };
 }

@@ -1,6 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
-import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -16,7 +15,7 @@ import * as Path from "effect/Path";
 import * as Str from "effect/String";
 import { nodeFilePlatformLayer, signalProcess, utf8ByteLength } from "pi-cosmic-core";
 import { nodePath } from "pi-cosmic-core/platform/node-builtins";
-import { provideBuiltLayer } from "pi-cosmic-core/testing";
+import { pollUntil, provideBuiltLayer } from "pi-cosmic-core/testing";
 import {
   LocalProcess,
   makeBackgroundProcessEnvironment,
@@ -62,17 +61,8 @@ const firstOutput = (handle: LocalProcessHandle) =>
 
 const processAlive = (pid: number) => signalProcess(pid, 0) === "present";
 
-const pollUntil = (done: Effect.Effect<boolean>) =>
-  Effect.gen(function* () {
-    const deadline = (yield* Clock.currentTimeMillis) + 10_000;
-    while ((yield* Clock.currentTimeMillis) < deadline) {
-      if (yield* done) return true;
-      yield* Effect.sleep("10 millis");
-    }
-    return yield* done;
-  });
-
-const awaitProcessDeath = (pid: number) => pollUntil(Effect.sync(() => !processAlive(pid)));
+// Up to ten seconds, which is generous for a loaded runner; a dead process returns at once.
+const awaitProcessDeath = (pid: number) => pollUntil(() => !processAlive(pid), 1_000);
 
 /** A stand-in shell that prints the command it was asked to run instead of running it. */
 const echoingShell = Effect.gen(function* () {
@@ -327,20 +317,9 @@ describe("local process boundary", () => {
         const handle = yield* spawnProcess(
           `node -e "const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore'}); process.stdout.write(String(child.pid)); setInterval(()=>{},1000)"`,
         );
-        const events = yield* handle.output.pipe(
-          Stream.take(1),
-          Stream.runCollect,
-          Effect.timeout(processTimeout),
-        );
-        const descendant = Number(
-          Fn.pipe(
-            [...events][0]?.text,
-            Option.fromUndefinedOr,
-            Option.map(Str.trim),
-            Option.getOrUndefined,
-          ),
-        );
+        const descendant = Number(Str.trim(yield* firstOutput(handle)));
         expect(Number.isSafeInteger(descendant)).toBe(true);
+        expect(descendant).toBeGreaterThan(0);
         return { leader: handle.pid, descendant };
       }).pipe(Effect.scoped, provideBuiltLayer(LocalProcess.layer));
 
@@ -377,7 +356,11 @@ describe("local process boundary", () => {
         expect(yield* handle.leaderExited).toBe(false);
         yield* handle.terminate("graceful");
         // The shell leader dies of SIGTERM; its descendant ignores it and holds the group open.
-        expect(yield* pollUntil(handle.leaderExited)).toBe(true);
+        const leaderExited = yield* handle.leaderExited.pipe(
+          Effect.repeat({ schedule: Schedule.spaced("10 millis"), until: (exited) => exited }),
+          Effect.timeout(processTimeout),
+        );
+        expect(leaderExited).toBe(true);
         const early = yield* handle.awaitExit.pipe(Effect.timeoutOption("300 millis"));
         expect(Option.isNone(early)).toBe(true);
         expect(processAlive(descendant)).toBe(true);

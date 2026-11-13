@@ -32,11 +32,11 @@ import {
 } from "../ui/tool-body.ts";
 import {
   callTitles,
+  contentText,
   QUESTIONS_SHOWN,
   decodePresentation,
   type PresentationProgress,
   decodeOutcome,
-  fallbackText,
   requestArguments,
   titlesByKey,
 } from "../ui/tool-render-projection.ts";
@@ -120,12 +120,11 @@ export function registerAskUserTool(
           details.answers,
           titlesByKey(context.args),
           theme,
-          true,
           context,
           Predicate.isObject(state) ? state : undefined,
         );
       }
-      return new Text(fallbackText(result.content), 0, 0);
+      return new Text(contentText(result.content), 0, 0);
     },
   });
   pi.registerTool(
@@ -155,7 +154,7 @@ function expandedContent<Details>(
   const answers = details?.outcome === "submitted" ? details.answers : undefined;
   return expandedResult(
     {
-      raw: fallbackText(result.content),
+      raw: contentText(result.content),
       isError: context.isError,
       decoded: details !== undefined,
       answers,

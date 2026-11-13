@@ -1,7 +1,7 @@
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { formatKeyIds } from "pi-cosmic-ui/manager/key-labels";
 
-export type EditorKeybindings = Pick<KeybindingsManager, "getKeys">;
+type EditorKeybindings = Pick<KeybindingsManager, "getKeys">;
 
 /** The first configured key of each editor action, so hints name the keys that actually work. */
 export interface EditorKeyLabels {

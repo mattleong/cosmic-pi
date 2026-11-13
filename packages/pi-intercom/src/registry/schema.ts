@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import { hex } from "../transport/handshake.ts";
 
 const RECORD_VERSION = 1 as const;
 
@@ -6,9 +7,6 @@ const RECORD_VERSION = 1 as const;
 export const INSTANCE_BYTES = 16;
 /** 256-bit socket token, in lowercase hex. */
 export const TOKEN_BYTES = 32;
-
-const hex = (bytes: number) =>
-  Schema.String.check(Schema.isPattern(new RegExp(`^[0-9a-f]{${bytes * 2}}$`)));
 
 const ProcessId = Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0));
 

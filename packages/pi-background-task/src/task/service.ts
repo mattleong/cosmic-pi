@@ -40,7 +40,6 @@ import {
   InvalidBackgroundCwdError,
   type BackgroundTaskError,
 } from "./errors.ts";
-import { readLogBuffer } from "./log-buffer.ts";
 import {
   isActiveTaskState,
   notifiesOn,
@@ -66,6 +65,7 @@ import {
   completedSnapshot,
   enforceRetainedLogBudget,
   logFields,
+  readRecordLogs,
   taskRecord,
   registryProjection,
   trimRetention,
@@ -188,6 +188,12 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   // registration wait for this lock with interruption masked, so that a claim and its handoff
   // can't be split; those waits stay brief only because every holder releases promptly.
   const withLock = Semaphore.withPermit(lock);
+  /** The task's record as the registry holds it now; callers that act on it hold the lock. */
+  const findRecord = (id: string): Effect.Effect<TaskRecord, BackgroundTaskNotFoundError> =>
+    Effect.suspend(() => {
+      const record = tasks.get(id);
+      return record ? Effect.succeed(record) : Effect.fail(backgroundTaskNotFound(id));
+    });
   // A failing host publisher must not abort the registry transition that is publishing.
   const { publish, publishOutput } = yield* startTaskPublication(lock, () =>
     invokeHostCallback(() => options.publish?.(registryProjection(tasks)), undefined),
@@ -200,9 +206,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     if (record.noticeClaimed || admissionsClosed || !options.notify) return;
     const notice: BackgroundTaskNotice = {
       task: record.snapshot,
-      recent: readLogBuffer(record.snapshot.id, record.logs, record.snapshot.state, {
-        tailLines: BACKGROUND_LOG_BOUNDS.recentOutputLines,
-      }),
+      recent: readRecordLogs(record, { tailLines: BACKGROUND_LOG_BOUNDS.recentOutputLines }),
       // A clear or retention trim may have removed the task while reads were in progress.
       retained: tasks.get(record.snapshot.id) === record,
     };
@@ -296,8 +300,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
       Effect.gen(function* () {
         const prepared = yield* withLock(
           Effect.gen(function* () {
-            const record = tasks.get(id);
-            if (!record) return yield* backgroundTaskNotFound(id);
+            const record = yield* findRecord(id);
             if (!isActiveTaskState(record.snapshot.state)) {
               // The agent's stop result says the task had already finished.
               if (reportsFinish) claimFinishedNotice(record);
@@ -553,21 +556,13 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
 
   const status: BackgroundTaskServiceContract["status"] = (id) =>
     withLock(
-      Effect.suspend(() => {
-        const record = tasks.get(id);
-        if (!record) return Effect.fail(backgroundTaskNotFound(id));
+      Effect.map(findRecord(id), (record) => {
         claimFinishedNotice(record);
-        return Effect.succeed(record.snapshot);
+        return record.snapshot;
       }),
     );
 
-  const admitRecord = (id: string): Effect.Effect<TaskRecord, BackgroundTaskNotFoundError> =>
-    withLock(
-      Effect.suspend(() => {
-        const record = tasks.get(id);
-        return record ? Effect.succeed(record) : Effect.fail(backgroundTaskNotFound(id));
-      }),
-    );
+  const admitRecord = (id: string) => withLock(findRecord(id));
 
   /**
    * Inspects the task under the lock until `inspect` returns a value, waiting for its change in
@@ -603,7 +598,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             };
       return yield* pollUntil(deadline, (expired): Poll<BackgroundTaskLogs> => {
         const { snapshot } = record;
-        const slice = readLogBuffer(request.id, record.logs, snapshot.state, window);
+        const slice = readRecordLogs(record, window);
         if (!expired && slice.events.length === 0 && isActiveTaskState(snapshot.state))
           return { done: false, change: Deferred.await(record.wake) };
         const task = Object.freeze({
@@ -652,9 +647,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
 
       return yield* pollUntil(deadline, (expired): Poll<BackgroundTaskStatusWait> => {
         const { state } = record.snapshot;
-        const slice = readLogBuffer(request.id, record.logs, state, {
-          afterCursor: matcher.afterCursor,
-        });
+        const slice = readRecordLogs(record, { afterCursor: matcher.afterCursor });
         const match = matcher.match(slice);
         const outcome: BackgroundTaskWaitResult["outcome"] | undefined = match
           ? "matched"
@@ -690,7 +683,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
               matchedLine: match.line,
             }),
             appliedWaitSeconds,
-            recent: readLogBuffer(request.id, record.logs, state, {
+            recent: readRecordLogs(record, {
               tailLines: BACKGROUND_LOG_BOUNDS.recentOutputLines,
             }),
           },

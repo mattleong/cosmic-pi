@@ -14,13 +14,11 @@ import {
   scriptResult,
   settledSummary,
 } from "../support/native-codemode";
-import { stripAnsi } from "../support/render";
+import { applyRowStyle, stripAnsi } from "../support/render";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 
-const settings = (style: "compact" | "preview", background: "off" | "on" | "border" = "off") =>
-  applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
 beforeEach(() =>
   applyPresentationSettings({
     syntaxHighlighting: false,
@@ -79,7 +77,7 @@ test("saved output cannot hide script failures, child failures, or incomplete ca
 
 for (const style of ["compact", "preview"] as const)
   test(`native ${style} source rendering does not invoke argument accessors`, () => {
-    settings(style);
+    applyRowStyle(style);
     let invoked = false;
     const args = Object.defineProperty({}, "code", {
       enumerable: true,
@@ -124,7 +122,7 @@ test("projection sanitizes bounded attention/targets without changing raw native
 for (const style of ["compact", "preview"] as const)
   for (const mode of ["off", "on", "border"] as const)
     test(`native ${style}/${mode} expansion preserves source, errors, images, spill paths and malformed history`, () => {
-      settings(style, mode);
+      applyRowStyle(style, mode);
       const tool = codemodeRenderers();
       const source = Arr.join(
         Array.from({ length: 20 }, (_, index) => `text('SOURCE_${index}');`),

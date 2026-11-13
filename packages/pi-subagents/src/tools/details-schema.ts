@@ -32,7 +32,7 @@ import {
 } from "../run/model.ts";
 import { MAX_ERROR_CHARS, MAX_FINAL_TEXT_CHARS, MAX_NAME_CHARS } from "../run/state.ts";
 import { WriterWorkspaceModeSchema } from "../config/schema.ts";
-import { AWAIT_UNTIL } from "./schema.ts";
+import { AWAIT_UNTIL, WORKSPACE_ACTIONS } from "./schema.ts";
 
 export const SUBAGENT_CARD_DETAILS_VERSION = 2;
 export const MAX_CARD_MODEL_CHARS = 512;
@@ -93,7 +93,7 @@ const WORKSPACE_APPLY_TESTING = ["parent-tested", "untested"] as const;
 export const WorkspaceToolDetailsSchema = Schema.Struct({
   version: Schema.Literal(1),
   action: Schema.Literal("workspace"),
-  operation: Schema.Literals(["list", "review", "prepare", "apply", "discard", "revise"]),
+  operation: Schema.Literals(WORKSPACE_ACTIONS),
   workspaceId: Schema.optionalKey(NonEmptyText(MAX_PROTOCOL_ID_CHARS)),
   /** The display name of the latest writer run that owns the workspace, for the heading. */
   writerName: Schema.optionalKey(NonEmptyText(MAX_NAME_CHARS)),
@@ -125,11 +125,11 @@ export const WorkspaceToolDetailsSchema = Schema.Struct({
 });
 export type WorkspaceToolDetails = typeof WorkspaceToolDetailsSchema.Type;
 
-const EffortSchema = Schema.Literals(SUBAGENT_EFFORTS);
-const CandidateEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
-const ContextSchema = Schema.Literals(PROFILE_CANDIDATE_CONTEXTS);
-const WriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
-const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
+export const EffortSchema = Schema.Literals(SUBAGENT_EFFORTS);
+export const CandidateEffortSchema = Schema.Literals(PROFILE_CANDIDATE_EFFORTS);
+export const ContextSchema = Schema.Literals(PROFILE_CANDIDATE_CONTEXTS);
+export const WriteIntentSchema = Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS);
+export const ProfileIdSchema = Schema.Literals(PROFILE_IDS);
 export const AgentNameSchema = NonEmptyText(MAX_CUSTOM_AGENT_NAME_CHARS);
 /** Each document fails at most every entry and its whole `agents` object closed. */
 export const MAX_INVALID_AGENT_ENTRIES = CUSTOM_AGENT_SCOPES.length * (MAX_CUSTOM_AGENTS + 1);
@@ -335,13 +335,7 @@ const FailedStartRecoverySchema = Schema.Struct({
   runId: NonEmptyText(MAX_PROTOCOL_ID_CHARS),
   cleanupDisposition: Schema.Literals(FAILED_START_CLEANUP_DISPOSITIONS),
   nextCandidate: Schema.optionalKey(
-    Schema.Union([
-      Schema.Literal("none"),
-      Schema.Struct({
-        model: NonEmptyText(MAX_CARD_MODEL_CHARS),
-        effort: CandidateEffortSchema,
-      }),
-    ]),
+    Schema.Union([Schema.Literal("none"), SkippedCandidateRouteSchema]),
   ),
   /** The whole failure, saved when it is longer than its preview. */
   failureFile: Schema.optionalKey(
@@ -436,9 +430,7 @@ export const SubagentAwaitDetailsSchema = Schema.Struct({
   version: Schema.Literal(SUBAGENT_CARD_DETAILS_VERSION),
   action: Schema.Literal("await"),
   cards: boundedArray(SubagentRunCardSchema, MAX_TARGET_RUNS),
-  awaitedRunIds: Schema.optionalKey(
-    boundedArray(NonEmptyText(MAX_PROTOCOL_ID_CHARS), MAX_TARGET_RUNS),
-  ),
+  awaitedRunIds: boundedArray(NonEmptyText(MAX_PROTOCOL_ID_CHARS), MAX_TARGET_RUNS),
   awaitUntil: Schema.Literals(AWAIT_UNTIL),
   attentionRequired: Schema.optionalKey(Schema.Literal(true)),
   cancelled: Schema.optionalKey(Schema.Literal(true)),
@@ -547,22 +539,20 @@ export const AgentToolDetailsSchema = Schema.Union([
     /** The only listed agent, when exactly one was listed. */
     only: Schema.optionalKey(Schema.Struct({ id: AgentIdSchema, name: AgentDetailsNameSchema })),
     /** Each listed agent as the user sees it, parents before children. */
-    entries: Schema.optionalKey(
-      boundedArray(
-        Schema.Struct({
-          id: AgentIdSchema,
-          name: AgentDetailsNameSchema,
-          kind: Schema.Literals(["main", "run"]),
-          state: AgentDetailsStateSchema,
-          depth: Schema.optionalKey(nonNegativeInteger),
-          task: Schema.optionalKey(NonEmptyText(MAX_AGENT_LIST_TASK_CHARS)),
-          /** A short status that departs from the state's expected course, such as a question. */
-          status: Schema.optionalKey(AgentStatusSchema),
-          /** One technical line for the expanded view: ID, route, workspace, and parent. */
-          facts: Schema.optionalKey(AgentFactSchema),
-        }),
-        MAX_AGENT_LIST_ENTRIES,
-      ),
+    entries: boundedArray(
+      Schema.Struct({
+        id: AgentIdSchema,
+        name: AgentDetailsNameSchema,
+        kind: Schema.Literals(["main", "run"]),
+        state: AgentDetailsStateSchema,
+        depth: Schema.optionalKey(nonNegativeInteger),
+        task: Schema.optionalKey(NonEmptyText(MAX_AGENT_LIST_TASK_CHARS)),
+        /** A short status that departs from the state's expected course, such as a question. */
+        status: Schema.optionalKey(AgentStatusSchema),
+        /** One technical line for the expanded view: ID, route, workspace, and parent. */
+        facts: AgentFactSchema,
+      }),
+      MAX_AGENT_LIST_ENTRIES,
     ),
     missingIds: AgentDetailsIdsSchema,
   }),

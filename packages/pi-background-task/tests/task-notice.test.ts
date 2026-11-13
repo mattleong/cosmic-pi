@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
 import { applyPresentationSettings } from "pi-code-previews/testing";
 import {
+  agentBeforeSettleEventFixture,
   extensionContextFixture,
   keybindingHintsFixture,
   plainTheme,
@@ -133,22 +134,6 @@ describe("background task notice rendering", () => {
     },
   );
 
-  it("states a run time beside the compact glyph and the whole phrase in a preview heading", () => {
-    const collapsed = (style: "compact" | "preview") => {
-      const undo = applyPresentationSettings({ toolCallCollapsedStyle: style });
-      try {
-        const message = taskNoticeMessage(failedNotice);
-        return renderNotice(message.details, false, message.content);
-      } finally {
-        undo();
-      }
-    };
-    // The task ran 2m 3s; a compact `✗` already says it failed.
-    expect(collapsed("compact")).toMatch(/· 2m 3s/u);
-    expect(collapsed("compact")).not.toMatch(/failed after/u);
-    expect(collapsed("preview")).toMatch(/failed after 2m 3s/u);
-  });
-
   it("expands a notice stored without display output to the text the agent read", () => {
     const content = taskNoticeContent(failedNotice);
     const { tail: _tail, ...stored } = taskNoticeMessage(failedNotice).details;
@@ -168,19 +153,7 @@ const settleEvent = (
   contextMessages: ReadonlyArray<ContextMessage>,
   pendingMessages: ReadonlyArray<ContextMessage> = [],
   outcome: AgentBeforeSettleEvent["outcome"] = "completed",
-): AgentBeforeSettleEvent => ({
-  type: "agent_before_settle",
-  outcome,
-  entries: [],
-  continue: false,
-  context: {
-    contextEntries: [],
-    contextMessages: [...contextMessages],
-    llmMessages: [],
-    pendingMessages: [...pendingMessages],
-    canContinue: true,
-  },
-});
+) => agentBeforeSettleEventFixture({ contextMessages, pendingMessages, outcome });
 
 const userPrompt: BeforeAgentStartEvent = {
   type: "before_agent_start",

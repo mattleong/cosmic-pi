@@ -1,8 +1,9 @@
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test } from "vitest";
-import { previewHeadingRow, wrappedPreviewHeading } from "../../src/preview/preview-heading";
+import { layoutPreviewHeadingRow, wrappedPreviewHeading } from "../../src/preview/preview-heading";
 import { wrapPreviewHeading } from "../../src/preview/heading-wrap";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
 import { plainTheme as theme, stripAnsi } from "../support/render";
@@ -13,7 +14,7 @@ const summary = {
   metadata: ["84k tokens"],
 };
 const row = (width: number) =>
-  stripAnsi(previewHeadingRow("Agent report", summary, false, theme, width));
+  stripAnsi(layoutPreviewHeadingRow("Agent report", summary, false, theme, width).row);
 
 test("a one-row preview heading shows the widest counter alternative that fits whole", () => {
   expect(row(100)).toContain("2 finished · 1 failed · 1 with warnings · 84k tokens");
@@ -26,7 +27,7 @@ test("a one-row preview heading shows the widest counter alternative that fits w
 
 test("a cut subject keeps the first counter alternative that leaves it room", () => {
   const long = { ...summary, subject: "a review of every authentication path in the service" };
-  const cut = stripAnsi(previewHeadingRow("Agent report", long, false, theme, 50));
+  const cut = stripAnsi(layoutPreviewHeadingRow("Agent report", long, false, theme, 50).row);
   expect(cut).toContain("…");
   expect(cut).toMatch(/2 finished/u);
   expect(visibleWidth(cut)).toBeLessThanOrEqual(50);
@@ -38,7 +39,9 @@ test("a cut subject without counters keeps its first metadata, so the row keeps 
     metadata: ["finished in 1m 33s", "task-0000000017"],
   };
   for (const width of [57, 100]) {
-    const cut = stripAnsi(previewHeadingRow("Background task", notice, false, theme, width));
+    const cut = stripAnsi(
+      layoutPreviewHeadingRow("Background task", notice, false, theme, width).row,
+    );
     expect(cut).toMatch(/…/u);
     expect(cut).toContain(" · finished in 1m 33s");
     expect(cut).not.toContain("task-0000000017");
@@ -50,7 +53,9 @@ test("a cut subject without counters keeps its first metadata, so the row keeps 
 
 test("a subject cut beside a counter ends at a word boundary, in both heading styles", () => {
   const peers = { subject: "db-migration, schema-check", counters: ["also work here"] };
-  const preview = stripAnsi(previewHeadingRow("Shared checkout", peers, false, theme, 57));
+  const preview = stripAnsi(
+    layoutPreviewHeadingRow("Shared checkout", peers, false, theme, 57).row,
+  );
   expect(preview).toMatch(/ db-migration… · also work here$/u);
   const [compact = ""] = renderCompactToolCall(
     { name: "shared_checkout", phase: "settled", summary: { ...peers, outcome: "success" } },
@@ -73,7 +78,7 @@ test("a collapsed heading keeps its whole outcome beside a subject of any length
   expect(extremeNotice.subject).toHaveLength(449);
   for (const width of [57, 180]) {
     const heading = stripAnsi(
-      previewHeadingRow("Background task", extremeNotice, false, theme, width),
+      layoutPreviewHeadingRow("Background task", extremeNotice, false, theme, width).row,
     );
     expect(heading).toMatch(/… · finished in 399ms$/u);
     expect(heading).not.toContain("[truncated]");
@@ -83,18 +88,12 @@ test("a collapsed heading keeps its whole outcome beside a subject of any length
 
 test("an expanded heading wraps a subject of any length whole and keeps its outcome", () => {
   for (const width of [57, 180]) {
-    const { rows, subjectComplete } = wrappedPreviewHeading(
-      "Background task",
-      extremeNotice,
-      theme,
-      width,
-    );
+    const rows = wrappedPreviewHeading("Background task", extremeNotice, theme, width);
     const words = Arr.join(
       Arr.map(rows, (line) => Str.trim(stripAnsi(line))),
       " ",
     );
     expect(words).toBe(`Background task ${extremeNotice.subject} · finished in 399ms`);
-    expect(subjectComplete).toBe(true);
     for (const line of rows) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
   }
 });
@@ -104,7 +103,7 @@ test("a wrapped heading keeps a direction arrow with the name it points at", () 
     const heading = `Message ${arrow} billing-and-invoicing-migration-review-follow-up`;
     const rows = Arr.map(wrapPreviewHeading(heading, 56), stripAnsi);
     expect(rows.length).toBeGreaterThan(1);
-    for (const line of rows) expect(Str.endsWith(arrow)(Str.trimEnd(line))).toBe(false);
+    for (const line of rows) expect(Fn.pipe(Str.trimEnd(line), Str.endsWith(arrow))).toBe(false);
     expect(Str.trim(rows[1] ?? "")).toBe(
       `${arrow} billing-and-invoicing-migration-review-follow-up`,
     );
@@ -118,7 +117,7 @@ test("a name too wide for a row breaks after a hyphen rather than inside a word"
       Str.trim(stripAnsi(line)),
     );
     expect(Arr.join(rows, "")).toBe(`agent_message ${name}`);
-    for (const line of rows.slice(0, -1)) expect(Str.endsWith("-")(line)).toBe(true);
+    for (const line of rows.slice(0, -1)) expect(Fn.pipe(line, Str.endsWith("-"))).toBe(true);
   }
   // A path whose directory is too wide breaks after its `/` before inside the name.
   const path = Arr.map(wrapPreviewHeading("Status packages/pi-code-previews/src", 16), (line) =>

@@ -9,8 +9,16 @@ import { countLabel } from "pi-cosmic-core/display";
 import { joinInline } from "pi-cosmic-ui/manager";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { stripTerminalControls } from "pi-cosmic-core/security";
-import { MAX_RETAINED_REQUESTS, type PendingPresentation } from "../questionnaire/async-model.ts";
 import {
+  AsyncDeliverySchema,
+  AsyncPresentationSchema,
+  AsyncStatusSchema,
+  MAX_RETAINED_REQUESTS,
+  PendingPresentationSchema,
+  type PendingPresentation,
+} from "../questionnaire/async-model.ts";
+import {
+  ASYNC_CONTROL_ACTIONS,
   MAX_CHOICES,
   MAX_KEY_LENGTH,
   MAX_QUESTIONS,
@@ -48,9 +56,7 @@ export type ReplayedOutcome = typeof answerOutcome.Type;
  * The progress a live call reports about its questions: on screen, hidden, or queued behind
  * others. A blocking questionnaire reports only that it opened.
  */
-const PresentationProgressSchema = Schema.Struct({
-  questionnaire: Schema.Literals(["open", "hidden", "queued"]),
-});
+const PresentationProgressSchema = Schema.Struct({ questionnaire: PendingPresentationSchema });
 export type PresentationProgress = typeof PresentationProgressSchema.Type;
 export const presentationProgress = (presentation: PendingPresentation): PresentationProgress => ({
   questionnaire: presentation,
@@ -84,51 +90,35 @@ export function headingAnswer(
 }
 export const decodeOutcome = decodeUnknownOrUndefined(answerOutcome);
 
-const asyncSnapshotFields = {
+const asyncSnapshot = Schema.Struct({
   requestId: Schema.String,
   deliveryId: Schema.String,
-  status: Schema.Literals(["pending", "submitted", "cancelled", "failed"]),
-  delivery: Schema.Literals(["pending", "sending", "sent", "failed", "waiter", "none"]),
+  status: AsyncStatusSchema,
+  delivery: AsyncDeliverySchema,
   outcome: Schema.optional(answerOutcome),
-  presentation: Schema.optional(
-    Schema.Literals(["queued", "opening", "open", "hidden", "settled"]),
-  ),
+  presentation: Schema.optional(AsyncPresentationSchema),
   // Decoded on its own by titlesOf, so a malformed label never hides the row.
   titles: Schema.optional(Schema.Unknown),
-};
-
-const compactIdentity = Schema.String.check(Schema.isBetweenLength(1, 256));
-const compactAsyncSnapshot = Schema.Struct({
-  ...asyncSnapshotFields,
-  requestId: compactIdentity,
-  deliveryId: compactIdentity,
 });
-const expandedAsyncSnapshot = Schema.Struct({
-  ...asyncSnapshotFields,
-  independentWork: Schema.optional(Schema.String),
-  blockedWork: Schema.optional(Schema.String),
-});
-export type ReplayedSnapshot = typeof expandedAsyncSnapshot.Type;
+export type ReplayedSnapshot = typeof asyncSnapshot.Type;
 
-const asyncRows = <S extends Schema.ConstraintDecoder<unknown>>(snapshot: S) => {
-  const list = Schema.Struct({
-    requests: Schema.Array(snapshot).check(Schema.isMaxLength(MAX_RETAINED_REQUESTS)),
-  });
-  const isList = Schema.is(list);
-  return Fn.flow(
-    decodeUnknownOrUndefined(Schema.Union([snapshot, list])),
-    (decoded): readonly S["Type"][] | undefined => {
-      if (decoded === undefined) return undefined;
-      return isList(decoded) ? decoded.requests : [decoded];
-    },
-  );
-};
-export const decodeCompactAsyncRows = asyncRows(compactAsyncSnapshot);
-export const decodeExpandedAsyncRows = asyncRows(expandedAsyncSnapshot);
+const asyncList = Schema.Struct({
+  requests: Schema.Array(asyncSnapshot).check(Schema.isMaxLength(MAX_RETAINED_REQUESTS)),
+});
+const isAsyncList = Schema.is(asyncList);
+
+/** One stored async snapshot or a list of them, as rows. */
+export const decodeAsyncRows = Fn.flow(
+  decodeUnknownOrUndefined(Schema.Union([asyncSnapshot, asyncList])),
+  (decoded): readonly ReplayedSnapshot[] | undefined => {
+    if (decoded === undefined) return undefined;
+    return isAsyncList(decoded) ? decoded.requests : [decoded];
+  },
+);
 
 export const decodeAsyncControl = decodeUnknownOrUndefined(
   Schema.Struct({
-    action: Schema.Literals(["status", "await", "cancel"]),
+    action: Schema.Literals(ASYNC_CONTROL_ACTIONS),
     requestId: Schema.optional(Schema.String),
   }),
 );
@@ -190,7 +180,7 @@ export const titlesByKey = Fn.flow(
 );
 
 /** What a questionnaire call asked, for its readable expanded request. */
-export const decodeRequestView = decodeUnknownOrUndefined(
+const decodeRequestView = decodeUnknownOrUndefined(
   Schema.Struct({
     questions: Schema.Array(
       Schema.Struct({
@@ -250,7 +240,6 @@ export const decodeCompactChoices = decodeUnknownOrUndefined(
     ).check(Schema.isMaxLength(MAX_QUESTIONS)),
   }),
 );
-const parts = decodeUnknownOrUndefined(Schema.Array(Schema.Unknown));
 const textPart = decodeUnknownOrUndefined(
   Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
 );
@@ -258,6 +247,7 @@ const replayContent = decodeUnknownOrUndefined(
   Schema.Union([Schema.String, Schema.Array(Schema.Unknown)]),
 );
 
+// Each part is stripped alone, so an unterminated control string in one part can't swallow the next.
 const partsText = (decoded: ReadonlyArray<unknown> | undefined): string =>
   Arr.join(
     Arr.filterMap(decoded ?? [], (part) => {
@@ -266,8 +256,6 @@ const partsText = (decoded: ReadonlyArray<unknown> | undefined): string =>
     }),
     "\n",
   );
-
-export const fallbackText = Fn.flow(parts, partsText);
 
 export const contentText = Fn.flow(replayContent, (decoded) =>
   Predicate.isString(decoded) ? stripTerminalControls(decoded) : partsText(decoded),
@@ -394,9 +382,6 @@ export function requestFacts(rows: readonly ReplayedSnapshot[], list: boolean): 
     ]);
   });
 }
-
-/** A listed questionnaire's state in words, for a row whose glyph doesn't already say it. */
-export const listedStateWords = (state: QuestionnaireState): string => STATE_WORDS[state](1);
 
 export const deliveryFacts = (requestId: string, deliveryId: string): string[] => [
   factLine([requestId, `delivery ID ${deliveryId}`]),

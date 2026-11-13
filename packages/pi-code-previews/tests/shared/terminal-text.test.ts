@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { test } from "vitest";
-import { escapeControlChars, wrapAnsiToWidth } from "../../src/shared/terminal-text";
+import {
+  escapeControlChars,
+  wrapAnsiToWidth,
+  wrapIndentedLine,
+} from "../../src/shared/terminal-text";
 import { stripAnsi } from "../support/render";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -49,4 +53,20 @@ test("word-aware wrapping moves a word near the edge whole, and splits one that 
   });
   assert.equal(colored.length, 2);
   assert.ok(Fn.pipe(colored[1] ?? "", Str.startsWith("\x1b[31m")));
+});
+
+const withoutSpaces = (text: string) => Fn.pipe(text, Str.replaceAll(" ", ""));
+
+test("a wrapped plain line keeps its indent, every character, and its width", () => {
+  const line = "    at Object.<anonymous> (/Users/me/project/src/index.ts:12:5)";
+  for (const width of [80, 40, 24, 12]) {
+    const rows = wrapIndentedLine(line, width);
+    assert.ok(
+      Arr.every(rows, (row) => visibleWidth(row) <= width),
+      `fits ${width}`,
+    );
+    assert.ok(Fn.pipe(rows[0] ?? "", Str.startsWith("    at")), `keeps the indent at ${width}`);
+    assert.equal(withoutSpaces(Arr.join(rows, "")), withoutSpaces(line));
+  }
+  assert.deepEqual(wrapIndentedLine("  short", 80), ["  short"]);
 });

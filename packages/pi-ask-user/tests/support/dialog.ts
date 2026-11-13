@@ -1,4 +1,3 @@
-import type { Theme } from "@earendil-works/pi-coding-agent";
 import { type KeyId, matchesKey } from "@earendil-works/pi-tui";
 import {
   keybindingsFixture,
@@ -15,7 +14,6 @@ export const ENTER = "\r";
 export const ESCAPE = "\x1b";
 export const DOWN = "\x1b[B";
 export const RIGHT = "\x1b[C";
-export const LEFT = "\x1b[D";
 export const EXTERNAL_EDITOR = "\x07";
 
 const KEY_BINDINGS = new Map<string, KeyId>([
@@ -43,11 +41,7 @@ export const keybindings = keybindingsFixture({
 
 export const makeDialog = (
   request: AskUserRequest,
-  options: {
-    readonly editExternally?: (value: string) => Promise<string | undefined>;
-    readonly getHeight?: () => number;
-    readonly theme?: Theme;
-  } = {},
+  editExternally: (value: string) => Promise<string | undefined> = () => Promise.resolve(undefined),
 ) => {
   const done = vi.fn<(outcome: AskUserOutcome) => void>();
   const collapse = vi.fn();
@@ -57,12 +51,11 @@ export const makeDialog = (
   });
   const dialog = new AskUserDialog({
     tui,
-    theme: options.theme ?? plainTheme,
+    theme: plainTheme,
     keybindings,
     request,
-    getHeight: options.getHeight ?? (() => Infinity),
     done,
-    editExternally: options.editExternally ?? (() => Promise.resolve(undefined)),
+    editExternally,
     collapse,
   });
   return { dialog, done, collapse };

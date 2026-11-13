@@ -43,6 +43,7 @@ import {
 } from "./details-schema.ts";
 import { runStallFact } from "./format.ts";
 import { isTextFragment } from "./text-fragments.ts";
+import * as Fn from "effect/Function";
 
 export const agentName = (entry: { readonly name: string }): string =>
   projectName(entry.name) || "agent";
@@ -168,7 +169,10 @@ const readIssues = (
         showsQuestion: () => shown.question,
       }),
       (issue) =>
-        !(shown.error && Arr.some(FAILURE_ISSUE_CODES, (code) => Str.endsWith(code)(issue.code))),
+        !(
+          shown.error &&
+          Arr.some(FAILURE_ISSUE_CODES, (code) => Fn.pipe(issue.code, Str.endsWith(code)))
+        ),
     ).slice(0, MAX_AGENT_READ_ISSUES),
     boundedReadIssue,
   );

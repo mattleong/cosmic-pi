@@ -165,8 +165,33 @@ export const answersHideMore = (answers: readonly ReplayedAnswer[]): boolean =>
       firstLine(value).hidesMore || (note !== undefined && firstLine(note).hidesMore),
   );
 
+/** Every answer and note in full, each written line wrapped, for an expanded result. */
+function fullAnswers(
+  answers: readonly ReplayedAnswer[],
+  titles: ReadonlyMap<string, string>,
+  theme: Theme,
+): Component {
+  const entries = answerEntries(answers, titles);
+  return widthRows((width) => {
+    const lines: string[] = [];
+    for (const { label, value, note } of entries) {
+      appendAnswerLines(lines, theme.fg("muted", `${label}: `), value, Fn.identity, "", width);
+      if (note !== undefined)
+        appendAnswerLines(
+          lines,
+          theme.fg("dim", "Note: "),
+          note,
+          (text) => theme.fg("dim", text),
+          "  ",
+          width,
+        );
+    }
+    return lines;
+  });
+}
+
 /**
- * A row's answers. Bounded, each answer and note shows its first line, cut at a word boundary with
+ * A collapsed row's answers: each answer and note shows its first line, cut at a word boundary with
  * `…` where it doesn't fit; the row's tag, never a line of the body's own, offers the rest. Inside
  * a preview row (`row`), answers with later lines hidden name the tag `answers`. `titledHeading` is
  * the renderer state of a heading whose subject is `titles`: a lone answer to a lone question whose
@@ -176,7 +201,6 @@ export function answersBody(
   answers: readonly ReplayedAnswer[],
   titles: ReadonlyMap<string, string>,
   theme: Theme,
-  bounded: boolean,
   row?: { readonly state: unknown },
   titledHeading?: WeakKey,
 ): Component {
@@ -189,23 +213,6 @@ export function answersBody(
     answers.length === 1 &&
     loneTitle !== undefined &&
     stripTerminalControls(loneTitle) === titleLabel(loneTitle);
-  if (!bounded)
-    return widthRows((width) => {
-      const lines: string[] = [];
-      for (const { label, value, note } of entries) {
-        appendAnswerLines(lines, theme.fg("muted", `${label}: `), value, Fn.identity, "", width);
-        if (note !== undefined)
-          appendAnswerLines(
-            lines,
-            theme.fg("dim", "Note: "),
-            note,
-            (text) => theme.fg("dim", text),
-            "  ",
-            width,
-          );
-      }
-      return lines;
-    });
   // Splitting long answers is width-independent; rows are rebuilt only when the width changes.
   const firstLines = Arr.map(entries, ({ label, value, note }) => ({
     label,
@@ -226,7 +233,7 @@ export function answersBody(
     const fit = (lead: string, line: FirstLine, style: (value: string) => string): string => {
       const room = width - visibleWidth(lead);
       const shown = line.hidesMore
-        ? `${Str.replace(TRAILING_PUNCTUATION, "")(line.text)}…`
+        ? `${Fn.pipe(line.text, Str.replace(TRAILING_PUNCTUATION, ""))}…`
         : line.text;
       return visibleWidth(shown) <= room
         ? `${lead}${style(shown)}`
@@ -320,7 +327,7 @@ function requestRows(request: RequestView, theme: Theme, width: number): string[
  * preview. Calls whose arguments don't read as a questionnaire keep their raw arguments, and a
  * control call's arguments are dropped only once its decoded result names the request.
  */
-export function requestSection(
+function requestSection(
   theme: Theme,
   args: RequestArguments | undefined,
   identified = false,
@@ -389,7 +396,7 @@ export function callBody(
   ]);
 }
 
-export interface ExpandedResultInput {
+interface ExpandedResultInput {
   /** The model-facing text, shown only when the details don't decode. */
   readonly raw: string;
   readonly isError: boolean;
@@ -442,11 +449,7 @@ export function expandedResult(input: ExpandedResultInput, theme: Theme): Compon
   const facts = input.facts ?? [];
   const answers =
     input.answers &&
-    expandedSection(
-      theme,
-      "Answers",
-      answersBody(input.answers, input.titles ?? new Map(), theme, false),
-    );
+    expandedSection(theme, "Answers", fullAnswers(input.answers, input.titles ?? new Map(), theme));
   return stacked([
     ...request,
     ...(answers ? [unlessShown(input.answerInHeading ?? (() => false), answers)] : []),

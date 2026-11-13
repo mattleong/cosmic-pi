@@ -11,7 +11,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
-import { isNativeMcpName } from "./native-mcp-identity";
+import { isNativeMcpName, isNativeMcpNamespaced } from "./native-mcp-identity";
 import type { HostContainer } from "../shared/untrusted-value";
 import { ownDataReader } from "./native-safe-content";
 import { syntaxChildren, syntaxNodeGuard, unhandledSyntax } from "./native-codemode-syntax";
@@ -38,7 +38,7 @@ function literalText(node: AnyNode | undefined): string | undefined {
 }
 
 function mcpNamespace(value: string | undefined): boolean {
-  return value !== undefined && /^mcp__[A-Za-z0-9_]+$/.test(value);
+  return value !== undefined && isNativeMcpNamespaced(value);
 }
 
 function mcpSearch(call: CallExpression): boolean {

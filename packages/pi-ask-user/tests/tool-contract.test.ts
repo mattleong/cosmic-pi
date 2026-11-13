@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaRepresentation from "effect/SchemaRepresentation";
 import * as Str from "effect/String";
 import { captureRegistrations, issueMessageStyleProblems } from "pi-code-previews/testing";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { extensionContextFixture, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
@@ -88,6 +89,25 @@ const outcomes: AskUserOutcome[] = [
       ...textOutcome.answers,
     ],
   },
+  // Decision strings stay lossless: limits, controls, and credential-like wording.
+  {
+    outcome: "submitted",
+    answers: [
+      {
+        key: "token=literal",
+        kind: "choices",
+        values: ["api_key=literal\u001b[0m"],
+        labels: ["Bearer literal"],
+        note: Fn.pipe("n", Str.repeat(2000)),
+      },
+      {
+        key: "text",
+        kind: "text",
+        text: Fn.pipe("\u001b[31mBearer literal\n", Str.padEnd(4000, "x")),
+      },
+      { key: "custom", kind: "custom", text: "  password=literal\nkeep whitespace  " },
+    ],
+  },
 ];
 
 describe("registered questionnaire parameters", () => {
@@ -99,8 +119,9 @@ describe("registered questionnaire parameters", () => {
 });
 
 const preparer = (name: string) => {
-  const prepareArguments = Option.getOrUndefined(
-    Arr.findFirst(registered(), (tool) => tool.name === name),
+  const prepareArguments = findOrUndefined(
+    registered(),
+    (tool) => tool.name === name,
   )?.prepareArguments;
   if (prepareArguments === undefined) throw new Error(`${name} has no argument preparation`);
   return prepareArguments;
@@ -168,7 +189,7 @@ describe("registered questionnaire arguments", () => {
 
 describe("registered questionnaire structured results", () => {
   it.effect(
-    "carries submitted answer variants and cancellation beside unchanged text and details",
+    "carries submitted answer variants, lossless decision strings and cancellation beside unchanged text and details",
     () =>
       Effect.gen(function* () {
         for (const outcome of outcomes) {
@@ -184,38 +205,6 @@ describe("registered questionnaire structured results", () => {
           });
           expect(declaredAccepts(tools[0]!, result.structuredContent)).toBe(true);
         }
-      }),
-  );
-
-  it.effect(
-    "preserves decision strings losslessly, including limits, controls and credential-like wording",
-    () =>
-      Effect.gen(function* () {
-        const outcome: AskUserOutcome = {
-          outcome: "submitted",
-          answers: [
-            {
-              key: "token=literal",
-              kind: "choices",
-              values: ["api_key=literal\u001b[0m"],
-              labels: ["Bearer literal"],
-              note: Fn.pipe("n", Str.repeat(2000)),
-            },
-            {
-              key: "text",
-              kind: "text",
-              text: Fn.pipe("\u001b[31mBearer literal\n", Str.padEnd(4000, "x")),
-            },
-            { key: "custom", kind: "custom", text: "  password=literal\nkeep whitespace  " },
-          ],
-        };
-        const result = yield* call(registered({ ask: () => Promise.resolve(outcome) }), "ask_user");
-        expect(decode(result.structuredContent)).toEqual({
-          ...envelope,
-          tool: "ask_user",
-          ...outcome,
-        });
-        expect(result.details).toBe(outcome);
       }),
   );
 

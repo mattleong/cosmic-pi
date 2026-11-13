@@ -1,7 +1,35 @@
 import { expect, test } from "@effect/vitest";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import { failureMessage, firstLineMessage, MESSAGE_TEXT_LIMIT } from "../src/message-text.ts";
+import {
+  contentText,
+  failureMessage,
+  firstLineMessage,
+  MESSAGE_TEXT_LIMIT,
+} from "../src/message-text.ts";
+
+test("content text keeps string content and joins only well-formed text parts", () => {
+  expect(contentText("  as written\n")).toBe("  as written\n");
+  expect(contentText(undefined)).toBe("");
+  expect(
+    contentText([
+      { type: "text", text: "first" },
+      { type: "image", data: "aGk=", mimeType: "image/png" },
+      { type: "thinking", thinking: "hidden", text: "also hidden" },
+      { type: "text", text: 7 },
+      "bare string",
+      null,
+      { type: "text", text: "second" },
+    ]),
+  ).toBe("first\nsecond");
+  const unreadable = Object.defineProperty({ type: "text" }, "text", {
+    enumerable: true,
+    get: () => {
+      throw new Error("unreadable part");
+    },
+  });
+  expect(contentText([unreadable, { type: "text", text: "kept" }])).toBe("kept");
+});
 
 test("first-line messages are one bounded, inert, nonblank line", () => {
   expect(firstLineMessage("\n  \r\n  first\t\tline  \nsecond", "fallback")).toBe("first line");

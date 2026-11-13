@@ -4,14 +4,18 @@ import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
+import { failureMessage, isAgentGuidance } from "pi-cosmic-core/message-text";
 import { sanitizeDiagnosticError, stripTerminalControls } from "pi-cosmic-core/security";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { toolRunningLine } from "pi-cosmic-ui/tool";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { renderHiddenPreviewExpandHint } from "../preview/bordered-tool-call";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
 import { HostContainerSchema, type HostContainer } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { splitLinesLimited } from "../shared/text-lines";
+import { argumentFailureIssue } from "./argument-failure";
+import type { CompactIssue } from "./compact-issues";
 import type { RendererState } from "./renderers/shared/types";
 
 const ARRAY_SLOT = /^(?:length|\d+)$/u;
@@ -30,6 +34,9 @@ export function ownDataReader<S extends Schema.ConstraintDecoder<unknown>>(schem
     return decode(descriptor?.value);
   };
 }
+
+/** Host text short enough to keep as call or receipt evidence. */
+export const EvidenceText = Schema.String.check(Schema.isMaxLength(4096));
 
 export const ownString = ownDataReader(Schema.String);
 export const ownContainer = ownDataReader(HostContainerSchema);
@@ -71,6 +78,29 @@ export function runningLine(theme: Theme, state: RendererState): Component {
       new Text(toolRunningLine(theme, getCodePreviewAnimationFrame({ state })), 0, 0).render(width),
     invalidate() {},
   };
+}
+
+/** A collapsed result that hides its whole content, which the row's tag names. */
+export function hiddenResult(
+  label: string,
+  theme: Theme,
+  row: { readonly state: unknown },
+): Component {
+  return safeContent(
+    () => renderHiddenPreviewExpandHint(row, theme, label),
+    plainRows(`▸ ${label}`, 1),
+  );
+}
+
+/** A failed native call's issue: Pi's argument rejection, else what its error's first line states. */
+export function nativeFailureIssue(text: string, code: string, fallback: string): CompactIssue {
+  return (
+    argumentFailureIssue(text) ?? {
+      severity: "error",
+      code,
+      message: isAgentGuidance(text) ? fallback : failureMessage(text, fallback),
+    }
+  );
 }
 
 export function safeContent(build: () => Component, fallback: string | Component): Component {

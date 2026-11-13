@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
   AgentDirectory,
@@ -346,7 +347,7 @@ it.effect.each(["save", "reset"] as const)(
           service.save({ ...loaded, readCollapsedLines: 99 }, earlier, { previous: loaded }),
         );
 
-        assert.equal(failure._tag, "CodePreviewSettingsSuperseded");
+        assert.ok(Predicate.isTagged(failure, "CodePreviewSettingsSuperseded"));
         assert.deepEqual(issueMessageStyleProblems(formatSettingsSaveError(failure)), []);
         assert.deepEqual(fake.documents.get("/agent/code-previews.json"), committed);
         assert.equal(codePreviewSettings, published);
@@ -681,9 +682,9 @@ it("a failed save names its cause in words, the file as notices show it, and a n
   });
   for (const cause of [denied, written]) {
     const notice = formatSettingsSaveError(cause, "/project");
-    assert.ok(!Str.includes("EACCES")(notice), notice);
-    assert.ok(!Str.includes("JSON document")(notice), notice);
-    assert.ok(!Str.includes(home)(notice), notice);
-    assert.ok(Str.includes("~/.pi/agent/code-previews.json")(notice), notice);
+    assert.ok(!Fn.pipe(notice, Str.includes("EACCES")), notice);
+    assert.ok(!Fn.pipe(notice, Str.includes("JSON document")), notice);
+    assert.ok(!Fn.pipe(notice, Str.includes(home)), notice);
+    assert.ok(Fn.pipe(notice, Str.includes("~/.pi/agent/code-previews.json")), notice);
   }
 });

@@ -5,15 +5,15 @@ import type {
   CompactSummaryProvider,
 } from "pi-code-previews";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { countLabel } from "pi-cosmic-core/display";
 import {
   callTitles,
   decodeAsyncControl,
   decodeCallQuestions,
-  decodeCompactAsyncRows,
+  decodeAsyncRows,
   decodeCompactChoices,
   decodeOutcome,
   decodePresentation,
@@ -131,7 +131,7 @@ function answerFacts(
   const questions = decodeCompactChoices(args)?.questions ?? [];
   const value = headingAnswer(answers, (answer) =>
     verifiedLabels(
-      Option.getOrUndefined(Arr.findFirst(questions, (question) => question.key === answer.key)),
+      findOrUndefined(questions, (question) => question.key === answer.key),
       answer.labels,
     ),
   );
@@ -186,8 +186,6 @@ export const askUserCompactSummaryFor =
     return decoded && settledSummary(args, decoded, style);
   };
 
-export const askUserCompactSummary = askUserCompactSummaryFor("compact");
-
 const DELIVERY_RETAINED = "The saved result stays available to the agent.";
 
 /** How to bring back hidden questionnaires, shown even when collapsed. */
@@ -200,15 +198,13 @@ function answersPending(
   states: readonly QuestionnaireState[],
   list: boolean,
 ): readonly CompactIssue[] {
-  const count = (wanted: QuestionnaireState) =>
-    Arr.filter(states, (state) => state === wanted).length;
-  const [waiting, hidden, queued] = [count("waiting"), count("hidden"), count("queued")];
-  const pending = waiting + hidden + queued;
-  if (pending === 0) return [];
-  const resume = hidden > 0 ? [hiddenIssue(hidden, list)] : [];
+  const hidden = Arr.filter(states, (state) => state === "hidden").length;
   // The heading already counts what needs the user's input and what is queued; only why queued
   // ones wait is new.
-  return [...resume, ...(queued > 0 ? [QUEUED_ISSUE] : [])];
+  return [
+    ...(hidden > 0 ? [hiddenIssue(hidden, list)] : []),
+    ...(states.includes("queued") ? [QUEUED_ISSUE] : []),
+  ];
 }
 
 /** A failure's issue; under the row's `✗`, one questionnaire's says only what it left undone. */
@@ -353,7 +349,7 @@ export const asyncAskUserCompactSummaryFor =
   ({ phase, args, result, context }) => {
     if (phase !== "settled")
       return context.isError ? undefined : liveSummary(args, decodePresentation(result?.details));
-    const decoded = decodeCompactAsyncRows(result?.details);
+    const decoded = decodeAsyncRows(result?.details);
     const rows =
       decoded &&
       Arr.map(decoded, (row) => Object.assign({}, row, { state: questionnaireState(row) }));
@@ -365,5 +361,3 @@ export const asyncAskUserCompactSummaryFor =
       return { ...identity(args), outcome: "error", expandLabel: revealed(args, "details") };
     return undefined;
   };
-
-export const asyncAskUserCompactSummary = asyncAskUserCompactSummaryFor("compact");

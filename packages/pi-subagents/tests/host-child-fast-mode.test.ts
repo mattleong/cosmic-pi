@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
@@ -9,13 +9,6 @@ import {
 } from "pi-cosmic-core/testing";
 
 type FastModeFlag = boolean | string | undefined;
-type RequestPayload =
-  | { readonly input: string; readonly service_tier?: string }
-  | string
-  | number
-  | null
-  | undefined
-  | ReadonlyArray<never>;
 
 beforeEach(() => {
   vi.stubEnv("PI_SUBAGENT_RUNTIME_API_KEY", undefined);
@@ -23,8 +16,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-const requestContext = (provider = "openai-codex", id = "gpt-5.6-sol") =>
-  extensionContextFixture({ model: modelFixture({ provider, id }) });
+const requestContext = () =>
+  extensionContextFixture({ model: modelFixture({ provider: "openai-codex", id: "gpt-5.6-sol" }) });
 
 const requestHarness = () => {
   let fastMode: FastModeFlag = false;
@@ -40,10 +33,10 @@ const requestHarness = () => {
     setFastMode: (value: FastModeFlag) => {
       fastMode = value;
     },
-    request: (payload: RequestPayload, ctx: ExtensionContext = requestContext()) => {
+    request: (payload: { readonly input: string }) => {
       const handler = host.handlers.get("before_provider_request")?.[0];
       if (!handler) throw new Error("Missing request hook");
-      return handler({ type: "before_provider_request", payload }, ctx);
+      return handler({ type: "before_provider_request", payload }, requestContext());
     },
   };
 };

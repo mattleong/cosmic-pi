@@ -5,6 +5,7 @@ import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { clipToWidth } from "pi-cosmic-ui/manager";
 import { composeToolComponent, toolStatusLine } from "pi-cosmic-ui/tool";
@@ -117,14 +118,12 @@ export function previewIssues<TArgs, TDetails, TState extends object>(
     ...compactPresentationInput(provider, phase, result, context),
     expanded: true,
   });
+  const status = compactStatus(phase, collapsedSummary);
   const value = {
     summary,
-    status: compactStatus(phase, collapsedSummary),
+    status,
     issues: collapsedSummary.issues ?? [],
-    cancelled:
-      phase === "settled" &&
-      context.isError &&
-      compactStatus(phase, collapsedSummary) === "cancelled",
+    cancelled: phase === "settled" && context.isError && status === "cancelled",
   };
   frame.issues = { inputs, value };
   return value;
@@ -279,12 +278,12 @@ export function capturePreviewCall<TArgs, TState extends object>(
     } catch {
       all = [];
     }
-    const end = Arr.findFirstIndex(all, (row) => Str.includes(HEADING_END)(row));
+    const end = Arr.findFirstIndex(all, (row) => Fn.pipe(row, Str.includes(HEADING_END)));
     const heading = Option.isSome(end) ? all.slice(0, end.value) : all;
     drawn = {
       width,
       heading: Arr.some(heading, (row) => Str.trim(row) !== "") ? heading : undefined,
-      rows: Arr.filter(all, (row) => !Str.includes(HEADING_END)(row)),
+      rows: Arr.filter(all, (row) => !Fn.pipe(row, Str.includes(HEADING_END))),
     };
     return drawn;
   };

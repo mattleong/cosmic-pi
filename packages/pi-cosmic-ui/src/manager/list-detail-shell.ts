@@ -354,6 +354,18 @@ export const framedBodyWithHints = (
 // A prompt band leaves at least this many body rows above it before it takes the whole body.
 const PROMPT_CONTEXT_ROWS = 3;
 
+/** The first `limit` lines; when lines were cut, the last one kept ends with `…` within `width`. */
+export const firstLines = (
+  lines: ReadonlyArray<string>,
+  limit: number,
+  width: number,
+): string[] => {
+  const shown = lines.slice(0, limit);
+  if (lines.length > limit)
+    shown[limit - 1] = `${clipToWidth(shown[limit - 1] ?? "", width - 1, "")}…`;
+  return shown;
+};
+
 /**
  * Places a prompt, such as a confirmation, in a band between a framed body and its bottom border,
  * set off by a divider, so the panes above stay in view while the border names the decision keys.
@@ -385,10 +397,7 @@ export const framedBodyWithPrompt = (
       framedDivider(frame, inner, columns),
       ...framedFill(frame, framedGutter(wrapped, inner), wrapped.length, inner),
     ];
-  const shown = wrapped.slice(0, height);
-  if (wrapped.length > height)
-    shown[height - 1] = `${clipToWidth(shown[height - 1] ?? "", room - 1, "")}…`;
-  return framedFill(frame, framedGutter(shown, inner), height, inner);
+  return framedFill(frame, framedGutter(firstLines(wrapped, height, room), inner), height, inner);
 };
 
 /**

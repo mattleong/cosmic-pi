@@ -1,8 +1,8 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import { formatElapsed } from "pi-cosmic-core/display";
 import type { SubagentRunView } from "./model.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const STALL_IDLE_MILLIS = 2 * 60 * 1000;
 const STALL_TOOL_OPEN_MILLIS = 5 * 60 * 1000;
@@ -24,7 +24,7 @@ export const runStall = (run: StallRun, now: number): RunStall | undefined => {
   if (run.state !== "running") return undefined;
   const tools = Arr.filter(run.sessionEvents, (event) => event.type === "tool");
   // The oldest open tool, so a newer parallel call can't hide one that is stuck.
-  const open = Option.getOrUndefined(Arr.findFirst(tools, (event) => event.state === "running"));
+  const open = findOrUndefined(tools, (event) => event.state === "running");
   if (open && now - open.startedAt >= STALL_TOOL_OPEN_MILLIS)
     return { kind: "tool-open", toolName: open.toolName, sinceMillis: now - open.startedAt };
   let failed = 0;

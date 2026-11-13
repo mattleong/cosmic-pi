@@ -12,6 +12,7 @@ import {
   request,
   serviceLayer,
   withService,
+  yieldTurns,
   type FakeChildControl,
 } from "./fixtures/service-harness.ts";
 
@@ -77,7 +78,7 @@ describe("assignment-owned questionnaire proxy", () => {
           open!();
           open!();
           yield* yieldUntil(() => notices().length > 0);
-          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          yield* yieldTurns(20);
           expect(notices()).toEqual([
             { channel: "pi-subagents", type: "proxy_questionnaire_shown", requestId: "q-open" },
           ]);
@@ -89,7 +90,7 @@ describe("assignment-owned questionnaire proxy", () => {
             ),
           );
           queued!();
-          for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+          yield* yieldTurns(20);
           expect(notices()).toHaveLength(1);
           yield* Deferred.succeed(answers.get("q-open")!, undefined);
         });
@@ -118,7 +119,7 @@ describe("assignment-owned questionnaire proxy", () => {
         yield* yieldUntil(() => questionnaire.state.owner !== undefined);
         yield* Deferred.succeed(promptGate, undefined);
         yield* yieldUntil(() => questionnaire.state.interrupted);
-        for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
+        yield* yieldTurns(20);
         const releasedBeforeCleanup = child.released();
         yield* Deferred.succeed(release, undefined);
         const failure = yield* Fiber.join(starting);

@@ -50,17 +50,16 @@ const EventDiscriminantSchema = Schema.Struct({ type: Schema.optional(Schema.Str
 
 type ImageGenerationItem = typeof ImageGenerationItemSchema.Type;
 
-export type ImageStreamEvent = Data.TaggedEnum<{
+type ImageStreamEvent = Data.TaggedEnum<{
   Image: { readonly image: ExtractedImageResult };
   ImageFailed: Record<never, never>;
-  ResponseFailed: { readonly message: string };
-  ProviderError: { readonly message: string };
+  Failed: { readonly message: string };
   Ignored: Record<never, never>;
 }>;
-export const ImageStreamEvent = Data.taggedEnum<ImageStreamEvent>();
+const ImageStreamEvent = Data.taggedEnum<ImageStreamEvent>();
 
 const ignoredEvent = ImageStreamEvent.Ignored();
-const NO_REASON = "OpenAI gave no reason.";
+export const NO_REASON = "OpenAI gave no reason.";
 
 const imageData = (value: string) =>
   Str.trim(/^data:[^;,]+;base64,(.*)$/s.exec(value)?.[1] ?? value);
@@ -99,15 +98,11 @@ export const decodeImageStreamEvent = Effect.fn("OpenAIImageProtocol.decodeEvent
   }
   if (discriminant.type === "response.failed") {
     const event = yield* Schema.decodeUnknownEffect(FailedEventSchema)(value);
-    return ImageStreamEvent.ResponseFailed({
-      message: event.response.error?.message ?? NO_REASON,
-    });
+    return ImageStreamEvent.Failed({ message: event.response.error?.message ?? NO_REASON });
   }
   if (discriminant.type === "error") {
     const event = yield* Schema.decodeUnknownEffect(ProviderErrorEventSchema)(value);
-    return ImageStreamEvent.ProviderError({
-      message: event.message ?? NO_REASON,
-    });
+    return ImageStreamEvent.Failed({ message: event.message ?? NO_REASON });
   }
   if (
     discriminant.type === undefined &&
@@ -149,7 +144,7 @@ export const ImageRequestSchema = Schema.Struct({
   include: Schema.Array(Schema.Unknown),
   client_metadata: Schema.Record(Schema.String, Schema.String),
 });
-export type ImageRequest = typeof ImageRequestSchema.Type;
+type ImageRequest = typeof ImageRequestSchema.Type;
 
 export function buildImageRequest(values: {
   readonly prompt: string;

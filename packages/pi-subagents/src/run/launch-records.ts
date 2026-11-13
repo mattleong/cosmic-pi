@@ -1,8 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as Str from "effect/String";
 import type { BackendLaunchRequest } from "../backend/model.ts";
-import { invalidRequest, type SubagentError } from "./errors.ts";
-import { isCleanupOwed, type RunContext, type RunRecord, type StoredRunView } from "./internal.ts";
+import { invalidRequest, type SubagentError, withGuidance } from "./errors.ts";
+import { isCleanupOwed, type RunRecord, type StoredRunView } from "./internal.ts";
 import {
   emptyUsage,
   isTerminalRunState,
@@ -24,6 +24,24 @@ interface LaunchIdentity {
   readonly id: string;
   readonly name: string;
 }
+
+export const scriptOriginForStart = (
+  records: ReadonlyMap<string, RunRecord>,
+  request: StartSubagentRequest,
+  scriptedRoot: boolean,
+): boolean =>
+  scriptedRoot ||
+  (request.parentRunId !== undefined && records.get(request.parentRunId)?.scriptOrigin === true);
+
+export const scriptedWriterAdmissionError = () =>
+  invalidRequest(
+    "scripted_subtree_writer_not_supported",
+    withGuidance(
+      "Agents started by a codemode script can only launch read-only agents",
+      "The main agent can start separate writer work outside this script's agents.",
+      "\n\n",
+    ),
+  );
 
 export const validateStartRequest = (
   request: StartSubagentRequest,
@@ -104,7 +122,7 @@ export const backendLaunchRequest = (
 });
 
 export const isEvictionEligible = (
-  { records }: Pick<RunContext, "records">,
+  records: ReadonlyMap<string, RunRecord>,
   record: RunRecord,
 ): boolean =>
   !isCleanupOwed(record) &&

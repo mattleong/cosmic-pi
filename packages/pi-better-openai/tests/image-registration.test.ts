@@ -15,18 +15,16 @@ import { OPENAI_IMAGE_TOOL, registerOpenAIImage } from "../src/image/register.ts
 import { OpenAIImageService } from "../src/image/service.ts";
 import type { CodexImageResult } from "../src/image/types.ts";
 import { OpenAIBoundaryError } from "../src/usage/controller.ts";
+import { imageDetailsFixture, pngPart } from "./image-fixtures.ts";
 
 const image: CodexImageResult = {
-  id: "image-1",
-  status: "completed",
-  prompt: "draw a comet",
-  revisedPrompt: "Draw a bright comet.",
-  data: "aW1hZ2U=",
-  mimeType: "image/png",
-  savedPath: "/tmp/generated-comet.png",
-  model: "image-model",
-  action: "generate",
-  outputFormat: "png",
+  ...imageDetailsFixture({
+    prompt: "draw a comet",
+    revisedPrompt: "Draw a bright comet.",
+    savedPath: "/tmp/generated-comet.png",
+    model: "image-model",
+  }),
+  data: pngPart.data,
 };
 
 const ignoreSubcommand: ExtensionSubcommand["handler"] = () => undefined;

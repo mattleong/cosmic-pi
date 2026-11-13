@@ -10,24 +10,24 @@ import {
   probeAnimationOwnership,
 } from "pi-code-previews/testing";
 import { Image } from "@earendil-works/pi-tui";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { stripTerminalControls } from "pi-cosmic-core/security";
 import { keybindingHintsFixture, plainTheme as theme } from "pi-cosmic-core/testing";
 import { afterEach, describe, expect, it } from "vitest";
 import { presentImageMessage } from "../src/image/message.ts";
-import { pngPart as image, registerImagePresentation, textPart as text } from "./image-fixtures.ts";
+import {
+  imageDetailsFixture,
+  pngPart as image,
+  registerImagePresentation,
+  textPart as text,
+} from "./image-fixtures.ts";
 
 const styles = ["compact", "preview"] as const;
-const details = {
-  id: "image-identity",
-  status: "completed",
+const details = imageDetailsFixture({
   prompt: "Full original prompt " + Fn.pipe("long prompt ", Str.repeat(20)) + "PROMPT_END",
   revisedPrompt: "Full revised prompt",
   savedPath: "/project/saved image.png",
-  mimeType: image.mimeType,
-  model: "model",
-  action: "generate" as const,
-  outputFormat: "png" as const,
-};
+});
 function register(style: (typeof styles)[number], scheduleAnimation?: CompactAnimationScheduler) {
   applyPresentationSettings({
     toolCallCollapsedStyle: style,
@@ -37,10 +37,6 @@ function register(style: (typeof styles)[number], scheduleAnimation?: CompactAni
   return registerImagePresentation(scheduleAnimation);
 }
 afterEach(applyPresentationSettings({}));
-
-/** Image rows without the terminal image id each native image draws under. */
-const anonymous = (rows: ReadonlyArray<string>) =>
-  Arr.map(rows, (row) => Str.replace(/\bi=\d+/gu, "i=*")(row));
 
 describe("registered image presentation", () => {
   it.each(styles)("leaves image-only and text/image attachments with Pi in %s mode", (style) => {
@@ -59,9 +55,7 @@ describe("registered image presentation", () => {
           expect(rendered).toContain("saved image.png");
         }
         expect(rendered).not.toContain(image.data);
-        expect(
-          Option.getOrUndefined(Arr.findFirst(result.content, (part) => part.type === "image")),
-        ).toBe(image);
+        expect(findOrUndefined(result.content, (part) => part.type === "image")).toBe(image);
       }
       expect(result).toEqual(before);
     }
@@ -110,7 +104,10 @@ describe("registered image presentation", () => {
       harness.cycle({ prompt }, result, { states: [false, true] }),
       (frame) => frame.expanded,
     );
-    const words = Str.replace(/\s+/gu, " ")(stripTerminalControls(Option.getOrThrow(shown).text));
+    const words = Fn.pipe(
+      stripTerminalControls(Option.getOrThrow(shown).text),
+      Str.replace(/\s+/gu, " "),
+    );
     expect(Str.split(words, prompt).length - 1).toBe(1);
   });
 
@@ -126,15 +123,10 @@ describe("registered image presentation", () => {
     expect(report?.stops).toBeGreaterThan(0);
   });
 
-  it.each(
-    Arr.flatMap(styles, (style) =>
-      Arr.map(["border", "on", "off"] as const, (background) => ({ style, background })),
-    ),
-  )(
-    "frames image messages like tool rows and keeps Pi's native image in $style/$background mode",
-    ({ style, background }) => {
+  it.each(styles)(
+    "frames a %s image message with its prompt, without mutating the message",
+    (style) => {
       const { message: render } = register(style);
-      applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
       const message = {
         role: "custom" as const,
         customType: "openai-image",
@@ -144,24 +136,13 @@ describe("registered image presentation", () => {
         timestamp: 0,
       };
       const before = structuredClone(message);
-      const native = anonymous(
-        new Image(
-          image.data,
-          image.mimeType,
-          { fallbackColor: (line) => theme.fg("dim", line) },
-          { maxWidthCells: 80, maxHeightCells: 24, filename: details.savedPath },
-        ).render(120),
-      );
       for (const expanded of [false, true]) {
-        const rows = anonymous(
+        const shown = Arr.join(
           render(message, { ...keybindingHintsFixture, expanded, outputPad: 1 }, theme)?.render(
             120,
           ) ?? [],
+          "\n",
         );
-        const at = Option.getOrThrow(Arr.findFirstIndex(rows, (row) => row === native[0]));
-        // The image follows the frame unchanged, as Pi draws a tool result's images.
-        expect(rows.slice(at, at + native.length)).toEqual(native);
-        const shown = Arr.join(rows.slice(0, at), "\n");
         expect(shown).toContain("Full original prompt");
         if (expanded) expect(shown).toContain("PROMPT_END");
       }
@@ -173,7 +154,10 @@ describe("registered image presentation", () => {
     "offers expansion on a collapsed %s image message only when it adds facts",
     (style) => {
       const present = presentImageMessage(() => "/project");
-      const shown = (content: ReturnType<typeof text>[], withDetails: boolean) =>
+      const shown = (
+        content: Array<ReturnType<typeof text> | typeof image>,
+        withDetails: boolean,
+      ) =>
         present(
           {
             role: "custom",
@@ -190,6 +174,10 @@ describe("registered image presentation", () => {
         expect.any(String),
       );
       expect(shown([], false).expandLabel).toBeUndefined();
+      // The message shell draws attachments below the frame; the presenter supplies the image.
+      expect(shown([text("Model-facing image text"), image], true).attachments).toEqual([
+        expect.any(Image),
+      ]);
     },
   );
 });

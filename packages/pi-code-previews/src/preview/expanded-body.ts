@@ -5,9 +5,10 @@ import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { wrapFacts } from "pi-cosmic-ui/manager";
-import { escapeControlChars } from "../shared/terminal-text";
-import { wrapPlainText } from "../shared/text-wrap";
+import { cachedComponent } from "pi-cosmic-ui/tool";
+import { escapeControlChars, wrapIndentedLine } from "../shared/terminal-text";
 import { authoredTextLines } from "./authored-text";
+import { compactPlainText } from "./compact-row";
 import { expandedSection, unlabeledSection } from "./expanded-section";
 
 /** Theme colors an expanded body draws plain text in. */
@@ -35,11 +36,7 @@ const MAX_VALUE_ROWS = 3;
 
 const pad = (width: number): string => Fn.pipe(" ", Str.repeat(width));
 
-const plainParts = (text: string): string[] =>
-  Str.split(
-    escapeControlChars(Fn.pipe(text, Str.replaceAll("\r\n", "\n"), Str.replaceAll("\t", "  "))),
-    "\n",
-  );
+const plainParts = (text: string): string[] => Str.split(compactPlainText(text), "\n");
 
 // A wrapped Details line hangs two columns past a nested fact, so it never reads as one.
 const NESTED_INDENT = 2;
@@ -64,26 +61,10 @@ const wrappedLine = (
     Arr.map(
       facts
         ? wrapFacts(part, Math.max(1, width), hanging)
-        : wrapPlainText(part, Math.max(1, width)),
+        : wrapIndentedLine(part, Math.max(1, width)),
       (row) => (row === "" ? "" : theme.fg(color, row)),
     ),
   );
-};
-
-const cachedComponent = (draw: (width: number) => string[]): Component => {
-  let cached: { readonly width: number; readonly lines: string[] } | undefined;
-  return {
-    render(width) {
-      if (!Number.isFinite(width) || width < 1) return [];
-      if (cached?.width === width) return cached.lines;
-      const lines = draw(width);
-      cached = { width, lines };
-      return lines;
-    },
-    invalidate() {
-      cached = undefined;
-    },
-  };
 };
 
 const linesComponent = (

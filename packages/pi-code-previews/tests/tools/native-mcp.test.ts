@@ -10,23 +10,18 @@ import {
   renderContextFixture,
 } from "pi-code-previews/testing";
 import { compactStatus, type CompactSummary } from "pi-code-previews";
-import { createNativeMcpRenderers } from "../../src/tools/native-mcp-render";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
 import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { stripAnsi } from "pi-cosmic-core";
-import { textResult } from "../support/render";
+import { findOrUndefined } from "pi-cosmic-core/array";
+import { styleNativeMcp } from "../support/native-mcp";
+import { applyRowStyle, textResult } from "../support/render";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 
 type NativeDefinition = Pick<ToolInfo, "name" | "namespace">;
-
-const styleNativeMcp = (
-  definition: NativeDefinition,
-  schedule = animationSchedulerProbe().schedule,
-) =>
-  createNativeMcpRenderers(definition.name, definition, undefined, { scheduleAnimation: schedule });
 
 type ResourceTool = "list_mcp_resources" | "list_mcp_resource_templates" | "read_mcp_resource";
 
@@ -44,8 +39,6 @@ function resourceTool(name: ResourceTool): NativeDefinition {
 
 const docs = { server: "docs", tool: "lookup" };
 
-const settings = (style: "compact" | "preview", background: "off" | "on" | "border" = "off") =>
-  applyPresentationSettings({ toolCallCollapsedStyle: style, toolCallBackground: background });
 beforeEach(() => applyPresentationSettings({ syntaxHighlighting: false, toolCallTiming: false }));
 
 interface NativeArguments {
@@ -126,9 +119,7 @@ test("errors are short human issues while expansion keeps full native text and r
   ]) {
     const summary = summarize(dynamicTool(), textResult(text, docs), {}, true);
     assert.equal(status(summary), "error");
-    const error = Option.getOrUndefined(
-      Arr.findFirst(summary?.issues ?? [], (issue) => issue.severity === "error"),
-    );
+    const error = findOrUndefined(summary?.issues ?? [], (issue) => issue.severity === "error");
     assert.ok(error);
     assert.deepEqual(
       issueMessageStyleProblems(error.message, { forbidden: ["mcp__docs__lookup", "Run /mcp"] }),
@@ -136,7 +127,7 @@ test("errors are short human issues while expansion keeps full native text and r
     );
   }
   for (const style of ["compact", "preview"] as const) {
-    settings(style);
+    applyRowStyle(style);
     const h = createToolPresentationHarness(styleNativeMcp(dynamicTool()), { width: 200 });
     const frames = h.cycle(
       { query: "effect" },
@@ -151,7 +142,7 @@ test("errors are short human issues while expansion keeps full native text and r
 for (const style of ["compact", "preview"] as const)
   for (const background of ["off", "on", "border"] as const)
     test(`${style}/${background} expansion keeps exact arguments, output, saved paths and images`, () => {
-      settings(style, background);
+      applyRowStyle(style, background);
       const original = dynamicTool();
       const tool = styleNativeMcp(original);
       const long = `${Fn.pipe("L", Str.repeat(600))}END`;
@@ -203,7 +194,7 @@ for (const style of ["compact", "preview"] as const)
 
 for (const style of ["compact", "preview"] as const)
   test(`${style} collapsed previews stay bounded and terminal-control safe`, () => {
-    settings(style);
+    applyRowStyle(style);
     const hostile = "\u001b[31mRED\u001b[0m\u001b]0;title\u0007\r\u009b2J";
     const output = Arr.join(
       Array.from(
@@ -236,7 +227,7 @@ for (const style of ["compact", "preview"] as const)
 
 for (const style of ["compact", "preview"] as const)
   test(`${style} running calls show native progress under the injected animation owner`, () => {
-    settings(style);
+    applyRowStyle(style);
     const probe = animationSchedulerProbe();
     const h = createToolPresentationHarness(styleNativeMcp(dynamicTool(), probe.schedule));
     h.call({ query: "effect" }, { executionStarted: true });

@@ -4,7 +4,6 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import {
   CrossProcessLock,
-  CrossProcessLockError,
   type CrossProcessLease,
   type CrossProcessLockContract,
 } from "pi-cosmic-core";
@@ -12,16 +11,10 @@ import { temporaryDirectory } from "pi-cosmic-core/testing";
 import { WriterLeaseReleaseError, WriterLeaseService } from "../src/boundary/writer-lease.ts";
 import { nodeFsPromises as fs, nodePath } from "./support/node-builtins.ts";
 
-type LockOutcome = "live" | "recovery-required" | "unavailable";
-
-const RECOVERY_SLOT = "/agent/subagents/writer-leases-v3/slot";
-
-const fakeLock = (outcomes: Array<LockOutcome> = []) => {
-  const calls: Array<keyof CrossProcessLease | "tryAcquire"> = [];
+const fakeLock = () => {
   const failing = new Set<keyof CrossProcessLease>();
   let held = false;
   const call = (name: keyof CrossProcessLease) => {
-    calls.push(name);
     if (failing.has(name)) throw new Error(`${name} failed`);
   };
   const handle: CrossProcessLease = {
@@ -34,25 +27,19 @@ const fakeLock = (outcomes: Array<LockOutcome> = []) => {
   };
   const lock: CrossProcessLockContract = {
     tryAcquire: () =>
-      Effect.suspend(() => {
-        calls.push("tryAcquire");
-        const outcome = outcomes.shift();
-        if (outcome === "recovery-required")
-          return Effect.fail(CrossProcessLockError.make({ reason: outcome, slot: RECOVERY_SLOT }));
-        if (outcome !== undefined && outcome !== "live")
-          return Effect.fail(CrossProcessLockError.make({ reason: outcome }));
-        const admitted = outcome === undefined && !held;
+      Effect.sync(() => {
+        const admitted = !held;
         held ||= admitted;
-        return Effect.succeed(admitted ? handle : undefined);
+        return admitted ? handle : undefined;
       }),
   };
-  return { lock, calls, failing, held: () => held };
+  return { lock, failing, held: () => held };
 };
 
-const adapter = (outcomes?: Array<LockOutcome>) =>
+const adapter = () =>
   Effect.gen(function* () {
     const agentDirectory = yield* temporaryDirectory("pi-subagents-writer-lease-");
-    const fake = fakeLock(outcomes);
+    const fake = fakeLock();
     const service = yield* WriterLeaseService.pipe(
       Effect.provide(
         WriterLeaseService.layerWithLock({ agentDirectory }).pipe(
@@ -61,13 +48,7 @@ const adapter = (outcomes?: Array<LockOutcome>) =>
       ),
     );
     const cwd = yield* service.canonicalize(agentDirectory);
-    return {
-      ...fake,
-      agentDirectory,
-      service,
-      cwd,
-      acquire: service.acquire({ cwd, runId: "run" }),
-    };
+    return { ...fake, service, acquire: service.acquire({ cwd, runId: "run" }) };
   });
 
 describe("writer lease adapter", () => {

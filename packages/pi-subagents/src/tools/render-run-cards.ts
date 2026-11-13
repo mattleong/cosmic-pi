@@ -51,7 +51,7 @@ const reportNotes = (card: SubagentRunCard): ReadonlyArray<string> =>
   );
 
 /** The words a run's card holds: its report, failure, or question. */
-export const cardWords = (card: SubagentRunCard): string | undefined => {
+const cardWords = (card: SubagentRunCard): string | undefined => {
   if (card.state === "completed") return card.finalText;
   if (card.error) return card.error;
   const attention = runAttention(card);

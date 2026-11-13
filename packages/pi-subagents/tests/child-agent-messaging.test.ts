@@ -8,14 +8,10 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { assert, describe, expect, it } from "@effect/vitest";
-import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import {
   deferredPromise,
-  extensionContextFixture,
   recordingExtensionHost,
   temporaryDirectory,
 } from "pi-cosmic-core/testing";
@@ -25,16 +21,20 @@ import {
   type QuestionnaireOwner,
 } from "pi-ask-user/protocol";
 import { vi } from "vitest";
-import type { BackendDriver, BackendEvent } from "../src/backend/model.ts";
-import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
 import { SubagentService } from "../src/run/service.ts";
 import { AGENT_TOOL_NAMES } from "../src/run/tool-policy.ts";
 import { decodeSubagentContract } from "../src/tools/contract-schema.ts";
 import { encodeSubagentProxyInput, withSubagentProxyParent } from "../src/tools/proxy-protocol.ts";
 import type { AgentToolInput } from "../src/tools/schema.ts";
-import { activateRoot, proxyIpcChannel } from "./fixtures/proxy-parent.ts";
-import { fakeWriterLeaseLayer, profileLayerFor, request } from "./run/fixtures/service-harness.ts";
+import { sessionContextFixture } from "./fixtures/pi-host.ts";
+import {
+  activateRoot,
+  proxyBackend,
+  proxyIpcChannel,
+  proxyServiceLayer,
+} from "./fixtures/proxy-parent.ts";
+import { request } from "./run/fixtures/service-harness.ts";
 import { eventLoopTurn, step } from "./support/effect-test.ts";
 import { answerCapabilityQueries, pickQuestionnaire } from "./support/questionnaire.ts";
 import * as Arr from "effect/Array";
@@ -45,65 +45,7 @@ const eventLoopTurns = () => eventLoopTurn().then(eventLoopTurn).then(eventLoopT
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const contextFor = (session: SessionManager) =>
-  extensionContextFixture({
-    cwd: session.getCwd(),
-    signal: undefined,
-    hasUI: false,
-    mode: "rpc",
-    sessionManager: session,
-    isProjectTrusted: () => true,
-  });
-
-// Every run is a live Pi child whose steering input the test observes.
-const backendFixture = () => {
-  const controls: Array<{
-    readonly runId: string;
-    readonly steered: string[];
-    readonly offer: (event: BackendEvent) => void;
-  }> = [];
-  const driver: BackendDriver = {
-    supportsContext: () => true,
-    preflight: () => Effect.void,
-    spawn: (launch) =>
-      Effect.acquireRelease(
-        Effect.gen(function* () {
-          const events = yield* Queue.unbounded<BackendEvent, Cause.Done>();
-          const session = SessionManager.inMemory(launch.cwd);
-          const control = {
-            runId: launch.runId,
-            steered: new Array<string>(),
-            offer: (event: BackendEvent) => void Queue.offerUnsafe(events, event),
-          };
-          controls.push(control);
-          return {
-            events,
-            awaitExit: Effect.never,
-            acknowledge: () => {},
-            terminate: () => Effect.void,
-            cancelPending: () => {},
-            controls: {
-              initialize: Effect.succeed({
-                model: launch.model,
-                effort: launch.effort,
-                sessionId: session.getSessionId(),
-              }),
-              start: (_message: string, assignmentEpoch: number) =>
-                Effect.sync(() => control.offer({ type: "run_started", assignmentEpoch })),
-              steer: (message: string) => Effect.sync(() => void control.steered.push(message)),
-              interrupt: Effect.void,
-              reply: () => Effect.void,
-              notifyPeers: () => Effect.void,
-            },
-          };
-        }),
-        (handle) => Effect.sync(() => Queue.endUnsafe(handle.events)),
-      ),
-  };
-  return {
-    controls,
-    layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver)),
-  };
-};
+  sessionContextFixture({ cwd: session.getCwd(), sessionManager: session });
 
 const openRoot = (ctx: ExtensionContext, directory: string) =>
   Effect.gen(function* () {
@@ -118,7 +60,7 @@ const openRoot = (ctx: ExtensionContext, directory: string) =>
 
 // A child bridge whose IPC requests reach the root through its run's authenticated channel.
 const openChild = (
-  control: ReturnType<typeof backendFixture>["controls"][number],
+  control: ReturnType<typeof proxyBackend>["controls"][number],
   session: SessionManager,
   activeTools: ReadonlyArray<string>,
 ) =>
@@ -196,14 +138,10 @@ describe("Pi child agent messaging through the root coordinator", () => {
       root.appendMessage({ role: "user", content: "Coordinate the review", timestamp: 1 });
       root.appendMessage(fauxAssistantMessage("MAIN-LATEST-FINDING"));
       const { activation, sendMessage } = yield* openRoot(contextFor(root), directory);
-      const backend = backendFixture();
-      const layer = SubagentService.layer({
-        proxyHandler: activation.proxyHandler,
-        agentMain: activation.agentMain,
-      }).pipe(
-        Layer.provideMerge(backend.layer),
-        Layer.provideMerge(profileLayerFor({})),
-        Layer.provide(fakeWriterLeaseLayer()),
+      const backend = proxyBackend();
+      const layer = proxyServiceLayer(
+        { proxyHandler: activation.proxyHandler, agentMain: activation.agentMain },
+        backend,
       );
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
@@ -280,14 +218,10 @@ describe("Pi child agent messaging through the root coordinator", () => {
       const directory = yield* temporaryDirectory("pi-child-agent-forgery-");
       const root = SessionManager.create(directory, directory);
       const { activation } = yield* openRoot(contextFor(root), directory);
-      const backend = backendFixture();
-      const layer = SubagentService.layer({
-        proxyHandler: activation.proxyHandler,
-        agentMain: activation.agentMain,
-      }).pipe(
-        Layer.provideMerge(backend.layer),
-        Layer.provideMerge(profileLayerFor({})),
-        Layer.provide(fakeWriterLeaseLayer()),
+      const backend = proxyBackend();
+      const layer = proxyServiceLayer(
+        { proxyHandler: activation.proxyHandler, agentMain: activation.agentMain },
+        backend,
       );
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
@@ -358,14 +292,13 @@ describe("Pi child questionnaires through the root coordinator", () => {
           return reply.promise;
         },
       }));
-      const backend = backendFixture();
-      const layer = SubagentService.layer({
-        proxyHandler: activation.proxyHandler,
-        questionnaireHandler: activation.questionnaireHandler,
-      }).pipe(
-        Layer.provideMerge(backend.layer),
-        Layer.provideMerge(profileLayerFor({})),
-        Layer.provide(fakeWriterLeaseLayer()),
+      const backend = proxyBackend();
+      const layer = proxyServiceLayer(
+        {
+          proxyHandler: activation.proxyHandler,
+          questionnaireHandler: activation.questionnaireHandler,
+        },
+        backend,
       );
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;

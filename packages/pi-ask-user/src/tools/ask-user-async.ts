@@ -5,12 +5,7 @@ import {
   withCodePreviewShell,
   type CompactAnimationScheduler,
 } from "pi-code-previews";
-import {
-  defineTool,
-  type ExtensionAPI,
-  type MessageRenderer,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
+import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
 import {
   AskUserAsyncParameters,
@@ -48,10 +43,8 @@ import {
 // Converted on first registration; only the TUI root registers the async tools.
 const outputSchema = Fn.memoize(toPiToolOutputSchema);
 
-export const renderAskUserAsyncMessage: MessageRenderer = renderAsyncMessage;
-
 export function registerAsyncAskUserMessageRenderer(pi: ExtensionAPI): void {
-  pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, renderAskUserAsyncMessage);
+  pi.registerMessageRenderer(ASYNC_MESSAGE_TYPE, renderAsyncMessage);
 }
 
 export function registerAsyncAskUserTools(

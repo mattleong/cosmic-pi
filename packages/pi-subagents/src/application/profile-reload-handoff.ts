@@ -45,28 +45,22 @@ const deleteEnvelope = (): void => {
   } catch {}
 };
 
-/** The handoff slot's own value, read or written as is. */
-interface EnvelopeSlot {
-  readonly value?: unknown;
-}
-
-const readEnvelopeValue = (): EnvelopeSlot | undefined => {
+/** The handoff slot as it is; a missing slot or an accessor has no value. */
+const readEnvelope = (): PropertyDescriptor | undefined => {
   try {
-    const descriptor = Object.getOwnPropertyDescriptor(globalThis, PROFILE_RELOAD_HANDOFF_KEY);
-    if (!descriptor) return {};
-    return "value" in descriptor ? { value: descriptor.value } : undefined;
+    return Object.getOwnPropertyDescriptor(globalThis, PROFILE_RELOAD_HANDOFF_KEY);
   } catch {
     return undefined;
   }
 };
 
-const writeEnvelopeValue = (slot: EnvelopeSlot): void => {
+const writeEnvelope = ({ value }: Pick<PropertyDescriptor, "value">): void => {
   try {
     Reflect.defineProperty(globalThis, PROFILE_RELOAD_HANDOFF_KEY, {
       configurable: true,
       enumerable: true,
       writable: true,
-      value: slot.value,
+      value,
     });
   } catch {}
 };
@@ -96,7 +90,7 @@ export const profileReloadHandoff = {
    * that no longer decodes affects only the reload that read it unless it is retained.
    */
   capture: (sessionKey: string): ProfileReloadCapture | undefined => {
-    const slot = readEnvelopeValue();
+    const slot = readEnvelope();
     deleteEnvelope();
     if (
       slot?.value === undefined ||
@@ -106,7 +100,7 @@ export const profileReloadHandoff = {
       return undefined;
     return {
       restore: decodeSessionProfileRestore(decodeEnvelope(slot.value)?.seed),
-      retain: () => writeEnvelopeValue(slot),
+      retain: () => writeEnvelope(slot),
     };
   },
   publish: (sessionKey: string, seed: SessionProfileOverrideSeed): void => {
@@ -117,7 +111,7 @@ export const profileReloadHandoff = {
       }
       const decodedSeed = decodeSessionProfileOverrideSeed(seed);
       if (!decodedSeed?.baseline) return;
-      writeEnvelopeValue({
+      writeEnvelope({
         value: Object.freeze({
           version: 2,
           sessionKey,

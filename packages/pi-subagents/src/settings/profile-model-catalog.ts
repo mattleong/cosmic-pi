@@ -2,20 +2,17 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
+import { modelSelector } from "pi-cosmic-ui/manager/model-picker";
 import { decodeSubagentEffort, type SubagentEffort } from "../domain/routing.ts";
-import {
-  isSafeNativeModelSelector,
-  type ProfileCandidate,
-  type ProfileId,
-} from "../profiles/model.ts";
+import { isSafeNativeModelSelector, type ProfileCandidate } from "../profiles/model.ts";
 import {
   createPiModelOptions,
   retainUnavailableCurrent,
   type ProfileModelOption,
-  type ProfileModelPickerContext,
 } from "./ui/model-picker.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export interface ProjectedPiModel {
   readonly provider: string;
@@ -68,18 +65,15 @@ const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
 const projectRegistry = (
   registry: ProfileModelRegistry,
   scopedSelectors: ReadonlySet<string>,
-): ProfileModelCatalogSnapshot | undefined => {
-  try {
+): ProfileModelCatalogSnapshot | undefined =>
+  invokeHostCallback(() => {
     const models = Arr.map(registry.getAvailable(), projectPiModel);
     const scopedModels =
       scopedSelectors.size === 0
         ? models
-        : Arr.filter(models, (model) => scopedSelectors.has(`${model.provider}/${model.id}`));
+        : Arr.filter(models, (model) => scopedSelectors.has(modelSelector(model)));
     return freezeCatalogSnapshot(models, scopedModels);
-  } catch {
-    return undefined;
-  }
-};
+  }, undefined);
 
 export class ProfileModelCatalog {
   private snapshot: ProfileModelCatalogSnapshot;
@@ -88,9 +82,7 @@ export class ProfileModelCatalog {
 
   constructor(registry: ProfileModelRegistry, scopedModels: ReadonlyArray<Model<Api>> = []) {
     this.registry = registry;
-    this.scopedSelectors = new Set(
-      Arr.map(scopedModels, (model) => `${model.provider}/${model.id}`),
-    );
+    this.scopedSelectors = new Set(Arr.map(scopedModels, (model) => modelSelector(model)));
     this.snapshot = projectRegistry(registry, this.scopedSelectors) ?? freezeCatalogSnapshot([]);
   }
 
@@ -114,50 +106,39 @@ export class ProfileModelCatalog {
   }
 }
 
-const canonicalPiSelector = (model: ProjectedPiModel): string => `${model.provider}/${model.id}`;
-
 export interface CandidateModelPickerData {
   readonly choices: ReadonlyArray<ProfileModelOption>;
   readonly scopedChoices?: ReadonlyArray<ProfileModelOption> | undefined;
-  readonly current: string;
-  readonly context: ProfileModelPickerContext;
   readonly warning?: string | undefined;
 }
 
 interface CandidateModelPickerInput {
-  readonly profile: ProfileId;
-  readonly candidateIndex: number;
   readonly candidate: ProfileCandidate;
   readonly piCatalog: ProfileModelCatalogSnapshot;
   readonly parentSelector?: string | undefined;
 }
 
-type PiModelOptionsInput = Pick<
-  CandidateModelPickerInput,
-  "candidate" | "piCatalog" | "parentSelector"
->;
-
 const piModelOptions = (
-  { piCatalog, parentSelector }: PiModelOptionsInput,
+  { piCatalog, parentSelector }: CandidateModelPickerInput,
   models = piCatalog.piModels,
 ) =>
   createPiModelOptions({
     models,
-    parentModel: Option.getOrUndefined(
-      Arr.findFirst(piCatalog.piModels, (model) => canonicalPiSelector(model) === parentSelector),
+    parentModel: findOrUndefined(
+      piCatalog.piModels,
+      (model) => modelSelector(model) === parentSelector,
     ),
   });
 
 export const supportedPiEfforts = (
-  input: PiModelOptionsInput,
+  input: CandidateModelPickerInput,
 ): ReadonlyArray<SubagentEffort> | undefined =>
-  Option.getOrUndefined(
-    Arr.findFirst(piModelOptions(input), (option) => option.selector === input.candidate.model),
-  )?.supportedEfforts;
+  findOrUndefined(piModelOptions(input), (option) => option.selector === input.candidate.model)
+    ?.supportedEfforts;
 
 export function loadCandidateModelPicker(
   input: CandidateModelPickerInput,
-): Promise<CandidateModelPickerData> {
+): CandidateModelPickerData {
   const candidate = input.candidate;
   const snapshot = input.piCatalog;
   const optionsFor = (models: ReadonlyArray<ProjectedPiModel>) =>
@@ -165,7 +146,7 @@ export function loadCandidateModelPicker(
   const choices = optionsFor(snapshot.piModels);
   const unsafeModels = Arr.filter(
     snapshot.piModels,
-    (model) => !isSafeNativeModelSelector(canonicalPiSelector(model)),
+    (model) => !isSafeNativeModelSelector(modelSelector(model)),
   ).length;
   const warnings = Arr.filter(
     [
@@ -178,13 +159,6 @@ export function loadCandidateModelPicker(
     ],
     (warning) => warning !== undefined,
   );
-  const base = {
-    choices,
-    scopedChoices: optionsFor(snapshot.scopedPiModels),
-    current: candidate.model,
-    context: { profile: input.profile, candidateIndex: input.candidateIndex },
-  };
-  return Promise.resolve(
-    warnings.length > 0 ? { ...base, warning: Arr.join(warnings, " ") } : base,
-  );
+  const base = { choices, scopedChoices: optionsFor(snapshot.scopedPiModels) };
+  return warnings.length > 0 ? { ...base, warning: Arr.join(warnings, " ") } : base;
 }

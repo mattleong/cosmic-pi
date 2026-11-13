@@ -12,7 +12,6 @@ import { vi } from "vitest";
 import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
-  type CodePreviewSessionCapability,
 } from "../../src/application/capability";
 import { nextSettingsAdmission, withSettingsCoordinator } from "../../src/config/coordinator";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
@@ -21,13 +20,23 @@ import { codePreviewSettings, setCodePreviewSettings } from "../../src/config/st
 import { codePreviewApplicationLayer } from "../../src/layer";
 import { codePreviewSettingsSubcommand } from "../../src/settings/controller";
 import { step } from "../support/effect-test";
-import { inertScheduler } from "../support/renderer-host";
+import { inertCapability } from "../support/renderer-host";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 
-const inertCapability = (): CodePreviewSessionCapability => ({
-  ...inertScheduler,
-  run: () => Promise.reject(new Error("unexpected settings runtime call")),
+type PanelModule = typeof import("../../src/settings/panel");
+
+/** A settings implementation whose command path saves through `persistSettingsChange` only. */
+const panelStub = (
+  persistSettingsChange: PanelModule["persistSettingsChange"],
+  onModel: () => void = () => undefined,
+): PanelModule => ({
+  persistSettingsChange,
+  createCodePreviewSettingsModel: () => {
+    onModel();
+    throw new Error("this command path must not construct a panel");
+  },
 });
 
 const isolatedSettings = Effect.gen(function* () {
@@ -65,19 +74,14 @@ for (const action of ["", "readCollapsedLines 40"])
       () =>
         Effect.gen(function* () {
           const initial = yield* isolatedSettings;
-          const loading = deferredPromise<typeof import("../../src/settings/panel")>();
+          const loading = deferredPromise<PanelModule>();
           const entered = yield* Deferred.make<void>();
           let saves = 0;
-          const panel = {
-            persistSettingsChange: (next) => {
-              saves++;
-              setCodePreviewSettings(next);
-              return Promise.resolve();
-            },
-            createCodePreviewSettingsModel: () => {
-              throw new Error("a retired panel must not be constructed");
-            },
-          } satisfies typeof import("../../src/settings/panel");
+          const panel = panelStub((next) => {
+            saves++;
+            setCodePreviewSettings(next);
+            return Promise.resolve();
+          });
           const command = codePreviewSettingsSubcommand(() => {
             Deferred.doneUnsafe(entered, Effect.void);
             return loading.promise;
@@ -111,20 +115,19 @@ for (const action of ["", "readCollapsedLines 40"])
         () =>
           Effect.gen(function* () {
             yield* isolatedSettings;
-            const loading = deferredPromise<typeof import("../../src/settings/panel")>();
+            const loading = deferredPromise<PanelModule>();
             const entered = yield* Deferred.make<void>();
             let saves = 0;
             let models = 0;
-            const panel = {
-              persistSettingsChange: () => {
+            const panel = panelStub(
+              () => {
                 saves++;
                 return Promise.resolve();
               },
-              createCodePreviewSettingsModel: () => {
+              () => {
                 models++;
-                throw new Error("an aborted panel must not be constructed");
               },
-            } satisfies typeof import("../../src/settings/panel");
+            );
             const command = codePreviewSettingsSubcommand(() => {
               Deferred.doneUnsafe(entered, Effect.void);
               return loading.promise;
@@ -212,15 +215,12 @@ it.effect("a rejected settings implementation load is reported safely and can be
         failed = true;
         return Promise.reject(new Error("secret module path"));
       }
-      return Promise.resolve({
-        persistSettingsChange: (next) => {
+      return Promise.resolve(
+        panelStub((next) => {
           setCodePreviewSettings(next);
           return Promise.resolve();
-        },
-        createCodePreviewSettingsModel: () => {
-          throw new Error("the retry assigns a setting instead of opening a panel");
-        },
-      });
+        }),
+      );
     });
     const notifications: string[] = [];
     const host = fakeCustomSurfaceHost();
@@ -247,10 +247,9 @@ const overlappingSettingsCommands = (commands: readonly string[]) =>
     yield* Effect.addFinalizer(() => Effect.sync(() => vi.unstubAllEnvs()));
     const runtime = ManagedRuntime.make(codePreviewApplicationLayer);
     yield* Effect.addFinalizer(() => runtime.disposeEffect);
-    const capability: CodePreviewSessionCapability = {
-      ...inertScheduler,
+    const capability = inertCapability({
       run: (effect, signal) => runtime.runPromise(effect, { signal }),
-    };
+    });
     installCodePreviewSessionCapability(capability);
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
@@ -329,15 +328,10 @@ it.effect("a rejected free-form value states what the setting accepts", () =>
   Effect.gen(function* () {
     yield* isolatedSettings;
     let saves = 0;
-    const panel = {
-      persistSettingsChange: () => {
-        saves++;
-        return Promise.resolve();
-      },
-      createCodePreviewSettingsModel: () => {
-        throw new Error("an assignment must not open the panel");
-      },
-    } satisfies typeof import("../../src/settings/panel");
+    const panel = panelStub(() => {
+      saves++;
+      return Promise.resolve();
+    });
     const command = codePreviewSettingsSubcommand(() => Promise.resolve(panel));
     const host = fakeCustomSurfaceHost();
     const notifications: string[] = [];
@@ -347,7 +341,7 @@ it.effect("a rejected free-form value states what the setting accepts", () =>
     assert.equal(codePreviewSettings.shikiTheme, defaultCodePreviewSettings.shikiTheme);
     const [notice = ""] = notifications;
     // The free-form theme names its rule rather than only repeating the rejected value.
-    assert.ok(Str.includes("shikiTheme")(notice), notice);
-    assert.ok(!Str.includes("not-a-theme")(notice), notice);
+    assert.ok(Fn.pipe(notice, Str.includes("shikiTheme")), notice);
+    assert.ok(!Fn.pipe(notice, Str.includes("not-a-theme")), notice);
   }),
 );

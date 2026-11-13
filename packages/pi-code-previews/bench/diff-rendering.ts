@@ -2,7 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import type { DiffWordEmphasis } from "../src/config/schema";
 import {
   benchLog,
@@ -163,8 +163,9 @@ function printLargeDiffEstimates(
   scenarios: LargeScenario[],
 ): void {
   const rows = Arr.map(scenarios, (scenario) => {
-    const sourceCase = Option.getOrUndefined(
-      Arr.findFirst(benchCases, (benchCase) => benchCase.name === scenario.baseCase),
+    const sourceCase = findOrUndefined(
+      benchCases,
+      (benchCase) => benchCase.name === scenario.baseCase,
     );
     const smartRanges = findResult(results, scenario.baseCase, "word-ranges", "smart");
     const msPerPair =
@@ -249,11 +250,9 @@ function findResult(
   layer: BenchResult["layer"],
   mode: string,
 ): BenchResult | undefined {
-  return Option.getOrUndefined(
-    Arr.findFirst(
-      results,
-      (result) => result.caseName === caseName && result.layer === layer && result.mode === mode,
-    ),
+  return findOrUndefined(
+    results,
+    (result) => result.caseName === caseName && result.layer === layer && result.mode === mode,
   );
 }
 

@@ -13,7 +13,6 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { CompactAnimationScheduler } from "pi-code-previews";
-import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { SubagentToolPresentation } from "../boundary/host-activity-widget.ts";
 import type { SubagentSessionEnvironment } from "../boundary/host-profile-resolution.ts";
 import type { SubagentBackendRegistry } from "../backend/service.ts";
@@ -28,7 +27,6 @@ import {
 import {
   isParentActionRequiredRun,
   type StartSubagentRequest,
-  type SubagentControlExpectation,
   type SubagentRunView,
 } from "../run/model.ts";
 import { MAX_LIFECYCLE_TARGET_RUNS, MAX_TARGET_RUNS } from "../run/limits.ts";
@@ -40,7 +38,11 @@ import {
 } from "../run/service.ts";
 import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 import { executeStartBatch, resolveRecordedLaunch } from "./execute-start.ts";
-import { presentSubagentResult } from "./execute-result.ts";
+import {
+  presentAwaitResult,
+  presentLifecycleResult,
+  presentStartResult,
+} from "./execute-result.ts";
 import { awaitContract, startContract, lifecycleContract } from "./contract.ts";
 import { attentionRecoveryText } from "./format.ts";
 import {
@@ -160,7 +162,6 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
   callerRunId?: string,
   awaitExecution?: AwaitExecution,
   scripted: boolean = false,
-  expected?: SubagentControlExpectation,
 ): Effect.fn.Return<
   AgentToolResult<unknown>,
   SubagentError,
@@ -220,23 +221,33 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
         "scripted_parent_attention_required",
         `Subagents need parent attention\n\nEnd the script and handle this directly.\n\n${attentionRecoveryText(attention)}`,
       );
-    const outcome = {
-      runs,
-      attentionRequired,
-      ...(messages.count > 0 && { awaitMessages: messages }),
-      text: awaitResultText(state.progressSummary(runs), observations, questions, now, messages),
-      awaitContextRuns: withQuestionRuns(state.contextRuns(), questions),
-      contract: awaitContract({
-        observations,
-        until: awaitUntil(args),
-        requestedRunIds: state.requestedIds,
-        questionsElsewhere: questions.length > 0,
-        messages,
-        now,
-      }),
-    };
+    const until = awaitUntil(args);
     const result = yield* Effect.sync(() =>
-      presentSubagentResult(input, outcome, state.requestedIds),
+      presentAwaitResult(
+        {
+          runs,
+          contextRuns: withQuestionRuns(state.contextRuns(), questions),
+          awaitedRunIds: state.requestedIds,
+          awaitUntil: until,
+          attentionRequired,
+          ...(messages.count > 0 && { messages }),
+          text: awaitResultText(
+            state.progressSummary(runs),
+            observations,
+            questions,
+            now,
+            messages,
+          ),
+        },
+        awaitContract({
+          observations,
+          until,
+          requestedRunIds: state.requestedIds,
+          questionsElsewhere: questions.length > 0,
+          messages,
+          now,
+        }),
+      ),
     );
     const receipts = Arr.filterMap(observations, (observation) =>
       observation.completionReceipt
@@ -258,13 +269,10 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
     const ids = yield* requiredTargetIds(action, args.runIds, MAX_LIFECYCLE_TARGET_RUNS);
     yield* authorize(ids);
     const result = yield* forEachOutcome(ids, (id) =>
-      args.action === "interrupt" ? service.interrupt(id, expected) : service.stop(id, expected),
+      args.action === "interrupt" ? service.interrupt(id) : service.stop(id),
     );
     return yield* Effect.sync(() =>
-      presentSubagentResult(input, {
-        ...result,
-        contract: lifecycleContract(args.action, result.outcomes),
-      }),
+      presentLifecycleResult(args.action, result, lifecycleContract(args.action, result.outcomes)),
     );
   }, Effect.mapError(codedFailure));
   // The timeout applies here for root and nested callers alike, so the result is either the
@@ -287,9 +295,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
     if (timeoutSeconds === undefined) return yield* wait();
     const bounded = yield* awaitWithinTimeout(wait, timeoutSeconds);
     if (Result.isSuccess(bounded)) return bounded.success;
-    const result = state.cancelled(yield* Clock.currentTimeMillis, false, bounded.failure);
-    invokeHostCallback(() => onUpdate?.(result), undefined);
-    return result;
+    return state.ended(yield* Clock.currentTimeMillis, false, bounded.failure);
   }, Effect.mapError(codedFailure));
 
   switch (input.tool) {
@@ -307,10 +313,7 @@ export const executeSubagentActionEffect = Effect.fn("SubagentTools.execute")(fu
           readOnly: scripted,
         }).pipe(
           Effect.map((result) =>
-            presentSubagentResult(input, {
-              ...result,
-              contract: startContract(args.agents, result.startOutcomes),
-            }),
+            presentStartResult(result, startContract(args.agents, result.startOutcomes)),
           ),
         ),
       );
@@ -338,11 +341,6 @@ const executeRootAwait = (
   scripted: boolean,
 ): Promise<AgentToolResult<unknown>> => {
   const state = awaitExecutionFor(input.args.runIds, awaitUntil(input.args), onUpdate);
-  const ended = (ending: AwaitEnding) => {
-    const result = state.cancelled(state.interruptedAt(), false, ending);
-    invokeHostCallback(() => onUpdate?.(result), undefined);
-    return result;
-  };
   const wait = executeSubagentActionEffect(
     pi,
     runtime.environment,
@@ -366,7 +364,7 @@ const executeRootAwait = (
         signal?.aborted !== true && userInput?.aborted === true
           ? { kind: "user_input" }
           : { kind: "cancelled" };
-      return ended(ending);
+      return state.ended(state.interruptedAt(), false, ending);
     });
 };
 
@@ -413,13 +411,7 @@ const executeProxiedAwait = (
   return proxyCall(forwarded, signal, interrupted, backstop).catch((cause: unknown) => {
     if (!state.wasInterrupted()) throw cause;
     state.markDeliveryAttempt(state.requestedIds);
-    const result = state.cancelled(
-      undefined,
-      true,
-      signal?.aborted === true ? { kind: "cancelled" } : ending,
-    );
-    invokeHostCallback(() => onUpdate?.(result), undefined);
-    return result;
+    return state.ended(undefined, true, signal?.aborted === true ? { kind: "cancelled" } : ending);
   });
 };
 

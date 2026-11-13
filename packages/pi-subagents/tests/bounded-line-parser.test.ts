@@ -82,6 +82,7 @@ describe("bounded child line parser", () => {
         stream.emit("data", Buffer.from(Fn.pipe("x", Str.repeat(20)), "utf8"));
         stream.emit("data", Buffer.from(Fn.pipe("y", Str.repeat(20)), "utf8"));
       },
+      onOversizedLine: () => {},
       onOverflow: overflow,
     });
     stream.write(Buffer.from("seed\n", "utf8"));

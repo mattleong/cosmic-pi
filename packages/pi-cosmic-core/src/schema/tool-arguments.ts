@@ -11,6 +11,7 @@ import type { Static, TSchema } from "typebox";
 import { formats } from "@earendil-works/pi-schema/formats";
 import { clipText } from "../display.ts";
 import { isJsonObject, type JsonObject, type JsonValue } from "../platform/json-document.ts";
+import { findOrUndefined } from "../array.ts";
 
 const validators = new WeakMap<object, Validator>();
 
@@ -235,19 +236,15 @@ export const replacementField = (
 ): string | undefined => {
   // @effect-diagnostics-next-line preferEffectString:off -- Str.replace takes no replacer callback
   const camel = key.replace(/_([a-z])/gu, (_match, letter: string) => Str.toUpperCase(letter));
-  const alias = Option.getOrUndefined(
-    Arr.findFirst([key, camel], (name) => Rec.has(aliases, name)),
-  );
-  return Option.getOrUndefined(
-    Arr.findFirst(
-      [
-        alias === undefined ? undefined : aliases[alias],
-        camel,
-        `${camel}s`,
-        Fn.pipe(camel, Str.replace(/s$/u, "")),
-      ],
-      (candidate) => candidate !== undefined && candidate !== key && accepted.includes(candidate),
-    ),
+  const alias = findOrUndefined([key, camel], (name) => Rec.has(aliases, name));
+  return findOrUndefined(
+    [
+      alias === undefined ? undefined : aliases[alias],
+      camel,
+      `${camel}s`,
+      Fn.pipe(camel, Str.replace(/s$/u, "")),
+    ],
+    (candidate) => candidate !== undefined && candidate !== key && accepted.includes(candidate),
   );
 };
 

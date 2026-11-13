@@ -21,8 +21,8 @@ interface BoundedLineParserOptions {
   readonly maxLineBytes: number;
   readonly maxQueuedBytes: number;
   readonly onLine: (line: string) => void;
-  /** Receives oversized lines and keeps parsing after them. Without it, one overflows the parser. */
-  readonly onOversizedLine?: (line: OversizedLine) => void;
+  /** Receives oversized lines; the parser keeps parsing after them. */
+  readonly onOversizedLine: (line: OversizedLine) => void;
   readonly onOverflow: () => void;
 }
 
@@ -91,7 +91,6 @@ export function attachBoundedLineParser(
       lineBytes += segment.length;
       return;
     }
-    if (!options.onOversizedLine) return overflow();
     const parts = [...line, segment];
     const bytes = lineBytes + segment.length;
     const suffix = Arr.reduce(parts, Buffer.alloc(0), withTail);
@@ -108,7 +107,7 @@ export function attachBoundedLineParser(
     const oversized = skipped;
     if (oversized) {
       skipped = undefined;
-      options.onOversizedLine?.({
+      options.onOversizedLine({
         prefix: oversized.prefix.toString("utf8"),
         suffix: lineText(oversized.suffix),
         bytes: oversized.bytes,

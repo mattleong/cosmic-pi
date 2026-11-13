@@ -18,9 +18,9 @@ import {
   spinnerFrameAt,
 } from "pi-cosmic-ui/manager";
 import {
+  isActiveRunState,
   isTerminalRunState,
   type SubagentProjection,
-  type SubagentRunState,
   type SubagentRunView,
 } from "../run/model.ts";
 import { aggregateUsage } from "./metrics.ts";
@@ -32,7 +32,7 @@ import {
   shortRunId,
 } from "./run-presentation.ts";
 import { projectFleetTree, runTreeBranch, type FleetTreeRow } from "./run-tree-rows.ts";
-import { runLiveActivity } from "./run-live-activity.ts";
+import { runLiveActivity, runNameLookup, type RunNameLookup } from "./run-live-activity.ts";
 import { runRowStateLabel, runStateColor, runStateGlyph } from "./run-state.ts";
 
 export type SubagentActivityAwaitMode = "all_finished" | "any_finished";
@@ -74,14 +74,6 @@ interface RunMessageSummary {
   readonly latest?: RunMessagePreview | undefined;
 }
 
-const PANEL_RUN_STATES: ReadonlySet<SubagentRunState> = new Set([
-  "starting",
-  "running",
-  "waiting_for_parent",
-  "paused",
-  "stopping",
-]);
-
 export interface SubagentActivityPanelProjection {
   readonly rows: ReadonlyArray<FleetTreeRow>;
   readonly trackedRuns: ReadonlyArray<SubagentRunView>;
@@ -89,7 +81,7 @@ export interface SubagentActivityPanelProjection {
   readonly awaitedRunIds: ReadonlySet<string>;
   readonly awaitedRuns: ReadonlyArray<SubagentRunView>;
   /** Display names by run ID, for rows that name the runs they wait on. */
-  readonly runNames: ReadonlyMap<string, string>;
+  readonly nameOf: RunNameLookup;
   /** Message counts and latest previews for included runs that sent or received any. */
   readonly messages: ReadonlyMap<string, RunMessageSummary>;
   readonly presentation: SubagentActivityPresentationSnapshot;
@@ -146,7 +138,7 @@ export const projectSubagentActivityPanel = (
   projection: SubagentProjection,
   presentation: SubagentActivityPresentationSnapshot = EMPTY_ACTIVITY_PRESENTATION,
 ): SubagentActivityPanelProjection => {
-  const trackedRuns = Arr.filter(projection.runs, (run) => PANEL_RUN_STATES.has(run.state));
+  const trackedRuns = Arr.filter(projection.runs, (run) => isActiveRunState(run.state));
   const includedIds = new Set(Arr.map(trackedRuns, (run) => run.id));
   const runsById = new Map(Arr.map(projection.runs, (run) => [run.id, run]));
 
@@ -175,7 +167,7 @@ export const projectSubagentActivityPanel = (
     trackedRunIds: new Set(Arr.map(trackedRuns, (run) => run.id)),
     awaitedRunIds,
     awaitedRuns: Arr.filter(projection.runs, (run) => awaitedRunIds.has(run.id)),
-    runNames: new Map(Arr.map(projection.runs, (run) => [run.id, run.name] as const)),
+    nameOf: runNameLookup(projection.runs),
     messages: projectRunMessages(includedRuns, runsById),
     presentation,
   };
@@ -185,7 +177,7 @@ export const hasSubagentActivityPanelContent = (
   projection: SubagentProjection,
   presentation: SubagentActivityPresentationSnapshot = EMPTY_ACTIVITY_PRESENTATION,
 ): boolean =>
-  Arr.some(projection.runs, (run) => PANEL_RUN_STATES.has(run.state)) ||
+  Arr.some(projection.runs, (run) => isActiveRunState(run.state)) ||
   presentation.starts.length > 0 ||
   presentation.awaits.length > 0;
 
@@ -219,7 +211,7 @@ const runElapsed = (run: SubagentRunView, now: number): string =>
 const runActivity = (run: SubagentRunView, panel: SubagentActivityPanelProjection): string => {
   if (run.state === "waiting_for_parent" || run.state === "paused")
     return runRowStateLabel(run.state) ?? "";
-  return sanitizeTerminalLine(runLiveActivity(run, (id) => panel.runNames.get(id)) ?? "");
+  return sanitizeTerminalLine(runLiveActivity(run, panel.nameOf) ?? "");
 };
 
 interface HeaderPart {
@@ -451,7 +443,7 @@ const activityMetadataVariants = (
     { parts: [model] },
   ];
   return Arr.flatMap(variants, (variant) => {
-    const parts = Arr.filter(variant.parts, Boolean);
+    const parts = Arr.filter(variant.parts, Str.isNonEmpty);
     return parts.length > 0 ? [{ ...variant, parts }] : [];
   });
 };
@@ -467,7 +459,7 @@ const fitActivityMetadata = (
   const elapsedWidth = variant.elapsed ? visibleWidth(variant.elapsed) + ELAPSED_GAP : 0;
   const rightAligned = (left: string): string =>
     variant.elapsed
-      ? `${left}${Str.repeat(Math.max(ELAPSED_GAP, width - visibleWidth(left) - visibleWidth(variant.elapsed)))(" ")}${variant.elapsed}`
+      ? `${left}${Fn.pipe(" ", Str.repeat(Math.max(ELAPSED_GAP, width - visibleWidth(left) - visibleWidth(variant.elapsed))))}${variant.elapsed}`
       : left;
   if (visibleWidth(prefix + metadata) + elapsedWidth <= width)
     return rightAligned(prefix + metadata);

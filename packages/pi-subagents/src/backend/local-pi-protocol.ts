@@ -1,4 +1,4 @@
-import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import { contentText } from "pi-cosmic-core/message-text";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Effect from "effect/Effect";
@@ -282,7 +282,6 @@ const AssistantMessageSchema = Schema.Struct({
   content: Schema.Array(Schema.Unknown),
   stopReason: Schema.optional(Schema.Literals(["stop", "length", "toolUse", "error", "aborted"])),
   errorMessage: Schema.optional(ProtocolErrorSchema),
-  usage: Schema.optional(Schema.Unknown),
 });
 const MessageDiscriminantSchema = Schema.Struct({ role: Schema.optional(Schema.String) });
 
@@ -291,9 +290,6 @@ export const decodeAssistantMessage = Effect.fnUntraced(function* (value: Schema
   if (discriminant.role !== "assistant") return undefined;
   return yield* Schema.decodeUnknownEffect(AssistantMessageSchema)(value);
 });
-
-const TextPartSchema = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
-const decodeTextPart = decodeUnknownOrUndefined(TextPartSchema);
 
 /** The `provider/model` selector a reply came from; extensions can switch it mid-run. */
 export const assistantModel = (message: typeof AssistantMessageSchema.Type): string | undefined => {
@@ -304,12 +300,7 @@ export const assistantModel = (message: typeof AssistantMessageSchema.Type): str
 };
 
 export const assistantText = (message: typeof AssistantMessageSchema.Type): string =>
-  Str.trim(
-    Arr.join(
-      Arr.flatMap(message.content, (part) => Arr.fromNullishOr(decodeTextPart(part)?.text)),
-      "\n",
-    ),
-  );
+  Str.trim(contentText(message.content));
 
 type CorrelatedRpcCommand =
   | { readonly type: "get_state"; readonly id?: string | undefined }

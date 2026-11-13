@@ -443,7 +443,7 @@ export function controlOperations(dependencies: RunControlDependencies) {
         return snapshotRun(record);
       }),
     );
-    yield* sendPeerNotices(id);
+    yield* sendPeerNotices;
     return view;
   });
 

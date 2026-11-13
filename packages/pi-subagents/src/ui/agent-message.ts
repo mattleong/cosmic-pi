@@ -1,20 +1,17 @@
-import { Text } from "@earendil-works/pi-tui";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { CodePreviewMessagePresenter } from "pi-code-previews";
-import { stripTerminalControls } from "pi-cosmic-core/security";
 import { composeToolComponent } from "pi-cosmic-ui/tool";
-import { agentTextLines, bodyIndent, expandedRowsBody, indentedBody } from "./agent-text.ts";
+import { agentTextLines, bodyIndent, expandedRowsBody } from "./agent-text.ts";
 import { agentFactLines } from "./run-facts.ts";
-import { decodeMessageEnvelope, messageContentText } from "./message-envelope.ts";
-import { displayName, MAX_NOTICE_TEXT_CHARS } from "./notice-details.ts";
+import { decodeMessageEnvelope, receivedMessageBody } from "./message-envelope.ts";
+import { AgentIdSchema, displayName, MAX_NOTICE_TEXT_CHARS } from "./notice-details.ts";
 
-const Id = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(1_024));
 const AgentMessageDetailsSchema = Schema.Struct({
-  from: Id,
-  fromName: Schema.optionalKey(Id),
-  to: Id,
-  messageId: Id,
+  from: AgentIdSchema,
+  fromName: Schema.optionalKey(AgentIdSchema),
+  to: AgentIdSchema,
+  messageId: AgentIdSchema,
   /** A bounded display copy of the sender's words, without the frame the recipient reads. */
   text: Schema.optionalKey(
     Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(MAX_NOTICE_TEXT_CHARS)),
@@ -33,7 +30,6 @@ const decodeDetails = Schema.decodeUnknownOption(AgentMessageDetailsSchema, {
 export const presentAgentMessage: CodePreviewMessagePresenter = (input, options, theme) => {
   const envelope = Option.getOrUndefined(decodeMessageEnvelope(input));
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
-  const words = details?.text;
   const sender = details ? displayName(details.fromName ?? details.from) : "";
   // The arrow icon already says the message came in; a recipient shows only when it isn't main.
   const recipient = details && details.to !== "main" ? ` → ${displayName(details.to)}` : "";
@@ -43,29 +39,22 @@ export const presentAgentMessage: CodePreviewMessagePresenter = (input, options,
     messageIcon: "received",
   } as const;
   const presentation = { name: "agent_message", label: "Agent message", summary };
-  if (words === undefined)
+  if (details?.text === undefined)
     return {
       ...presentation,
       expandLabel: "message",
-      expanded: () =>
-        indentedBody(
-          theme,
-          new Text(stripTerminalControls(messageContentText(envelope?.content)), 0, 0),
-        ),
+      expanded: () => receivedMessageBody(theme, envelope?.content),
     };
-  const facts = details
-    ? [
-        ...agentFactLines(sender, [details.from, `message ${details.messageId}`]),
-        ...(details.textCut ? ["Shown up to its display limit; the agent received all of it"] : []),
-      ]
-    : [];
+  const words = details.text;
+  const facts = [
+    ...agentFactLines(sender, [details.from, `message ${details.messageId}`]),
+    ...(details.textCut ? ["Shown up to its display limit; the agent received all of it"] : []),
+  ];
   return {
     ...presentation,
     // A collapsed compact row hides the words. In preview style they show collapsed, clipped with
     // their own affordance, and expansion adds the sender's IDs.
-    ...(options.collapsedStyle === "compact"
-      ? { expandLabel: "message" }
-      : facts.length > 0 && { expandLabel: "details" }),
+    expandLabel: options.collapsedStyle === "compact" ? "message" : "details",
     collapsed: () =>
       composeToolComponent((width) =>
         agentTextLines(words, width, theme, { expanded: false, indent: bodyIndent(options) }),

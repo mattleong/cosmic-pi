@@ -1,6 +1,5 @@
 import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import type { BackendEvent } from "./model.ts";
 
@@ -14,7 +13,6 @@ export interface LocalCliRawEventOwnership<Raw> {
 export const makeLocalCliRawEventOwnership = <Raw>(
   events: Queue.Queue<BackendEvent, Cause.Done>,
   acknowledgeRaw: (raw: Raw) => void,
-  label: string,
 ): LocalCliRawEventOwnership<Raw> => {
   const rawOwners = new Map<BackendEvent, Raw>();
   // Activity only refreshes the run's throttled liveness timestamp, so one pending event per
@@ -36,7 +34,7 @@ export const makeLocalCliRawEventOwnership = <Raw>(
   };
   const dropDiagnostic = (event: BackendEvent): Effect.Effect<void> =>
     Effect.logWarning(
-      `Subagent ${label} event ingress overflowed; dropped a ${event.type} event.`,
+      `Subagent local-Pi event ingress overflowed; dropped a ${event.type} event.`,
     ).pipe(Effect.andThen(Effect.sync(() => acknowledge(event))));
   const offer = (event: BackendEvent, raw?: Raw): Effect.Effect<void> =>
     Effect.suspend(() => {
@@ -47,7 +45,7 @@ export const makeLocalCliRawEventOwnership = <Raw>(
       if (raw) rawOwners.set(event, raw);
       return Queue.offer(events, event).pipe(
         Effect.flatMap((delivered) => (delivered ? Effect.void : dropDiagnostic(event))),
-        Effect.onExit((exit) => (Exit.isSuccess(exit) ? Effect.void : dropDiagnostic(event))),
+        Effect.onError(() => dropDiagnostic(event)),
       );
     });
   return { offer, release, acknowledge, acknowledgeAll };
@@ -55,10 +53,9 @@ export const makeLocalCliRawEventOwnership = <Raw>(
 
 export const localCliEventIngress = Effect.fn("LocalCliEvents.ingress")(function* <Raw>(
   acknowledgeRaw: (raw: Raw) => void,
-  label: string,
 ) {
   const events = yield* Queue.bounded<BackendEvent, Cause.Done>(512);
-  const ownership = makeLocalCliRawEventOwnership(events, acknowledgeRaw, label);
+  const ownership = makeLocalCliRawEventOwnership(events, acknowledgeRaw);
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       ownership.acknowledgeAll();

@@ -17,7 +17,7 @@ import { projectRunCardTree, runTreeBranch } from "../ui/run-tree-rows.ts";
 import type { CompactChild, CompactStatus, CompactSummary } from "pi-code-previews";
 import type { SubagentRunCard, SubagentStartAwaitCardDetails } from "./details-schema.ts";
 import { composeToolComponent as renderComponent } from "pi-cosmic-ui/tool";
-import { runTiming, type RunHierarchy } from "./render-run-rows.ts";
+import { runTiming } from "./render-run-rows.ts";
 import { isTextFragment } from "./text-fragments.ts";
 
 interface AwaitProgressRun {
@@ -32,8 +32,9 @@ interface AwaitProgressRun {
   readonly usage?: { readonly totalTokens: number; readonly cost?: number | undefined } | undefined;
 }
 
-interface AwaitHierarchy extends RunHierarchy {
+interface AwaitHierarchy {
   readonly awaitedRunIds: ReadonlySet<string>;
+  readonly contextOmitted?: boolean | undefined;
 }
 
 const firstFinishedSummary = (run: AwaitProgressRun): string =>
@@ -58,7 +59,7 @@ const stateCounts = (
   states: ReadonlyArray<AwaitProgressRun["state"]>,
 ): string[] =>
   Arr.flatMap(states, (state) => {
-    const count = Arr.filter(runs, (run) => run.state === state).length;
+    const count = Arr.countBy(runs, (run) => run.state === state);
     return count > 0 ? [`${count} ${runStateLabel(state)}`] : [];
   });
 
@@ -137,7 +138,7 @@ export const formatAwaitSummary = (
 ): string => {
   const { awaitedIds, allRuns } = progressRuns(runs, contextRuns);
   const usage = aggregateUsage(allRuns);
-  const finished = Arr.filter(runs, (run) => isTerminalRunState(run.state)).length;
+  const finished = Arr.countBy(runs, (run) => isTerminalRunState(run.state));
   const first = firstFinishedRun(runs, until);
   const descendantCount = allRuns.length - runs.length;
   return Arr.join(
@@ -226,7 +227,7 @@ export const syncAwaitProgressTicker = (
   invokeHostCallback(stop, undefined);
 };
 
-export const DESCENDANTS_OMITTED = "Some descendants are not shown";
+const DESCENDANTS_OMITTED = "Some descendants are not shown";
 
 const LIVE_CHILD_STATUS: Readonly<Record<SubagentRunCard["state"], CompactStatus>> = {
   starting: "pending",

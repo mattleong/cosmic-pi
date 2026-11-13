@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { countLabel, formatClockTime } from "pi-cosmic-core/display";
+import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import {
   MAX_PARENT_MESSAGES,
   ParentConversationSchema,
@@ -25,14 +26,13 @@ export type ParentReadFailure = typeof ParentReadFailureSchema.Type;
 const ParentToolDetailsSchema = Schema.Union([ParentConversationSchema, ParentReadFailureSchema]);
 export type ParentToolDetails = typeof ParentToolDetailsSchema.Type;
 
+const decodeDetails = decodeUnknownOrUndefined(ParentToolDetailsSchema, {
+  onExcessProperty: "ignore",
+});
+
 export const decodeParentToolDetails = (
   result: AgentToolResult<unknown> | undefined,
-): ParentToolDetails | undefined =>
-  Option.getOrUndefined(
-    Schema.decodeUnknownOption(ParentToolDetailsSchema, { onExcessProperty: "ignore" })(
-      result?.details,
-    ),
-  );
+): ParentToolDetails | undefined => decodeDetails(result?.details);
 
 export const isReadFailure = Schema.is(ParentReadFailureSchema);
 

@@ -1,7 +1,9 @@
 import type {
+  AgentBeforeSettleEvent,
   AgentBeforeSettleEventResult,
   BeforeAgentStartEventResult,
   BeforeProviderRequestEventResult,
+  BoundaryContextPreview,
   CacheWarmingDecisionEventResult,
   ContextEventResult,
   ExtensionContext,
@@ -14,6 +16,7 @@ import type {
   SessionBeforeForkResult,
   SessionBeforeSwitchResult,
   SessionBeforeTreeResult,
+  SessionBoundaryDraft,
   ToolCallEventResult,
   ToolResultEventResult,
   TurnEndEventResult,
@@ -124,3 +127,32 @@ export const defaultEvent = <Name extends ExtensionEventName>(
   const defaults: EventDefaults = makeDefaultEvents();
   return defaults[name];
 };
+
+type BoundaryContextMessage = BoundaryContextPreview["contextMessages"][number];
+
+interface AgentBeforeSettleEventOverrides {
+  /** The transcript the run settles with. */
+  readonly contextMessages?: ReadonlyArray<BoundaryContextMessage>;
+  /** Messages Pi appended after the last settle boundary. */
+  readonly pendingMessages?: ReadonlyArray<BoundaryContextMessage>;
+  readonly outcome?: AgentBeforeSettleEvent["outcome"];
+  /** Entries earlier `agent_before_settle` handlers returned. */
+  readonly entries?: ReadonlyArray<SessionBoundaryDraft>;
+}
+
+/** Pi's `agent_before_settle` event for a completed run that may continue, with fresh arrays. */
+export const agentBeforeSettleEventFixture = (
+  overrides: AgentBeforeSettleEventOverrides = {},
+): AgentBeforeSettleEvent => ({
+  type: "agent_before_settle",
+  outcome: overrides.outcome ?? "completed",
+  entries: [...(overrides.entries ?? [])],
+  continue: false,
+  context: {
+    contextEntries: [],
+    contextMessages: [...(overrides.contextMessages ?? [])],
+    llmMessages: [],
+    pendingMessages: [...(overrides.pendingMessages ?? [])],
+    canContinue: true,
+  },
+});

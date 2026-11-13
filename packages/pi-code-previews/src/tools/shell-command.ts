@@ -1,13 +1,10 @@
-import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export function getFirstShellCommandName(command: string): string | undefined {
   const words = getLeadingShellWords(command);
-  const commandWord = Option.getOrUndefined(
-    Arr.findFirst(words, (word) => !isShellAssignment(word)),
-  );
+  const commandWord = findOrUndefined(words, (word) => !isShellAssignment(word));
   return commandWord === undefined ? undefined : Str.split(commandWord, "/").pop();
 }
 

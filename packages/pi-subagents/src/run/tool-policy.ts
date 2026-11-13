@@ -5,6 +5,7 @@ import * as Rec from "effect/Record";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { hasControlCharacter } from "pi-cosmic-core/security";
+import { utf8ByteLength } from "pi-cosmic-core/text";
 import type { SubagentWriteIntent } from "../domain/routing.ts";
 import type { CustomAgentTools } from "../profiles/agents.ts";
 import { type InvalidSubagentRequestError, invalidRequest } from "./errors.ts";
@@ -47,7 +48,11 @@ const COORDINATION_TOOL_NAME_SET: ReadonlySet<string> = new Set([
   ...ROOT_TOOL_NAMES,
   CONTACT_PARENT_TOOL_NAME,
 ]);
-const isCoordinationTool = (name: string): boolean => COORDINATION_TOOL_NAME_SET.has(name);
+/**
+ * This package's own tools, root or child: never inherited, and their model-facing results are
+ * delivery envelopes rather than output a user reads.
+ */
+export const isCoordinationTool = (name: string): boolean => COORDINATION_TOOL_NAME_SET.has(name);
 
 export const isAgentToolName = Schema.is(Schema.Literals(AGENT_TOOL_NAMES));
 
@@ -72,7 +77,6 @@ export const PI_CHILD_EXCLUDED_TOOL_ARGUMENT = Arr.join(
 const MAX_INHERITED_PI_TOOL_COUNT = 256;
 const MAX_INHERITED_PI_TOOL_NAME_CHARS = 128;
 const MAX_INHERITED_PI_TOOL_ARGUMENT_BYTES = 32_768;
-const toolNameEncoder = new TextEncoder();
 
 const isChildExcludedTool = (name: string): boolean =>
   name === "workflow" ||
@@ -103,7 +107,7 @@ export const piRootActiveToolSnapshot = (
   for (const name of rootActiveTools) {
     if (!isCliRepresentableToolName(name)) return Effect.fail(unrepresentableToolSnapshot());
     if (seen.has(name) || isCoordinationTool(name) || isChildExcludedTool(name)) continue;
-    const encodedBytes = toolNameEncoder.encode(name).length + (inherited.length === 0 ? 0 : 1);
+    const encodedBytes = utf8ByteLength(name) + (inherited.length === 0 ? 0 : 1);
     if (argumentBytes + encodedBytes > MAX_INHERITED_PI_TOOL_ARGUMENT_BYTES)
       return Effect.fail(unrepresentableToolSnapshot());
     argumentBytes += encodedBytes;
@@ -121,7 +125,7 @@ const FILE_MUTATION_TOOL_NAME_SET: ReadonlySet<string> = new Set(PI_FILE_MUTATIO
 export const isWithheldPiChildTool = (name: string, writeIntent: SubagentWriteIntent): boolean =>
   writeIntent !== "writer" && FILE_MUTATION_TOOL_NAME_SET.has(name);
 
-export interface PiChildToolSnapshot {
+interface PiChildToolSnapshot {
   readonly tools: ReadonlyArray<string>;
   /** File-mutation tools the agent's allow list named that a read-only child doesn't receive. */
   readonly withheld: ReadonlyArray<string>;

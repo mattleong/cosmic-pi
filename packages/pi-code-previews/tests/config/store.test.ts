@@ -8,12 +8,12 @@ import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { SettingsList } from "@earendil-works/pi-tui";
 import type { JsonObject } from "pi-cosmic-core";
 import { deferredPromise } from "pi-cosmic-core/testing";
-import { afterEach } from "vitest";
+import { afterEach, vi } from "vitest";
 import { effectTest, step } from "../support/effect-test";
-import { inertScheduler } from "../support/renderer-host";
+import { inertCapability } from "../support/renderer-host";
+import { plainSettingsList } from "../support/settings-list";
 import {
   clearCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
@@ -59,8 +59,8 @@ const settingsRoots = Effect.fn("StoreTest.settingsRoots")(
       project: join(root, "project"),
     };
     // Settings resolve the agent directory and home from the process environment.
-    process.env.HOME = roots.home;
-    process.env.PI_CODING_AGENT_DIR = roots.agentDir;
+    vi.stubEnv("HOME", roots.home);
+    vi.stubEnv("PI_CODING_AGENT_DIR", roots.agentDir);
     return { ...roots, join };
   },
   Effect.orDie,
@@ -68,7 +68,7 @@ const settingsRoots = Effect.fn("StoreTest.settingsRoots")(
 );
 
 const installRunOnlyCapability = (run: CodePreviewSessionCapability["run"]) =>
-  installCodePreviewSessionCapability({ run, ...inertScheduler });
+  installCodePreviewSessionCapability(inertCapability({ run }));
 
 const JsonDocument = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 
@@ -95,14 +95,8 @@ const writeJson = Effect.fn("StoreTest.writeJson")(
 const loadPreviewSettings = (project: string, trusted?: boolean) =>
   step(() => loadCodePreviewSettings(project, trusted));
 
-const originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
-const originalHome = process.env.HOME;
-
 afterEach(() => {
-  if (originalPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-  else process.env.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
-  if (originalHome === undefined) delete process.env.HOME;
-  else process.env.HOME = originalHome;
+  vi.unstubAllEnvs();
   clearCodePreviewSessionCapability();
   setCodePreviewSettings(defaultCodePreviewSettings);
 });
@@ -174,19 +168,7 @@ effectTest("rapid panel edits preserve fields merged from an external settings e
       initializeSyntax: () => Promise.resolve(),
     },
   });
-  const list = new SettingsList(
-    model.items,
-    10,
-    {
-      label: (text) => text,
-      value: (text) => text,
-      description: (text) => text,
-      cursor: ">",
-      hint: (text) => text,
-    },
-    () => undefined,
-    () => undefined,
-  );
+  const list = plainSettingsList(model);
   model.onChange("readCollapsedLines", "40", list);
   model.onChange("readLineNumbers", "off", list);
   yield* Deferred.succeed(release, undefined);
@@ -239,17 +221,9 @@ effectTest("loadSettingsFromDisk merges only current locations in precedence ord
   assert.equal(untrusted.findResultPreview, false);
 });
 
-const globalOverrideCases = [
-  {
-    name: "saving a global change does not copy project defaults into other projects",
-    existing: undefined,
-    saved: { shikiTheme: "github-dark" },
-    secondRead: 22,
-  },
-];
-
-for (const { name, existing, saved, secondRead } of globalOverrideCases)
-  effectTest(name, function* () {
+effectTest(
+  "saving a global change does not copy project defaults into other projects",
+  function* () {
     const { root, agentDir, project, join } = yield* settingsRoots(
       "pi-code-previews-global-overrides-",
     );
@@ -260,7 +234,6 @@ for (const { name, existing, saved, secondRead } of globalOverrideCases)
     yield* writeJson(join(secondProject, ".pi", "settings.json"), {
       codePreview: { readCollapsedLines: 22 },
     });
-    if (existing) yield* writeJson(join(agentDir, "code-previews.json"), existing);
 
     const first = yield* loadSettingsFromDisk({ projectCwd: project, projectTrusted: true });
     assert.ok(first);
@@ -269,11 +242,14 @@ for (const { name, existing, saved, secondRead } of globalOverrideCases)
       { projectCwd: project, projectTrusted: true },
     );
 
-    assert.deepEqual(yield* readSavedDocument(join(agentDir, "code-previews.json")), saved);
+    assert.deepEqual(yield* readSavedDocument(join(agentDir, "code-previews.json")), {
+      shikiTheme: "github-dark",
+    });
     const second = yield* loadSettingsFromDisk({ projectCwd: secondProject, projectTrusted: true });
-    assert.equal(second?.readCollapsedLines, secondRead);
+    assert.equal(second?.readCollapsedLines, 22);
     assert.equal(second?.shikiTheme, "github-dark");
-  });
+  },
+);
 
 effectTest("an older live fallback cannot replace a newer successful publication", function* () {
   const { agentDir, project, join } = yield* settingsRoots("pi-code-previews-stale-fallback-");

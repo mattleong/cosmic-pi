@@ -1,6 +1,5 @@
 import * as Result from "effect/Result";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
@@ -11,6 +10,7 @@ import {
 import { clipText } from "pi-cosmic-core/display";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { type ExtensionSubcommand } from "pi-cosmic-core/host-command";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import {
   openSettingsList,
   settingsStatusText,
@@ -113,9 +113,7 @@ function codePreviewSettingsCommand(
     apply: (ctx, id, value, signal) => {
       operationSignal = signal;
       if (!operationIsCurrent() || !config()) return rejectInactiveCodePreviewSession("settings");
-      const setting = Option.getOrUndefined(
-        Arr.findFirst(SCRIPTED_SETTINGS, (entry) => entry.id === id),
-      );
+      const setting = findOrUndefined(SCRIPTED_SETTINGS, (entry) => entry.id === id);
       const previous = codePreviewSettings;
       const updated = updateSetting(previous, id, value);
       if (!setting || formatSettingValue(updated, setting.id) !== value)

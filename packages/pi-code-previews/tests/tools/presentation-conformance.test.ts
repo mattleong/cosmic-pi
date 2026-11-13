@@ -4,7 +4,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
 import type { CompactIssue } from "../../src/tools/compact-issues";
-import { failingRenderer, textResult } from "../support/render";
+import { failingRenderer, occurrences, textResult } from "../support/render";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -21,7 +21,6 @@ const issue: CompactIssue = {
   message: "Failure cause",
   detail: "Independent recovery",
 };
-const count = (text: string, phrase: string) => Str.split(text, phrase).length - 1;
 const inOrder = (text: string, phrases: readonly string[]) => {
   const positions = Arr.map(phrases, (phrase) =>
     Option.getOrElse(Fn.pipe(text, Str.indexOf(phrase)), () => -1),
@@ -74,9 +73,9 @@ test.each(modes)(
     );
     const h = createToolPresentationHarness(tool, { width: 120 });
     for (const { expanded, text } of h.cycle({ path: "file" }, original)) {
-      expect(count(text, "The operation may still be running")).toBe(1);
+      expect(occurrences(text, "The operation may still be running")).toBe(1);
       for (const phrase of ["AGENT_DETAIL", "INFO_NOTE", "CONTENT CALL", "CONTENT RESULT"])
-        expect(count(text, phrase)).toBe(expanded ? 1 : 0);
+        expect(occurrences(text, phrase)).toBe(expanded ? 1 : 0);
       expect(text).not.toMatch(/ORIGINAL CALL|ORIGINAL RESULT|RAW diagnostics|AGENT_COMMAND/u);
       expect(Fn.pipe(text, Str.includes("FULL_INTERNAL_SUBJECT"))).toBe(expanded);
       expect(Fn.pipe(text, Str.includes("Operation"))).toBe(!expanded);
@@ -121,7 +120,7 @@ test("content construction or drawing failure falls back in that slot and keeps 
       const text = Arr.join(h.render(), "\n");
       expect(text).toContain("unique call");
       for (const phrase of ["Failure cause", "Independent recovery", "Continue with next page"])
-        expect(count(text, phrase)).toBe(1);
+        expect(occurrences(text, phrase)).toBe(1);
       expect(text).not.toMatch(/ORIGINAL/u);
       expect(Fn.pipe(text, Str.includes("content output"))).toBe(failure === "none");
       expect(Fn.pipe(text, Str.includes("RAW diagnostics"))).toBe(failure !== "none");
@@ -163,7 +162,7 @@ test.each(modes)(
     const states = (h: ReturnType<typeof preview>, state: RegExp) =>
       Arr.map(h.cycle({ path: "file" }, result), ({ expanded, text }) => ({
         expanded,
-        count: Option.match(Str.match(state)(Str.toLowerCase(text)), {
+        count: Option.match(Fn.pipe(Str.toLowerCase(text), Str.match(state)), {
           onNone: () => 0,
           onSome: (found) => found.length,
         }),

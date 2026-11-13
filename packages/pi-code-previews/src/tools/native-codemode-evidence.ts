@@ -6,24 +6,21 @@ import * as Rec from "effect/Record";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { HostContainer } from "../shared/untrusted-value";
-import { ownContainer, ownDataReader } from "./native-safe-content";
+import { EvidenceText, ownContainer, ownDataReader } from "./native-safe-content";
 
-const Text = Schema.String.check(Schema.isMaxLength(4096));
 const Nonnegative = Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0));
 const Call = Schema.Struct({
-  id: Text,
-  name: Text,
-  args: Text,
+  id: EvidenceText,
+  name: EvidenceText,
+  args: EvidenceText,
   status: Schema.Literals(["running", "ok", "error", "cancelled"]),
   durationMs: Schema.optionalKey(Nonnegative),
-  error: Schema.optionalKey(Text),
+  error: Schema.optionalKey(EvidenceText),
   cost: Schema.optionalKey(Nonnegative),
 });
 export type NativeCodemodeCall = typeof Call.Type;
-const FieldValue = Schema.Union([Text, Nonnegative, Schema.Undefined]);
-const decodeFieldValue = decodeUnknownOrUndefined(FieldValue);
 const decodeCall = decodeUnknownOrUndefined(Call);
-const ownText = ownDataReader(Text);
+const ownText = ownDataReader(EvidenceText);
 const ownCount = ownDataReader(Schema.Natural);
 const MAX_CALL_RECORDS = 256;
 
@@ -43,16 +40,14 @@ export type NativeCallEvidence = (
 function callRecord(value: HostContainer | undefined): NativeCodemodeCall | undefined {
   return invokeHostCallback(() => {
     if (!Predicate.isObject(value)) return undefined;
-    const input: Partial<Record<string, typeof FieldValue.Type>> = {};
+    const input = new Map<string, unknown>();
     for (const key of Rec.keys(Call.fields)) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor) continue;
       if (!("value" in descriptor)) return undefined;
-      const decoded = decodeFieldValue(descriptor.value);
-      if (decoded === undefined && descriptor.value !== undefined) return undefined;
-      input[key] = decoded;
+      input.set(key, descriptor.value);
     }
-    return decodeCall(input);
+    return decodeCall(Rec.fromEntries(input));
   }, undefined);
 }
 
@@ -95,6 +90,9 @@ function readEvidence(value: HostContainer | undefined): NativeCallEvidence {
     ...recovery,
   };
 }
+
+export const nativeEvidenceComplete = (evidence: NativeCallEvidence): boolean =>
+  evidence.kind === "available" && evidence.complete;
 
 export function nativeEvidenceCoverage(evidence: NativeCallEvidence): string {
   if (evidence.kind === "unavailable") return "No readable call ledger is available";

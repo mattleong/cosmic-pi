@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { clipText, countLabel } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import { compile } from "@earendil-works/pi-schema";
+import { checkToolArguments } from "pi-cosmic-core/tool-arguments";
 import {
   invalidRequest,
   subagentErrorCode,
@@ -38,8 +38,6 @@ import {
   workspaceOperationError,
   type SubagentWorkspaceInput,
 } from "./schema.ts";
-
-const isWorkspaceInput = compile(WorkspaceParameters).check;
 
 const preparedCwdMetadata = (
   cwd: string,
@@ -215,10 +213,10 @@ const executeWorkspaceList = Effect.fn("SubagentTools.workspaceList")(function* 
     lines.push(line);
   }
   const omitted = entries.length - lines.length;
-  const adoptableCount = Arr.filter(
+  const adoptableCount = Arr.countBy(
     [...(listing.orphans?.values() ?? [])],
     (disposition) => disposition === "adoptable",
-  ).length;
+  );
   // The expansion's details list what the model's output listed, up to their own bound.
   const shown = entries.slice(0, Math.min(lines.length, MAX_WORKSPACE_LIST_ENTRIES));
   const listed = Arr.map(shown, (entry) => ({
@@ -409,10 +407,6 @@ const successorStartFailure = (error: SubagentError): Effect.Effect<never, Subag
   return Effect.fail(invalidRequest(subagentErrorCode(error), text));
 };
 
-/**
- * `resolveLaunch` resolves an adopted workspace's recorded launch for its first revision; the
- * host supplies it with its profiles and parent context.
- */
 // The newest run on the workspace names it: a revision's successor replaces its predecessor.
 const workspaceWriterName = (service: SubagentServiceContract, workspaceId: string) =>
   service.projection.pipe(
@@ -426,12 +420,16 @@ const workspaceWriterName = (service: SubagentServiceContract, workspaceId: stri
     ),
   );
 
+/**
+ * `resolveLaunch` resolves an adopted workspace's recorded launch for its first revision; the
+ * host supplies it with its profiles and parent context.
+ */
 export const executeWorkspaceAction = Effect.fn("SubagentTools.workspace")(function* (
   operation: SubagentWorkspaceInput,
   callerRunId: string = SUBAGENT_ROOT_RUN_ID,
   resolveLaunch?: WorkspaceReviseOptions["resolveLaunch"],
 ) {
-  const error = isWorkspaceInput(operation)
+  const error = checkToolArguments(WorkspaceParameters, operation)
     ? workspaceOperationError(operation)
     : "Worktree arguments failed strict validation.";
   if (error !== undefined) return yield* invalidRequest("workspace_input_invalid", error);

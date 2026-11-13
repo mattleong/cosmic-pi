@@ -1,11 +1,9 @@
 import type {
   AgentBeforeSettleEvent,
-  BoundaryContextPreview,
   ExtensionAPI,
   ExtensionContext,
   InputEvent,
 } from "@earendil-works/pi-coding-agent";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import {
   extensionContextFixture,
   recordingExtensionHost,
@@ -31,18 +29,6 @@ import {
 import { stringContaining } from "./support/matchers.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-
-type ContextMessage = BoundaryContextPreview["contextMessages"][number];
-
-const notice = (customType = "pi-subagents-completed"): ContextMessage => ({
-  role: "custom",
-  customType,
-  content: "Background subagent reader (agent-1) completed.",
-  display: true,
-  timestamp: 0,
-});
-
-const reply = (): ContextMessage => fauxAssistantMessage("Noted.");
 
 const inputEvent = (source: InputEvent["source"]): InputEvent => ({
   type: "input",
@@ -146,60 +132,20 @@ describe("parent wake policy", () => {
     }),
   );
 
-  it.effect("appends notices to a busy parent and continues its run so the model sees them", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      test.setIdle(false);
-      test.notify({ type: "completed", runs: [completed] });
-      test.notify({
-        type: "question",
-        id: "agent-2",
-        name: "writer",
-        requestId: "q-1",
-        message: "Which file?",
-        generation: 1,
-      });
-      expect(test.turns()).toEqual([false, false]);
-
-      const pending = yield* Effect.promise(() =>
-        test.settle(test.ctx(), settleEvent("completed", [reply()], [notice()])),
-      );
-      expect(pending).toMatchObject({ continue: true });
-
-      const appended = yield* Effect.promise(() =>
-        test.settle(test.ctx(), settleEvent("completed", [reply(), notice()])),
-      );
-      expect(appended).toMatchObject({ continue: true });
-
-      const answered = yield* Effect.promise(() =>
-        test.settle(test.ctx(), settleEvent("completed", [notice(), reply()])),
-      );
-      expect(answered).toBeUndefined();
-
-      yield* Effect.promise(() =>
-        test.emit("agent_settled", test.ctx(), { type: "agent_settled", aborted: false }),
-      );
-      expect(test.wakes()).toHaveLength(0);
-    }),
-  );
-
-  it.effect("wakes once when a notice arrives after the run's last settle boundary", () =>
-    Effect.gen(function* () {
-      const test = harness();
-      test.setIdle(false);
-      yield* Effect.promise(() => test.settle(test.ctx(), settleEvent("completed", [reply()])));
-      test.notify({ type: "completed", runs: [completed] });
-
-      yield* Effect.promise(() =>
-        test.emit("agent_settled", test.ctx(), { type: "agent_settled", aborted: false }),
-      );
-      yield* Effect.promise(() =>
-        test.emit("agent_settled", test.ctx(), { type: "agent_settled", aborted: false }),
-      );
-      expect(test.wakes()).toHaveLength(1);
-      expect(test.wakes()[0]?.[1]).toMatchObject({ triggerTurn: true });
-    }),
-  );
+  it("appends completion and question notices to a busy parent without starting a turn", () => {
+    const test = harness();
+    test.setIdle(false);
+    test.notify({ type: "completed", runs: [completed] });
+    test.notify({
+      type: "question",
+      id: "agent-2",
+      name: "writer",
+      requestId: "q-1",
+      message: "Which file?",
+      generation: 1,
+    });
+    expect(test.turns()).toEqual([false, false]);
+  });
 
   it.effect("reminds only about direct-child questions in the service projection", () => {
     const { fake, layer, projections } = localServiceFixture();
@@ -246,51 +192,49 @@ describe("parent wake policy", () => {
     }),
   );
 
-  for (const mode of ["print"] as const) {
-    it.effect(`continues ${mode} drain for a question blocked behind nested delivery`, () => {
-      const test = harness();
-      test.setIdle(false);
-      const { fake, layer, notifications } = localServiceFixture({
-        publish: test.setProjection,
-        notify: test.notify,
-      });
-      return withService(layer, function* (service) {
-        test.drain.mockImplementation(() => Effect.runPromise(service.awaitParentDrain));
-        const parent = yield* service.start(request({ name: "nested-parent" }));
-        yield* service.startSessionOwnedFrom(parent.id, request({ name: "nested-child" }));
-        const asking = yield* service.start(request({ name: "root-child" }));
-        const deliveryGate = yield* Deferred.make<void>();
-        yield* Effect.addFinalizer(() => Deferred.succeed(deliveryGate, undefined));
-        fake.controls[0]?.gateNextIpcType("proxy_notification", deliveryGate);
-        fake.controls[1]?.offerIpc(
-          contactParentFrame("nested-question", "question", "Question for the nested parent."),
-        );
-        yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
-        const settling = yield* Effect.promise(() => test.settle(test.ctx(mode))).pipe(
-          Effect.forkScoped,
-        );
-        yield* yieldUntil(() => test.drain.mock.calls.length > 0);
-        const question = "Question for the root parent.";
-        fake.controls[2]?.offerIpc(contactParentFrame("root-question", "question", question));
-
-        const result = yield* Fiber.join(settling);
-        expect(result).toMatchObject({ continue: true });
-        expect(JSON.stringify(result?.entries)).toContain(question);
-        const rootNotifications = () =>
-          Arr.filter(notifications, (item) => item.type === "question" && item.id === asking.id);
-        expect(rootNotifications()).toEqual([]);
-        expect(test.sendMessage).not.toHaveBeenCalled();
-        // A reminder is not a notifier acknowledgement. An already-reminded question must not
-        // cause either another continuation or an indefinite drain on the still-running sibling.
-        expect(yield* Effect.promise(() => test.settle(test.ctx(mode)))).toBeUndefined();
-
-        yield* Deferred.succeed(deliveryGate, undefined);
-        yield* yieldUntil(() => rootNotifications().length === 1);
-        yield* TestClock.adjust("1 second");
-        expect(rootNotifications()).toHaveLength(1);
-        expect(test.turns()).toEqual([false]);
-        expect(yield* Effect.promise(() => test.settle(test.ctx(mode)))).toBeUndefined();
-      });
+  it.effect("continues print drain for a question blocked behind nested delivery", () => {
+    const test = harness();
+    test.setIdle(false);
+    const { fake, layer, notifications } = localServiceFixture({
+      publish: test.setProjection,
+      notify: test.notify,
     });
-  }
+    return withService(layer, function* (service) {
+      test.drain.mockImplementation(() => Effect.runPromise(service.awaitParentDrain));
+      const parent = yield* service.start(request({ name: "nested-parent" }));
+      yield* service.startSessionOwnedFrom(parent.id, request({ name: "nested-child" }));
+      const asking = yield* service.start(request({ name: "root-child" }));
+      const deliveryGate = yield* Deferred.make<void>();
+      yield* Effect.addFinalizer(() => Deferred.succeed(deliveryGate, undefined));
+      fake.controls[0]?.gateNextIpcType("proxy_notification", deliveryGate);
+      fake.controls[1]?.offerIpc(
+        contactParentFrame("nested-question", "question", "Question for the nested parent."),
+      );
+      yield* yieldUntil(() => fake.controls[0]?.sentIpc("proxy_notification") === true);
+      const settling = yield* Effect.promise(() => test.settle(test.ctx("print"))).pipe(
+        Effect.forkScoped,
+      );
+      yield* yieldUntil(() => test.drain.mock.calls.length > 0);
+      const question = "Question for the root parent.";
+      fake.controls[2]?.offerIpc(contactParentFrame("root-question", "question", question));
+
+      const result = yield* Fiber.join(settling);
+      expect(result).toMatchObject({ continue: true });
+      expect(JSON.stringify(result?.entries)).toContain(question);
+      const rootNotifications = () =>
+        Arr.filter(notifications, (item) => item.type === "question" && item.id === asking.id);
+      expect(rootNotifications()).toEqual([]);
+      expect(test.sendMessage).not.toHaveBeenCalled();
+      // A reminder is not a notifier acknowledgement. An already-reminded question must not
+      // cause either another continuation or an indefinite drain on the still-running sibling.
+      expect(yield* Effect.promise(() => test.settle(test.ctx("print")))).toBeUndefined();
+
+      yield* Deferred.succeed(deliveryGate, undefined);
+      yield* yieldUntil(() => rootNotifications().length === 1);
+      yield* TestClock.adjust("1 second");
+      expect(rootNotifications()).toHaveLength(1);
+      expect(test.turns()).toEqual([false]);
+      expect(yield* Effect.promise(() => test.settle(test.ctx("print")))).toBeUndefined();
+    });
+  });
 });

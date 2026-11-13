@@ -1,3 +1,4 @@
+import * as Arr from "effect/Array";
 import type * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -42,7 +43,7 @@ export const makeRunContext = (overrides: Partial<RunContext> = {}) =>
               SubagentNotFoundError.make({ id, message: `Subagent run not found: ${id}` }),
             );
       },
-      sendPeerNotices: () => Effect.void,
+      sendPeerNotices: Effect.void,
       allocateAssignmentAttemptToken: () => `assignment-test-${++attempts}`,
       sessionUsage: emptySessionUsageLedger(),
       ...overrides,
@@ -79,20 +80,26 @@ export const quietDelivery: RunNotificationDelivery = {
   forgetTakenReportLocked: () => undefined,
 };
 
-export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
-  makeRunContext(overrides).pipe(
-    Effect.map((context) =>
-      settlementOperations({
-        ...context,
-        delivery: inertDelivery,
-        closeRecordScope: () => Effect.void,
-        claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
-      }),
-    ),
-  );
+/**
+ * A settlement over `context` that closes no scope and finds turn input already drained. Its
+ * delivery refuses every call unless `dependencies` replaces it.
+ */
+export const testSettlement = (
+  context: RunContext,
+  dependencies: Partial<Parameters<typeof settlementOperations>[0]> = {},
+) =>
+  settlementOperations({
+    ...context,
+    delivery: inertDelivery,
+    closeRecordScope: () => Effect.void,
+    claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
+    ...dependencies,
+  });
 
-const inertDriver: BackendDriver = {
-  supportsContext: () => true,
+export const makeTestSettlement = (overrides: Partial<RunContext> = {}) =>
+  makeRunContext(overrides).pipe(Effect.map((context) => testSettlement(context)));
+
+export const inertDriver: BackendDriver = {
   preflight: () => Effect.void,
   spawn: () => Effect.die("unused"),
 };
@@ -187,6 +194,13 @@ export const runningAssignment = (epoch: number): RunRecord["assignment"] => ({
   outcomeUncertain: false,
   pendingRunSettled: false,
 });
+
+/** A report of `lines` numbered lines, for tests of what a long report retains. */
+export const findings = (lines: number) =>
+  Arr.join(
+    Array.from({ length: lines }, (_, line) => `finding ${line}`),
+    "\n",
+  );
 
 /** A report archive whose saves wait for the test's release, recording what it saved and discarded. */
 export const gatedReportArchive = Effect.gen(function* () {

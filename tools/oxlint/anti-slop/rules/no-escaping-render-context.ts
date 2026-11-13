@@ -32,8 +32,8 @@ export const knownHelpers: readonly KnownHelper[] = [
     retained: [0],
   },
   {
-    name: "stateHeading",
-    definition: "pi-code-previews/src/tools/renderers/shared/state-heading",
+    name: "previewHeadingText",
+    definition: "pi-code-previews/src/preview/heading-wrap",
     retained: [0],
   },
   {

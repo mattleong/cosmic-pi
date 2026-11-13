@@ -7,6 +7,7 @@ import * as Order from "effect/Order";
 import { clipText, countLabel, formatBytes, formatCount } from "pi-cosmic-core/display";
 import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
+import { hasControlCharacter } from "pi-cosmic-core/security";
 import {
   checkDirectory,
   git,
@@ -80,7 +81,8 @@ export const readWorktreeInclude = Effect.fn("GitWorktreeInclude.readWorktreeInc
     patterns.length > MAX_WORKTREE_INCLUDE_PATTERNS ||
     Arr.some(
       patterns,
-      (pattern) => pattern.length > MAX_WORKTREE_INCLUDE_PATTERN_CHARS || /\p{Cc}/u.test(pattern),
+      (pattern) =>
+        pattern.length > MAX_WORKTREE_INCLUDE_PATTERN_CHARS || hasControlCharacter(pattern),
     )
   )
     return yield* unreadableInclude(file, limits);

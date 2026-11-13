@@ -25,7 +25,7 @@ interface DelegationPrompt {
   readonly section?: string | undefined;
 }
 
-const DELEGATION_PROMPTS = {
+export const DELEGATION_PROMPTS = {
   normal: { startGuideline: NORMAL_START_GUIDELINE },
   encouraged: {
     startGuideline:
@@ -50,6 +50,3 @@ const DELEGATION_PROMPTS = {
     ),
   },
 } as const satisfies Record<DelegationMode, DelegationPrompt>;
-
-export const delegationPrompt = (mode: DelegationMode): DelegationPrompt =>
-  DELEGATION_PROMPTS[mode];

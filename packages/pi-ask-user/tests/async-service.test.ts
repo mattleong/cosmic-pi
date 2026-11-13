@@ -1,4 +1,10 @@
-import { acquireService, asyncRequest as request } from "./support/questionnaire.ts";
+import {
+  acquireService,
+  asyncRequest as request,
+  forkNow,
+  keyedRequest as keyedQuestions,
+  submitted,
+} from "./support/questionnaire.ts";
 import { it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Deferred from "effect/Deferred";
@@ -28,15 +34,9 @@ import {
 } from "../src/questionnaire/async-model.ts";
 import type { AskUserAsyncControl } from "../src/questionnaire/schema.ts";
 
-const outcome: AskUserOutcome = {
-  outcome: "submitted",
-  answers: [{ key: "library", kind: "choices", values: ["a"], labels: ["A"] }],
-};
+const outcome = submitted({ key: "library", kind: "choices", values: ["a"], labels: ["A"] });
 
-const keyedRequest = (index: number) => ({
-  ...request,
-  questions: [{ ...request.questions[0]!, key: String(index) }],
-});
+const keyedRequest = (index: number) => ({ ...request, ...keyedQuestions(String(index)) });
 
 const control = (
   service: Effect.Success<ReturnType<typeof acquireService>>,
@@ -114,9 +114,7 @@ it.effect("waits only for mounting, admits independent work, and retains automat
 it.effect("an await owns answer delivery; status never consumes it", () =>
   Effect.gen(function* () {
     const { f, service, receipt } = yield* startMounted();
-    const waiter = yield* Effect.forkChild(control(service, "await", receipt.requestId), {
-      startImmediately: true,
-    });
+    const waiter = yield* forkNow(control(service, "await", receipt.requestId));
     expect((yield* control(service, "status"))?.status).toBe("pending");
     expect(yield* Effect.flip(control(service, "await", receipt.requestId))).toMatchObject({
       reason: "busy",
@@ -132,9 +130,7 @@ it.effect("an await owns answer delivery; status never consumes it", () =>
 it.effect("interrupting an await leaves the UI alive and restores automatic delivery", () =>
   Effect.gen(function* () {
     const { f, service, receipt } = yield* startMounted();
-    const waiter = yield* Effect.forkChild(control(service, "await", receipt.requestId), {
-      startImmediately: true,
-    });
+    const waiter = yield* forkNow(control(service, "await", receipt.requestId));
     yield* Fiber.interrupt(waiter);
     expect(yield* Ref.get(f.released)).toBe(0);
     expect((yield* control(service, "status"))?.status).toBe("pending");
@@ -413,9 +409,7 @@ it.effect("shutdown never mounts a blocking request queued behind an active ques
     const scope = yield* Scope.make();
     const service = yield* acquireService(host, () => Effect.void).pipe(Scope.provide(scope));
     yield* service.startAsync(keyedRequest(0));
-    const blocking = yield* Effect.forkChild(service.ask(keyedRequest(1)), {
-      startImmediately: true,
-    });
+    const blocking = yield* forkNow(service.ask(keyedRequest(1)));
     yield* Scope.close(scope, Exit.void);
     for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
     expect(yield* Ref.get(mounted)).toEqual(["0"]);
@@ -428,9 +422,7 @@ it.effect("shutdown settles an in-progress await and an opening start with a clo
     const mountedScope = yield* Scope.make();
     const { service } = yield* startMounted().pipe(Scope.provide(mountedScope));
     const id = (yield* control(service, "status"))!.requestId;
-    const waiter = yield* Effect.forkChild(control(service, "await", id), {
-      startImmediately: true,
-    });
+    const waiter = yield* forkNow(control(service, "await", id));
     yield* Scope.close(mountedScope, Exit.void);
     expect(yield* Effect.flip(Fiber.join(waiter))).toBeInstanceOf(AskUserRuntimeClosedError);
 
@@ -470,16 +462,10 @@ it.effect("a queued presenter released by shutdown settles its waiter with the c
     );
     yield* service.startAsync(keyedRequest(0));
     const queued = yield* service.startAsync(keyedRequest(1));
-    const waiter = yield* Effect.forkChild(control(service, "await", queued.requestId), {
-      startImmediately: true,
-    });
-    const holding = yield* Effect.forkChild(service.startAsync(keyedRequest(2)), {
-      startImmediately: true,
-    });
+    const waiter = yield* forkNow(control(service, "await", queued.requestId));
+    const holding = yield* forkNow(service.startAsync(keyedRequest(2)));
     yield* Deferred.await(permitHeld);
-    const closing = yield* Effect.forkChild(Scope.close(scope, Exit.void), {
-      startImmediately: true,
-    });
+    const closing = yield* forkNow(Scope.close(scope, Exit.void));
     const waited = yield* Effect.flip(Fiber.join(waiter)).pipe(Effect.exit);
     yield* Deferred.succeed(releasePermit, undefined);
     yield* Fiber.join(closing);
@@ -530,12 +516,11 @@ const priorDelivery = (f: Fixture, prior: AcknowledgementPrior) =>
 const forkPausedAwait = (awaitResult: AwaitResult, budget: number) =>
   Effect.gen(function* () {
     const paused = pausedScheduler();
-    const fiber = yield* Effect.forkChild(
+    const fiber = yield* forkNow(
       awaitResult.pipe(
         Effect.provideService(Scheduler.MaxOpsBeforeYield, budget),
         Effect.provideService(Scheduler.Scheduler, paused.scheduler),
       ),
-      { startImmediately: true },
     );
     return { paused, fiber };
   });
@@ -641,11 +626,10 @@ it.effect("cancellation after final failed-opening acknowledgement retains it", 
     const opening = yield* Effect.forkChild(service.startAsync(request));
     yield* Deferred.await(f.entered);
     const id = (yield* control(service, "status"))!.requestId;
-    const waiter = yield* Effect.forkChild(
+    const waiter = yield* forkNow(
       service
         .controlAsync({ action: "await", requestId: id })
         .pipe(Effect.provideService(Scheduler.MaxOpsBeforeYield, 16)),
-      { startImmediately: true },
     );
     for (let i = 0; i < 20; i++) yield* Effect.yieldNow;
     yield* Deferred.fail(
@@ -705,11 +689,10 @@ it.effect("an await follows its questionnaire: queued, then on screen, hidden, a
           yield* Effect.yieldNow;
         return yield* Ref.get(seen);
       });
-    const waiter = yield* Effect.forkChild(
+    const waiter = yield* forkNow(
       service.controlAsync({ action: "await", requestId: second.requestId }, (presentation) =>
         Ref.update(seen, (items) => [...items, presentation]),
       ),
-      { startImmediately: true },
     );
     // Queued behind the first, it never claims to be on screen.
     for (let i = 0; i < 20; i++) yield* Effect.yieldNow;

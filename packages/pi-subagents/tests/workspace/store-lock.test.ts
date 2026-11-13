@@ -19,6 +19,7 @@ import {
   exists,
   failureOf,
   io,
+  registryOf,
   temporaryDirectory,
   workspaceTarget,
   workspaceTests,
@@ -183,7 +184,7 @@ const exitedProcessId = Effect.gen(function* () {
 const test = workspaceTests([["src/main.ts", "baseline\n"]]);
 
 test("reclaims a lock left by a process that exited and ignores the old global lock", function* (service, root, agent) {
-  const registry = path.join(agent, "subagent-worktrees");
+  const registry = registryOf(agent);
   const directory = workspaceLockDirectory(registry);
   yield* io(() => fs.mkdir(path.join(registry, "operation.lock"), { recursive: true }));
   yield* io(() => fs.chmod(registry, 0o700));

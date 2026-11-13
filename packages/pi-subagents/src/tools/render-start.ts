@@ -24,6 +24,7 @@ import type { SubagentStartEntry } from "./details-schema.ts";
 import type { SubagentStartFailure } from "./model.ts";
 import { previewHeading } from "./render-preview.ts";
 import { isTextFragment } from "./text-fragments.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 // Raw call arguments reach the renderer before Pi validates them, and models send null for absent
 // fields; a malformed field or entry renders as absent instead of failing the row.
@@ -155,7 +156,7 @@ const receiptStatus = (
   theme: Theme,
 ): string | undefined => {
   const started = Arr.filter(entries, (entry) => entry.status === "started");
-  const failed = Arr.filter(entries, (entry) => entry.status === "failed").length;
+  const failed = Arr.countBy(entries, (entry) => entry.status === "failed");
   if (partial)
     return toolStatusLine(
       theme,
@@ -210,9 +211,7 @@ export const renderStartReceiptComponent = (
   const facts = Arr.flatMap(entries, (entry) =>
     entryFacts(
       entry,
-      Option.getOrUndefined(
-        Arr.findFirst(receipt.startFailures ?? [], (candidate) => candidate.index === entry.index),
-      ),
+      findOrUndefined(receipt.startFailures ?? [], (candidate) => candidate.index === entry.index),
     ),
   );
   return expandedRowsBody(theme, rows, facts);

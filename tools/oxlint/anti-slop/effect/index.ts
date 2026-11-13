@@ -1,5 +1,7 @@
 import { eslintCompatPlugin } from "@oxlint/plugins";
 
+import { noBooleanFilterRule } from "./rules/no-boolean-filter.ts";
+import { noCurriedStringCallRule } from "./rules/no-curried-string-call.ts";
 import { noEffectRunnerImportsRule } from "./rules/no-effect-runner-imports.ts";
 import { noManualTagComparisonRule } from "./rules/no-manual-tag-comparison.ts";
 import { noManualTaggedConstructionRule } from "./rules/no-manual-tagged-construction.ts";
@@ -11,6 +13,8 @@ import { preferEffectMatchRule } from "./rules/prefer-effect-match.ts";
 const antiSlopEffectPlugin = eslintCompatPlugin({
   meta: { name: "anti-slop-effect" },
   rules: {
+    "no-boolean-filter": noBooleanFilterRule,
+    "no-curried-string-call": noCurriedStringCallRule,
     "no-effect-runner-imports": noEffectRunnerImportsRule,
     "no-manual-tag-comparison": noManualTagComparisonRule,
     "no-manual-tagged-construction": noManualTaggedConstructionRule,

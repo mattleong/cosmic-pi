@@ -3,25 +3,30 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { yieldUntil } from "pi-cosmic-core/testing";
-import { WriterLeaseReleaseError } from "../../src/boundary/writer-lease.ts";
 import type { SubagentServiceContract } from "../../src/run/service.ts";
 import { WorkspaceError } from "../../src/workspace/model.ts";
-import { completeLocalRun, request, runView, withService } from "./fixtures/service-harness.ts";
 import {
+  completeLocalRun,
+  request,
+  runView,
+  withService,
+  yieldTurns,
+} from "./fixtures/service-harness.ts";
+import {
+  failedWriter,
+  failingRelease,
   gateCreate,
   leasesWith,
+  replacedIdentity,
   repoWriter,
   reviewAndPrepare,
   stoppedWriter,
   workspaceFixture,
   completedWriter,
 } from "./fixtures/workspace-engine.ts";
-import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
-
-type Fixture = ReturnType<typeof workspaceFixture>;
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const nesting = (limits: {
   readonly maxDirectChildren?: number;
@@ -30,23 +35,12 @@ const nesting = (limits: {
   nestingPolicy: { maxDirectChildren: 12, maxDepth: 3, ...limits },
 });
 
-const failedWriter = (service: SubagentServiceContract, f: Fixture) =>
-  Effect.gen(function* () {
-    const run = yield* service.start(repoWriter());
-    const control = f.children.controls.at(-1)!;
-    control.exit(1);
-    yield* yieldUntil(() => control.released() === 1);
-    return run;
-  });
-
 const listed = (service: SubagentServiceContract, workspaceId: string) =>
   service
     .workspaceList()
     .pipe(
       Effect.map((listing) =>
-        Option.getOrUndefined(
-          Arr.findFirst(listing.records, (entry) => entry.handle.workspaceId === workspaceId),
-        ),
+        findOrUndefined(listing.records, (entry) => entry.handle.workspaceId === workspaceId),
       ),
     );
 
@@ -175,14 +169,7 @@ describe("writer workspace lifecycle", () => {
   });
 
   it.effect("refuses worktree writer resume while integration is quarantined", () => {
-    const f = workspaceFixture({
-      writerLeases: leasesWith((base) => ({
-        release: (lease) =>
-          lease.canonicalCwd === "/repo"
-            ? Effect.fail(WriterLeaseReleaseError.make({ message: "Release unconfirmed." }))
-            : base.release(lease),
-      })),
-    });
+    const f = workspaceFixture({ writerLeases: leasesWith(failingRelease("/repo")) });
     return withService(f.layer, function* (service) {
       const integrated = yield* completedWriter(service, f);
       const kept = yield* completedWriter(service, f);
@@ -224,20 +211,9 @@ describe("writer workspace lifecycle", () => {
   it.effect("a refused revision successor keeps the review and tested preparation", () => {
     let replaced = false;
     const f = workspaceFixture({
-      writerLeases: leasesWith((base) => ({
-        canonicalize: (cwd) =>
-          base.canonicalize(cwd).pipe(
-            Effect.map((identity) =>
-              replaced && Fn.pipe(cwd, Str.startsWith("/private/"))
-                ? {
-                    ...identity,
-                    filesystemIdentity: "dev:2;ino:3",
-                    digest: Fn.pipe("f", Str.repeat(64)),
-                  }
-                : identity,
-            ),
-          ),
-      })),
+      writerLeases: leasesWith(
+        replacedIdentity((cwd) => replaced && Fn.pipe(cwd, Str.startsWith("/private/"))),
+      ),
     });
     return withService(f.layer, function* (service) {
       const writer = yield* completedWriter(service, f);
@@ -333,7 +309,7 @@ describe("writer workspace lifecycle", () => {
         const first = yield* service.start(repoWriter(limits)).pipe(Effect.forkChild);
         yield* Deferred.await(create.entered);
         const second = yield* service.start(repoWriter(limits)).pipe(Effect.forkChild);
-        for (let turn = 0; turn < 20; turn++) yield* Effect.yieldNow;
+        yield* yieldTurns(20);
         expect(second.pollUnsafe()).toBeUndefined();
         expect(f.entries.size).toBe(1);
         f.hooks.afterCreate = Effect.void;

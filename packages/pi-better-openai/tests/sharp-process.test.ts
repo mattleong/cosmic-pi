@@ -96,14 +96,18 @@ it.live("deadline force-kills a SIGTERM-ignoring child before reuse", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const marker = yield* makeMarker;
-    const pending = yield* fixtureRunner(marker, 1_000).pipe(Effect.forkScoped);
+    const admission = createSharpAdmission();
+    const pending = yield* makeSharpAdapter(
+      (_bytes, onCleanup) => fixtureRunner(marker, 1_000, onCleanup),
+      admission,
+    )
+      .decode(png)
+      .pipe(Effect.flip, Effect.forkScoped);
     const pid = yield* ownPid(marker);
-    const result = yield* Fiber.join(pending);
-    expect(result.timedOut).toBe(true);
-    expect(result.cleanupUnconfirmed).toBe(false);
+    expect(yield* Fiber.join(pending)).toMatchObject({ operation: "decode" });
     expect(yield* fs.readFileString(marker)).toContain("SIGTERM");
     expectExited(pid);
-    expect(yield* makeSharpAdapter().decode(png)).toEqual({ format: "png" });
+    expect(yield* makeSharpAdapter(undefined, admission).decode(png)).toEqual({ format: "png" });
   }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
 );
 

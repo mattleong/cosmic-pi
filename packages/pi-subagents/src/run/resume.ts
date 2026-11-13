@@ -5,13 +5,8 @@ import * as Exit from "effect/Exit";
 import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import * as Str from "effect/String";
-import {
-  canonicalizeWriterCwd,
-  processCapacityError,
-  treeCapacityError,
-  writerConflictError,
-} from "./admission.ts";
-import { DEFAULT_MAX_ACTIVE_RUNS, type SubagentNestingPolicy } from "../config/schema.ts";
+import { canonicalizeWriterCwd, capacityError, writerConflictError } from "./admission.ts";
+import type { SubagentNestingPolicy } from "../config/schema.ts";
 import { beginNextAssignmentLocked, type RunAssignment } from "./assignment.ts";
 import { hasCompletionGenerationCapacity } from "./completion.ts";
 import { validateMessageText } from "./agent-messaging.ts";
@@ -140,33 +135,26 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
     closeRecordScope,
     workspaces,
     sendPeerNotices,
+    currentNesting,
   } = dependencies;
 
-  const waitForRunCleanup = (id: string) =>
-    withLock(
-      Effect.gen(function* () {
-        const record = yield* requireRecord(id);
-        return isCleanupOwed(record) ? record.cleanupSettlement : undefined;
-      }),
-    ).pipe(
-      Effect.flatMap((cleanupSettlement) =>
-        cleanupSettlement === undefined
-          ? Effect.void
-          : Deferred.await(cleanupSettlement).pipe(
-              Effect.flatMap((outcome) =>
-                outcome === "confirmed"
-                  ? Effect.void
-                  : Effect.fail(
-                      processError(
-                        "resume",
-                        "cleanup_unconfirmed",
-                        `Subagent ${id} cleanup could not be confirmed; resume remains blocked for this session.`,
-                      ),
-                    ),
-              ),
-            ),
-      ),
-      Effect.timeoutOrElse({
+  const waitForRunCleanup = Effect.fn("SubagentResume.waitForRunCleanup")(
+    function* (id: string) {
+      const cleanupSettlement = yield* withLock(
+        Effect.map(requireRecord(id), (record) =>
+          isCleanupOwed(record) ? record.cleanupSettlement : undefined,
+        ),
+      );
+      if (cleanupSettlement && (yield* Deferred.await(cleanupSettlement)) !== "confirmed")
+        return yield* processError(
+          "resume",
+          "cleanup_unconfirmed",
+          `Subagent ${id} cleanup could not be confirmed; resume remains blocked for this session.`,
+        );
+      return undefined;
+    },
+    (effect, id) =>
+      Effect.timeoutOrElse(effect, {
         duration: "10 seconds",
         orElse: () =>
           Effect.fail(
@@ -180,7 +168,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             ),
           ),
       }),
-    );
+  );
 
   const settlePendingInitialization = (
     record: RunRecord,
@@ -272,7 +260,7 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
           operation: "resume",
           message: view.error ?? `Subagent ${id} stopped before resume completed.`,
         });
-      yield* sendPeerNotices(id);
+      yield* sendPeerNotices;
       return view;
     },
     (effect, _id, claimed) =>
@@ -299,89 +287,47 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
       ),
   );
 
-  const resume = (
+  const resume = Effect.fn("SubagentResume.resume")(function* (
     id: string,
     message?: string,
     expected?: SubagentControlExpectation,
     agentMessage?: AgentMessageResume,
-  ): Effect.Effect<SubagentRunView, SubagentError> =>
-    waitForRunCleanup(id).pipe(
-      Effect.andThen(
-        withLock(
+  ): Effect.fn.Return<SubagentRunView, SubagentError> {
+    yield* waitForRunCleanup(id);
+    const candidate = yield* withLock(
+      Effect.map(requireRecord(id), (record) => ({
+        record,
+        assignment: record.assignment,
+        process: record.process,
+        cwd: record.launch.cwd,
+        validateCwd:
+          record.view.writeIntent === "writer" &&
+          record.process === undefined &&
+          isResumableRunState(record.view.state),
+      })),
+    );
+    const currentCwd = candidate.validateCwd
+      ? yield* canonicalizeWriterCwd(writerLeases, candidate.cwd)
+      : undefined;
+    const prompt =
+      agentMessage?.prompt ??
+      (message !== undefined && Str.trim(message)
+        ? yield* validateMessageText(message)
+        : "Continue the assigned task from the current session state.");
+    return yield* runSessionOwned(
+      ownerScope,
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const claimed = yield* withLock(
           Effect.gen(function* () {
-            const record = yield* requireRecord(id);
-            return {
-              record,
-              assignment: record.assignment,
-              process: record.process,
-              cwd: record.launch.cwd,
-              validateCwd:
-                record.view.writeIntent === "writer" &&
-                record.process === undefined &&
-                isResumableRunState(record.view.state),
-            };
-          }),
-        ),
-      ),
-      Effect.flatMap((candidate) =>
-        Effect.gen(function* () {
-          const currentCwd = candidate.validateCwd
-            ? yield* canonicalizeWriterCwd(writerLeases, candidate.cwd)
-            : undefined;
-          const isCurrentCandidate = (record: RunRecord) =>
-            record === candidate.record &&
-            record.assignment === candidate.assignment &&
-            record.process === candidate.process &&
-            record.launch.cwd === candidate.cwd;
-          const hasCurrentWriterCwd = (record: RunRecord) =>
-            currentCwd !== undefined &&
-            currentCwd.filesystemIdentity === record.canonicalWriterCwd?.filesystemIdentity &&
-            currentCwd.digest === record.canonicalWriterCwd?.digest;
-          const writerFailureLocked = Effect.fn("SubagentResume.writerFailureLocked")(function* (
-            selected: RunRecord,
-            needsRespawn: boolean,
-          ) {
-            const canonicalCwd = selected.canonicalWriterCwd;
-            if (!canonicalCwd)
-              return yield* invalidRequest(
-                "writer_cwd_canonicalization_missing",
-                `Subagent ${id} has no canonical writer cwd ownership evidence.`,
-              );
-            if (needsRespawn && !hasCurrentWriterCwd(selected))
-              return yield* invalidRequest(
-                "writer_cwd_identity_changed",
-                `Subagent ${id} cannot resume because its writer directory identity changed.`,
-              );
-            const writerFailure = writerConflictError(records, writerPools, canonicalCwd, selected);
-            if (writerFailure) return yield* writerFailure;
-            return undefined;
-          });
-          const respawnCapacityFailureLocked = Effect.fn(
-            "SubagentResume.respawnCapacityFailureLocked",
-          )(function* (selected: RunRecord) {
-            const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
-            const nesting = yield* dependencies.currentNesting;
-            const capacityFailure =
-              processCapacityError(
-                records,
-                parentRunId,
-                nesting.maxDirectChildren,
-                selected,
-                workspaces.heldLaunchSlots(parentRunId),
-              ) ??
-              treeCapacityError(
-                records,
-                nesting.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS,
-                selected,
-                workspaces.heldLaunchSlots(),
-              );
-            if (capacityFailure) return yield* capacityFailure;
-            return undefined;
-          });
-          const admitLocked = Effect.gen(function* () {
             const selected = yield* requireRecord(id);
             yield* requireControlExpectation(selected, expected);
-            if (!isCurrentCandidate(selected))
+            if (
+              selected !== candidate.record ||
+              selected.assignment !== candidate.assignment ||
+              selected.process !== candidate.process ||
+              selected.launch.cwd !== candidate.cwd
+            )
               return yield* invalidRequest(
                 "resume_state_invalid",
                 `Subagent ${id} changed while resume was being prepared.`,
@@ -406,53 +352,71 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
             // Ownership first: a revision successor in this workspace would otherwise surface as a
             // transient writer conflict.
             const invalidateWorkspace = yield* workspaces.invalidateForResume(selected);
-            if (selected.view.writeIntent === "writer")
-              yield* writerFailureLocked(selected, needsRespawn);
-            if (needsRespawn) yield* respawnCapacityFailureLocked(selected);
-            return { selected, needsRespawn, invalidateWorkspace };
-          });
-          const prompt =
-            agentMessage?.prompt ??
-            (message !== undefined && Str.trim(message)
-              ? yield* validateMessageText(message)
-              : "Continue the assigned task from the current session state.");
-          return yield* runSessionOwned(
-            ownerScope,
-            Effect.gen(function* () {
-              const now = yield* Clock.currentTimeMillis;
-              const claimed = yield* withLock(
-                Effect.gen(function* () {
-                  const { selected, needsRespawn, invalidateWorkspace } = yield* admitLocked;
-                  const attemptToken = allocateAssignmentAttemptToken();
-                  // An explicit resume supersedes an earlier stop or failure of this run.
-                  selected.stoppedByParent = false;
-                  selected.backendFailure = undefined;
-                  selected.pauseRequested = false;
-                  selected.pauseOutcome = undefined;
-                  clearRunActivity(selected);
-                  selected.notificationGeneration += 1;
-                  delivery.discardQuestionLocked(selected.view.id);
-                  selected.replyPendingRequestId = undefined;
-                  selected.initialization = needsRespawn
-                    ? { settled: yield* Deferred.make<void>() }
-                    : undefined;
-                  beginNextAssignmentLocked(selected, attemptToken, now, {
-                    question: undefined,
-                    currentTool: undefined,
-                  });
-                  invalidateWorkspace();
-                  yield* publish;
-                  return { record: selected, needsRespawn, attemptToken };
-                }),
+            if (selected.view.writeIntent === "writer") {
+              const canonicalCwd = selected.canonicalWriterCwd;
+              if (!canonicalCwd)
+                return yield* invalidRequest(
+                  "writer_cwd_canonicalization_missing",
+                  `Subagent ${id} has no canonical writer cwd ownership evidence.`,
+                );
+              if (
+                needsRespawn &&
+                (currentCwd?.filesystemIdentity !== canonicalCwd.filesystemIdentity ||
+                  currentCwd.digest !== canonicalCwd.digest)
+              )
+                return yield* invalidRequest(
+                  "writer_cwd_identity_changed",
+                  `Subagent ${id} cannot resume because its writer directory identity changed.`,
+                );
+              const writerFailure = writerConflictError(
+                records,
+                writerPools,
+                canonicalCwd,
+                selected,
               );
-              return { prompt, now, claimed };
-            }),
-            (admitted) =>
-              commitResume(id, admitted.claimed, admitted.prompt, admitted.now, agentMessage),
-          );
-        }),
-      ),
+              if (writerFailure) return yield* writerFailure;
+            }
+            if (needsRespawn) {
+              const parentRunId = selected.view.parentRunId ?? SUBAGENT_ROOT_RUN_ID;
+              const capacityFailure = capacityError(
+                records,
+                parentRunId,
+                yield* currentNesting,
+                selected,
+                {
+                  direct: workspaces.heldLaunchSlots(parentRunId),
+                  tree: workspaces.heldLaunchSlots(),
+                },
+              );
+              if (capacityFailure) return yield* capacityFailure;
+            }
+            const attemptToken = allocateAssignmentAttemptToken();
+            // An explicit resume supersedes an earlier stop or failure of this run.
+            selected.stoppedByParent = false;
+            selected.backendFailure = undefined;
+            selected.pauseRequested = false;
+            selected.pauseOutcome = undefined;
+            clearRunActivity(selected);
+            selected.notificationGeneration += 1;
+            delivery.discardQuestionLocked(selected.view.id);
+            selected.replyPendingRequestId = undefined;
+            selected.initialization = needsRespawn
+              ? { settled: yield* Deferred.make<void>() }
+              : undefined;
+            beginNextAssignmentLocked(selected, attemptToken, now, {
+              question: undefined,
+              currentTool: undefined,
+            });
+            invalidateWorkspace();
+            yield* publish;
+            return { record: selected, needsRespawn, attemptToken };
+          }),
+        );
+        return { now, claimed };
+      }),
+      ({ now, claimed }) => commitResume(id, claimed, prompt, now, agentMessage),
     );
+  });
 
   return {
     resume,

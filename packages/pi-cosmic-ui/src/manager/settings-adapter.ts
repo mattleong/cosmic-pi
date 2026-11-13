@@ -29,6 +29,7 @@ import {
 
 /** A settings row as the shared surface reads it, independent of pi-tui's private fields. */
 const SettingRowShape = Schema.Struct({
+  id: Schema.optional(Schema.String),
   kind: Schema.optional(Schema.String),
   values: Schema.optional(Schema.Array(Schema.String)),
   submenu: Schema.optional(Schema.Unknown),
@@ -93,19 +94,13 @@ const settingsListPosition = (list: Component): SettingsListPosition | undefined
     }),
   );
 
-const SettingRowId = Schema.Struct({ id: Schema.String });
-const isSettingRowWithId = Schema.is(SettingRowId);
-
 /** Where a list's cursor is: its row index and that row's id, so a refresh can keep it there. */
 export const settingsListFocus = (
   list: Component,
-): { readonly index: number; readonly id: string | undefined } | undefined =>
-  Option.getOrUndefined(
-    Option.map(decodeSettingsListSelection(list), ({ selectedIndex, filteredItems }) => {
-      const row = filteredItems[selectedIndex];
-      return { index: selectedIndex, id: isSettingRowWithId(row) ? row.id : undefined };
-    }),
-  );
+): { readonly index: number; readonly id: string | undefined } | undefined => {
+  const position = settingsListPosition(list);
+  return position && { index: position.index, id: position.row?.id };
+};
 
 /** The level whose Esc this hint describes: `top` closes the surface, `nested` goes back. */
 export interface SettingsHintOptions {

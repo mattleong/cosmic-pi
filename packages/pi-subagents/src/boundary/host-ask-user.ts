@@ -15,7 +15,7 @@ import {
   type QuestionnaireOwner,
   type QuestionnaireRelay,
 } from "pi-ask-user/protocol";
-import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { invalidRequest } from "../run/errors.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 
 const relayQueries = makeSessionCapabilityProtocol({ version: 1 });
@@ -24,10 +24,10 @@ const encodeRequest = Schema.encodeSync(Schema.fromJsonString(QuestionnaireReque
 const isShownCallback = Schema.is(ForeignCallable<[]>());
 
 const unavailable = () =>
-  InvalidSubagentRequestError.make({
-    code: "questionnaire_unavailable",
-    message: "The parent questionnaire is unavailable or its owning assignment ended.",
-  });
+  invalidRequest(
+    "questionnaire_unavailable",
+    "The parent questionnaire is unavailable or its owning assignment ended.",
+  );
 
 /**
  * Asks the root's questionnaire for an authenticated child. `shown` runs at most once, when the

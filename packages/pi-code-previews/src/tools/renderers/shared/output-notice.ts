@@ -6,7 +6,7 @@ import { Container, type Component } from "@earendil-works/pi-tui";
 import { outputLimitProjection } from "../../builtin-issues";
 import { hiddenPreviewExpandHintForShell } from "../../../preview/bordered-tool-call";
 import { expandedText } from "../../../preview/expanded-body";
-import { ownField, ownObject, type HostObject } from "../../../shared/untrusted-value";
+import type { HostObject } from "../../../shared/untrusted-value";
 import { numericArg } from "../../data/args";
 
 type SplitOutput = { readonly lines: string[]; readonly notice: string | undefined };
@@ -28,15 +28,6 @@ export const splitListingNotice = (lines: string[]): SplitOutput =>
 
 export const splitShellNotice = (lines: string[]): SplitOutput =>
   splitTrailingNotice(lines, SHELL_NOTICE);
-
-export function oversizedReadNotice(
-  details: HostObject | undefined,
-  text: string,
-): string | undefined {
-  if (ownField(ownObject(details, "truncation"), "firstLineExceedsLimit") !== true)
-    return undefined;
-  return /^\[([^\r\n]*)\]$/u.exec(text)?.[1] ?? text;
-}
 
 export function agentNotesSection(theme: Theme, notes: string): Component {
   return expandedText(theme, "Agent notes", Str.split(notes, "\n"), "dim");
@@ -64,15 +55,16 @@ export function limitReachedLine(
   const requested = numericArg(args, "limit");
   return requested !== undefined && counter === `limit reached: ${requested}`
     ? "Limit reached"
-    : `${Str.toUpperCase(Str.slice(0, 1)(counter))}${Str.slice(1)(counter)}`;
+    : `${Str.toUpperCase(Fn.pipe(counter, Str.slice(0, 1)))}${Fn.pipe(counter, Str.slice(1))}`;
 }
 
 /**
- * Records `agent notes` as a collapsed listing's tag when its limit was reached and agent notes
- * were kept for expansion, unless its rows already offer expansion with their own stand-in. Call it
- * while the shell builds the result body; outside a shell it returns the `▸ agent notes` line.
+ * Appends a collapsed listing's `Limit reached` line when its limit was reached. Agent notes kept
+ * for expansion become the row's `agent notes` tag, unless the rows already offer expansion with
+ * their own stand-in; outside a shell the `▸ agent notes` line follows instead. Build it while the
+ * shell builds the result body, because that is when the tag is recorded.
  */
-export function collapsedNotesHint(
+export function collapsedLimit(
   row: { readonly state: unknown },
   theme: Theme,
   tool: "grep" | "find" | "ls",
@@ -82,25 +74,12 @@ export function collapsedNotesHint(
     readonly notice: string | undefined;
     readonly offered: boolean;
   },
-): string | undefined {
-  if (!input.notice || input.offered) return undefined;
-  if (limitReachedLine(tool, input.details, input.args) === undefined) return undefined;
-  return hiddenPreviewExpandHintForShell(row, theme, "agent notes") || undefined;
-}
-
-/**
- * A collapsed listing's rows, then, when its limit was reached, its `Limit reached` line and the
- * `notesHint` from {@link collapsedNotesHint} where no shell takes it as the row's tag.
- */
-export function withCollapsedLimit(
-  text: string,
-  theme: Theme,
-  tool: "grep" | "find" | "ls",
-  details: HostObject | undefined,
-  args: HostObject | undefined,
-  notesHint: string | undefined,
-): string {
-  const stated = limitReachedLine(tool, details, args);
-  if (stated === undefined) return text;
-  return Arr.join([text, theme.fg("muted", stated), ...(notesHint ? [notesHint] : [])], "\n");
+): (text: string) => string {
+  const stated = limitReachedLine(tool, input.details, input.args);
+  if (stated === undefined) return Fn.identity;
+  const hint =
+    input.notice && !input.offered
+      ? hiddenPreviewExpandHintForShell(row, theme, "agent notes")
+      : "";
+  return (text) => Arr.join([text, theme.fg("muted", stated), ...(hint ? [hint] : [])], "\n");
 }

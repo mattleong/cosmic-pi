@@ -2,7 +2,6 @@ import type { MessageRenderer, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import {
@@ -10,11 +9,11 @@ import {
   expandedDetails,
   expandedFields,
   expandedText,
-  headingShowedSubject,
   withCodePreviewMessageShell,
   type CodePreviewMessagePresenter,
   type CompactSummary,
 } from "pi-code-previews";
+import { contentText } from "pi-cosmic-core/message-text";
 import {
   sanitizeDiagnosticContent,
   sanitizeTerminalLine,
@@ -24,27 +23,18 @@ import { TaskNoticeDetailsSchema, type TaskNoticeDetails } from "../task/notice.
 import { taskExpandLabel, taskNoticeSummary } from "./compact-summary.ts";
 import { taskOutputLine } from "./output-lines.ts";
 import { displayDirectory } from "./result-facts.ts";
+import { subjectAwareComponent } from "./subject-aware.ts";
 import { taskDisplayName } from "./task-state.ts";
 
 const Envelope = Schema.Struct({
   content: Schema.optional(Schema.Union([Schema.String, Schema.Array(Schema.Unknown)])),
   details: Schema.optional(Schema.Unknown),
 });
-const TextPart = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 
 const decodeEnvelope = Schema.decodeUnknownOption(Envelope, { onExcessProperty: "ignore" });
 const decodeDetails = Schema.decodeUnknownOption(TaskNoticeDetailsSchema, {
   onExcessProperty: "ignore",
 });
-const isTextPart = Schema.is(TextPart);
-
-const contentText = (content: string | ReadonlyArray<unknown> | undefined): string =>
-  Predicate.isString(content)
-    ? content
-    : Arr.join(
-        Arr.map(Arr.filter(content ?? [], isTextPart), (part) => part.text),
-        "\n",
-      );
 
 // Without readable details nothing says how the task ended; expansion shows the stored text.
 const UNKNOWN_NOTICE: CompactSummary = { subject: "task notice", outcome: "returned" };
@@ -77,17 +67,7 @@ const expandedNotice = (
       expandedText(theme, "Output", output ? Arr.map(Str.split(output, "\n"), taskOutputLine) : []),
       expandedDetails(theme, [Arr.join([task.id, displayDirectory(task.cwd)], " · ")]),
     );
-  // Chosen as it draws, after the heading reports whether it showed the subject whole.
-  let built: { readonly subjectShown: boolean; readonly component: Component } | undefined;
-  return {
-    render: (width) => {
-      const subjectShown = headingShowedSubject(headingState);
-      if (built?.subjectShown !== subjectShown)
-        built = { subjectShown, component: body(subjectShown) };
-      return built.component.render(width);
-    },
-    invalidate: () => built?.component.invalidate(),
-  };
+  return subjectAwareComponent(headingState, body);
 };
 
 /** The task's output, else its command where the heading names the task, else its details. */

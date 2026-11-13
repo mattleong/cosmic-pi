@@ -79,7 +79,8 @@ synchronous projection together through the store's `afterCommit` region, withou
 reacquiring the fast permit.
 Waiting and preparation remain interruptible. Startup writes only when `--fast`
 changes resolved intent; model switches stay in memory. Fast-only commits preserve
-in-flight usage results and do not wake polling. See [config tests](tests/config.test.ts),
+in-flight usage results and do not wake polling. See
+[configuration decoding tests](tests/domain.test.ts),
 [config service tests](tests/config-service.test.ts), and
 [fast commit tests](tests/fast-service.test.ts).
 

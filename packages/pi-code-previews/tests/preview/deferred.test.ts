@@ -1,31 +1,36 @@
 import assert from "node:assert/strict";
 import { Text } from "@earendil-works/pi-tui";
+import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { macrotask, provideBuiltLayer } from "pi-cosmic-core/testing";
 import { afterEach, test } from "vitest";
 import {
   clearCodePreviewSessionCapability,
   captureCodePreviewSessionCapability,
   installCodePreviewSessionCapability,
 } from "../../src/application/capability";
+import { CodePreviewSchedulerService } from "../../src/application/scheduler";
 import { plainTheme } from "../support/render";
+import { inertCapability } from "../support/renderer-host";
 import { cachedDeferredPreview, cachedPreview } from "../../src/tools/renderers/shared/cache";
-import { effectTest, eventLoopTurn, step } from "../support/effect-test";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 
 afterEach(() => clearCodePreviewSessionCapability());
 
-function installTestCapability(): void {
-  installCodePreviewSessionCapability({
-    run: () => Promise.reject(new Error("not used")),
-    defer: (task) => {
-      const fiber = Effect.runFork(Effect.yieldNow.pipe(Effect.andThen(Effect.sync(task))));
-      return () => fiber.interruptUnsafe();
-    },
-    schedule: () => () => undefined,
-  });
-}
+/** A deferred-preview test under a session capability backed by the real scheduler. */
+const scheduledTest = (name: string, body: () => Generator<Effect.Effect<void>, void, never>) =>
+  it.effect(name, () =>
+    CodePreviewSchedulerService.use((scheduler) =>
+      Effect.sync(() => installCodePreviewSessionCapability(inertCapability(scheduler))),
+    ).pipe(Effect.andThen(Effect.gen(body)), provideBuiltLayer(CodePreviewSchedulerService.layer)),
+  );
+
+// Deferred work runs on a later event-loop turn; the bound keeps a missed publication a failure.
+const turnsUntil = Effect.fnUntraced(function* (done: () => boolean) {
+  for (let turn = 0; turn < 20 && !done(); turn++) yield* macrotask;
+});
 
 const component = (text: string) => new Text(plainTheme.fg("toolOutput", text), 0, 0);
 
@@ -62,10 +67,9 @@ test("large previews remain synchronous before session acquisition", () => {
   assert.match(Arr.join(rendered.render(80), "\n"), /ready/);
 });
 
-effectTest(
+scheduledTest(
   "cache replacement cancels obsolete deferred publication and compares exact source",
   function* () {
-    installTestCapability();
     const state = {};
     let firstComputes = 0;
     let secondComputes = 0;
@@ -88,7 +92,7 @@ effectTest(
       },
       () => invalidations++,
     );
-    yield* step(() => eventLoopTurn());
+    yield* turnsUntil(() => invalidations > 0);
     assert.equal(firstComputes, 0);
     assert.equal(secondComputes, 1);
     assert.equal(invalidations, 1);
@@ -96,8 +100,7 @@ effectTest(
   },
 );
 
-effectTest("a failing replacement cannot reuse a cancelled deferred preview", function* () {
-  installTestCapability();
+scheduledTest("a failing replacement cannot reuse a cancelled deferred preview", function* () {
   const state = {};
   const source = Fn.pipe("a", Str.repeat(20_000));
   const obsolete = preview(
@@ -111,28 +114,33 @@ effectTest("a failing replacement cannot reuse a cancelled deferred preview", fu
       throw new Error("failed");
     }),
   );
+  let published = false;
   const current = preview(
     state,
     source,
     () => component("ready"),
-    () => {},
+    () => {
+      published = true;
+    },
   );
   assert.notEqual(current, obsolete);
-  yield* step(() => eventLoopTurn());
+  yield* turnsUntil(() => published);
   assert.match(Arr.join(current.render(80), "\n"), /ready/);
 });
 
-effectTest("deferred publication isolates a throwing host invalidation callback", function* () {
-  installTestCapability();
+scheduledTest("deferred publication isolates a throwing host invalidation callback", function* () {
   const state = {};
+  let invalidated = false;
   const current = preview(
     state,
     Fn.pipe("x", Str.repeat(20_000)),
     () => component("ready"),
     () => {
+      invalidated = true;
       throw new Error("host invalidation failed");
     },
   );
-  yield* step(() => eventLoopTurn());
+  yield* turnsUntil(() => invalidated);
+  assert.equal(invalidated, true);
   assert.match(Arr.join(current.render(80), "\n"), /ready/);
 });

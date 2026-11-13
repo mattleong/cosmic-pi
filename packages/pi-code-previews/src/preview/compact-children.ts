@@ -83,7 +83,7 @@ export function renderCompactChildren(
   );
   const rows =
     flat && omitted > 0
-      ? wrapHanging(`… ${formatCount(omitted)} ${calls(omitted)} not listed`, width, "", "", 0, {
+      ? wrapHanging(`… ${countLabel(omitted, "call")} not listed`, width, "", "", 0, {
           style: (row) => theme.fg("dim", row),
         })
       : [];
@@ -141,8 +141,6 @@ function childRowInput(
   };
 }
 
-const calls = (count: number) => (count === 1 ? "call" : "calls");
-
 function omissionRows(
   omitted: number,
   hiddenFailed: number,
@@ -165,7 +163,9 @@ function omissionRows(
     ? rows.concat(
         wrapHanging(continued, width, spaces, spaces, visibleWidth(continued), {
           style: (row) =>
-            Str.startsWith("· ")(row) ? `${dim("· ")}${error(Str.slice(2)(row))}` : error(row),
+            Fn.pipe(row, Str.startsWith("· "))
+              ? `${dim("· ")}${error(Fn.pipe(row, Str.slice(2)))}`
+              : error(row),
         }),
       )
     : rows;

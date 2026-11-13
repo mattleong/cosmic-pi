@@ -38,8 +38,8 @@ import {
   AGENT_TOOL_NAMES,
   CONTACT_PARENT_TOOL_NAME,
   isAgentToolName,
+  isCoordinationTool,
   NESTED_SUBAGENT_TOOL_NAMES,
-  SUBAGENT_TOOL_NAMES,
 } from "../run/tool-policy.ts";
 import {
   decodeSubagentProxyResult,
@@ -63,6 +63,7 @@ import {
   contactParentCompactSummary,
   contactParentExpandedContent,
   contactParentRenderers,
+  PARENT_REPLY_PREFIX,
 } from "../tools/render-parent.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerSubagentErrorReceipts } from "./host-tool-result.ts";
@@ -79,14 +80,7 @@ import {
   type LocalPiChildIpcChannel,
 } from "./local-pi-ipc.ts";
 
-const PARENT_REPLY_PREFIX = "Parent reply: ";
 const MAX_TOOL_REPLY_BYTES = MAX_TOOL_OUTPUT_CHARS - PARENT_REPLY_PREFIX.length;
-// Every private name is removed on deactivation, whichever surface this child registered.
-const CHILD_PRIVATE_TOOL_NAME_SET: ReadonlySet<string> = new Set([
-  ...SUBAGENT_TOOL_NAMES,
-  ...AGENT_TOOL_NAMES,
-  CONTACT_PARENT_TOOL_NAME,
-]);
 let nextRequest = 1;
 
 const clipToolReply = (value: string): string => clipUtf8Text(value, MAX_TOOL_REPLY_BYTES);
@@ -186,10 +180,8 @@ export function registerSubagentChildBridge(
 
   const removeProxyNames = (): void =>
     invokeHostCallback(() => {
-      const kept = Arr.filter(
-        pi.getActiveTools(),
-        (name) => !CHILD_PRIVATE_TOOL_NAME_SET.has(name),
-      );
+      // Every private name is removed on deactivation, whichever surface this child registered.
+      const kept = Arr.filter(pi.getActiveTools(), (name) => !isCoordinationTool(name));
       pi.setActiveTools(kept);
     }, undefined);
 
@@ -438,7 +430,7 @@ export function registerSubagentChildBridge(
                   }),
                 ),
               ),
-          ).pipe(Effect.asVoid),
+          ),
         ).pipe(Layer.merge(CodePreviewSchedulerService.layer)),
       ),
     startup: (input) =>

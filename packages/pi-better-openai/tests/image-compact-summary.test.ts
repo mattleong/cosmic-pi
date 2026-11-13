@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { compactIssueSeverity } from "pi-code-previews";
 import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
@@ -6,20 +7,15 @@ import { describe, expect, it } from "vitest";
 import { imageCompactSummaryFor, restatesImageFailure } from "../src/image/compact-summary.ts";
 
 const imageCompactSummary = imageCompactSummaryFor("compact");
-import type { CodexImageDetails } from "../src/image/types.ts";
-import { pngPart } from "./image-fixtures.ts";
+import { imageDetailsFixture, pngPart } from "./image-fixtures.ts";
 
 type Input = Parameters<typeof imageCompactSummary>[0];
-const record = (status: string): CodexImageDetails => ({
-  id: "image-1",
-  status,
-  prompt: "An otter",
-  mimeType: "image/png",
-  model: "model",
-  action: "generate",
-  outputFormat: "png",
-  savedPath: "/project/generated/otter-image-1.png",
-});
+const record = (status: string) =>
+  imageDetailsFixture({
+    status,
+    prompt: "An otter",
+    savedPath: "/project/generated/otter-image-1.png",
+  });
 const input = (status = "completed", expanded = false): Input => ({
   phase: "settled",
   args: { prompt: "An otter", action: "generate" },
@@ -123,7 +119,7 @@ describe("image expansion", () => {
     for (const args of [
       { prompt: "An otter", action: "generate", save: "none" },
       { prompt: "An otter\nat dawn" },
-      { prompt: Str.repeat(30)("otter ") },
+      { prompt: Fn.pipe("otter ", Str.repeat(30)) },
     ] satisfies Input["args"][])
       expect(pending(args)?.expandsSubjectOnly).toBeUndefined();
   });
@@ -138,7 +134,7 @@ describe("image expansion", () => {
       expect.any(String),
     );
     expect(pending({ prompt: "An otter\nat dawn" })).toEqual(expect.any(String));
-    expect(pending({ prompt: Str.repeat(30)("otter ") })).toEqual(expect.any(String));
+    expect(pending({ prompt: Fn.pipe("otter ", Str.repeat(30)) })).toEqual(expect.any(String));
   });
 
   it("offers expansion for settled images and failures", () => {
@@ -157,7 +153,7 @@ describe("image expansion", () => {
   it("names a settled prompt its heading can't show exactly as what expansion reveals", () => {
     const settled = (prompt: string) =>
       imageCompactSummary({ ...input(), args: { prompt, action: "generate" } })?.expandLabel;
-    expect(settled(Str.repeat(30)("otter "))).not.toBe(settled("An otter"));
-    expect(settled("An otter\nat dawn")).toBe(settled(Str.repeat(30)("otter ")));
+    expect(settled(Fn.pipe("otter ", Str.repeat(30)))).not.toBe(settled("An otter"));
+    expect(settled("An otter\nat dawn")).toBe(settled(Fn.pipe("otter ", Str.repeat(30))));
   });
 });

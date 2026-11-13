@@ -403,36 +403,31 @@ export function agentMessageOperations(dependencies: AgentMessageDependencies) {
   // The claim admits the message under the run lock, so a send that would be refused is refused
   // before any wait; once admitted, delivery commits in the session scope so a cancelled sender
   // never abandons it halfway.
-  const deliver = (
+  const deliver = Effect.fn("SubagentMessages.deliver")(function* (
     message: string,
     to: string,
     claim: (text: string) => Effect.Effect<SendClaim, SubagentError>,
-  ): Effect.Effect<AgentSendResult, SubagentError> =>
-    validateMessageText(message).pipe(
-      Effect.flatMap((text) =>
-        Effect.gen(function* () {
-          let claimed = yield* claim(text);
-          if (claimed.kind === "starting") {
-            yield* waitWhileStarting(to);
-            claimed = yield* claim(text);
-          }
-          if (claimed.kind === "starting") return yield* startingTargetRefusal(to);
-          return yield* runSessionOwned(ownerScope, Effect.succeed(claimed), (admitted) =>
-            commitSend(admitted, to, text, dependencies.allocateMessageId()),
-          );
-        }),
-      ),
+  ): Effect.fn.Return<AgentSendResult, SubagentError> {
+    const text = yield* validateMessageText(message);
+    let claimed = yield* claim(text);
+    if (claimed.kind === "starting") {
+      yield* waitWhileStarting(to);
+      claimed = yield* claim(text);
+    }
+    if (claimed.kind === "starting") return yield* startingTargetRefusal(to);
+    return yield* runSessionOwned(ownerScope, Effect.succeed(claimed), (admitted) =>
+      commitSend(admitted, to, text, dependencies.allocateMessageId()),
     );
+  });
 
   const send = (
     caller: AgentCaller,
     rawTo: string,
     message: string,
-  ): Effect.Effect<AgentSendResult, SubagentError> =>
-    Effect.suspend(() => {
-      const to = Str.trim(rawTo);
-      return deliver(message, to, (text) => claimSend(caller, to, text));
-    });
+  ): Effect.Effect<AgentSendResult, SubagentError> => {
+    const to = Str.trim(rawTo);
+    return deliver(message, to, (text) => claimSend(caller, to, text));
+  };
 
   /**
    * The user's message from Activity, delivered like an agent's but as bare text: it answers a

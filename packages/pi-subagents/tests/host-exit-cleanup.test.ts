@@ -7,37 +7,24 @@ import * as Predicate from "effect/Predicate";
 import * as Scope from "effect/Scope";
 import { vi } from "vitest";
 import { signalProcessGroup } from "pi-cosmic-core";
-import { spawnIpcChild, temporaryDirectory } from "pi-cosmic-core/testing";
+import { pollUntil, spawnIpcChild, temporaryDirectory } from "pi-cosmic-core/testing";
 import { acquireJsonlTransport } from "./support/jsonl-transport.ts";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 vi.setConfig({ testTimeout: 30_000 });
 
 const hostScript = fileURLToPath(new URL("./fixtures/abrupt-exit-host.ts", import.meta.url));
 
-const groupGone = (pid: number) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      if (signalProcessGroup(pid, 0) === "absent") return true;
-      yield* Effect.sleep("10 millis");
-    }
-    return false;
-  });
+const groupGone = (pid: number) => pollUntil(() => signalProcessGroup(pid, 0) === "absent");
 
 const killGroupAfterward = (pid: number) =>
   Effect.addFinalizer(() => Effect.sync(() => signalProcessGroup(pid, "SIGKILL")));
 
 // The host-exit guard holds one process `exit` listener exactly while any group is guarded.
 const exitListenersReach = (expected: number) =>
-  Effect.gen(function* () {
-    for (let attempt = 0; attempt < 200; attempt += 1) {
-      if (process.listenerCount("exit") === expected) return true;
-      yield* Effect.sleep("10 millis");
-    }
-    return false;
-  });
+  pollUntil(() => process.listenerCount("exit") === expected);
 
 const openShell = (script: string) =>
   Effect.gen(function* () {
@@ -64,10 +51,9 @@ describe("host exit cleanup", () => {
         // loaded machine.
         const host = yield* spawnIpcChild(hostScript, [agentDirectory], { timeout: "100 seconds" });
         yield* host.wait("ready");
-        const announced = Option.getOrUndefined(
-          Arr.findFirst(Arr.filter(host.messages, Predicate.isString), (message) =>
-            Fn.pipe(message, Str.startsWith("group:")),
-          ),
+        const announced = findOrUndefined(
+          Arr.filter(host.messages, Predicate.isString),
+          (message) => Fn.pipe(message, Str.startsWith("group:")),
         );
         assert(announced !== undefined);
         const pid = Number(Fn.pipe(announced, Str.slice("group:".length)));

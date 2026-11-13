@@ -213,33 +213,16 @@ export const withOriginMarkerOf = (
 /**
  * Wraps each of `source`'s custom messages in a marker naming its extension, type, and origin, so
  * the model can tell them from text the user typed; Pi otherwise sends custom messages as plain
- * user text. Markers inside content are neutralized so content cannot close its own marker. Other
- * messages keep their identity and order, and `messages` itself is returned when nothing matched.
- */
-export const markMessageOrigins = (
-  messages: ContextEvent["messages"],
-  source: MessageOriginSource,
-): ContextEvent["messages"] => {
-  let changed = false;
-  const marked = Arr.map(messages, (message): ContextMessage => {
-    if (message.role !== "custom") return message;
-    const content = originMarkedContent(message, source);
-    if (content === undefined) return message;
-    changed = true;
-    return { ...message, content };
-  });
-  return changed ? marked : messages;
-};
-
-/**
- * Marks `source`'s messages in every model request, before any `context_with_system` handler. Pi
- * folds every system message into one leading message once a `context` handler returns a list or
- * replaces an element, so the content of each matching element is replaced in place and nothing is
- * returned: mid-conversation system messages stay where they are. A `context_with_system` handler
- * could not keep that ordering, since those chain in extension load order, and marking after Better
- * OpenAI's checkpoint repair would change checkpoint-covered messages so its checkpoint no longer
- * matches the request. Pi runs `context` handlers on a copy of the transcript, so the stored session
- * and chat view keep the original content; the Pi tests in core's suite pin that. Register once per
+ * user text. Markers inside content are neutralized so content cannot close its own marker.
+ *
+ * Marking runs in every model request, before any `context_with_system` handler. Pi folds every
+ * system message into one leading message once a `context` handler returns a list or replaces an
+ * element, so the content of each matching element is replaced in place and nothing is returned:
+ * mid-conversation system messages stay where they are. A `context_with_system` handler could not
+ * keep that ordering, since those chain in extension load order, and marking after Better OpenAI's
+ * checkpoint repair would change checkpoint-covered messages so its checkpoint no longer matches
+ * the request. Pi runs `context` handlers on a copy of the transcript, so the stored session and
+ * chat view keep the original content; the Pi tests in core's suite pin that. Register once per
  * extension, at factory time.
  */
 export function registerMessageOrigins(pi: ExtensionAPI, source: MessageOriginSource): void {

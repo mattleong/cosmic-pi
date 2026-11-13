@@ -2,6 +2,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
+import { cachedComponent } from "pi-cosmic-ui/tool";
 import { wrapAnsiToWidth } from "../../../shared/terminal-text";
 
 /** One logical preview line and the prefix its wrapped continuation rows start with. */
@@ -23,18 +24,9 @@ export function hangingContinuation(line: string): string {
  * Wraps code at the width it is drawn at, so a long line continues under its own code column
  * instead of running back through the line-number gutter or the indentation.
  */
-export class WrappedCodeText implements Component {
-  private cachedWidth: number | undefined;
-  private cachedRows: string[] | undefined;
-  private readonly rows: ReadonlyArray<WrappedCodeRow>;
-
-  constructor(rows: ReadonlyArray<WrappedCodeRow>) {
-    this.rows = rows;
-  }
-
-  render(width: number): string[] {
-    if (this.cachedWidth === width && this.cachedRows) return this.cachedRows;
-    const rows = Arr.flatMap(this.rows, ({ text, continuation }) =>
+export const wrappedCodeText = (rows: ReadonlyArray<WrappedCodeRow>): Component =>
+  cachedComponent((width) =>
+    Arr.flatMap(rows, ({ text, continuation }) =>
       wrapAnsiToWidth(
         text,
         width,
@@ -43,14 +35,5 @@ export class WrappedCodeText implements Component {
         visibleWidth(continuation) * 2 <= width ? continuation : "",
         { breakAtWords: true },
       ),
-    );
-    this.cachedWidth = width;
-    this.cachedRows = rows;
-    return rows;
-  }
-
-  invalidate(): void {
-    this.cachedWidth = undefined;
-    this.cachedRows = undefined;
-  }
-}
+    ),
+  );

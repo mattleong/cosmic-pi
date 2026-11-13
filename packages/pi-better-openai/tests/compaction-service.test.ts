@@ -18,7 +18,6 @@ import type {
   CompactionResult,
   ExtensionContext,
   SessionBeforeCompactEvent,
-  SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
@@ -28,6 +27,7 @@ import * as Layer from "effect/Layer";
 import * as MutableRef from "effect/MutableRef";
 import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { extensionContextFixture, provideBuiltLayer } from "pi-cosmic-core/testing";
@@ -48,37 +48,21 @@ import { initialFastSnapshot } from "../src/fast/controller.ts";
 import {
   appendAssistant,
   assistantMessage,
+  beforeCompactEvent,
   makeResolvedConfig,
   serializedSnapshot,
   testModel,
   zeroUsage,
 } from "./helpers.ts";
 
-const customMessageEntry = (id: string, content: string): SessionEntry => ({
-  type: "custom_message",
-  id,
-  parentId: null,
-  timestamp: "2026-01-01T00:00:00.000Z",
-  customType: "test",
-  content,
-  display: false,
-});
-
-const compactEvent = (firstKeptEntryId = "kept"): SessionBeforeCompactEvent => {
+const compactEvent = (): SessionBeforeCompactEvent => {
+  const base = beforeCompactEvent();
   return {
-    type: "session_before_compact",
-    branchEntries: [customMessageEntry(firstKeptEntryId, "kept")],
+    ...base,
     customInstructions: "retain decisions",
-    reason: "manual",
-    signal: new AbortController().signal,
-    willRetry: false,
     preparation: {
-      firstKeptEntryId,
+      ...base.preparation,
       tokensBefore: 321,
-      messagesToSummarize: [],
-      turnPrefixMessages: [],
-      isSplitTurn: false,
-      fileOps: { read: new Set(), written: new Set(), edited: new Set() },
       settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1000 },
     },
   };
@@ -309,8 +293,7 @@ describe("OpenAICompactionService", () => {
         const service = yield* OpenAICompactionService;
         const compactRound = (round: number) =>
           Effect.gen(function* () {
-            const firstId = manager.getBranch()[0]!.id;
-            const result = commit(manager, yield* service.compact(compactEvent(firstId)));
+            const result = commit(manager, yield* service.compact(compactEvent()));
             expect(result.usage).toMatchObject({
               input: 7,
               output: 3,
@@ -341,9 +324,7 @@ describe("OpenAICompactionService", () => {
             expect(
               Arr.filter(manager.buildContextEntries(), (item) => item.type === "compaction"),
             ).toHaveLength(1);
-            expect((yield* service.compact(compactEvent()).pipe(Effect.result))._tag).toBe(
-              "Failure",
-            );
+            yield* service.compact(compactEvent()).pipe(Effect.flip);
           });
         const injectTail = (round: number) =>
           Effect.gen(function* () {
@@ -557,7 +538,7 @@ describe("OpenAICompactionService", () => {
           );
           const forged = Arr.map(input, (item) =>
             decodeJsonText(
-              Str.replace("covered question", "forged question")(serializedSnapshot(item)),
+              Fn.pipe(serializedSnapshot(item), Str.replace("covered question", "forged question")),
             ),
           );
           expect(serializedSnapshot(forged)).toContain("forged question");
@@ -841,7 +822,7 @@ describe("OpenAICompactionService", () => {
         target.setEnabled(false);
         const result = yield* service.compact(compactEvent()).pipe(Effect.result);
         expect(attempts).toBe(enabled ? 2 : 1);
-        expect(result._tag).toBe(enabled ? "Success" : "Failure");
+        expect(Result.isSuccess(result)).toBe(enabled);
         if (enabled) expect(serializedSnapshot(result)).toContain("retried summary");
       }).pipe(provideBuiltLayer(serviceLayer(target, client, { retryPolicy })));
     });

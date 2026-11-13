@@ -109,18 +109,6 @@ function withoutKnownSettings(latest: JsonObject): JsonObject {
   return document;
 }
 
-function editedSettingKeys(
-  settings: CodePreviewSettings,
-  previous: CodePreviewSettings,
-  editedKeys: readonly SettingKey[] | undefined,
-): readonly SettingKey[] {
-  // Explicit assignments remain edits even while pending saves make the snapshot stale.
-  return (
-    editedKeys ??
-    Arr.filter(CODE_PREVIEW_SETTING_KEYS, (key) => !Equal.equals(settings[key], previous[key]))
-  );
-}
-
 function settingsDocument(
   settings: CodePreviewSettings,
   context: SettingsSaveContext,
@@ -306,7 +294,10 @@ export class CodePreviewSettingsService extends Context.Service<
         editedKeys?: readonly SettingKey[],
       ) {
         const loaded = yield* decodeCommittedSettings(settings, flatSettingsPath);
-        const keys = editedSettingKeys(loaded, previous, editedKeys);
+        // Explicit assignments remain edits even while pending saves make the snapshot stale.
+        const keys =
+          editedKeys ??
+          Arr.filter(CODE_PREVIEW_SETTING_KEYS, (key) => !Equal.equals(loaded[key], previous[key]));
         return yield* commitDocument(coordinator, keys, { ...context, loaded }, (latest) =>
           settingsDocument(loaded, context, latest, keys),
         );

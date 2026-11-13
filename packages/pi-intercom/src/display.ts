@@ -4,6 +4,7 @@ import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 import { authoredTextLines, expandedDetails } from "pi-code-previews";
 import { sanitizeTerminalLine, stripTerminalControls } from "pi-cosmic-core/security";
+import { cachedComponent } from "pi-cosmic-ui/tool";
 import { displayDirectory, overlongSessionName } from "./identity.ts";
 
 /** Words a session wrote, without terminal escape sequences that would restyle the view. */
@@ -19,21 +20,10 @@ export const textBody = (
   theme: Pick<Theme, "fg" | "bold">,
   expanded: boolean,
   indent = 0,
-): Component => {
-  let cached: { readonly width: number; readonly rows: string[] } | undefined;
-  return {
-    render(width) {
-      if (!Number.isFinite(width) || width < 1) return [];
-      if (cached?.width === width) return cached.rows;
-      const rows = authoredTextLines(sessionText(text), width, theme, { expanded, indent });
-      cached = { width, rows };
-      return rows;
-    },
-    invalidate() {
-      cached = undefined;
-    },
-  };
-};
+): Component =>
+  cachedComponent((width) =>
+    authoredTextLines(sessionText(text), width, theme, { expanded, indent }),
+  );
 
 /** How far a collapsed preview message's body indents beneath its heading. */
 export const PREVIEW_BODY_INDENT = 2;

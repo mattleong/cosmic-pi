@@ -9,10 +9,15 @@ import { SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
 const LIVE_TARGET_WIDTH = 160;
 const MAX_WAITING_NAMES = 3;
 
-type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
+export type ToolEvent = Extract<SubagentSessionEvent, { readonly type: "tool" }>;
 
 /** A run's display name by ID, when the projection still holds it. */
 export type RunNameLookup = (runId: string) => string | undefined;
+
+export const runNameLookup = (runs: ReadonlyArray<SubagentRunView>): RunNameLookup => {
+  const names = new Map(Arr.map(runs, (run) => [run.id, run.name] as const));
+  return (id) => names.get(id);
+};
 
 const runningTool = (run: SubagentRunView): ToolEvent | undefined =>
   Option.getOrUndefined(

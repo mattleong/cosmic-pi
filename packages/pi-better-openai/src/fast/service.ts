@@ -11,7 +11,7 @@ import type { ResolvedConfig } from "../config/schema.ts";
 import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
 import { OpenAIConfigService } from "../config/store.ts";
 
-export interface FastInjectionEvent {
+interface FastInjectionEvent {
   readonly model: string;
   readonly tier: string;
 }

@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Str from "effect/String";
 import { describe, expect, it } from "vitest";
 import { listReport } from "../src/command.ts";
 import { contractEnvelope, SESSION_TOOL, type SessionListContract } from "../src/tools/contract.ts";
@@ -19,18 +20,18 @@ const listing = (names: ReadonlyArray<string>): SessionListContract => ({
 const LONG_NAME = "checkout redesign review for the acme platform team and billing";
 
 describe("/intercom list example", () => {
+  const mentions = (names: ReadonlyArray<string>, word: string) =>
+    Str.split(listReport(listing(names)), word).length - 1;
+
   it("names a listed session the user could type", () => {
-    expect(listReport(listing([LONG_NAME, "web work"]))).toContain(
-      '"Ask the web work session to run its tests"',
-    );
+    // Once in the list and once in the example.
+    expect(mentions([LONG_NAME, "web work"], "web work")).toBe(2);
   });
 
-  it("points at the list rather than inventing a session when no name fits", () => {
-    const one = listReport(listing([LONG_NAME]));
-    expect(one).toContain("the session listed above");
-    expect(one).not.toContain("the web session");
-    expect(listReport(listing([LONG_NAME, `${LONG_NAME} follow-up`]))).toContain(
-      "one of the sessions above",
-    );
+  it("names no session rather than inventing one when no name fits", () => {
+    // A name the list cuts appears only there, and the example makes up no session instead.
+    expect(mentions([LONG_NAME], "checkout")).toBe(1);
+    expect(mentions([LONG_NAME], "web")).toBe(0);
+    expect(mentions([LONG_NAME, `${LONG_NAME} follow-up`], "checkout")).toBe(2);
   });
 });

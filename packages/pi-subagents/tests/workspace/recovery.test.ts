@@ -8,7 +8,6 @@ import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
-import * as Scope from "effect/Scope";
 import { CrossProcessLock } from "pi-cosmic-core";
 import {
   sourceLockNamespace,
@@ -19,14 +18,14 @@ import { git } from "../../src/boundary/git-worktree-process.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import { WorkspaceService } from "../../src/workspace/service.ts";
 import {
-  commitRepository,
   exists,
   failureOf,
   io,
   openWorkspaceService,
+  orphanScenario,
   prepareIntegration,
   registryOf,
-  temporaryDirectory,
+  successorDependencies,
   workspaceTarget,
   workspaceTests,
   writeFile,
@@ -34,17 +33,16 @@ import {
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 
+const MAIN_FILE = [["main.ts", "baseline\n"]] as const;
+
 for (const replaced of [false, true]) {
   it.live(
     `retains a ${replaced ? "replaced" : "renamed"} worker cwd while its original lease is held`,
     () =>
       Effect.gen(function* () {
-        const temporary = yield* temporaryDirectory("pi-orphan-identity-");
-        const source = path.join(temporary, "source");
-        const agent = path.join(temporary, "agent");
-        yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
-        yield* commitRepository(source, [["pkg/main.ts", "baseline\n"]]);
-        const creator = yield* openWorkspaceService(agent);
+        const { source, agent, creator } = yield* orphanScenario("pi-orphan-identity-", [
+          ["pkg/main.ts", "baseline\n"],
+        ]);
         const handle = yield* creator.service.create({
           sourceCwd: path.join(source, "pkg"),
           ownerId: "old/root",
@@ -68,18 +66,9 @@ for (const replaced of [false, true]) {
         }
         yield* creator.close;
         const successor = yield* openWorkspaceService(agent);
-        const context = yield* workspaceControlContext({
-          ownerScope: yield* Scope.Scope,
-          records: new Map(),
-          withLock: (effect) => effect,
-          writerLeases: leases,
-          engine: successor.service,
-          initialMode: "worktree",
-          worktreeCreate: [],
-          ownerId: "new",
-          sourceCwd: source,
-          isClosed: () => false,
-        });
+        const context = yield* workspaceControlContext(
+          yield* successorDependencies(leases, successor.service, source),
+        );
         expect(
           yield* workspaceOrphanOperations(context, Effect.succeed)
             .discardOrphan(handle.workspaceId)
@@ -98,38 +87,32 @@ it.live(
   "preserves both worker trees when its path is replaced while orphan discard waits for the source lock",
   () =>
     Effect.gen(function* () {
-      const temporary = yield* temporaryDirectory("pi-orphan-cleanup-race-");
-      const source = path.join(temporary, "source");
-      const agent = path.join(temporary, "agent");
-      yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
-      yield* commitRepository(source, [["main.ts", "baseline\n"]]);
-      const creator = yield* openWorkspaceService(agent);
+      const { source, agent, creator } = yield* orphanScenario(
+        "pi-orphan-cleanup-race-",
+        MAIN_FILE,
+      );
       const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       const { prepared } = yield* prepareIntegration(creator.service, handle);
       yield* creator.close;
       const successor = yield* openWorkspaceService(agent);
-      const registry = path.join(agent, "subagent-worktrees");
-      const lockDirectory = workspaceLockDirectory(registry);
+      const lockDirectory = workspaceLockDirectory(registryOf(agent));
       const verified = yield* Deferred.make<void>();
       const leases = yield* WriterLeaseService.pipe(
         Effect.provide(WriterLeaseService.layer({ agentDirectory: agent })),
       );
-      const context = yield* workspaceControlContext({
-        ownerScope: yield* Scope.Scope,
-        records: new Map(),
-        withLock: (effect) => effect,
-        writerLeases: {
-          ...leases,
-          canonicalize: (cwd) =>
-            leases.canonicalize(cwd).pipe(Effect.tap(() => Deferred.succeed(verified, undefined))),
-        },
-        engine: successor.service,
-        initialMode: "worktree",
-        worktreeCreate: [],
-        ownerId: "new",
-        sourceCwd: source,
-        isClosed: () => false,
-      });
+      const context = yield* workspaceControlContext(
+        yield* successorDependencies(
+          {
+            ...leases,
+            canonicalize: (cwd) =>
+              leases
+                .canonicalize(cwd)
+                .pipe(Effect.tap(() => Deferred.succeed(verified, undefined))),
+          },
+          successor.service,
+          source,
+        ),
+      );
       const renamed = `${handle.cwd}-original`;
       const pending = yield* Effect.gen(function* () {
         const locks = yield* CrossProcessLock;
@@ -165,12 +148,7 @@ it.live(
   "discards an orphan only once the session that created it has ended",
   () =>
     Effect.gen(function* () {
-      const temporary = yield* temporaryDirectory("pi-orphan-");
-      const source = path.join(temporary, "source");
-      const agent = path.join(temporary, "agent");
-      yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
-      yield* commitRepository(source, [["main.ts", "baseline\n"]]);
-      const creator = yield* openWorkspaceService(agent);
+      const { source, agent, creator } = yield* orphanScenario("pi-orphan-", MAIN_FILE);
       const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       yield* writeFile(path.join(handle.cwd, "main.ts"), "unreviewed\n");
       const successor = yield* openWorkspaceService(agent);
@@ -199,12 +177,7 @@ it.live(
   "removes the worktree and refs a create left when its session ended mid-create",
   () =>
     Effect.gen(function* () {
-      const temporary = yield* temporaryDirectory("pi-abandoned-create-");
-      const source = path.join(temporary, "source");
-      const agent = path.join(temporary, "agent");
-      yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
-      yield* commitRepository(source, [["main.ts", "baseline\n"]]);
-      const creator = yield* openWorkspaceService(agent);
+      const { source, agent, creator } = yield* orphanScenario("pi-abandoned-create-", MAIN_FILE);
       const handle = yield* creator.service.create({ sourceCwd: source, ownerId: "old/root" });
       // As if the session crashed after adding the worker, before the record said active.
       const recordFile = path.join(registryOf(agent), handle.workspaceId, "record.json");
@@ -242,11 +215,7 @@ const age = (agent: string, workspaceId: string, days: number) =>
   Effect.gen(function* () {
     const seconds = (yield* Clock.currentTimeMillis) / 1000 - days * 24 * 60 * 60;
     yield* io(() =>
-      fs.utimes(
-        path.join(agent, "subagent-worktrees", workspaceId, "record.json"),
-        seconds,
-        seconds,
-      ),
+      fs.utimes(path.join(registryOf(agent), workspaceId, "record.json"), seconds, seconds),
     );
   });
 
@@ -264,7 +233,7 @@ test("collects week-old finished records but keeps unintegrated work", function*
   const active = yield* service.create({ sourceCwd: root, ownerId: "parent" });
   for (const handle of [expired, kept, active]) yield* age(agent, handle.workspaceId, 8);
 
-  const registry = path.join(agent, "subagent-worktrees");
+  const registry = registryOf(agent);
   const remaining = yield* Effect.gen(function* () {
     const restarted = yield* WorkspaceService;
     return Arr.map((yield* restarted.listAll).records, (record) => record.handle.workspaceId);

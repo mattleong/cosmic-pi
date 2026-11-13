@@ -214,7 +214,8 @@ export function withoutStatusGlyphWords(
     : fact;
 }
 
-const STYLE_RESET = "\u001b[0m";
+/** The SGR reset pi-tui closes clipped or styled text with. */
+export const STYLE_RESET = "\u001b[0m";
 
 // A separator left stranded before a cut goes with it: `read-only…`, not `read-only ·…`.
 const STRANDED_SEPARATORS = [" ·", " →"] as const;
@@ -388,7 +389,7 @@ export const wrapFacts = (facts: string, width: number, hangingIndent = "  "): s
     if (current) lines.push(current);
     // An over-wide piece starts its own line; the facts after it keep packing onto its last row.
     // A led fact's own continuation hangs past its `· `, so it never reads as another fact.
-    const under = Str.repeat(visibleWidth(piece.lead))(" ");
+    const under = Fn.pipe(" ", Str.repeat(visibleWidth(piece.lead)));
     const rows = Arr.map(
       wrapWords(`${piece.lead}${piece.text}`, limit(), Math.max(1, room - under.length)),
       (row, index) => (index === 0 ? row : `${under}${row}`),
@@ -405,11 +406,4 @@ export const clipToWidth = (text: string, width: number, marker = "…"): string
   if (width > 0 && visibleWidth(text) <= width) return text;
   const clipped = truncateToWidth(text, width, marker);
   return marker ? closeUpMarker(clipped, marker) : clipped;
-};
-
-export const managerTabs = (tabs: ReadonlyArray<string>, active: number, width: number): string => {
-  const full = `  ${Arr.join(tabs, "  ")}`;
-  return visibleWidth(full) <= width
-    ? full
-    : truncateToWidth(`  ${tabs[active] ?? ""}`, Math.max(0, width), "");
 };

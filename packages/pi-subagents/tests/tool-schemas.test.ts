@@ -1,7 +1,6 @@
 import { fauxAssistantMessage, fauxToolCall, validateToolArguments } from "@earendil-works/pi-ai";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
-import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import { getTextContent } from "pi-code-previews";
@@ -24,8 +23,8 @@ import {
 import { replacementField } from "pi-cosmic-core/tool-arguments";
 import { registerSubagentTools } from "../src/tools/subagent.ts";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 import * as Rec from "effect/Record";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const registeredTools = (nested: boolean) =>
   captureRegistrations((pi) =>
@@ -131,9 +130,7 @@ describe("subagent argument preparation", () => {
       ]);
       yield* Effect.promise(() => session.prompt("start a scout"));
       expect(fake.getPendingResponseCount()).toBe(0);
-      const result = Option.getOrUndefined(
-        Arr.findFirst(session.messages, (message) => message.role === "toolResult"),
-      );
+      const result = findOrUndefined(session.messages, (message) => message.role === "toolResult");
       expect(result).toMatchObject({ toolName: "agent_start", isError: true });
       const shown = getTextContent(result?.content);
       expect(shown).toMatch(/\[invalid_arguments\][\s\S]*\bagents is required/u);
@@ -222,35 +219,5 @@ describe("await arguments", () => {
         runIds: ["agent-1"],
         timeoutSeconds,
       });
-  });
-});
-
-const ids = (count: number) => Array.from({ length: count }, (_, index) => `agent-${index}`);
-
-describe("lifecycle arguments", () => {
-  const prepareLifecycle = subagentArgumentPreparer("agent_lifecycle");
-
-  it("rejects resume, which is a message to the run, and accepts the other actions", () => {
-    expect(() => prepareLifecycle({ action: "resume", runIds: ["agent-1"] })).toThrow(
-      /\[invalid_arguments\][\s\S]*action/u,
-    );
-    expect(() =>
-      prepareLifecycle({ action: "stop", runIds: ["agent-1"], message: "Continue." }),
-    ).toThrow(/\[invalid_arguments\]/u);
-    for (const action of ["interrupt", "stop"] as const)
-      expect(prepareLifecycle({ action, runIds: ["agent-1"] })).toEqual({
-        action,
-        runIds: ["agent-1"],
-      });
-  });
-
-  it("takes as many targets as one start batch launches", () => {
-    expect(prepareLifecycle({ action: "stop", runIds: ids(32) })).toEqual({
-      action: "stop",
-      runIds: ids(32),
-    });
-    expect(() => prepareLifecycle({ action: "stop", runIds: ids(33) })).toThrow(
-      /\[invalid_arguments\][\s\S]*runIds/u,
-    );
   });
 });

@@ -61,8 +61,7 @@ const observeCleanupPhase = <A, E, R>(
 
 const cleanupUnconfirmed = (
   message = "Process tree exit was not confirmed after forced termination.",
-) =>
-  processCauseError("confirm subagent process cleanup", new Error(message), "cleanup_unconfirmed");
+) => processCauseError("confirm subagent process cleanup", message, "cleanup_unconfirmed");
 
 export interface ProcessTransportRuntime {
   readonly spawn: (...args: Parameters<typeof nodeSpawn>) => NodeChildProcess;
@@ -377,24 +376,20 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
           }),
         );
       const confirmDetachedGroupsExit = Effect.suspend(() =>
-        Effect.forEach(
+        Effect.filter(
           [...detachedGroups],
-          (group) =>
-            runtime
-              .confirmGroupExit(group, 2_000)
-              .pipe(Effect.map((gone) => (gone ? [] : [group]))),
+          (group) => runtime.confirmGroupExit(group, 2_000).pipe(Effect.map((gone) => !gone)),
           { concurrency: "unbounded" },
         ),
-      ).pipe(Effect.map((remaining) => remaining.flat()));
-      const observe = Effect.gen(function* () {
-        if (!settled && child.exitCode === null && child.signalCode === null)
-          return yield* Effect.fail(
-            processCleanupDiagnostic(
-              "process-exit",
-              cleanupUnconfirmed("The exact child process has not exited."),
-            ),
-          );
+      );
+      /** The checks after the leader's exit, in order; each failure names its phase. */
+      const confirmTreeGone = Effect.fnUntraced(function* (
+        groupPresent: string | undefined,
+        descendantsPresent: (remaining: ReadonlyArray<number>) => string,
+      ) {
         if (detachedSnapshotFailure) return yield* Effect.fail(detachedSnapshotFailure);
+        // A child that exited on its own was never snapshotted, and its descendants have
+        // reparented, so nothing can show they are gone.
         if (!detachedSnapshotComplete)
           return yield* Effect.fail(
             processCleanupDiagnostic(
@@ -407,11 +402,7 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
           runtime
             .confirmGroupExit(pid, 2_000)
             .pipe(
-              Effect.flatMap((gone) =>
-                gone
-                  ? Effect.void
-                  : cleanupUnconfirmed("The original process group is still present."),
-              ),
+              Effect.flatMap((gone) => (gone ? Effect.void : cleanupUnconfirmed(groupPresent))),
             ),
         );
         const remaining = yield* observeCleanupPhase(
@@ -422,10 +413,23 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
           return yield* Effect.fail(
             processCleanupDiagnostic(
               "descendant-groups",
-              cleanupUnconfirmed("Recorded detached descendant groups are still present."),
+              cleanupUnconfirmed(descendantsPresent(remaining)),
             ),
           );
         return undefined;
+      });
+      const observe = Effect.gen(function* () {
+        if (!settled && child.exitCode === null && child.signalCode === null)
+          return yield* Effect.fail(
+            processCleanupDiagnostic(
+              "process-exit",
+              cleanupUnconfirmed("The exact child process has not exited."),
+            ),
+          );
+        return yield* confirmTreeGone(
+          "The original process group is still present.",
+          () => "Recorded detached descendant groups are still present.",
+        );
       });
       const cleanupVerifier: BackendCleanupVerifier = {
         diagnostic: (reason) =>
@@ -452,29 +456,11 @@ export const acquireProcessTransport = Effect.fn("ProcessTransport.acquire")(fun
               ? failAttested(detachedSnapshotFailure)
               : attest("process-exit", cleanupUnconfirmed());
         }
-        if (detachedSnapshotFailure) return yield* failAttested(detachedSnapshotFailure);
-        // A child that exited on its own was never snapshotted, and its descendants have
-        // reparented, so nothing can show they are gone.
-        if (!detachedSnapshotComplete)
-          return yield* attest(
-            "descendant-snapshot",
-            cleanupUnconfirmed("No complete pre-exit descendant snapshot was retained."),
-          );
-        yield* attest(
-          "process-group",
-          runtime
-            .confirmGroupExit(pid, 2_000)
-            .pipe(Effect.flatMap((gone) => (gone ? Effect.void : cleanupUnconfirmed()))),
-        );
-        const remaining = yield* attest("descendant-groups", confirmDetachedGroupsExit);
-        if (remaining.length > 0)
-          return yield* attest(
-            "descendant-groups",
-            cleanupUnconfirmed(
-              `Detached descendant process groups ${Arr.join(Arr.map(remaining, String), ", ")} were still running after the subagent exited.`,
-            ),
-          );
-        return undefined;
+        return yield* confirmTreeGone(
+          undefined,
+          (remaining) =>
+            `Detached descendant process groups ${Arr.join(Arr.map(remaining, String), ", ")} were still running after the subagent exited.`,
+        ).pipe(Effect.catch(failAttested));
       });
       yield* Effect.addFinalizer(() =>
         release.pipe(Effect.ensuring(Effect.sync(cleanup)), Effect.orDie),

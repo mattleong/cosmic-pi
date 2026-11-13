@@ -6,8 +6,8 @@ import type { ChildProcessHandle } from "../boundary/child-process.ts";
 import {
   appendShared,
   errorText,
-  failureFields,
   isOutcomeUncertain,
+  processError,
   SubagentProcessError,
   withGuidance,
   type GuidedText,
@@ -39,21 +39,19 @@ const appendQueueNote = (text: GuidedText): GuidedText =>
 
 const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): SubagentError =>
   Predicate.isTagged(error, "SubagentProcessError") && error.code === "transport_outcome_uncertain"
-    ? SubagentProcessError.make({
-        operation: `execute ${command.type} in`,
-        code: rpcOutcomeCode(command),
-        ...failureFields(
-          command.type === "clear_queue"
-            ? withGuidance(
-                appendQueueNote(errorText(error)),
-                "Inspect the run with agent_read before retrying interrupt.",
-              )
-            : withGuidance(
-                errorText(error),
-                `Inspect the run with agent_read before retrying ${commandLabel(command)}.`,
-              ),
-        ),
-      })
+    ? processError(
+        `execute ${command.type} in`,
+        rpcOutcomeCode(command),
+        command.type === "clear_queue"
+          ? withGuidance(
+              appendQueueNote(errorText(error)),
+              "Inspect the run with agent_read before retrying interrupt.",
+            )
+          : withGuidance(
+              errorText(error),
+              `Inspect the run with agent_read before retrying ${commandLabel(command)}.`,
+            ),
+      )
     : error;
 
 interface PendingRpcResponse {
@@ -96,21 +94,19 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
           .send({ ...command, id })
           .pipe(Effect.mapError((error) => mapTransportUncertainty(command, error))),
       timeoutError: () =>
-        SubagentProcessError.make({
-          operation: "await RPC response from",
-          code: rpcOutcomeCode(command),
-          ...failureFields(
-            command.type === "clear_queue"
-              ? withGuidance(
-                  "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent.",
-                  "Inspect the run with agent_read before retrying interrupt.",
-                )
-              : withGuidance(
-                  `Subagent did not answer ${commandLabel(command)}; the command may already have applied.`,
-                  "Inspect the run with agent_read before retrying.",
-                ),
-          ),
-        }),
+        processError(
+          "await RPC response from",
+          rpcOutcomeCode(command),
+          command.type === "clear_queue"
+            ? withGuidance(
+                "Subagent did not answer clear_queue; queue clearing may already have applied, but abort was not sent.",
+                "Inspect the run with agent_read before retrying interrupt.",
+              )
+            : withGuidance(
+                `Subagent did not answer ${commandLabel(command)}; the command may already have applied.`,
+                "Inspect the run with agent_read before retrying.",
+              ),
+        ),
     }).pipe(
       Effect.filterOrFail(
         (response) => response.success,

@@ -30,6 +30,7 @@ const { JsonDocumentStore } = await import("pi-cosmic-core/platform/json-documen
 const { makePiManagedRuntime } = await import("pi-cosmic-core/runtime");
 
 await Promise.all([
+  import("pi-cosmic-core/array"),
   import("pi-cosmic-core/display"),
   import("pi-cosmic-core/message-text"),
   import("pi-cosmic-core/security"),
@@ -48,6 +49,7 @@ await Promise.all([
   import("pi-cosmic-core/config/scoped-config-store"),
   import("pi-cosmic-core/platform/safe-file"),
   import("pi-cosmic-core/platform/private-file"),
+  import("pi-cosmic-core/platform/errors"),
 ]);
 assert.equal(process.listenerCount("exit"), exitListeners);
 

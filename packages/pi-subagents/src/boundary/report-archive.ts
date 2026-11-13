@@ -9,11 +9,12 @@ import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
 import { safeSubagentDirectorySegment } from "./child-process.ts";
-import { nodeErrorCode } from "./harness-shared.ts";
+import { nodeErrorCode } from "pi-cosmic-core/platform/errors";
 import { MAX_OUTCOME_FILE_PATH_CHARS } from "../run/limits.ts";
 import type { SubagentReportArchive } from "../run/model.ts";
 import { lineCount } from "../run/state.ts";
 import {
+  attempt,
   PRIVATE_STATE_RETENTION_MILLIS,
   REPORT_ARCHIVE_ROOT,
   SUBAGENT_STATE_ROOT,
@@ -159,9 +160,6 @@ interface ArchivedFile {
   readonly size: number;
   readonly modified: number;
 }
-
-const attempt = <A>(evaluate: () => PromiseLike<A>): Effect.Effect<Option.Option<A>> =>
-  Effect.tryPromise(evaluate).pipe(Effect.option);
 
 const sessionDirectories = (root: string): Effect.Effect<ReadonlyArray<string>> =>
   attempt(() => fs.readdir(root, { withFileTypes: true })).pipe(

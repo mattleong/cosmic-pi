@@ -5,16 +5,14 @@ import {
   applyPresentationSettings,
   createToolPresentationHarness,
   issueMessageStyleProblems,
-  renderContextFixture,
 } from "pi-code-previews/testing";
 import { stripAnsi } from "pi-cosmic-core";
 import { beforeEach, expect } from "vitest";
 import { callerNotRegistered, codedFailure, runNotFound } from "../../src/run/errors.ts";
 import { SUBAGENT_TOOL_NAME } from "../../src/run/tool-policy.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
-import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { eventBackendServiceFixture } from "../run/fixtures/service-harness.ts";
-import { executeTool, managedToolHost } from "./fixtures/tool-harness.ts";
+import { executeTool, managedToolHost, settledSummary } from "./fixtures/tool-harness.ts";
 
 beforeEach(() =>
   applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallTiming: false }),
@@ -23,21 +21,16 @@ beforeEach(() =>
 const MISSING = "agent-0123456789";
 
 const settledIssue = (args: { readonly runIds: ReadonlyArray<string> }, text: string) =>
-  createSubagentCompactSummary(SUBAGENT_TOOL_NAME.await)({
-    phase: "settled",
-    args,
-    result: { content: [{ type: "text", text }], details: {} },
-    context: renderContextFixture({ isError: true }),
+  settledSummary(createSubagentCompactSummary(SUBAGENT_TOOL_NAME.await), args, {
+    details: {},
+    isError: true,
+    text,
   })?.issues?.[0];
 
 it.live("names an unknown awaited run without its ID until the call is expanded", () =>
   Effect.gen(function* () {
     const fixture = eventBackendServiceFixture();
-    const { pi, tools, runtime } = yield* managedToolHost(fixture);
-    registerSubagentTools(pi, {
-      environment: { cwd: "/project", projectTrusted: true },
-      run: (effect, signal) => runtime.run(effect, signal),
-    });
+    const { tools } = yield* managedToolHost(fixture);
     const tool = tools.get(SUBAGENT_TOOL_NAME.await)!;
     const args = { runIds: [MISSING] };
     // The thrown message is the text Pi shows the model and hands the renderer.

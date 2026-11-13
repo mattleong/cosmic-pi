@@ -138,30 +138,14 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       () =>
         Effect.gen(function* () {
           const loadPreviewSettings = vi.fn(() => Promise.resolve());
-          const metadata = { generation: "previous", deliveryId: "answer" };
-          const receipt = {
-            id: "receipt",
-            parentId: null,
-            timestamp: "2026-01-01T00:00:00Z",
-            type: "custom",
-            customType: ASYNC_RECEIPT_TYPE,
-            data: { version: 1, ...metadata },
-          } satisfies CustomEntry;
           const h = yield* harness(loadPreviewSettings, {
             mode,
             hasUI: false,
-            sessionManager: { getBranch: () => [receipt] },
+            sessionManager: { getBranch: () => [receiptEntry("answer")] },
           });
           yield* Effect.promise(() => h.emit("session_start"));
-          const recorded = {
-            role: "custom" as const,
-            customType: ASYNC_MESSAGE_TYPE,
-            content: "answer",
-            display: true,
-            details: metadata,
-            timestamp: 0,
-          };
-          const late = { ...recorded, details: { ...metadata, deliveryId: "unreceipted" } };
+          const recorded = answerMessage("answer", "submitted");
+          const late = { ...recorded, details: { ...recorded.details, deliveryId: "unreceipted" } };
           const result = yield* Effect.promise(() =>
             Promise.resolve(
               h.handlers.get("context")[0]!({ type: "context", messages: [recorded, late] }, h.ctx),
@@ -238,16 +222,12 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
     }),
   );
 
-  it.effect("answers /ask-user help with an overview and warns about an unknown subcommand", () =>
+  it.effect("says so when bare /ask-user finds nothing hidden to resume", () =>
     Effect.gen(function* () {
       const notify = vi.fn<(message: string, level?: string) => void>();
       const h = yield* harness(() => Promise.resolve(), { ui: { notify } });
-      const command = h.commands.get("ask-user");
-      for (const args of ["", "help", "settings"])
-        yield* Effect.promise(() => Promise.resolve(command?.handler(args, h.ctx)));
-      expect(Arr.map(notify.mock.calls, ([, level]) => level)).toEqual(["info", "info", "warning"]);
-      // Bare /ask-user resumes, so with nothing hidden it says so instead of showing the overview.
-      expect(notify.mock.calls[0]?.[0]).not.toBe(notify.mock.calls[1]?.[0]);
+      yield* Effect.promise(() => Promise.resolve(h.commands.get("ask-user")?.handler("", h.ctx)));
+      expect(Arr.map(notify.mock.calls, ([, level]) => level)).toEqual(["info"]);
     }),
   );
 

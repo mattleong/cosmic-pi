@@ -2,16 +2,15 @@ import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { countLabel } from "pi-cosmic-core/display";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
-import { failureMessage, isAgentGuidance } from "pi-cosmic-core/message-text";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import type { CompactSummaryProvider } from "./compact-summary";
 import { endElide, FACT_CUT_SLACK } from "../preview/compact-header";
-import { argumentFailureIssue } from "./argument-failure";
 import { hostContainer, type HostContainer } from "../shared/untrusted-value";
 import {
+  nativeFailureIssue,
   ownContainer,
   ownDataReader,
   ownString,
@@ -66,21 +65,12 @@ export const nativeToolSearchSummary: CompactSummaryProvider = ({
   if (phase !== "settled") return heading;
   if (!result) return undefined;
   if (context.isError) {
-    const first = Option.getOrUndefined(
-      Arr.findFirst(result.content, (part) => part.type === "text"),
-    );
+    const first = findOrUndefined(result.content, (part) => part.type === "text");
     const text = first?.type === "text" ? Fn.pipe(first.text, Str.slice(0, 8192)) : "";
-    const fallback = "Tool search failed";
     return {
       ...heading,
       outcome: "error",
-      issues: [
-        argumentFailureIssue(text) ?? {
-          severity: "error",
-          code: "tool-search-error",
-          message: isAgentGuidance(text) ? fallback : failureMessage(text, fallback),
-        },
-      ],
+      issues: [nativeFailureIssue(text, "tool-search-error", "Tool search failed")],
     };
   }
   const receipt = nativeToolSearchReceipt(hostContainer(result.details));

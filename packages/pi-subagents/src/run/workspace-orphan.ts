@@ -1,7 +1,5 @@
-import * as Arr from "effect/Array";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import {
   isOriginalWorker,
   OPEN_WORKSPACE_STATUSES,
@@ -22,6 +20,7 @@ import {
   type WorkspaceControlContext,
 } from "./workspace-binding.ts";
 import { integrationTarget } from "./workspace-integration.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const ORPHAN_UNAVAILABLE =
   "This session can only adopt or discard an orphaned workspace of its own checkout whose session has ended.";
@@ -134,8 +133,9 @@ export function workspaceOrphanOperations(
       Effect.mapError(mapWorkspaceError),
       Effect.flatMap(visibleRecords),
     );
-    const record = Option.getOrUndefined(
-      Arr.findFirst(listing.records, (entry) => entry.handle.workspaceId === workspaceId),
+    const record = findOrUndefined(
+      listing.records,
+      (entry) => entry.handle.workspaceId === workspaceId,
     );
     if (!record) return yield* invalid("workspace_owner_unavailable", ORPHAN_UNAVAILABLE);
     return record;

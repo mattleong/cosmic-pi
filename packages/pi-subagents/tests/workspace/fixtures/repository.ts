@@ -3,10 +3,15 @@ import { vi } from "vitest";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Fn from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
+import * as Str from "effect/String";
 import * as os from "node:os";
 import { git, workspaceIO } from "../../../src/boundary/git-worktree-process.ts";
+import type { WriterLeaseContract } from "../../../src/boundary/writer-lease.ts";
+import type { WorkspaceControlDependencies } from "../../../src/run/workspace-binding.ts";
 import { nodeFsPromises as fs, nodePath as path } from "../../support/node-builtins.ts";
 import type { WorkspaceHandle } from "../../../src/workspace/model.ts";
 import { WorkspaceService, type WorkspaceServiceContract } from "../../../src/workspace/service.ts";
@@ -68,6 +73,70 @@ export const openWorkspaceService = (agentDirectory: string) =>
       close: Scope.close(scope, Exit.void),
     };
   });
+
+/** A checkout with a session that created workspaces in it, which a test ends with `creator.close`. */
+export const orphanScenario = (prefix: string, files: RepositoryFiles) =>
+  Effect.gen(function* () {
+    const temporary = yield* temporaryDirectory(prefix);
+    const source = path.join(temporary, "source");
+    const agent = path.join(temporary, "agent");
+    yield* io(() => fs.mkdir(agent, { mode: 0o700 }));
+    yield* commitRepository(source, files);
+    const creator = yield* openWorkspaceService(agent);
+    return { source, agent, creator };
+  });
+
+/** What the root coordinator of a later session sharing the agent directory is built from. */
+export const successorDependencies = (
+  writerLeases: WriterLeaseContract,
+  engine: WorkspaceServiceContract,
+  sourceCwd: string,
+) =>
+  Effect.map(
+    Effect.scope,
+    (ownerScope): WorkspaceControlDependencies => ({
+      ownerScope,
+      records: new Map(),
+      withLock: (effect) => effect,
+      writerLeases,
+      engine,
+      initialMode: "worktree",
+      worktreeCreate: [],
+      ownerId: "new",
+      sourceCwd,
+      isClosed: () => false,
+    }),
+  );
+
+interface PendingInterrupt {
+  interrupt?: () => void;
+}
+
+/** Interrupts `effect` just before a record matching `matches` is renamed into place. */
+export const interruptAtRecordSave = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  matches: (text: string) => boolean,
+) =>
+  Effect.gen(function* () {
+    const rename = fs.rename;
+    const pending: PendingInterrupt = {};
+    const spy = vi.spyOn(fs, "rename").mockImplementation((from, to) =>
+      fs.readFile(from, "utf8").then((text) => {
+        if (Fn.pipe(String(to), Str.endsWith("record.json")) && matches(text))
+          pending.interrupt?.();
+        return rename(from, to);
+      }),
+    );
+    const fiber = yield* Effect.forkChild(effect);
+    pending.interrupt = () => fiber.interruptUnsafe();
+    return yield* Fiber.await(fiber).pipe(Effect.ensuring(Effect.sync(() => spy.mockRestore())));
+  });
+
+/** The prepared trees a workspace's private directory still holds. */
+export const preparedTrees = (artifact: string) =>
+  io(() => fs.readdir(artifact)).pipe(
+    Effect.map((names) => Arr.filter(names, (name) => Fn.pipe(name, Str.startsWith("prepare-")))),
+  );
 
 export const workspaceTarget = (handle: WorkspaceHandle) => ({
   workspaceId: handle.workspaceId,

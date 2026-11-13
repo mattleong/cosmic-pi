@@ -1,4 +1,3 @@
-import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
@@ -14,10 +13,7 @@ const SECRET_WARNINGS = {
 
 export function getSecretWarnings(text: string, limit = Infinity): string[] {
   const sample = secretScanSample(text, limit);
-  return Arr.map(
-    Arr.filter(Rec.toEntries(SECRET_WARNINGS), ([, pattern]) => pattern.test(sample)),
-    ([label]) => label,
-  );
+  return Rec.keys(Rec.filter(SECRET_WARNINGS, (pattern) => pattern.test(sample)));
 }
 
 function secretScanSample(source: string, limit: number): string {

@@ -1,5 +1,5 @@
 import type { CompactIssue } from "pi-code-previews";
-import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
+import { issueMessageStyleProblems } from "pi-code-previews/testing";
 import * as Fn from "effect/Function";
 import type * as Schema from "effect/Schema";
 import { assert, describe, expect, it } from "vitest";
@@ -13,10 +13,11 @@ import type {
   SubagentStartDetails,
   WorkspaceToolDetails,
 } from "../../src/tools/details-schema.ts";
-import { view } from "./fixtures/tool-harness.ts";
+import { settledSummary, view } from "./fixtures/tool-harness.ts";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 type SummarizedDetails =
   | CompactSubagentToolDetails
@@ -26,10 +27,9 @@ type SummarizedDetails =
   | Schema.Json
   | undefined;
 
-function summarize(
+const summarize = (
   action: keyof typeof SUBAGENT_TOOL_NAME,
   details: SummarizedDetails,
-  phase: "running" | "settled" = "settled",
   args: {
     action?: string;
     runIds?: string[];
@@ -37,15 +37,12 @@ function summarize(
     agents?: { name: string; profile: string }[];
   } = {},
   isError = false,
-) {
-  const provider = createSubagentCompactSummary(SUBAGENT_TOOL_NAME[action]);
-  return provider({
-    phase,
-    args,
-    result: { content: [{ type: "text", text: "Untrusted success text" }], details },
-    context: renderContextFixture({ isError }),
+) =>
+  settledSummary(createSubagentCompactSummary(SUBAGENT_TOOL_NAME[action]), args, {
+    details,
+    isError,
+    text: "Untrusted success text",
   });
-}
 
 const issueDetails = (issues: readonly CompactIssue[] | undefined) =>
   Arr.join(
@@ -79,7 +76,7 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
     writerCleanupQuarantined: true,
   });
   for (const action of ["interrupt", "stop"] as const) {
-    const summary = summarize("lifecycle", compactToolDetails({ action, runs: [run] }), "settled", {
+    const summary = summarize("lifecycle", compactToolDetails({ action, runs: [run] }), {
       action,
     });
     expect(summary?.outcome).toBe("warning");
@@ -97,7 +94,6 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
       awaitedRunIds: [run.id],
       attentionRequired: true,
     }),
-    "settled",
     { runIds: [run.id] },
   );
   expect(awaited?.outcome).toBe("warning");
@@ -110,7 +106,6 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
       awaitedRunIds: ["target"],
       attentionRequired: true,
     }),
-    "settled",
     { runIds: ["target"] },
   );
   expect(issueDetails(context?.issues)).toContain("Diagnostic evidence sentinel");
@@ -128,7 +123,6 @@ it("treats cleanup quarantine as warning rather than failed work or successful s
         },
       ],
     }),
-    "settled",
     { action: "stop" },
   );
   expect(confirmed?.outcome).toBe("success");
@@ -178,7 +172,7 @@ const worktreeWriter = (workspaceOutcome?: SubagentRunView["workspaceOutcome"]) 
     ...(workspaceOutcome && { workspaceOutcome }),
   });
 const stopSummary = (run: SubagentRunView) =>
-  summarize("lifecycle", stoppedOf(run), "settled", { action: "stop", runIds: [run.id] });
+  summarize("lifecycle", stoppedOf(run), { action: "stop", runIds: [run.id] });
 
 describe("worktree writer workspace outcomes", () => {
   it("presents every outcome as information, and only a proposal as changes to review", () => {
@@ -206,7 +200,6 @@ describe("await outcomes", () => {
     const summary = summarize(
       "await",
       awaitReceipt([run], { awaitedRunIds: [run.id], cancelled: true, endedByUserInput: true }),
-      "settled",
       { runIds: [run.id] },
     );
     expect(summary?.outcome).toBe("returned");
@@ -215,12 +208,11 @@ describe("await outcomes", () => {
   const agentMessages = { count: 1, senders: [{ id: "agent-7", name: "api-scout" }] };
   const messageEnded = { ...agentMessages, endedWait: true as const };
 
-  it("notes an agent message that ended the wait without treating it as a problem", () => {
+  it("notes an agent message beside the recorded reason the wait ended", () => {
     const running = view({ id: "agent-1", state: "running" });
     const ended = summarize(
       "await",
       awaitReceipt([running], { awaitedRunIds: [running.id], agentMessages: messageEnded }),
-      "settled",
       { runIds: [running.id] },
     );
     expect(ended?.outcome).toBe("returned");
@@ -229,40 +221,18 @@ describe("await outcomes", () => {
     expect(issueMessageStyleProblems(issue?.message ?? "", { forbidden: ["agent-7"] })).toEqual([]);
     expect(issueDetails(ended?.issues)).toContain("agent-7");
 
-    // Targets that finished anyway keep the result a success; the message is still noted.
+    // Targets that finished anyway keep the result a success; the message is still noted, though
+    // not as the reason the wait ended.
     const done = view({ id: "agent-1", state: "completed", finalText: "Done" });
     const finished = summarize(
       "await",
       awaitReceipt([done], { awaitedRunIds: [done.id], agentMessages }),
-      "settled",
       { runIds: [done.id] },
     );
     expect(finished?.outcome).toBe("success");
     expect(issueDetails(finished?.issues)).toContain("agent-7");
-    expect(messages(finished?.issues)).not.toBe(messages(ended?.issues));
-  });
-
-  it("names the recorded reason a wait ended, not one inferred from the cards", () => {
-    const done = view({ id: "agent-1", state: "completed", finalText: "Done" });
-    const noted = agentMessageNote(
-      summarize(
-        "await",
-        awaitReceipt([done], { awaitedRunIds: [done.id], agentMessages }),
-        "settled",
-        {
-          runIds: [done.id],
-        },
-      )?.issues,
-    );
-    const running = view({ id: "agent-1", state: "running" });
-    const endedNote = agentMessageNote(
-      summarize(
-        "await",
-        awaitReceipt([running], { awaitedRunIds: [running.id], agentMessages: messageEnded }),
-        "settled",
-        { runIds: [running.id] },
-      )?.issues,
-    );
+    const noted = agentMessageNote(finished?.issues);
+    const endedNote = agentMessageNote(ended?.issues);
     expect(noted).toBeDefined();
     expect(endedNote).toBeDefined();
     expect(noted).not.toBe(endedNote);
@@ -277,7 +247,6 @@ describe("await outcomes", () => {
         attentionRequired: true,
         agentMessages,
       }),
-      "settled",
       { runIds: [paused.id] },
     );
     expect(attention?.outcome).toBe("paused");
@@ -287,7 +256,6 @@ describe("await outcomes", () => {
     const partial = summarize(
       "await",
       awaitReceipt([done], { awaitedRunIds: [done.id], agentMessages: messageEnded }),
-      "settled",
       { runIds: [done.id, "agent-2"] },
     );
     expect(agentMessageNote(partial?.issues)).toBe(endedNote);
@@ -306,12 +274,9 @@ describe("waiting and held runs", () => {
   const unavailable = view({ id: "agent-2", state: "waiting_for_parent" });
   const paused = view({ id: "agent-3", state: "paused" });
   const awaitOf = (run: SubagentRunView) =>
-    summarize(
-      "await",
-      awaitReceipt([run], { awaitedRunIds: [run.id], attentionRequired: true }),
-      "settled",
-      { runIds: [run.id] },
-    );
+    summarize("await", awaitReceipt([run], { awaitedRunIds: [run.id], attentionRequired: true }), {
+      runIds: [run.id],
+    });
 
   it("asks for attention, not a warning, while a run waits for a reply", () => {
     for (const run of [asking, unavailable]) {
@@ -322,14 +287,15 @@ describe("waiting and held runs", () => {
     // Every surface quotes the question the run asked.
     const question = asking.question?.message ?? "";
     expect(
-      Arr.some(awaitOf(asking)?.issues ?? [], (issue) => Str.includes(question)(issue.message)),
+      Arr.some(awaitOf(asking)?.issues ?? [], (issue) =>
+        Fn.pipe(issue.message, Str.includes(question)),
+      ),
     ).toBe(true);
     // A question from a run the wait didn't target still reaches the caller as attention.
     const target = view({ id: "target", state: "running" });
     const beside = summarize(
       "await",
       awaitReceipt([target, asking], { awaitedRunIds: ["target"], attentionRequired: true }),
-      "settled",
       { runIds: ["target"] },
     );
     expect(beside?.outcome).toBe("attention");
@@ -347,9 +313,7 @@ describe("waiting and held runs", () => {
       },
     });
     const cut = awaitOf(long);
-    const quote = Option.getOrUndefined(
-      Arr.findFirst(cut?.issues ?? [], (issue) => issue.severity === "attention"),
-    );
+    const quote = findOrUndefined(cut?.issues ?? [], (issue) => issue.severity === "attention");
     expect(quote?.message).toMatch(/…$/u);
     expect(cut?.expandLabel).toBe("question");
     const whole = awaitOf(asking);
@@ -367,7 +331,6 @@ describe("waiting and held runs", () => {
     const interrupted = summarize(
       "lifecycle",
       compactToolDetails({ action: "interrupt", runs: [paused] }),
-      "settled",
       { action: "interrupt", runIds: [paused.id] },
     );
     expect(interrupted?.outcome).toBe("success");
@@ -415,7 +378,6 @@ describe("subagent compact semantic policy", () => {
           runs: [],
           actionFailures: [{ id: "target", code, message: "Evidence" }],
         }),
-        "settled",
         { action: "stop", runIds: ["target"] },
       );
       expect(summary?.issues?.length).toBeGreaterThan(0);
@@ -492,8 +454,8 @@ describe("subagent compact semantic policy", () => {
     const issues = Arr.flatMap(runs, (overrides) => {
       const run = view({ id, ...overrides });
       return [
-        ...(summarize("lifecycle", stoppedOf(run), "settled", { action: "stop", runIds: [run.id] })
-          ?.issues ?? []),
+        ...(summarize("lifecycle", stoppedOf(run), { action: "stop", runIds: [run.id] })?.issues ??
+          []),
         ...(summarize("await", awaitReceipt([run], { awaitedRunIds: [id] }))?.issues ?? []),
       ];
     });

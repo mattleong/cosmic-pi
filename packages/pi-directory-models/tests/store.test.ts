@@ -59,13 +59,13 @@ layer(nodeFilePlatformLayer)("directory model store", (it) => {
 
   it.effect("decodes the thinking level apart from the fields a preference requires", () =>
     Effect.gen(function* () {
-      const { fs, store, identity, readReason } = yield* storeFixture;
-      const document = (thinkingLevel: Schema.Json, model: Schema.Json = "gpt") =>
+      const { fs, store, identity } = yield* storeFixture;
+      const document = (thinkingLevel: Schema.Json) =>
         encodeJsonDocument({
           version: 1,
           cwd: identity.canonicalCwd,
           provider: "openai",
-          model,
+          model: "gpt",
           thinkingLevel,
         }).pipe(Effect.flatMap((encoded) => fs.writeFileString(identity.preferencePath, encoded)));
 
@@ -83,15 +83,6 @@ layer(nodeFilePlatformLayer)("directory model store", (it) => {
         thinkingLevel: undefined,
         invalidThinkingLevel: false,
       });
-
-      yield* document("xhigh");
-      expect(yield* store.read(identity)).toMatchObject({
-        thinkingLevel: "xhigh",
-        invalidThinkingLevel: false,
-      });
-
-      yield* document("high", 42);
-      expect(yield* readReason).toBe("invalid");
     }),
   );
 

@@ -12,6 +12,23 @@ export function isTruncated(details: HostObject | undefined): boolean {
   return ownField(ownObject(details, "truncation"), "truncated") === true;
 }
 
+/** The detail field each listing tool sets to the limit it reached. */
+export const LIMIT_REACHED_FIELDS = {
+  grep: "matchLimitReached",
+  find: "resultLimitReached",
+  ls: "entryLimitReached",
+} as const;
+
+/** Pi's notice for a read whose first line was too large to return, without its brackets. */
+export function oversizedReadNotice(
+  details: HostObject | undefined,
+  text: string,
+): string | undefined {
+  if (ownField(ownObject(details, "truncation"), "firstLineExceedsLimit") !== true)
+    return undefined;
+  return /^\[([^\r\n]*)\]$/u.exec(text)?.[1] ?? text;
+}
+
 /** Pi's edit diff, with context lines numbered by their position in the edited file. */
 export function getEditDiff(details: HostObject | undefined): string | undefined {
   const diff = ownField(details, "diff");
@@ -23,10 +40,7 @@ export function getTextContent(
 ): string {
   return content
     ? Arr.join(
-        Arr.map(
-          Arr.filter(content, (part) => part.type === "text"),
-          (part) => part.text ?? "",
-        ),
+        Arr.flatMap(content, (part) => (part.type === "text" ? [part.text ?? ""] : [])),
         "\n",
       )
     : "";

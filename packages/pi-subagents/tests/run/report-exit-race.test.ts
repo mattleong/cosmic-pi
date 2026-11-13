@@ -9,7 +9,6 @@ import { SubagentProcessError } from "../../src/run/errors.ts";
 import { backendEventHandler } from "../../src/run/events.ts";
 import { notificationDelivery } from "../../src/run/notification-delivery.ts";
 import { notificationHandoff } from "../../src/run/notification-handoff.ts";
-import { settlementOperations } from "../../src/run/settlement.ts";
 import type { ReportArchive } from "../../src/boundary/report-archive.ts";
 import type { WithRunLock } from "../../src/run/internal.ts";
 import { yieldUntil } from "pi-cosmic-core/testing";
@@ -20,6 +19,7 @@ import {
   makeRunContext,
   runRecordFixture,
   runningAssignment,
+  testSettlement,
 } from "./fixtures/run-context.ts";
 import { yieldTurns } from "./fixtures/service-harness.ts";
 
@@ -29,9 +29,13 @@ const lateEvents: ReadonlyArray<BackendEvent> = [
   { type: "protocol_error", message: "Transport closed." },
 ];
 
-const settlementFixture = (phase: "issuing" | "running", archiveReport?: ReportArchive) =>
+const settlementFixture = (
+  phase: "issuing" | "running",
+  archiveReport?: ReportArchive,
+  overrides?: Parameters<typeof makeRunContext>[0],
+) =>
   Effect.gen(function* () {
-    const context = yield* makeRunContext();
+    const context = yield* makeRunContext(overrides);
     const record = yield* runRecordFixture({
       view: view({ state: phase === "issuing" ? "starting" : "running" }),
       process: yield* backendHandleFixture(),
@@ -44,19 +48,13 @@ const settlementFixture = (phase: "issuing" | "running", archiveReport?: ReportA
       handoff: notificationHandoff(context.records),
       notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
     });
-    const settlement = settlementOperations({
-      ...context,
-      delivery,
-      closeRecordScope: () => Effect.void,
-      claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
-      ...(archiveReport && { archiveReport }),
-    });
+    const settlement = testSettlement(context, { delivery, archiveReport });
     const handleEvent = backendEventHandler({
       settlement,
       queueQuestionLocked: () => undefined,
       onProxyEvent: () => Effect.void,
     });
-    return { context, record, settlement, handleEvent };
+    return { context, record, delivery, settlement, handleEvent };
   });
 
 describe("report ownership while its file is saved", () => {
@@ -104,29 +102,13 @@ describe("report ownership at assignment activation", () => {
         const noticesGate = yield* Deferred.make<void>();
         const cleanupGate = yield* Deferred.make<void>();
         const cleanupDone = yield* Deferred.make<void>();
-        const context = yield* makeRunContext({
-          sendPeerNotices: () =>
-            Effect.sync(() => void (steps.noticesStarted = true)).pipe(
-              Effect.andThen(Deferred.await(noticesGate)),
-              Effect.andThen(Effect.sync(() => void (steps.noticesFinished = true))),
-            ),
+        const { context, record, delivery } = yield* settlementFixture("issuing", undefined, {
+          sendPeerNotices: Effect.sync(() => void (steps.noticesStarted = true)).pipe(
+            Effect.andThen(Deferred.await(noticesGate)),
+            Effect.andThen(Effect.sync(() => void (steps.noticesFinished = true))),
+          ),
         });
-        const record = yield* runRecordFixture({
-          view: view({ state: "starting" }),
-          process: yield* backendHandleFixture(),
-          assignment: {
-            ...runningAssignment(1),
-            phase: "issuing",
-            startedObserved: operation === "uncertain-resume",
-          },
-        });
-        const completionGate = yield* Semaphore.make(1);
-        const delivery = yield* notificationDelivery({
-          ...context,
-          withCompletionGate: completionGate.withPermits(1),
-          handoff: notificationHandoff(context.records),
-          notify: () => Effect.succeed({ deliveredCompletionKeys: [] }),
-        });
+        record.assignment.startedObserved = operation === "uncertain-resume";
         // The caller that commits the completion pauses once it releases the lock, so the test
         // can interrupt it while the work it handed over is still running.
         const committed = yield* Deferred.make<void>();
@@ -142,8 +124,7 @@ describe("report ownership at assignment activation", () => {
               );
             }),
           );
-        const settlement = settlementOperations({
-          ...context,
+        const settlement = testSettlement(context, {
           withLock: pauseAfterCommit,
           delivery,
           closeRecordScope: () =>
@@ -160,7 +141,6 @@ describe("report ownership at assignment activation", () => {
               Effect.andThen(Deferred.succeed(cleanupDone, undefined)),
               Effect.asVoid,
             ),
-          claimTurnInputDrain: (_record, drained) => Deferred.doneUnsafe(drained, Effect.void),
         });
         const assignments = assignmentOperations({
           ...context,

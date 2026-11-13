@@ -19,9 +19,11 @@ import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import type { SettingsOptionDescriptor } from "pi-cosmic-core";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { focusedField, LIST_CURSOR, managerTone, selectionMarker } from "./style.ts";
 import { FullScreenKeymap, type FullScreenKeymapOptions } from "./keymap.ts";
-import { clipToWidth, INLINE_SEPARATOR } from "./chrome.ts";
+import { clipToWidth, INLINE_SEPARATOR, STYLE_RESET } from "./chrome.ts";
+import { listWindowStart } from "./list-detail.ts";
 import { keyHint, keyHintBar, moveKeyHint, piSelectHintKeys } from "./key-labels.ts";
 import {
   moveSettingsList,
@@ -62,6 +64,17 @@ export const isInheritedSettingValue = (value: string): boolean =>
 export const inheritChoiceFirst = (values: ReadonlyArray<string>): string[] => [
   ...Arr.filter(values, isInheritedSettingValue),
   ...Arr.filter(values, (value) => !isInheritedSettingValue(value)),
+];
+
+/** A row's choices: its inherit choice, then a current value no preset names, then the presets. */
+export const inheritChoiceValues = (
+  inherited: string,
+  presets: ReadonlyArray<string>,
+  current: string,
+): string[] => [
+  inherited,
+  ...(current === inherited || Arr.contains(presets, current) ? [] : [current]),
+  ...presets,
 ];
 
 // pi-tui appends its own key hint to every SettingsList; the shared surface owns one hint line.
@@ -107,12 +120,6 @@ const nestedTitleLines = (
     : []),
 ];
 
-/**
- * pi-tui clips a long row value without a marker. Knowing the rows, the surface restores the `…`
- * on a value that is a clipped prefix of a row's full value.
- */
-const STYLE_RESET = "\u001b[0m";
-
 /** A value listing facts keeps whole facts: `read off · write off · …`, never `edit off ·…`. */
 const clipAtFact = (full: string, room: number): string | undefined => {
   const facts = Str.split(full, INLINE_SEPARATOR);
@@ -124,6 +131,10 @@ const clipAtFact = (full: string, room: number): string | undefined => {
   return Option.getOrUndefined(Option.map(Arr.last(fits), (prefix) => `${prefix}${ending}`));
 };
 
+/**
+ * pi-tui clips a long row value without a marker. Knowing the rows, the surface restores the `…`
+ * on a value that is a clipped prefix of a row's full value.
+ */
 const withClippedValueMarker = (
   theme: SettingsListTheme,
   items: ReadonlyArray<SettingItem>,
@@ -175,12 +186,7 @@ const refreshGroupSummaries = (
   for (const item of items) {
     const { summary } = item;
     if (!summary) continue;
-    let current: string | undefined;
-    try {
-      current = summary();
-    } catch {
-      current = undefined;
-    }
+    const current = invokeHostCallback<string | undefined>(summary, undefined);
     if (current !== undefined && current !== item.currentValue) update(item.id, current);
   }
 };
@@ -213,12 +219,9 @@ class SettingsChoiceSubmenu implements Component {
   constructor(options: SettingsChoiceSubmenuOptions) {
     this.options = options;
     this.values = this.readValues();
-    this.index = Math.max(
-      0,
-      Option.getOrElse(
-        Arr.findFirstIndex(this.values, (value) => value === this.current),
-        () => 0,
-      ),
+    this.index = Option.getOrElse(
+      Arr.findFirstIndex(this.values, (value) => value === this.current),
+      () => 0,
     );
   }
 
@@ -282,10 +285,7 @@ class SettingsChoiceSubmenu implements Component {
     const { theme, title, description } = this.options;
     const { values, current } = this;
     const visible = this.visible;
-    const start = Math.max(
-      0,
-      Math.min(this.index - Math.floor(visible / 2), values.length - visible),
-    );
+    const start = listWindowStart(values.length, this.index, visible);
     const rows = Arr.map(Arr.take(Arr.drop(values, start), visible), (value, offset) => {
       const selected = start + offset === this.index;
       const prefix = selected ? theme.cursor : "  ";
@@ -542,12 +542,11 @@ class SettingsGroupSubmenu extends Container {
    * that can't be derived keep the ones shown.
    */
   private refresh(): void {
-    let fresh: ReadonlyArray<SettingsSurfaceItem>;
-    try {
-      fresh = this.options.items();
-    } catch {
-      return;
-    }
+    const fresh = invokeHostCallback<ReadonlyArray<SettingsSurfaceItem> | undefined>(
+      () => this.options.items(),
+      undefined,
+    );
+    if (fresh === undefined) return;
     const focus = settingsListFocus(this.list);
     const { listTheme } = this.options;
     const next = Arr.map(fresh, (row) =>
@@ -599,12 +598,8 @@ export const withSettingsGroupChildren = (
     // Fixed rows persist what each save showed; derived rows come from the owner's current state.
     let rows = Predicate.isFunction(children) ? [] : copy(children);
     const derive = (): SettingsSurfaceItem[] => {
-      if (!Predicate.isFunction(children)) return rows;
-      try {
-        rows = copy(children());
-      } catch {
-        // Rows that can't be derived again keep the ones last shown.
-      }
+      // Rows that can't be derived again keep the ones last shown.
+      if (Predicate.isFunction(children)) rows = invokeHostCallback(() => copy(children()), rows);
       return rows;
     };
     return {

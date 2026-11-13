@@ -5,7 +5,6 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as Result from "effect/Result";
 import * as Path from "effect/Path";
 import * as Rec from "effect/Record";
 import type * as Schema from "effect/Schema";
@@ -103,8 +102,7 @@ it.effect("fails closed when the latest document cannot be decoded", () => {
   return Effect.gen(function* () {
     const { state, change } = trackedModification({ xai: {} });
     const store = yield* JsonDocumentStore;
-    const result = yield* Effect.result(store.modifyObject("/auth.json", change));
-    expect(result._tag).toBe("Failure");
+    yield* Effect.flip(store.modifyObject("/auth.json", change));
     expect(state).toEqual({ mutated: false, published: false });
     expect(harness.files.get("/auth.json")).toBe("not-json");
   }).pipe(provideBuiltLayer(harness.layer));
@@ -121,9 +119,8 @@ it.effect("rejects non-JSON values instead of coercing persisted data", () => {
       configurable: true,
       writable: true,
     });
-    const result = yield* Effect.result(store.writeObject("/config.json", invalidDocument));
-    expect(result._tag).toBe("Failure");
-    if (Result.isFailure(result)) expect(result.failure.operation).toBe("encode");
+    const failure = yield* Effect.flip(store.writeObject("/config.json", invalidDocument));
+    expect(failure.operation).toBe("encode");
     expect(harness.files.has("/config.json")).toBe(false);
   }).pipe(provideBuiltLayer(harness.layer));
 });

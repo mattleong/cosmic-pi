@@ -121,14 +121,7 @@ export function registerParentConversation(
       .then(() => undefined);
   };
 
-  pi.on("session_start", (_event, ctx) => {
-    try {
-      return start(ctx).finally(replay.finishStartup);
-    } catch (error) {
-      replay.finishStartup();
-      throw error;
-    }
-  });
+  pi.on("session_start", (_event, ctx) => start(ctx).finally(replay.finishStartup));
 
   pi.on("session_shutdown", () => {
     replay.retire();

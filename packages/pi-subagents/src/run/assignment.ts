@@ -176,13 +176,7 @@ export function assignmentOperations(dependencies: RunAssignmentDependencies) {
             yield* publish;
             return undefined;
           }
-          return yield* activateAssignmentLocked(record, {
-            ...record.view,
-            state: "running",
-            endedAt: undefined,
-            finalText: undefined,
-            lastActivityAt: now,
-          });
+          return yield* activateAssignmentLocked(record, runningView(record, now));
         }),
       );
       if (replay) yield* replayAssignmentActivation(record, replay);

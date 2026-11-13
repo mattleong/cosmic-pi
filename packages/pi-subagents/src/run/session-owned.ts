@@ -9,7 +9,7 @@ import { SubagentRuntimeClosedError } from "./errors.ts";
 export const isScopeClosed = (scope: Scope.Scope): boolean =>
   Predicate.isTagged(scope.state, "Closed");
 
-const sessionClosed = () =>
+export const sessionClosed = () =>
   SubagentRuntimeClosedError.make({ message: "Parent session shut down." });
 
 /**
@@ -21,13 +21,11 @@ export const commitSessionOwned = <A, E, R>(
   ownerScope: Scope.Scope,
   commit: Effect.Effect<A, E, R>,
   restore: <X, Y, Z>(effect: Effect.Effect<X, Y, Z>) => Effect.Effect<X, Y, Z>,
-  onOwned?: () => void,
 ) =>
   Effect.suspend<A, E | SubagentRuntimeClosedError, R>(() =>
     isScopeClosed(ownerScope)
       ? Effect.fail(sessionClosed())
       : Effect.forkIn(commit, ownerScope, { startImmediately: true }).pipe(
-          Effect.tap(() => Effect.sync(() => onOwned?.())),
           Effect.flatMap((fiber) => restore(Fiber.join(fiber))),
         ),
   );
@@ -63,10 +61,7 @@ export const runSessionOwned = <C, E2, R2, A, E, R>(
   ownerScope: Scope.Scope,
   claim: Effect.Effect<C, E2, R2>,
   commit: (claimed: C) => Effect.Effect<A, E, R>,
-  onOwned?: () => void,
 ): Effect.Effect<A, E | E2 | SubagentRuntimeClosedError, R | R2> =>
   Effect.uninterruptibleMask((restore) =>
-    Effect.flatMap(claim, (claimed) =>
-      commitSessionOwned(ownerScope, commit(claimed), restore, onOwned),
-    ),
+    Effect.flatMap(claim, (claimed) => commitSessionOwned(ownerScope, commit(claimed), restore)),
   );

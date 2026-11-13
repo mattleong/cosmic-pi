@@ -10,7 +10,6 @@ import {
   expandedDetails,
   expandedFields,
   expandedSection,
-  headingShowedSubject,
 } from "pi-code-previews";
 import { countLabel, formatDuration } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -26,16 +25,17 @@ import {
   wrapFacts,
   type StatusGlyphMeaning,
 } from "pi-cosmic-ui/manager";
-import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { cachedComponent, renderExpansionAffordance } from "pi-cosmic-ui/tool";
 import { countTaskStates, failingExitCode, type BackgroundTaskSnapshot } from "../task/model.ts";
 import {
   listedTaskIssues,
-  listedTaskOutcome,
   quotedWaitText,
+  taskOutcome,
   type TaskOutcome,
 } from "../ui/compact-summary.ts";
 import { styledTaskOutputLine } from "../ui/output-lines.ts";
 import { failureFactLines, resultFactLines } from "../ui/result-facts.ts";
+import { subjectAwareComponent } from "../ui/subject-aware.ts";
 import { emptyTaskListLabel, taskDisplayName, taskStatePresentation } from "../ui/task-state.ts";
 import {
   backgroundLogLines,
@@ -111,7 +111,7 @@ const STOPPING_GLYPH: ListedGlyph = {
 };
 
 const listedGlyph = (task: BackgroundTaskSnapshot): ListedGlyph =>
-  task.state === "stopping" ? STOPPING_GLYPH : LISTED_GLYPHS[listedTaskOutcome(task)];
+  task.state === "stopping" ? STOPPING_GLYPH : LISTED_GLYPHS[taskOutcome(task)];
 
 /**
  * A listed row's state in words, less what its glyph already says (`stopped` beside `⊘`). A
@@ -243,7 +243,7 @@ function wrapStyledFacts(
     while (next < styled.length && styled[next]?.char !== char) next++;
     return styled[next++]?.style;
   };
-  return Arr.map(wrapFacts(plain, width, Str.repeat(hang)(" ")), (line) => {
+  return Arr.map(wrapFacts(plain, width, Fn.pipe(" ", Str.repeat(hang))), (line) => {
     let out = "";
     let run = "";
     let runStyle: ((text: string) => string) | undefined;
@@ -422,9 +422,13 @@ function collapsedRows(
     case "wait":
       return waitRows(details, theme);
     case "list":
-      return taskRows(details.tasks, emptyListLabel(args.state), false, theme);
     case "stop_all":
-      return taskRows(details.tasks, emptyListLabel("active"), false, theme);
+      return taskRows(
+        details.tasks,
+        emptyListLabel(details.action === "list" ? args.state : "active"),
+        false,
+        theme,
+      );
     case "clear":
       return [
         { text: theme.fg("muted", `Removed ${countLabel(details.removed, "completed task")}`) },
@@ -523,23 +527,13 @@ function expandedSections(
     }
     // A compact heading already says a listing is empty.
     case "list":
+    case "stop_all": {
+      const listing = details.action === "list";
+      const empty = emptyListLabel(listing ? args.state : "active");
       return headingShowsState && details.tasks.length === 0
         ? []
-        : [
-            {
-              label: "Tasks",
-              rows: taskRows(details.tasks, emptyListLabel(args.state), true, theme, true),
-            },
-          ];
-    case "stop_all":
-      return headingShowsState && details.tasks.length === 0
-        ? []
-        : [
-            {
-              label: "Tasks",
-              rows: taskRows(details.tasks, emptyListLabel("active"), true, theme),
-            },
-          ];
+        : [{ label: "Tasks", rows: taskRows(details.tasks, empty, true, theme, listing) }];
+    }
     case "logs":
       return [{ label: "Output", rows: logRows(details, text, theme, true) }];
   }
@@ -620,33 +614,22 @@ function hangingRows(text: string, width: number, hang: number): string[] {
   if (visibleWidth(text) <= width) return [text];
   const indent = Math.min(hang, Math.max(0, width - 1));
   return Arr.map(wrapTextWithAnsi(text, Math.max(1, width - indent)), (part, index) =>
-    index === 0 ? part : `${Str.repeat(indent)(" ")}${Str.trimStart(part)}`,
+    index === 0 ? part : `${Fn.pipe(" ", Str.repeat(indent))}${Str.trimStart(part)}`,
   );
 }
 
-function rowsComponent(rows: ReadonlyArray<Row>, theme: PreviewTheme): Component {
-  let cached: { readonly width: number; readonly lines: string[] } | undefined;
-  return {
-    render(width) {
-      if (!Number.isFinite(width) || width < 1) return [];
-      if (cached?.width === width) return cached.lines;
-      const lines = Arr.flatMap(rows, (row) =>
-        row.wrap
-          ? row.facts !== undefined
-            ? wrapStyledFacts(row.facts, width, row.hang ?? 2, theme)
-            : row.hang === undefined
-              ? wrapTextWithAnsi(row.text, width)
-              : hangingRows(row.text, width, row.hang)
-          : [clipToWidth(row.text, width)],
-      );
-      cached = { width, lines };
-      return lines;
-    },
-    invalidate() {
-      cached = undefined;
-    },
-  };
-}
+const rowsComponent = (rows: ReadonlyArray<Row>, theme: PreviewTheme): Component =>
+  cachedComponent((width) =>
+    Arr.flatMap(rows, (row) =>
+      row.wrap
+        ? row.facts !== undefined
+          ? wrapStyledFacts(row.facts, width, row.hang ?? 2, theme)
+          : row.hang === undefined
+            ? wrapTextWithAnsi(row.text, width)
+            : hangingRows(row.text, width, row.hang)
+        : [clipToWidth(row.text, width)],
+    ),
+  );
 
 function buildPreview(
   input: BackgroundTaskPreviewInput,
@@ -674,23 +657,10 @@ function buildPreview(
   return container;
 }
 
-export function renderBackgroundTaskPreview(
+export const renderBackgroundTaskPreview = (
   input: BackgroundTaskPreviewInput,
   theme: Theme,
-): Component {
-  // Built on first draw and again after invalidation, so theme changes restyle every row, and
-  // again when the heading drawn just before it changes whether it showed its subject whole.
-  let built: { readonly subjectShown: boolean; readonly component: Component } | undefined;
-  return {
-    render(width) {
-      const subjectShown =
-        input.headingState !== undefined && headingShowedSubject(input.headingState);
-      if (built?.subjectShown !== subjectShown)
-        built = { subjectShown, component: buildPreview(input, theme, subjectShown) };
-      return built.component.render(width);
-    },
-    invalidate() {
-      built = undefined;
-    },
-  };
-}
+): Component =>
+  subjectAwareComponent(input.headingState, (subjectShown) =>
+    buildPreview(input, theme, subjectShown),
+  );

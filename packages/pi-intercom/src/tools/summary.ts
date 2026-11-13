@@ -11,6 +11,7 @@ import { MAX_MESSAGE_CHARS } from "../transport/protocol.ts";
 import {
   decodeSessionToolDetails,
   SESSION_TOOL,
+  type SessionListContract,
   type SessionRefusal,
   type SessionToolArgs,
   type SessionToolDetails,
@@ -96,8 +97,6 @@ const pending = (
 /** What an empty listing says, in a compact heading and a preview body alike. */
 export const NO_OTHER_SESSIONS = "no other live sessions";
 
-type ListDetails = Extract<SessionToolDetails, { readonly tool: "session_list" }>;
-
 const UNUSABLE_STATES = ["unavailable", "unresponsive", "unreachable"] as const;
 const LISTED_STATES = ["idle", "busy", ...UNUSABLE_STATES] as const;
 
@@ -106,7 +105,7 @@ const LISTED_STATES = ["idle", "busy", ...UNUSABLE_STATES] as const;
  * (`1 idle · 2 busy`), else the total, or the shared state where no session in it can take a
  * message (`2 unreachable`); then the total with how many can't be messaged, then the total.
  */
-const listCounters = (details: ListDetails, total: number): string[] => {
+const listCounters = (details: SessionListContract, total: number): string[] => {
   const counts = Arr.filterMap(LISTED_STATES, (state) => {
     const count = Arr.filter(details.sessions, (session) => session.state === state).length;
     return count > 0
@@ -133,7 +132,7 @@ const listCounters = (details: ListDetails, total: number): string[] => {
 };
 
 /** A listing only looks, so it is neutral: `• session_list · 2 sessions`. */
-const listSummary = (details: ListDetails): CompactSummary => {
+const listSummary = (details: SessionListContract): CompactSummary => {
   const total = details.sessions.length + details.omitted;
   const duplicates = Arr.filter(details.sessions, ({ duplicate }) => duplicate).length;
   // An empty listing's counter says so, where a preview's status line can show it too.
@@ -183,7 +182,7 @@ const settled = (details: SessionToolDetails): CompactSummary => {
 };
 
 /** Whether a read found words to show. */
-const hasReply = (details: { readonly text?: string | undefined }): boolean =>
+export const hasReply = (details: { readonly text?: string | undefined }): boolean =>
   details.text !== undefined && Str.isNonEmpty(Str.trim(details.text));
 
 /** Decodes a result's details when they belong to `tool`. */

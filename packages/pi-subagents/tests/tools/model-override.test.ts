@@ -1,59 +1,46 @@
-import { issueMessageStyleProblems, renderContextFixture } from "pi-code-previews/testing";
 import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import { describe, expect, vi } from "vitest";
 import { effectTest } from "../support/effect-test.ts";
+import type { BackendDriver } from "../../src/backend/model.ts";
 import { InvalidSubagentRequestError } from "../../src/run/errors.ts";
 import type { StartSubagentRequest } from "../../src/run/model.ts";
 import { createSubagentCompactSummary } from "../../src/tools/compact-summary.ts";
-import {
-  SubagentStartDetailsSchema,
-  type SubagentStartDetails,
-} from "../../src/tools/details-schema.ts";
+import type { SubagentStartDetails } from "../../src/tools/details-schema.ts";
 import type { SubagentStartInput, SubagentStartSpec } from "../../src/tools/schema.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import {
   captureSubagentTools,
+  decodeStartDetails,
   invokeOptionalTool,
-  startCapturingService,
-  testBackendRegistry,
+  issueStyle,
+  settledSummary,
+  startToolFor,
   view,
-  type CaptureOptions,
 } from "./fixtures/tool-harness.ts";
+import { inertDriver } from "../run/fixtures/run-context.ts";
 import { readoutOf } from "../fixtures/run-view.ts";
 import * as Arr from "effect/Array";
 
-const decodeStartDetails = Schema.decodeUnknownSync(SubagentStartDetailsSchema);
-
-const startWith = (requests: StartSubagentRequest[], options: CaptureOptions = {}) =>
-  captureSubagentTools(startCapturingService(requests), options).get("agent_start");
-
 const startIssueStyleProblems = (args: SubagentStartInput, details: SubagentStartDetails) =>
-  Arr.flatMap(
-    createSubagentCompactSummary("agent_start")({
-      phase: "settled",
-      args,
-      result: { content: [{ type: "text", text: "" }], details },
-      context: renderContextFixture({ isError: true }),
-    })?.issues ?? [],
-    (issue) => issueMessageStyleProblems(issue.message),
+  issueStyle(
+    settledSummary(createSubagentCompactSummary("agent_start"), args, { details, isError: true }),
   );
 
 // The parent's model is the only one the session offers, so the override's readiness probe fails.
 const SIGNED_OUT = "openai-codex/gpt-5.6-sol";
 
 const countingRegistry = () => {
-  const preflight = vi.fn<typeof testBackendRegistry.preflight>((selection, request) =>
-    request.model === SIGNED_OUT
+  const preflight = vi.fn<BackendDriver["preflight"]>((model) =>
+    model === SIGNED_OUT
       ? Effect.fail(
           InvalidSubagentRequestError.make({
             code: "provider_unauthenticated",
             message: "The provider is not signed in.",
           }),
         )
-      : testBackendRegistry.preflight(selection, request),
+      : Effect.void,
   );
-  return { preflight, registry: { ...testBackendRegistry, preflight } };
+  return { preflight, registry: { ...inertDriver, preflight } };
 };
 
 describe("per-launch model override", () => {
@@ -65,7 +52,7 @@ describe("per-launch model override", () => {
         model: "openai-codex/gpt-5.6-sol",
         effort: "medium",
       } as const;
-      const result = yield* invokeOptionalTool(startWith(requests), {
+      const result = yield* invokeOptionalTool(startToolFor(requests), {
         agents: [{ task: "Implement parsing", profile: "worker", model: modelOverride }],
       });
 
@@ -103,7 +90,7 @@ describe("per-launch model override", () => {
 
   effectTest("an omitted override effort takes the profile default", function* () {
     const requests: StartSubagentRequest[] = [];
-    yield* invokeOptionalTool(startWith(requests), {
+    yield* invokeOptionalTool(startToolFor(requests), {
       agents: [{ task: "Map auth", profile: "scout", model: { model: "parent" } }],
     });
     expect(requests[0]).toMatchObject({ effort: "low", effortWasExplicit: false });
@@ -128,10 +115,10 @@ describe("per-launch model override", () => {
           },
         ],
       };
-      const result = yield* invokeOptionalTool(startWith(requests, { registry }), args);
+      const result = yield* invokeOptionalTool(startToolFor(requests, { registry }), args);
 
       expect(requests).toEqual([]);
-      expect(Arr.map(preflight.mock.calls, ([, request]) => request.model)).toEqual([SIGNED_OUT]);
+      expect(Arr.map(preflight.mock.calls, ([model]) => model)).toEqual([SIGNED_OUT]);
       expect(result?.details).toMatchObject({
         startFailures: [
           { index: 0, code: "model_override_unavailable" },
@@ -154,7 +141,7 @@ describe("per-launch model override", () => {
     const args: SubagentStartInput = {
       agents: Arr.map(invalid, (agent) => ({ task: "Review", ...agent })),
     };
-    const result = yield* invokeOptionalTool(startWith(requests, { registry }), args);
+    const result = yield* invokeOptionalTool(startToolFor(requests, { registry }), args);
 
     expect(requests).toEqual([]);
     expect(preflight).not.toHaveBeenCalled();

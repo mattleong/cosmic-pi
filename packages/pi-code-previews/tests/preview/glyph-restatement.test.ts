@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { renderCompactToolCall } from "../../src/preview/compact-tool-call";
 import { layoutExpandedCompactHeading, type CompactRowInput } from "../../src/preview/compact-row";
 import type { CompactPhase, CompactSummary } from "../../src/tools/compact-summary";
@@ -25,7 +26,7 @@ const expanded = (input: CompactRowInput) =>
 const shows = (input: CompactRowInput, fact: string) => {
   const both = [collapsed(input), expanded(input)];
   expect(both[0]).toContain("auth-review");
-  return Arr.map(both, (text) => Str.includes(`· ${fact}`)(text));
+  return Arr.map(both, (text) => Fn.pipe(text, Str.includes(`· ${fact}`)));
 };
 
 test("a heading leaves out a fact that only restates its status glyph", () => {

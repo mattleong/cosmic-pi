@@ -4,11 +4,8 @@ import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
-import {
-  sanitizeDiagnosticContent,
-  sanitizeTerminalLine,
-  stripTerminalControls,
-} from "pi-cosmic-core/security";
+import { sanitizeDiagnosticContent, stripTerminalControls } from "pi-cosmic-core/security";
+import { cleanLine } from "./detach.ts";
 import { ACTIVITY_LIMITS } from "./limits.ts";
 import type { ActivityDetail, ActivityDetailField, ActivityDetailSection } from "./protocol.ts";
 
@@ -43,10 +40,6 @@ const cleanLines = (text: string, maximumLength: number): string =>
     ),
     { maximumLength },
   );
-const cleanLine = (text: string, maximumLength: number): string =>
-  sanitizeDiagnosticContent(sanitizeTerminalLine(Fn.pipe(text, Str.slice(0, maximumLength))), {
-    maximumLength,
-  });
 
 const cleanSections = (
   sections: ReadonlyArray<ActivityDetailSection>,
@@ -89,8 +82,6 @@ const cleanFields = (
 export const plainActivityDetail = (text: string): ActivityDetail => ({
   sections: cleanSections([{ body: text }]),
 });
-
-export const emptyActivityDetail: ActivityDetail = { sections: [] };
 
 /**
  * Admits a producer's detail. Invalid sections or fields are dropped individually so the rest

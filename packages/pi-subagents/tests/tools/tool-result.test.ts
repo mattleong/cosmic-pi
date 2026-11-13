@@ -26,19 +26,11 @@ import {
   withGuidanceClause,
 } from "../../src/run/errors.ts";
 import { workspaceBusyError } from "../../src/run/workspace-binding.ts";
-import { SubagentService } from "../../src/run/service.ts";
-import { SubagentProfileService } from "../../src/profiles/service.ts";
-import { SubagentBackendRegistry } from "../../src/backend/service.ts";
 import { compactToolDetails } from "../../src/tools/details.ts";
 import type { SubagentToolRuntime } from "../../src/tools/execute.ts";
 import { registerSubagentTools } from "../../src/tools/subagent.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import {
-  executeTool,
-  fallbackProfileService,
-  testBackendRegistry,
-  view,
-} from "./fixtures/tool-harness.ts";
+import { executeTool, provideToolServices, view } from "./fixtures/tool-harness.ts";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -178,11 +170,7 @@ function ownedTools(service = subagentServiceDouble({}), earlierResult?: ToolRes
       environment: { cwd: "/project", projectTrusted: false },
       run: (effect, signal) =>
         Effect.runPromise(
-          effect.pipe(
-            Effect.provideService(SubagentService, service),
-            Effect.provideService(SubagentProfileService, fallbackProfileService),
-            Effect.provideService(SubagentBackendRegistry, testBackendRegistry),
-          ),
+          effect.pipe(provideToolServices(service)),
           signal ? { signal } : undefined,
         ),
     },

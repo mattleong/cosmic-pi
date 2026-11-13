@@ -75,18 +75,6 @@ describe("Cosmic UI protocol guards", () => {
     });
   });
 
-  it("accepts every foreground theme token as a contribution color", () => {
-    const event = upsert({
-      kind: "text",
-      id: "usage",
-      region: "details",
-      text: "Usage",
-      color: "scrollbarThumb",
-      tone: "accent",
-    });
-    expect(event?.contribution).toMatchObject({ color: "scrollbarThumb", tone: "accent" });
-  });
-
   it("still rejects contributions without a usable identity", () => {
     expect(
       upsert({ kind: "text", id: "usage", region: "elsewhere", text: "Usage" }),

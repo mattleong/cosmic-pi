@@ -3,6 +3,7 @@ import { Container, Text, visibleWidth } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import * as Fn from "effect/Function";
 import { beforeEach, expect, test } from "vitest";
 import { previewIssuesSlot, previewMessageHeading } from "../../index";
 import { applyPresentationSettings, createToolPresentationHarness } from "../../testing";
@@ -54,7 +55,7 @@ test("a collapsed message heading is one row, its name cut at a word boundary", 
 test("an expanded message heading wraps with the name whole", () => {
   const rows = draw(true, 57);
   const end = Option.getOrElse(
-    Arr.findFirstIndex(rows, (row) => Str.includes(message)(row)),
+    Arr.findFirstIndex(rows, (row) => Fn.pipe(row, Str.includes(message))),
     () => rows.length,
   );
   const heading = Arr.join(Arr.map(Arr.take(rows, end), Str.trim), " ");

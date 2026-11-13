@@ -6,10 +6,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
-import type * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import {
   extensionContextFixture,
@@ -17,8 +14,6 @@ import {
   recordingExtensionHost,
   temporaryDirectory,
 } from "pi-cosmic-core/testing";
-import type { BackendDriver, BackendEvent, BackendLaunchRequest } from "../src/backend/model.ts";
-import { backendRegistryFor, SubagentBackendRegistry } from "../src/backend/service.ts";
 import { createForkedSession } from "../src/boundary/child-process.ts";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
 import { capturePiParentContext } from "../src/boundary/host-child-pi.ts";
@@ -27,15 +22,16 @@ import { SubagentService } from "../src/run/service.ts";
 import { executeSubagentActionEffect } from "../src/tools/execute.ts";
 import { encodeSubagentProxyInput, withSubagentProxyParent } from "../src/tools/proxy-protocol.ts";
 import type { SubagentToolInput } from "../src/tools/schema.ts";
-import { activateRoot, proxyIpcChannel } from "./fixtures/proxy-parent.ts";
+import { sessionContextFixture } from "./fixtures/pi-host.ts";
 import {
-  fakeWriterLeaseLayer,
-  profileLayerFor,
-  request,
-  runViews,
-} from "./run/fixtures/service-harness.ts";
+  activateRoot,
+  proxyBackend,
+  proxyIpcChannel,
+  proxyServiceLayer,
+} from "./fixtures/proxy-parent.ts";
+import { profileLayerFor, request, runViews } from "./run/fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const rootModel = modelFixture({
   provider: "openai",
@@ -55,80 +51,23 @@ const models = [rootModel, childModel, changedChildModel];
 const modelRegistry = {
   getAvailable: () => models,
   find: (provider: string, id: string) =>
-    Option.getOrUndefined(
-      Arr.findFirst(models, (model) => model.provider === provider && model.id === id),
-    ),
+    findOrUndefined(models, (model) => model.provider === provider && model.id === id),
   hasConfiguredAuth: () => true,
   getProviderAuthStatus: () => ({ configured: true, source: "stored" as const }),
 };
 
 const contextFor = (session: SessionManager, model = rootModel): ExtensionContext =>
-  extensionContextFixture({
+  sessionContextFixture({
     cwd: session.getCwd(),
-    signal: undefined,
-    hasUI: false,
-    mode: "rpc",
     model,
     modelRegistry,
     sessionManager: session,
-    isProjectTrusted: () => true,
     getContextUsage: () => ({ tokens: 1, contextWindow: 10_000, percent: 0.01 }),
   });
 
-const backendFixture = (parent: SessionManager) => {
-  const launches: BackendLaunchRequest[] = [];
-  const controls: Array<{ readonly offer: (event: BackendEvent) => void; released: boolean }> = [];
-  const driver: BackendDriver = {
-    supportsContext: () => true,
-    preflight: () => Effect.void,
-    spawn: (launch) =>
-      Effect.acquireRelease(
-        Effect.gen(function* () {
-          const events = yield* Queue.unbounded<BackendEvent, Cause.Done>();
-          const session = launches.length === 0 ? parent : SessionManager.inMemory(launch.cwd);
-          const control = {
-            offer: (event: BackendEvent) => void Queue.offerUnsafe(events, event),
-            released: false,
-          };
-          launches.push(launch);
-          controls.push(control);
-          return {
-            handle: {
-              events,
-              awaitExit: Effect.never,
-              acknowledge: () => {},
-              terminate: () => Effect.void,
-              cancelPending: () => {},
-              controls: {
-                initialize: Effect.succeed({
-                  model: launch.model,
-                  effort: launch.effort,
-                  sessionId: session.getSessionId(),
-                  sessionFile: session.getSessionFile(),
-                }),
-                start: (_message: string, assignmentEpoch: number) =>
-                  Effect.sync(() => control.offer({ type: "run_started", assignmentEpoch })),
-                steer: () => Effect.void,
-                interrupt: Effect.void,
-                reply: () => Effect.void,
-                notifyPeers: () => Effect.void,
-              },
-            },
-            release: Effect.sync(() => {
-              control.released = true;
-              Queue.endUnsafe(events);
-            }),
-          };
-        }),
-        ({ release }) => release,
-      ).pipe(Effect.map(({ handle }) => handle)),
-  };
-  return {
-    launches,
-    controls,
-    layer: Layer.succeed(SubagentBackendRegistry, backendRegistryFor(driver)),
-  };
-};
+// The first run is the persisted child session whose facts later launches inherit.
+const backendFixture = (parent: SessionManager) =>
+  proxyBackend((launch, index) => (index === 0 ? parent : SessionManager.inMemory(launch.cwd)));
 
 const profiles = profileLayerFor({
   version: 6,
@@ -181,11 +120,7 @@ describe("authenticated immediate-parent context", () => {
       const rootCtx = contextFor(root);
       const { host: rootHost, activation } = yield* openRoot(rootCtx, directory);
       const backend = backendFixture(child);
-      const layer = SubagentService.layer({ proxyHandler: activation.proxyHandler }).pipe(
-        Layer.provideMerge(backend.layer),
-        Layer.provideMerge(profiles),
-        Layer.provide(fakeWriterLeaseLayer()),
-      );
+      const layer = proxyServiceLayer({ proxyHandler: activation.proxyHandler }, backend, profiles);
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
         const parent = yield* service.start(
@@ -256,9 +191,7 @@ describe("authenticated immediate-parent context", () => {
         expect(inherited).toContain("CHILD-VERIFICATION");
         expect(inherited).not.toContain("ROOT-ONLY-HISTORY");
         expect(
-          Option.getOrUndefined(
-            Arr.findFirst(yield* runViews(service), (run) => run.id === oracle.runId),
-          )?.parentRunId,
+          findOrUndefined(yield* runViews(service), (run) => run.id === oracle.runId)?.parentRunId,
         ).toBe(parent.id);
 
         selectedModel = changedChildModel;
@@ -319,11 +252,7 @@ describe("authenticated immediate-parent context", () => {
       const rootCtx = contextFor(root);
       const { host, activation } = yield* openRoot(rootCtx, directory);
       const backend = backendFixture(child);
-      const layer = SubagentService.layer({ proxyHandler: activation.proxyHandler }).pipe(
-        Layer.provideMerge(backend.layer),
-        Layer.provideMerge(profiles),
-        Layer.provide(fakeWriterLeaseLayer()),
-      );
+      const layer = proxyServiceLayer({ proxyHandler: activation.proxyHandler }, backend, profiles);
       yield* Effect.gen(function* () {
         const service = yield* SubagentService;
         const parent = yield* service.start(

@@ -3,7 +3,7 @@ import { type SettingsList, type SettingItem } from "@earendil-works/pi-tui";
 import * as Fn from "effect/Function";
 import * as Schema from "effect/Schema";
 import * as Arr from "effect/Array";
-import { CODE_PREVIEW_SETTING_KEYS, type CodePreviewSettings } from "../config/schema";
+import { isCodePreviewSettingKey, type CodePreviewSettings } from "../config/schema";
 import { cloneCodePreviewSettings, codePreviewSettings } from "../config/state";
 import { updateSetting } from "../config/values";
 import {
@@ -129,7 +129,7 @@ export function createCodePreviewSettingsModel({
         return undefined;
       });
     } else {
-      const editedKeys = Arr.filter(CODE_PREVIEW_SETTING_KEYS, (key) => key === id);
+      const editedKeys = isCodePreviewSettingKey(id) ? [id] : [];
       const next = updateSetting(draftSettings, id, value);
       draftSettings = next;
       for (const edited of editedKeys) pendingEdits.set(edited, changeRevision);

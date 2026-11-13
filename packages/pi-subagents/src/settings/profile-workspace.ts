@@ -56,7 +56,7 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly initialCandidateIndex?: number | undefined;
   readonly initialFocus?: ProfileWorkspacePane | undefined;
   readonly initialAdvancedExpanded?: boolean | undefined;
-  readonly initialSelections?: ReadonlyArray<ProfileWorkspaceSelectionMemory> | undefined;
+  readonly initialSelections?: ReadonlyMap<ProfileId, ProfileWorkspaceSelectionMemory> | undefined;
   readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
   readonly close: () => void;
@@ -67,12 +67,7 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
     draft: ProfileRouteDraft,
     restore?: ProfileEditRestore,
   ) => Promise<ProfileWorkspaceSaveResult>;
-  readonly loadModelPicker: (
-    profile: ProfileId,
-    candidateIndex: number,
-    candidate: ProfileCandidate,
-    signal?: AbortSignal,
-  ) => Promise<CandidateModelPickerData>;
+  readonly loadModelPicker: (candidate: ProfileCandidate) => CandidateModelPickerData;
   readonly supportedPiEfforts: (
     candidate: ProfileCandidate,
   ) => ReadonlyArray<SubagentEffort> | undefined;
@@ -209,18 +204,7 @@ export class ProfileWorkspaceComponent
         this.message = undefined;
         this.renderSoon();
       } else if (action === "confirm") this.performDraftAction(this.pendingAction);
-      return;
     }
-    const resolution = this.keymap.resolve(data, {
-      mode: "busy",
-      matchesKeybinding: this.options.matchesKeybinding,
-    });
-    if (
-      this.catalogLoad &&
-      Predicate.isTagged(resolution, "Action") &&
-      resolution.action === "cancel"
-    )
-      this.cancelCatalogLoad();
   }
 
   handleInput(data: string): void {
@@ -325,7 +309,6 @@ export class ProfileWorkspaceComponent
     if (this.disposed) return [];
     if (this.modelPicker) return this.modelPicker.render(width);
     this.reconcile();
-    const changed = this.changedProfiles();
     return renderProfileWorkspace(
       {
         inspection: this.inspection,
@@ -338,11 +321,9 @@ export class ProfileWorkspaceComponent
         draft: this.draft(),
         expandedCandidates: this.selection().expanded,
         hintsExpanded: this.hintsExpanded,
-        changedProfiles: changed,
+        changedProfiles: this.changedProfiles(),
         canUndo: !this.busy && this.canUndo(),
-        sessionChanged: changed.size > 0,
         busy: this.busy,
-        cancellableBusy: this.catalogLoad !== undefined,
         choices: this.selectPage,
         confirmation: this.confirmation(),
         prompt,
@@ -366,8 +347,6 @@ export class ProfileWorkspaceComponent
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.catalogLoad?.abort();
-    this.catalogLoad = undefined;
     this.modelPicker = undefined;
     this.selectPage = undefined;
   }

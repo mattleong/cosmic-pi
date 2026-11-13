@@ -88,7 +88,7 @@ const STATUS_SUMMARIES = new Map<string, StatusSummary>([
   ["incomplete", uncertain("image-incomplete", "Image generation did not finish")],
 ]);
 
-export interface ImageSummaryOptions {
+interface ImageSummaryOptions {
   readonly hasImage: boolean;
   readonly prompt?: string | undefined;
 }
@@ -143,7 +143,7 @@ export const imageGenerationCause = (text: string): string | undefined => {
  * A failure's issue. Under the row's `✗`, a failed request's issue states OpenAI's cause alone,
  * not `Image generation failed:` before it.
  */
-export function imageFailureIssue(text: string): CompactIssue {
+function imageFailureIssue(text: string): CompactIssue {
   if (isSignInFailure(text))
     return {
       severity: "error",

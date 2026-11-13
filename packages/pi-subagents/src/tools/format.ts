@@ -54,7 +54,7 @@ export const boundToolOutput = (text: string): string =>
     "\n… [tool output truncated; narrow the request or query individual run IDs for the omitted content]",
   );
 
-export const boundedLine = (value: string, maximum: number): string =>
+const boundedLine = (value: string, maximum: number): string =>
   clipWithMarker(sanitizeTerminalLine(value), maximum, "… [truncated]");
 
 const runTarget = (run: AttentionRun): string =>
@@ -66,7 +66,7 @@ type ProposalDiffStat = Pick<
 >;
 
 /** A proposal's changed-file count with its line totals when known, such as `3 files, +12 −4`. */
-export const proposalChangeSummary = (outcome: ProposalDiffStat): string =>
+const proposalChangeSummary = (outcome: ProposalDiffStat): string =>
   `${countLabel(outcome.changedFileCount, "file")}${outcome.diffStat ? `, +${outcome.diffStat.addedLines} −${outcome.diffStat.deletedLines}` : ""}`;
 
 /** One line per file the bounded diffstat lists, then how many files it leaves out. */
@@ -171,16 +171,11 @@ export const cleanupRecoveryText = (run: AttentionRun): ReadonlyArray<string> =>
 };
 
 export const attentionRecoveryText = (runs: ReadonlyArray<AttentionRun>): string => {
-  const attention = Arr.filter(
-    runs,
-    (run) => isParentActionRequiredRun(run) || runCleanupAttention(run) !== undefined,
-  );
+  const attention = Arr.filter(runs, isParentActionRequiredRun);
   if (attention.length === 0) return "";
   return Arr.join(
     [
-      Arr.some(attention, isParentActionRequiredRun)
-        ? "Parent action required; other unfinished subagents continue independently."
-        : "Cleanup needs recovery; other unfinished subagents continue independently.",
+      "Parent action required; other unfinished subagents continue independently.",
       ...Arr.flatMap(attention, (run) => {
         const state = runAttention(run);
         const cleanup = cleanupRecoveryText(run);
@@ -256,10 +251,6 @@ export interface RunFormatOptions {
   readonly readerIsParent?: boolean | undefined;
 }
 
-/** `provider/model:effort`, with fast mode and an override marked. */
-export const formatRunModel = (run: SubagentRunView): string =>
-  projectRunRoutePresentation(run).model;
-
 export const runProfileLabel = (run: Pick<SubagentRunView, "agent" | "profile">): string =>
   run.agent
     ? `${sanitizeTerminalLine(run.agent)} (${sanitizeTerminalLine(run.profile ?? "generalist")})`
@@ -273,12 +264,12 @@ const runWorkspaceLabel = (run: SubagentRunView): string | undefined =>
       : undefined;
 
 /** One line per run: `id name · profile · provider/model:effort [· worktree <wsId>]`. */
-export const formatStartedRun = (run: SubagentRunView): string =>
+const formatStartedRun = (run: SubagentRunView): string =>
   Fn.pipe(
     [
       `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)}`,
       runProfileLabel(run),
-      formatRunModel(run),
+      projectRunRoutePresentation(run).model,
       runWorkspaceLabel(run),
     ],
     Arr.filter(isTextFragment),
@@ -291,7 +282,7 @@ const formatRunHeader = (run: SubagentRunView): string =>
       `${sanitizeTerminalLine(run.id)} ${sanitizeTerminalLine(run.name)}`,
       runStateLabel(run.state),
       runProfileLabel(run),
-      formatRunModel(run),
+      projectRunRoutePresentation(run).model,
       runWorkspaceLabel(run),
       run.depth && run.depth > 1 ? `depth ${run.depth}` : undefined,
       run.descendantCount ? countLabel(run.descendantCount, "descendant") : undefined,
@@ -452,7 +443,7 @@ export const formatRunCard = (run: SubagentRunView, options: RunFormatOptions = 
 
 type FailedStartRecovery = NonNullable<SubagentStartFailure["admittedRun"]>;
 
-export const formatFailedStartRecovery = (recovery: FailedStartRecovery): string =>
+const formatFailedStartRecovery = (recovery: FailedStartRecovery): string =>
   `admitted ${sanitizeTerminalLine(recovery.runId)}${recovery.cleanupDisposition === "quarantined" ? " · cleanup quarantined" : ""}`;
 
 /** The admitted run's next step, which starts with reading it. */
@@ -465,20 +456,16 @@ export const failedStartRecoveryAction = (recovery: FailedStartRecovery): string
       : `Review the failure with agent_read ${runId}, then start a new run with its route's next candidate, ${candidateLabel(recovery.nextCandidate)}.`;
 };
 
-/** A failed admitted run's warning on one redacted line, cut with a pointer to the whole one. */
-const failedStartWarningLine = (
-  recovery: FailedStartRecovery,
-  warning: string,
-  maximum: number,
-): string => {
+/**
+ * A run's warning on one redacted line of at most `maximum` characters, cut with a pointer to the
+ * whole one in the `agent_read` of the run `id` names.
+ */
+export const warningLine = (id: string, warning: string, maximum: number): string => {
   const label = "Warning: ";
-  const pointer = ` … (cut; agent_read ${sanitizeTerminalLine(recovery.runId)} has the full warning)`;
+  const pointer = ` … (cut; agent_read ${id} has the full warning)`;
   const whole = sanitizeDiagnosticError(warning, { maximumLength: Number.MAX_SAFE_INTEGER });
   const room = maximum - label.length;
-  return clipText(
-    `${label}${whole.length <= room ? whole : `${Str.trimEnd(safeTextPrefix(whole, room - pointer.length))}${pointer}`}`,
-    maximum,
-  );
+  return `${label}${whole.length <= room ? whole : `${Str.trimEnd(safeTextPrefix(whole, room - pointer.length))}${pointer}`}`;
 };
 
 /** A start result line, such as a started run or a failed launch's recovery step. */
@@ -521,7 +508,7 @@ const formatStartFailure = (failure: SubagentStartFailure): string => {
         : undefined,
       file ? startLine(`    ${failureFileText(file)}`, MAX_START_FILE_LINE_CHARS) : undefined,
       recovery?.warning
-        ? `    ${failedStartWarningLine(recovery, recovery.warning, MAX_START_NOTE_CHARS - 4)}`
+        ? `    ${startLine(warningLine(sanitizeTerminalLine(recovery.runId), recovery.warning, MAX_START_NOTE_CHARS - 4), MAX_START_NOTE_CHARS - 4)}`
         : undefined,
       recovery ? startLine(`    Next: ${failedStartRecoveryAction(recovery)}`) : undefined,
       !recovery && noEligibleRoute ? startLine(`    Next: ${noEligibleRouteRecovery}`) : undefined,
@@ -579,7 +566,7 @@ const actionFailureLine = (failure: SubagentActionFailure): string => {
   );
 };
 
-export const ACTION_FAILURE_SECTIONS = [
+const ACTION_FAILURE_SECTIONS = [
   ["unconfirmed", "Unconfirmed targets", unconfirmedActionRecovery],
   ["failed", "Failed targets", undefined],
 ] as const satisfies ReadonlyArray<readonly [ActionFailureDisposition, string, string | undefined]>;

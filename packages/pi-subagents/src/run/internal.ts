@@ -34,7 +34,8 @@ export interface RunContext {
   readonly writerPools: WriterPools;
   readonly writerLeases: WriterLeaseContract;
   readonly requireRecord: (id: string) => Effect.Effect<RunRecord, SubagentNotFoundError>;
-  readonly sendPeerNotices: (changedId: string) => Effect.Effect<void>;
+  /** Tells every active run who shares its working directory now. */
+  readonly sendPeerNotices: Effect.Effect<void>;
   readonly allocateAssignmentAttemptToken: () => string;
   readonly sessionUsage: SessionUsageLedger;
 }
@@ -54,6 +55,10 @@ export const isInactiveRunRecord = (record: RunRecord): boolean =>
   record.stoppedByParent ||
   record.view.state === "stopping" ||
   isTerminalRunState(record.view.state);
+
+/** Whether a stop claimed the run, so a start or respawn in progress must not attach to it. */
+export const isStopClaimedRunRecord = (record: RunRecord): boolean =>
+  record.stoppedByParent || record.view.state === "stopping" || record.view.state === "stopped";
 
 export interface CompletionGenerationRecord {
   readonly generation: number;
@@ -97,7 +102,7 @@ export type StoredRunView = Omit<SubagentRunView, DerivedViewField>;
  * Whether the run's cleanup has begun: `none` until a stop, settlement, failure, or shutdown
  * starts it, then `pending` while it runs or is reverified, and finally confirmed or quarantined.
  */
-export type RunCleanupDisposition = "none" | "pending" | "confirmed" | "quarantined";
+type RunCleanupDisposition = "none" | "pending" | "confirmed" | "quarantined";
 
 export interface RunRecord {
   readonly scriptOrigin: boolean;

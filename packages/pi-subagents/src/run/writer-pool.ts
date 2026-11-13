@@ -51,10 +51,6 @@ export class WriterPoolEntry implements WriterPoolView {
     return this.#leaseCleanupUncertain;
   }
 
-  get lease(): WriterLease | undefined {
-    return this.#lease;
-  }
-
   get preparationError(): SubagentError | undefined {
     return this.#preparationError;
   }
@@ -119,9 +115,7 @@ export class WriterPoolEntry implements WriterPoolView {
 }
 
 export interface WriterPoolLookup {
-  readonly size: number;
   readonly get: (digest: string) => WriterPoolView | undefined;
-  readonly values: () => Iterable<WriterPoolView>;
 }
 
 export class WriterPools implements WriterPoolLookup {
@@ -133,10 +127,6 @@ export class WriterPools implements WriterPoolLookup {
 
   get(digest: string): WriterPoolEntry | undefined {
     return this.#pools.get(digest);
-  }
-
-  values(): Iterable<WriterPoolEntry> {
-    return this.#pools.values();
   }
 
   joinLocked(cwd: CanonicalWriterCwd, runId: string): Effect.Effect<WriterPoolEntry> {
@@ -157,11 +147,7 @@ export class WriterPools implements WriterPoolLookup {
 
   completeReleaseLocked(pool: WriterPoolEntry, runId: string): boolean {
     if (!pool.completeReleaseLocked(runId)) return false;
-    this.removeLocked(pool);
-    return true;
-  }
-
-  private removeLocked(pool: WriterPoolEntry): void {
     if (this.#pools.get(pool.cwd.digest) === pool) this.#pools.delete(pool.cwd.digest);
+    return true;
   }
 }

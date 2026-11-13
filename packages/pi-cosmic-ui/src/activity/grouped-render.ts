@@ -1,10 +1,5 @@
 import { countLabel } from "pi-cosmic-core/display";
-import {
-  Markdown,
-  visibleWidth,
-  wrapTextWithAnsi,
-  type MarkdownTheme,
-} from "@earendil-works/pi-tui";
+import { Markdown, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Match from "effect/Match";
 import * as Option from "effect/Option";
@@ -67,8 +62,9 @@ import { groupSummaryLabels, summarizeGroup } from "./group-summary.ts";
 import { groupedDetail, type ActivityDetailBlock } from "./grouped-detail.ts";
 import type { ActivityComponentOptions } from "./component.ts";
 import type { ActivityDetailRequest } from "./service.ts";
-import type { ActivityRow } from "./model.ts";
+import { activityPath, type ActivityAction, type ActivityRow } from "./model.ts";
 import type { ActivityDetail } from "./protocol.ts";
+import { markdownTheme } from "../tool/presentation.ts";
 
 const CURSOR = `${LIST_CURSOR} `;
 // The list needs room for a tree, a title, and a whole `provider/model` beside the detail pane.
@@ -266,8 +262,6 @@ export interface ActivityFilterView {
   readonly input: (width: number) => string;
 }
 
-type ActivityAction = NonNullable<ActivityRow["actions"]>[number];
-
 interface GroupedBodyContext {
   readonly options: ActivityComponentOptions;
   readonly state: GroupedActivityState;
@@ -420,27 +414,6 @@ function activityList(
 
 type BodyTheme = ActivityComponentOptions["theme"];
 
-const plain = (text: string) => text;
-
-const markdownTheme = (theme: BodyTheme): MarkdownTheme => {
-  return {
-    heading: (text) => theme.fg("mdHeading", theme.bold(text)),
-    link: (text) => theme.fg("mdLink", text),
-    linkUrl: (text) => theme.fg("mdLinkUrl", text),
-    code: (text) => theme.fg("mdCode", text),
-    codeBlock: (text) => theme.fg("mdCodeBlock", text),
-    codeBlockBorder: (text) => theme.fg("mdCodeBlockBorder", text),
-    quote: (text) => theme.fg("mdQuote", text),
-    quoteBorder: (text) => theme.fg("mdQuoteBorder", text),
-    hr: (text) => theme.fg("mdHr", text),
-    listBullet: (text) => theme.fg("mdListBullet", text),
-    bold: (text) => theme.bold(text),
-    italic: plain,
-    strikethrough: plain,
-    underline: plain,
-  };
-};
-
 const HANGING_INDENT = "  ";
 
 // Wrapped continuation lines hang under their first line so long output stays scannable.
@@ -542,6 +515,7 @@ function activityDetail(context: GroupedBodyContext, detailHeight: number, detai
     technical: state.technical,
     actions: state.actions,
     children: state.children,
+    ownership: row ? activityPath(context.rows, row.key) : [],
   });
   const showHeading = detailHeight > 1;
   const details = state.shell.detailWindow(
@@ -616,13 +590,10 @@ export function renderGroupedActivity(
   state: GroupedActivityState,
   width: number,
 ): string[] {
-  if (width <= 0) return [];
   const { shell, entries, selected } = state;
   const rows = options.snapshot();
   const height = Math.max(0, options.height());
   const arrangement = shell.syncArrangement(width, height);
-  // A section heading folds in place; only a source's detail can be entered.
-  shell.ensureSelectionPane(selected?.type === "member");
   const inner = Math.max(0, width - 2);
   // A pending confirmation holds the keys, so neither pane shows focus.
   const frame = listDetailFrame(options.theme, state.confirmation ? undefined : shell.state.pane);

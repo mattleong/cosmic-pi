@@ -1,7 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Data from "effect/Data";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "./array.ts";
 
 interface SettingsDispatchDescriptor {
   readonly id: string;
@@ -45,9 +45,7 @@ export const dispatchSettingsCommand = (
   const [id = "", ...parts] = tokens;
   const value = Str.trim(Arr.join(parts, " "));
   if (!value) return SettingsCommandDispatch.Invalid({ reason: "missing-value", id });
-  const descriptor = Option.getOrUndefined(
-    Arr.findFirst(descriptors, (candidate) => candidate.id === id),
-  );
+  const descriptor = findOrUndefined(descriptors, (candidate) => candidate.id === id);
   if (!descriptor) return SettingsCommandDispatch.Invalid({ reason: "unknown-setting", id });
   if (descriptor.values && !descriptor.openValues && !descriptor.values.includes(value)) {
     return SettingsCommandDispatch.Invalid({

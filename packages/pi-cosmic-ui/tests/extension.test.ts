@@ -16,11 +16,8 @@ import { vi } from "vitest";
 import {
   deferredPromise,
   extensionContextFixture,
-  footerDataFixture,
   modelFixture,
-  plainTheme,
   recordingExtensionHost,
-  tuiFixture,
   type DefaultedEventName,
   type ExtensionEventNamed,
 } from "pi-cosmic-core/testing";
@@ -46,7 +43,10 @@ import {
   eventBus,
   execOk,
   execResult,
+  makeFooter,
   nativeUsage,
+  usageEntry,
+  type FooterData,
 } from "./support/host.ts";
 
 function harness(dependencies?: CosmicUiApplicationDependencies) {
@@ -135,27 +135,6 @@ const waitUntil = (predicate: () => boolean): Effect.Effect<void> =>
 
 const advanceTimers = (millis: number) => Effect.promise(() => vi.advanceTimersByTimeAsync(millis));
 
-type FooterFactory = NonNullable<Parameters<ExtensionUIContext["setFooter"]>[0]>;
-type FooterData = Parameters<FooterFactory>[2];
-
-function makeFooter(
-  factory: FooterFactory | undefined,
-  data: Partial<FooterData> = {},
-  requestRender: () => void = vi.fn(),
-) {
-  if (!factory) throw new Error("Expected an installed footer factory.");
-  const component = factory(
-    tuiFixture({ requestRender }),
-    plainTheme,
-    footerDataFixture({ getAvailableProviderCount: () => 1, ...data }),
-  );
-  if (!component.dispose) throw new Error("Expected a disposable footer.");
-  return {
-    render: (width: number) => component.render(width),
-    dispose: () => component.dispose?.(),
-  };
-}
-
 function capturedFooter(
   h: ReturnType<typeof harness>,
   call = 0,
@@ -214,14 +193,6 @@ const uiPrompt = (
   type,
   reason: "ui_prompt",
   kind: "custom",
-});
-const usageEntry = (kind: string, input: number) => ({
-  ...entryBase,
-  type: "usage" as const,
-  kind,
-  provider: "test",
-  model: "test",
-  usage: nativeUsage(input),
 });
 
 const startWithPendingProbes = (h: ReturnType<typeof harness>) =>
@@ -399,7 +370,7 @@ describe("Cosmic UI extension", () => {
       const usage = nativeUsage(10);
       const entries: SessionEntries = [
         ...assistantEntries(50),
-        usageEntry("future-operation", 10),
+        usageEntry(10, { kind: "future-operation" }),
         {
           ...entryBase,
           type: "compaction",
@@ -436,7 +407,7 @@ describe("Cosmic UI extension", () => {
       yield* emit(h, "agent_settled");
       expect(input).not.toHaveBeenCalled();
       expect(Arr.join(footer.render(100), "\n")).toContain("↑90");
-      entries.push(usageEntry("cache_warm", 10));
+      entries.push(usageEntry(10));
       yield* emit(h, "agent_settled");
       expect(Arr.join(footer.render(100), "\n")).toContain("↑100");
       yield* emit(h, "session_shutdown");
@@ -447,11 +418,11 @@ describe("Cosmic UI extension", () => {
     Effect.gen(function* () {
       const h = harness();
       const retired = h.ctx;
-      retired.sessionManager.getEntries = vi.fn(() => [usageEntry("cache_warm", 11)]);
+      retired.sessionManager.getEntries = vi.fn(() => [usageEntry(11)]);
       yield* emit(h, "session_start");
       expectFooterShows(capturedFooter(h), "↑11");
       const replacement = withSession(retired, {
-        getEntries: vi.fn(() => [usageEntry("cache_warm", 22)]),
+        getEntries: vi.fn(() => [usageEntry(22)]),
       });
       yield* emit(h, "session_start", replacement);
       const footer = capturedFooter(h, -1);

@@ -8,6 +8,7 @@ import { WorkspaceError } from "../workspace/model.ts";
 import type { WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import {
+  CHECKOUT_TIMEOUT_MILLIS,
   checkDirectory,
   git,
   repositoryGit,
@@ -16,6 +17,7 @@ import {
 } from "./git-worktree-process.ts";
 import { workspaceDirectory } from "./git-worktree-store.ts";
 import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 /** A workspace's private directory, which holds its record, patch, and trees. */
 export const workspaceArtifact = (registry: string, record: WorkspaceRecord) =>
@@ -31,9 +33,6 @@ export const workspaceSubdirectory = (record: WorkspaceRecord) =>
 
 /** Names the workspace in `git worktree list`, so users can tell its trees apart. */
 const lockReason = (workspaceId: string) => `pi-subagents workspace ${workspaceId}`;
-
-// Checking out a large tree runs every filter, such as Git LFS, so it may take a while.
-const CHECKOUT_TIMEOUT_MILLIS = 10 * 60 * 1000;
 
 /**
  * Adds a locked, detached linked worktree of the record's repository at `tree`, checked out at
@@ -99,11 +98,9 @@ export const removeWorkspaceTree = Effect.fn("GitWorktreeTrees.removeWorkspaceTr
   tree: string,
   listed?: ReadonlyArray<ListedTree>,
 ) {
-  const entry = Option.getOrUndefined(
-    Arr.findFirst(
-      listed ?? (yield* listedWorkspaceTrees(registry, record)),
-      (candidate) => candidate.path === tree,
-    ),
+  const entry = findOrUndefined(
+    listed ?? (yield* listedWorkspaceTrees(registry, record)),
+    (candidate) => candidate.path === tree,
   );
   const present = yield* workspaceIOIfPresent("discard", () => fs.lstat(tree));
   if (entry?.locked) yield* repositoryGit(record.repository, ["worktree", "unlock", tree]);
@@ -149,5 +146,6 @@ export const withOutcome = (error: WorkspaceError, outcome: string) =>
       Arr.filter([error.detail, outcome], (line) => line !== undefined),
       "\n",
     ),
+    ...(error.remedy !== undefined && { remedy: error.remedy }),
     ...(error.cleanupUnconfirmed && { cleanupUnconfirmed: true }),
   });

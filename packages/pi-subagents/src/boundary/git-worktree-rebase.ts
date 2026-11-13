@@ -2,15 +2,17 @@ import * as Effect from "effect/Effect";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 import * as Order from "effect/Order";
-import { OPEN_WORKSPACE_STATUSES, WorkspaceError } from "../workspace/model.ts";
+import {
+  OPEN_WORKSPACE_STATUSES,
+  reopenedWorkspaceRecord,
+  WorkspaceError,
+} from "../workspace/model.ts";
 import type { WorkspaceRebase, WorkspaceRecord } from "../workspace/model.ts";
 import { nodeFsPromises as fs, nodePath as path } from "pi-cosmic-core/platform/node-builtins";
 import {
   git,
   gitFailure,
-  gitFields,
   type GitResult,
   gitResult,
   gitStderrLines,
@@ -21,12 +23,7 @@ import {
   workspaceIO,
   workspaceRefusal,
 } from "./git-worktree-process.ts";
-import {
-  newWorkspaceId,
-  readWorkspaceRecord,
-  reopenedWorkspaceRecord,
-  saveWorkspaceRecord,
-} from "./git-worktree-store.ts";
+import { newWorkspaceId, readWorkspaceRecord, saveWorkspaceRecord } from "./git-worktree-store.ts";
 import { patchBytes } from "./git-worktree-patch.ts";
 import {
   captureTree,
@@ -35,10 +32,11 @@ import {
   setWorkspaceRef,
   sourceLeftOut,
   treeHolds,
+  unmergedPaths,
   workerLeftOut,
   workspaceRef,
 } from "./git-capture.ts";
-import { gitPath, headCommit, sourceIdentity } from "./git-repository.ts";
+import { gitPath, sourceIdentity } from "./git-repository.ts";
 import {
   removePreparation,
   withOutcome,
@@ -47,27 +45,6 @@ import {
   workspaceWorker,
 } from "./git-worktree-trees.ts";
 import type { BeforeTreeRemoval } from "./git-worktree-hooks.ts";
-
-/** Paths `git apply --3way` left unmerged in the tree's index. */
-const unmergedPaths = (root: string) =>
-  gitFields(root, ["ls-files", "-u", "-z"]).pipe(
-    Effect.map((lines) => [
-      ...new Set(
-        Arr.map(lines, (line) =>
-          Fn.pipe(
-            line,
-            Str.slice(
-              Fn.pipe(
-                line,
-                Str.indexOf("\t"),
-                Option.getOrElse(() => -1),
-              ) + 1,
-            ),
-          ),
-        ),
-      ),
-    ]),
-  );
 
 const rebaseRefusal = (result: GitResult, changedPaths: ReadonlyArray<string>) => {
   const stderr = gitStderrLines(result.stderr);
@@ -241,12 +218,7 @@ export const rebaseWorkspace = Effect.fn("GitWorktreeRebase.rebaseWorkspace")(fu
       : yield* patchBytes(registry, record, { from: record.baseline, to: captured }, "rebase");
   const identity = yield* sourceIdentity(sourceRoot);
   const source = yield* captureTree(sourceRoot, scratch, sourceLeftOut, []);
-  const parent = yield* commitTree(
-    repository,
-    source.tree,
-    [yield* headCommit(sourceRoot)],
-    "baseline",
-  );
+  const parent = yield* commitTree(repository, source.tree, [identity.commit], "baseline");
   const relative = workspaceSubdirectory(record);
   if (relative !== "" && !(yield* treeHolds(repository, parent, relative)))
     return yield* workspaceRefusal(

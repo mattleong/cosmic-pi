@@ -54,10 +54,11 @@ export function cachedDeferredPreview(
   invalidate: () => void,
   owner: CodePreviewSessionCapability | undefined,
 ): Component {
-  const active = owner !== undefined && owner === captureCodePreviewSessionCapability();
+  // The capturing session, while it is still the current one.
+  const current = owner === captureCodePreviewSessionCapability() ? owner : undefined;
   return cachedPreview(state, slot, dependencies, () =>
-    shouldRenderDeferred(sourceCharacters) && active
-      ? new DeferredPreview(loadingLabel, theme, render, invalidate, owner)
-      : render(active),
+    shouldRenderDeferred(sourceCharacters) && current
+      ? new DeferredPreview(loadingLabel, theme, render, invalidate, current)
+      : render(current !== undefined),
   );
 }

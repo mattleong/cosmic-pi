@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { argumentFailureIssue } from "./argument-failure";
@@ -167,7 +168,10 @@ function withHostErrorDetail(
   const text = Str.trim(errorText);
   if (
     text === "" ||
-    Arr.some(issues, (issue) => issue.detail !== undefined && Str.includes(text)(issue.detail))
+    Arr.some(
+      issues,
+      (issue) => issue.detail !== undefined && Fn.pipe(issue.detail, Str.includes(text)),
+    )
   )
     return issues;
   const index = Arr.findFirstIndex(issues, (issue) => issue.severity === "warning");

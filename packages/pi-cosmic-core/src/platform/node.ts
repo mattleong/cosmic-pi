@@ -9,4 +9,3 @@ const http = Layer.merge(JsonHttpClient.layer, StreamingHttpClient.layer).pipe(
 );
 
 export const nodePlatformLayer = Layer.merge(nodeFilePlatformLayer, http);
-export { nodeFilePlatformLayer as fileLayer, nodePlatformLayer as layer };

@@ -91,7 +91,7 @@ describe("captured fleet control authority", () => {
         captureSubagentControlExpectation(snapshotRun(record)),
       );
       expect(deliveries).toEqual(["new-question: No"]);
-    }).pipe(Effect.scoped),
+    }),
   );
 
   for (const action of ["send", "interrupt", "rename", "stop", "stop subtree"] as const)
@@ -123,7 +123,7 @@ describe("captured fleet control authority", () => {
         expect(record.pauseRequested).toBe(false);
         expect(record.stoppedByParent).toBe(false);
         expect(record.cleanupDisposition).toBe("none");
-      }).pipe(Effect.scoped),
+      }),
     );
 
   it.effect("rejects a stale resume even after the same process returns to paused", () => {

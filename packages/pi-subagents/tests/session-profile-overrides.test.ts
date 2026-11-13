@@ -1,9 +1,12 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import { ProjectionError } from "pi-cosmic-core";
 import { type ProfileRoute } from "../src/profiles/model.ts";
+import { resolveProfilePlan } from "../src/profiles/resolve.ts";
 import {
   SessionProfileConflictError,
   SessionProfileInvalidError,
@@ -197,7 +200,7 @@ describe("session profile overrides", () => {
         expect(disabled.effectiveConfig.profiles.reviewer.candidates).toEqual([]);
         expect(disabled.effectiveConfig.profileSources.reviewer).toBe("session");
         expect(
-          service.resolve(disabled, "reviewer", {
+          resolveProfilePlan("reviewer", disabled.effectiveConfig, {
             availablePiModels: [],
             forkAvailable: false,
           }),
@@ -391,6 +394,52 @@ describe("session profile overrides", () => {
       const snapshot = yield* service.capture;
       expect(snapshot.revision).toBe(1);
       expect(Rec.size<string, unknown>(snapshot.overrides)).toBe(1);
+    }),
+  );
+
+  it.effect("holds the session revision lock through a deferred saved-set write", () =>
+    Effect.gen(function* () {
+      const service = yield* builtProfileService(baseConfig());
+      const writeStarted = yield* Deferred.make<void>();
+      const releaseWrite = yield* Deferred.make<void>();
+      const editAttempted = yield* Deferred.make<void>();
+      const editFinished = yield* Deferred.make<void>();
+      let persistedReviewerCandidates: number | undefined;
+
+      const saving = yield* Effect.forkChild(
+        service
+          .withSnapshotAtRevision(0, (snapshot) =>
+            Effect.gen(function* () {
+              persistedReviewerCandidates =
+                snapshot.effectiveConfig.profiles.reviewer.candidates.length;
+              yield* Deferred.succeed(writeStarted, undefined);
+              yield* Deferred.await(releaseWrite);
+            }),
+          )
+          .pipe(Effect.orDie),
+      );
+      yield* Deferred.await(writeStarted);
+
+      const editing = yield* Effect.forkChild(
+        Effect.gen(function* () {
+          yield* Deferred.succeed(editAttempted, undefined);
+          yield* service.patchSessionProfile({
+            profile: "reviewer",
+            route: { candidates: [] },
+            expectedRevision: 0,
+          });
+          yield* Deferred.succeed(editFinished, undefined);
+        }).pipe(Effect.orDie),
+      );
+      yield* Deferred.await(editAttempted);
+      yield* Effect.yieldNow;
+      expect(Option.isNone(yield* Deferred.poll(editFinished))).toBe(true);
+
+      yield* Deferred.succeed(releaseWrite, undefined);
+      yield* Fiber.join(saving);
+      yield* Fiber.join(editing);
+      expect(persistedReviewerCandidates).toBeGreaterThan(0);
+      expect((yield* service.capture).effectiveConfig.profiles.reviewer.candidates).toEqual([]);
     }),
   );
 });

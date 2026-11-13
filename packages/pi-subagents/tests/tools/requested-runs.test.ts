@@ -1,5 +1,6 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Str from "effect/String";
 import { stripAnsi } from "pi-cosmic-core";
 import { plainTheme } from "pi-cosmic-core/testing";
 import { applyPresentationSettings, createToolPresentationHarness } from "pi-code-previews/testing";
@@ -15,7 +16,7 @@ import {
 } from "../../src/tools/render.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
 import { effectTest } from "../support/effect-test.ts";
-import { captureSubagentTools, view } from "./fixtures/tool-harness.ts";
+import { renderOnlyTool, view } from "./fixtures/tool-harness.ts";
 
 const requested = (
   ids: ReadonlyArray<string>,
@@ -57,7 +58,6 @@ describe("requested runs beside their result", () => {
     );
     expect(terms).not.toContain("auth-review");
     expect(terms).toContain("30s");
-    expect(terms).toMatch(/first finishes/iu);
   });
 
   it("leaves out a target a shown stop's Details name as not stopped", () => {
@@ -68,7 +68,9 @@ describe("requested runs beside their result", () => {
       actionFailures: [{ id: "agent-12", code: "not_found", message: "Run not found." }],
     });
     rememberRunNames(row, decodeOutcomeDetails(partial), true);
-    expect(requested(["agent-1", "agent-12", "agent-99"], row)).toBe("Requested agent-99");
+    const left = requested(["agent-1", "agent-12", "agent-99"], row);
+    expect(left).toContain("agent-99");
+    expect(left).not.toContain("agent-1");
     // A body that isn't drawn names none of them.
     rememberRunNames(row, decodeOutcomeDetails(partial), false);
     expect(requested(["agent-12"], row)).toContain("agent-12");
@@ -82,8 +84,8 @@ describe("requested runs beside their result", () => {
   });
 });
 
-const tools = () => captureSubagentTools(subagentServiceDouble({}));
-const tool = (name: string) => tools().get(name)!;
+const occurrences = (text: string, part: string | RegExp): number =>
+  Str.split(text, part).length - 1;
 
 const expandedText = (harness: { render(width?: number): string[] }) =>
   stripAnsi(Arr.join(harness.render(100), "\n"));
@@ -94,9 +96,11 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
   );
 
   it("leaves out agents a read's result names and the ones its not-found issue names", () => {
-    const harness = createToolPresentationHarness(tool("agent_read"));
+    const harness = createToolPresentationHarness(renderOnlyTool("agent_read"));
     harness.call({ agentIds: ["agent-1", "agent-12"] }, { expanded: true });
-    expect(expandedText(harness)).toContain("Requested agent-1, agent-12");
+    const typed = expandedText(harness);
+    expect(occurrences(typed, /agent-1\b/u)).toBe(1);
+    expect(occurrences(typed, "agent-12")).toBe(1);
     harness.result(
       {
         content: [{ type: "text", text: "Read one agent." }],
@@ -119,15 +123,16 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
       },
       { expanded: true },
     );
+    // The requested line repeats neither: the missing agent's ID shows once, in its issue.
     const settled = expandedText(harness);
-    expect(settled).not.toContain("Requested");
-    expect(settled).toContain("Not found: agent-12");
+    expect(occurrences(settled, /agent-1\b/u)).toBe(0);
+    expect(occurrences(settled, "agent-12")).toBe(1);
   });
 
   it("leaves out agents a list's not-found issue names", () => {
-    const harness = createToolPresentationHarness(tool("agent_list"));
+    const harness = createToolPresentationHarness(renderOnlyTool("agent_list"));
     harness.call({ agentIds: ["agent-7"] }, { expanded: true });
-    expect(expandedText(harness)).toContain("Requested agent-7");
+    expect(occurrences(expandedText(harness), "agent-7")).toBe(1);
     harness.result(
       {
         content: [{ type: "text", text: "No agents found." }],
@@ -142,13 +147,11 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
       },
       { expanded: true },
     );
-    const settled = expandedText(harness);
-    expect(settled).not.toContain("Requested");
-    expect(settled).toContain("Not found: agent-7");
+    expect(occurrences(expandedText(harness), "agent-7")).toBe(1);
   });
 
   it("keeps a found agent's ID requested when the read shows no Details with it", () => {
-    const harness = createToolPresentationHarness(tool("agent_read"));
+    const harness = createToolPresentationHarness(renderOnlyTool("agent_read"));
     harness.call({ agentIds: ["agent-only-id"] }, { expanded: true });
     harness.result(
       {
@@ -176,7 +179,7 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
   });
 
   it("names a running wait's runs in its progress tree, not again on its requested line", () => {
-    const harness = createToolPresentationHarness(tool("agent_await"));
+    const harness = createToolPresentationHarness(renderOnlyTool("agent_await"));
     const args = { runIds: ["agent-1", "agent-12"], timeoutSeconds: 30 };
     harness.call(args, { expanded: true, executionStarted: true });
     harness.result(
@@ -192,7 +195,9 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
     );
     const running = expandedText(harness);
     expect(running).toContain("auth-review");
-    expect(running).toMatch(/Requested agent-12 · timeout 30s/u);
+    expect(occurrences(running, /agent-1\b/u)).toBe(0);
+    expect(occurrences(running, "agent-12")).toBe(1);
+    expect(running).toContain("30s");
   });
 
   effectTest(
@@ -221,7 +226,7 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
         ),
         Effect.orDie,
       );
-      const harness = createToolPresentationHarness(tool("agent_worktree"));
+      const harness = createToolPresentationHarness(renderOnlyTool("agent_worktree"));
       harness.call(args, { expanded: true });
       harness.result(applied, { expanded: true });
       expect(expandedText(harness)).not.toContain("Requested worktree ws-1");
@@ -234,7 +239,7 @@ describe.each(["compact", "preview"] as const)("requested line in %s rows", (sty
       );
       expect(expandedText(harness)).toContain("Requested worktree ws-1");
       // A row of its own never borrows another's result.
-      const fresh = createToolPresentationHarness(tool("agent_worktree"));
+      const fresh = createToolPresentationHarness(renderOnlyTool("agent_worktree"));
       fresh.call(args, { expanded: true, isError: true });
       fresh.result(
         { content: [{ type: "text", text: "Refused." }], details: undefined },

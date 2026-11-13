@@ -13,7 +13,7 @@ import { JsonDocumentError, JsonDocumentStore, nodeFilePlatformLayer } from "pi-
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
 import * as configStore from "../src/config/store.ts";
-import { extensionHarness } from "./extension-harness.ts";
+import { extensionHarness, modelSelectEvent } from "./extension-harness.ts";
 import { ownedCheckpointDetails, testModel, waitUntil } from "./helpers.ts";
 
 afterEach(() => {
@@ -78,18 +78,7 @@ layer(nodeFilePlatformLayer)("Better OpenAI session boundary", (it) => {
     Effect.gen(function* () {
       const h = yield* extensionHarness({ config: { persistState: true, desiredActive: true } });
       const selectModel = (ctx: ExtensionContext, source: ModelSelectEvent["source"]) =>
-        Effect.promise(() =>
-          Promise.all(
-            Arr.map(h.handlers.get("model_select"), (handler) =>
-              Promise.resolve(
-                handler(
-                  { type: "model_select", model: testModel(), previousModel: undefined, source },
-                  ctx,
-                ),
-              ),
-            ),
-          ),
-        );
+        h.deliver("model_select", modelSelectEvent(source), ctx);
       const otherProvider = { ...h.ctx, model: testModel("claude-opus-5-5", "anthropic") };
       yield* h.emit("session_start");
       expect(h.notify).not.toHaveBeenCalled();

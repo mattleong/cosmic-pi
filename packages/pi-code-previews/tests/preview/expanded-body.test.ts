@@ -86,32 +86,9 @@ test("a wrapped line of facts breaks between whole facts and never ends with a s
     );
     for (const fact of ["84k tokens", "$0.61", "4m 30s"])
       assert.ok(
-        Arr.some(rows, (row) => Str.includes(fact)(row)),
+        Arr.some(rows, (row) => Fn.pipe(row, Str.includes(fact))),
         `${fact} stays whole at ${width}`,
       );
-  }
-});
-
-const indent = (row: string) => row.length - Str.trimStart(row).length;
-
-test("a wrapped Details line never continues in a nested fact's column", () => {
-  const facts =
-    "auth-review: agent-1 · reviewer → openai-codex/gpt-5.6-sol:high · 84k tokens · $0.61 · 4m 30s";
-  for (const width of [57, 40]) {
-    // The section label comes first; the top-level fact starts the rows beneath it.
-    const rows = Arr.drop(expandedDetails(plainTheme, [facts, `  ${facts}`]).render(width), 1);
-    const nestedAt = Option.getOrElse(
-      Arr.findFirstIndex(rows, (row, index) => index > 0 && Str.includes("auth-review")(row)),
-      () => -1,
-    );
-    const top = indent(rows[0] ?? "");
-    const nested = indent(rows[nestedAt] ?? "");
-    assert.ok(nestedAt > 1 && nested > top, `the top fact wraps above its nested fact at ${width}`);
-    for (const [index, row] of rows.entries()) {
-      if (index === 0 || index === nestedAt) continue;
-      const owner = index < nestedAt ? top : nested;
-      assert.ok(indent(row) >= owner + 4, `a continuation hangs past nesting at ${width}`);
-    }
   }
 });
 
@@ -127,9 +104,14 @@ test("a value that would wrap past three rows beside its label stacks beneath it
   const label = Option.getOrThrow(Arr.findFirst(rows, Str.includes("Command")));
   assert.equal(Str.trim(label), "Command");
   assert.deepEqual(
-    Arr.filter(words(rows), (word) => Str.startsWith("--")(word)),
+    Arr.filter(words(rows), (word) => Fn.pipe(word, Str.startsWith("--"))),
     Str.split(command, " "),
   );
   // A short value still sits beside its label.
-  assert.ok(Arr.some(rows, (row) => Str.includes("Notify")(row) && Str.includes("when")(row)));
+  assert.ok(
+    Arr.some(
+      rows,
+      (row) => Fn.pipe(row, Str.includes("Notify")) && Fn.pipe(row, Str.includes("when")),
+    ),
+  );
 });

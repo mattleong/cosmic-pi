@@ -1,10 +1,4 @@
-import {
-  KeybindingsManager as TuiKeybindingsManager,
-  setKeybindings,
-  Text,
-  TUI_KEYBINDINGS,
-} from "@earendil-works/pi-tui";
-import { beforeEach, describe, expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
@@ -12,16 +6,17 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { deferredPromise, plainTheme } from "pi-cosmic-core/testing";
 import {
-  createSettingsListSurface,
   managerSettingsTheme,
   settingInherited,
   withSettingsGroupChildren,
   type SettingsSurfaceItem,
 } from "../src/manager/settings-surface.ts";
+import { surfaceFor } from "./support/settings-surface.ts";
 
 const ESC = "\u001b";
 
-beforeEach(() => setKeybindings(new TuiKeybindingsManager(TUI_KEYBINDINGS)));
+/** A rendered row without its cursor. */
+const unmarked = (entry: string) => Str.trim(Fn.pipe(entry, Str.replace(/^›/u, "")));
 
 /**
  * How a save reaches the store: at once, after `release` (a slow write), or optimistically at once
@@ -78,23 +73,9 @@ const scopedSurface = (timing: SaveTiming = "immediate") => {
       return settled.promise;
     },
   );
-  const created = createSettingsListSurface({
-    header: new Text("Settings", 0, 0),
-    items,
-    height: items.length,
-    listTheme: managerSettingsTheme(plainTheme),
-    onChange: () => undefined,
-    onCancel: () => undefined,
-    matchesKeybinding: undefined,
-    requestRender: () => undefined,
-    dim: (text) => text,
-    bridge: {},
-  });
-  const lines = () => created.surface.render(80);
+  const { press, lines } = surfaceFor(items);
   return {
-    press: (...keys: string[]) => {
-      for (const key of keys) created.surface.handleInput?.(key);
-    },
+    press,
     // Settles every save still in flight, in the order they were made.
     release: () => Promise.all(Arr.map(pending.splice(0), (settle) => Promise.resolve(settle()))),
     lines,
@@ -105,9 +86,7 @@ const scopedSurface = (timing: SaveTiming = "immediate") => {
       ),
     line: (start: string) =>
       Option.getOrElse(
-        Arr.findFirst(lines(), (entry) =>
-          Fn.pipe(Str.trim(Str.replace(/^›/u, "")(entry)), Str.startsWith(start)),
-        ),
+        Arr.findFirst(lines(), (entry) => Fn.pipe(unmarked(entry), Str.startsWith(start))),
         () => "",
       ),
   };
@@ -139,14 +118,8 @@ describe("settings surface live values", () => {
   it("puts the inherit choice first in every choice list", () => {
     const surface = scopedSurface();
     surface.press("\r", "\r");
-    const choices = Arr.filter(surface.lines(), (entry) =>
-      Fn.pipe(Str.trim(Str.replace(/^›/u, "")(entry)), Str.startsWith("(")),
-    );
-    expect(Arr.map(choices, (entry) => Str.trim(Str.replace(/^›/u, "")(entry)))).toEqual([
-      "(•) inherit (8)",
-      "( ) 4",
-      "( ) 16",
-    ]);
+    const choices = Arr.filter(Arr.map(surface.lines(), unmarked), Str.startsWith("("));
+    expect(choices).toEqual(["(•) inherit (8)", "( ) 4", "( ) 16"]);
   });
 
   it.effect("updates an open group's rows and open choice list when an earlier save settles", () =>

@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Rec from "effect/Record";
 import type { JsonObject } from "pi-cosmic-core";
 import type { ResolvedSubagentConfig } from "../../src/config/options.ts";
 import {
@@ -53,3 +54,17 @@ export const builtProfileService = (
     Effect.provide(subagentProfileServiceLayerFor(config, options)),
     Effect.orDie,
   );
+
+/** The global slot a reload hands session profile settings through. */
+export const profileReloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
+
+export const profileReloadSlotPresent = () =>
+  Rec.has<string | symbol, unknown>(globalThis, profileReloadSlot);
+
+export const writeProfileReloadSlot = (descriptor: PropertyDescriptor) =>
+  Object.defineProperty(globalThis, profileReloadSlot, {
+    configurable: true,
+    enumerable: true,
+    writable: true,
+    ...descriptor,
+  });

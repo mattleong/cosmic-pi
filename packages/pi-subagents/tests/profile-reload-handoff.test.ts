@@ -6,22 +6,15 @@ import {
   completeBaseline,
   declaredCandidate,
   profileCandidate as candidate,
+  profileReloadSlot as reloadSlot,
+  profileReloadSlotPresent as slotPresent,
+  writeProfileReloadSlot as writeSlot,
 } from "./fixtures/profiles.ts";
 import * as Arr from "effect/Array";
 import * as Rec from "effect/Record";
 
-const reloadSlot = Symbol.for("@cosmic-pi/pi-subagents/profile-reload-handoff/v1");
-
 afterEach(() => handoff.clear());
 
-const slotPresent = () => Rec.has<string | symbol, unknown>(globalThis, reloadSlot);
-const writeSlot = (descriptor: PropertyDescriptor) =>
-  Object.defineProperty(globalThis, reloadSlot, {
-    configurable: true,
-    enumerable: true,
-    writable: true,
-    ...descriptor,
-  });
 const completeSeed = (revision = 0) => ({
   revision,
   overrides: {},

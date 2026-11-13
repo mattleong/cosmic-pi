@@ -36,7 +36,6 @@ export const cosmicUiApplicationLayer = (
   {
     ctx,
     context,
-    sessionManager,
     cwd,
     initialTotals,
     readUsageTotals,
@@ -48,7 +47,6 @@ export const cosmicUiApplicationLayer = (
   const platform = Layer.merge(nodeFilePlatformLayer, AgentDirectory.layerFromHost(getAgentDir));
   const service = CosmicUiService.layer({
     context,
-    sessionManager,
     cwd,
     initialTotals,
     readUsageTotals,

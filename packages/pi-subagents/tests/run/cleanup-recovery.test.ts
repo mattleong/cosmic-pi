@@ -19,7 +19,7 @@ import {
 } from "./fixtures/service-harness.ts";
 import * as Arr from "effect/Array";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 const originalFailure: SubagentCleanupDiagnostic = {
   phase: "process-group",
@@ -165,8 +165,9 @@ describe("explicit cleanup verification", () => {
       expect(JSON.stringify(diagnostic)).not.toContain("private-token");
       expect(JSON.stringify(diagnostic)).not.toContain("private-key");
       expect(failed.cleanup?.diagnostic?.phase).toBe("process-group");
-      const cleanupLog = Option.getOrUndefined(
-        Arr.findFirst(logs, (entry) => entry.annotations.cleanupPhase === "process-group"),
+      const cleanupLog = findOrUndefined(
+        logs,
+        (entry) => entry.annotations.cleanupPhase === "process-group",
       );
       expect(cleanupLog?.annotations.cleanupReason).toBe(diagnostic?.message);
       expect(JSON.stringify(logs)).not.toContain("private-token");

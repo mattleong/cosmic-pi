@@ -26,9 +26,9 @@ import { compactPlainText } from "../preview/compact-row";
 import { expandedSection } from "../preview/expanded-section";
 import { expandedText } from "../preview/expanded-body";
 import { repeatsIssueMessage } from "../preview/compact-issues";
+import { previewHeadingText } from "../preview/heading-wrap";
 import { previewIssuesSlot } from "../preview/preview-issues";
 import { getCodePreviewAnimationFrame } from "../preview/tool-timing";
-import { renderHiddenPreviewExpandHint } from "../preview/bordered-tool-call";
 import { hostContainer, hostObject, type HostContainer } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
 import { withCodePreviewRenderers } from "./cooperative-tools";
@@ -40,10 +40,8 @@ import type {
   RenderResult,
   ToolRenderContext,
 } from "./renderers/shared/types";
-import { stateHeading } from "./renderers/shared/state-heading";
 import {
   nativeMcpEvidence,
-  nativeMcpHasRecoverableClipping,
   nativeMcpProgress,
   nativeMcpErrorIssue,
   nativeMcpReceipt,
@@ -52,7 +50,7 @@ import {
 } from "./native-mcp-summary";
 import { nativeMcpHeading } from "./native-mcp-subject";
 import { nativeMcpIdentity } from "./native-mcp-identity";
-import { plainRows, plainText, safeContent } from "./native-safe-content";
+import { hiddenResult, plainRows, plainText, safeContent } from "./native-safe-content";
 import { parseNativeTruncatedOutput } from "./native-truncation";
 
 const DISPLAY_NAME = "mcp";
@@ -195,12 +193,11 @@ function renderOutputPreview(
   return safeContent(() => preview(theme), preview(unstyled));
 }
 
-/** A collapsed result that hides its whole content, which the row's tag names. */
-function hiddenResult(label: string, theme: Theme, row: { readonly state: unknown }): Component {
-  return safeContent(
-    () => renderHiddenPreviewExpandHint(row, theme, label),
-    plainRows(`▸ ${label}`, 1),
-  );
+/** The truncation envelope of a result whose first part is its only text. */
+function soleTextEnvelope(result: AgentToolResult<unknown>) {
+  const [first, ...rest] = result.content;
+  if (first?.type !== "text" || Arr.some(rest, (part) => part.type === "text")) return undefined;
+  return parseNativeTruncatedOutput(first.text);
 }
 
 export function createNativeMcpRenderers(
@@ -213,9 +210,13 @@ export function createNativeMcpRenderers(
   const nativeCall = identity.kind === "tool" ? downstream?.renderCall : undefined;
   const nativeComponents = new WeakSet<Component>();
   const receipts = new WeakMap<object, NativeMcpEvidence>();
-  const recordReceipt = (result: AgentToolResult<unknown>, context: Context): void => {
+  const recordReceipt = (
+    result: AgentToolResult<unknown>,
+    context: Context,
+  ): NativeMcpEvidence | undefined => {
     const receipt = nativeMcpReceipt(identity, result, hostContainer(context.args));
     if (receipt && Predicate.isObject(context.state)) receipts.set(context.state, receipt);
+    return receipt;
   };
   const subtitle = (state: RendererState, args: HostContainer | undefined): string => {
     const receipt = Predicate.isObject(state) ? receipts.get(state) : undefined;
@@ -227,13 +228,12 @@ export function createNativeMcpRenderers(
     state: RendererState,
     args: HostContainer | undefined,
   ): Component =>
-    stateHeading(() => {
+    previewHeadingText(() => {
       const current = subtitle(state, args);
-      try {
-        return renderToolHeader({ title: DISPLAY_NAME, subtitle: current }, theme);
-      } catch {
-        return escapeControlChars(`${DISPLAY_NAME} ${current}`);
-      }
+      return invokeHostCallback(
+        () => renderToolHeader({ title: DISPLAY_NAME, subtitle: current }, theme),
+        escapeControlChars(`${DISPLAY_NAME} ${current}`),
+      );
     });
   const renderCall: RenderCall<unknown, RendererState> = (args, theme, context) => {
     if (nativeCall && !context.expanded) {
@@ -289,26 +289,20 @@ export function createNativeMcpRenderers(
     context,
   ) => {
     if (options.expanded) return renderExpandedOutput(result, options, theme, context);
-    recordReceipt(result, context);
+    const receipt = recordReceipt(result, context);
     if (options.isPartial) return renderProgress(result, theme, context.state);
-    const args = hostContainer(context.args);
     // The heading's issue states a failure; its full text and any recovery stay in expansion.
     if (context.isError) return hiddenResult("error", theme, context);
-    if (nativeMcpHasRecoverableClipping(identity, result, args))
+    const envelope = receipt ? soleTextEnvelope(result) : undefined;
+    if (envelope?.footer === "saved" && receipt?.fullOutputPath)
       return hiddenResult("output", theme, context);
-    return renderOutputPreview(result, theme, context, ownedEnvelopeBody(result, args));
-  };
-  // Truncation issues explain a recognized, owned envelope, so its preview shows only the output.
-  const ownedEnvelopeBody = (
-    result: AgentToolResult<unknown>,
-    args: HostContainer | undefined,
-  ): string | undefined => {
-    const [first, ...rest] = result.content;
-    if (first?.type !== "text" || Arr.some(rest, (part) => part.type === "text")) return undefined;
-    const envelope = parseNativeTruncatedOutput(first.text);
-    return envelope && envelope.footer !== "unknown" && nativeMcpReceipt(identity, result, args)
-      ? envelope.body
-      : undefined;
+    // Truncation issues explain a recognized, owned envelope, so its preview shows only the output.
+    return renderOutputPreview(
+      result,
+      theme,
+      context,
+      envelope && envelope.footer !== "unknown" ? envelope.body : undefined,
+    );
   };
   return withCodePreviewRenderers(
     { name },

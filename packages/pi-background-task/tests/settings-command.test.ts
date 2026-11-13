@@ -82,6 +82,19 @@ const pickerHarness = (
     notify,
     input,
     screen,
+    /** The first screen row that starts with `label`, whether or not the cursor is on it. */
+    line: (label: string) =>
+      Fn.pipe(
+        Arr.findFirst(Str.split(screen(), "\n"), (entry) =>
+          Fn.pipe(Str.trim(Fn.pipe(entry, Str.replace(/^›/u, ""))), Str.startsWith(label)),
+        ),
+        Option.getOrElse(() => ""),
+      ),
+    /** Steps down a row's choices to `value`: the list leads with its inherit choice. */
+    stepsTo: (id: string, value: string) =>
+      Option.getOrThrow(
+        Arr.findFirst(BACKGROUND_TASK_SETTINGS, (setting) => setting.id === id),
+      ).values.indexOf(value) + 1,
     opened,
     open,
     close: () => input("\u001b"),
@@ -307,18 +320,8 @@ describe("/tasks settings", () => {
         const h = pickerHarness(true);
         yield* macrotask;
         expect(h.isOpen()).toBe(true);
-        const line = (label: string) =>
-          Fn.pipe(
-            Arr.findFirst(Str.split(h.screen(), "\n"), (entry) =>
-              Fn.pipe(Str.trim(Str.replace(/^›/u, "")(entry)), Str.startsWith(label)),
-            ),
-            Option.getOrElse(() => ""),
-          );
-        const limits = Option.getOrThrow(
-          Arr.findFirst(BACKGROUND_TASK_SETTINGS, (setting) => setting.id === "maxRunning"),
-        ).values;
-        // The list leads with `inherit (8)`, so the steps down to 16 are its index plus one.
-        const steps = limits.indexOf("16") + 1;
+        const { line } = h;
+        const steps = h.stepsTo("maxRunning", "16");
         expect(steps).toBeGreaterThan(0);
         // Global's running limit, from inherited 8 to 16.
         h.input("\r");
@@ -375,23 +378,15 @@ describe("/tasks settings", () => {
         const h = pickerHarness(true);
         yield* macrotask;
         expect(h.isOpen()).toBe(true);
-        const lines = () => Str.split(h.screen(), "\n");
-        const line = (label: string) =>
+        const { line } = h;
+        const cursor = () =>
           Fn.pipe(
-            Arr.findFirst(lines(), (entry) =>
-              Fn.pipe(Str.trim(Str.replace(/^›/u, "")(entry)), Str.startsWith(label)),
+            Arr.findFirst(Str.split(h.screen(), "\n"), (entry) =>
+              Fn.pipe(Str.trim(entry), Str.startsWith("›")),
             ),
             Option.getOrElse(() => ""),
           );
-        const cursor = () =>
-          Fn.pipe(
-            Arr.findFirst(lines(), (entry) => Fn.pipe(Str.trim(entry), Str.startsWith("›"))),
-            Option.getOrElse(() => ""),
-          );
-        const limits = Option.getOrThrow(
-          Arr.findFirst(BACKGROUND_TASK_SETTINGS, (setting) => setting.id === "maxRunning"),
-        ).values;
-        const steps = limits.indexOf("16") + 1;
+        const steps = h.stepsTo("maxRunning", "16");
         const written = deferredPromise();
         const landed = deferredPromise();
         h.write.mockImplementationOnce(() => {
@@ -434,17 +429,10 @@ describe("/tasks settings", () => {
       );
       yield* macrotask;
       expect(h.isOpen()).toBe(true);
-      const row = (label: string) =>
-        Fn.pipe(
-          Arr.findFirst(Str.split(h.screen(), "\n"), (line) =>
-            Fn.pipe(Str.trim(Str.replace(/^›/u, "")(line)), Str.startsWith(label)),
-          ),
-          Option.getOrElse(() => ""),
-        );
       // The project sets nothing, so it reads the global count rather than a bare `inherit`.
-      expect(row("Project")).toContain("16");
-      expect(row("Project")).not.toMatch(/\binherit\b/u);
-      expect(row("Global")).toContain("16");
+      expect(h.line("Project")).toContain("16");
+      expect(h.line("Project")).not.toMatch(/\binherit\b/u);
+      expect(h.line("Global")).toContain("16");
       h.close();
       yield* Effect.promise(() => h.opened);
     }),

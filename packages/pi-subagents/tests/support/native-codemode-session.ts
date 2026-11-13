@@ -2,7 +2,7 @@ import type { AuthOperationOptions, ModelType } from "@earendil-works/pi-ai";
 import * as Effect from "effect/Effect";
 import { fauxCodemodeSession } from "pi-cosmic-core/testing/sdk";
 import { registerSubagentErrorReceipts } from "../../src/boundary/host-tool-result.ts";
-import { backendRegistryFor, SubagentBackendRegistry } from "../../src/backend/service.ts";
+import { SubagentBackendRegistry } from "../../src/backend/service.ts";
 import type { BackendDriver } from "../../src/backend/model.ts";
 import { SubagentProfileService } from "../../src/profiles/service.ts";
 import { SubagentService, type SubagentServiceContract } from "../../src/run/service.ts";
@@ -11,11 +11,9 @@ import { declaredCandidate } from "../fixtures/profiles.ts";
 import { profileServiceFor } from "../tools/fixtures/tool-harness.ts";
 
 const driver: BackendDriver = {
-  supportsContext: (context) => context === "fresh",
   preflight: () => Effect.void,
   spawn: () => Effect.die("The session fixture delegates spawning to its owned service boundary."),
 };
-const registry = backendRegistryFor(driver);
 const profilesFor = () =>
   profileServiceFor({
     profiles: {
@@ -62,7 +60,7 @@ export const nativeCodemodeSession = (
                 effect.pipe(
                   Effect.provideService(SubagentService, service),
                   Effect.provideService(SubagentProfileService, profiles),
-                  Effect.provideService(SubagentBackendRegistry, registry),
+                  Effect.provideService(SubagentBackendRegistry, driver),
                 ),
                 signal ? { signal } : undefined,
               ),

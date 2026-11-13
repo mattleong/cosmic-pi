@@ -7,8 +7,9 @@ import { type JsonObject } from "pi-cosmic-core/platform/json-document";
 const PREFERENCE_VERSION = 1 as const;
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
-export const ThinkingLevelSchema = Schema.Literals(THINKING_LEVELS);
+const ThinkingLevelSchema = Schema.Literals(THINKING_LEVELS);
 export type ThinkingLevel = typeof ThinkingLevelSchema.Type;
+export const decodeThinkingLevel = decodeUnknownOrUndefined(ThinkingLevelSchema);
 
 export const DirectoryModelPreferenceSchema = Schema.Struct({
   version: Schema.Literal(PREFERENCE_VERSION),
@@ -26,7 +27,6 @@ export const equivalentPreference = Schema.toEquivalence(DirectoryModelPreferenc
 const SavedPreferenceEssentialsSchema = DirectoryModelPreferenceSchema.mapFields(
   Struct.omit(["thinkingLevel"]),
 );
-const decodeSavedThinkingLevel = decodeUnknownOrUndefined(ThinkingLevelSchema);
 
 /** A saved preference whose thinking level, when absent or invalid, leaves Pi's level alone. */
 export interface SavedDirectoryModelPreference extends Omit<
@@ -43,7 +43,7 @@ export const decodeSavedPreference = Effect.fn("DirectoryModelPreference.decodeS
 ) {
   const essentials = yield* Schema.decodeUnknownEffect(SavedPreferenceEssentialsSchema)(document);
   const saved = document["thinkingLevel"];
-  const thinkingLevel = decodeSavedThinkingLevel(saved);
+  const thinkingLevel = decodeThinkingLevel(saved);
   return {
     ...essentials,
     thinkingLevel,

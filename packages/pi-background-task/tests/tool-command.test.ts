@@ -6,14 +6,11 @@ import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { formatBytes } from "pi-cosmic-core";
 import { BACKGROUND_LOG_BOUNDS } from "../src/task/bounds.ts";
+import { InvalidBackgroundCommandError } from "../src/task/errors.ts";
 import { LogBuffer, readLogBuffer } from "../src/task/log-buffer.ts";
 import { MAX_CONTRACT_LOG_OUTPUT_BYTES } from "../src/tools/contract-schema.ts";
 import type { BackgroundTaskServiceContract } from "../src/task/service.ts";
-import {
-  backgroundLogLines,
-  executeBackgroundTaskCommand,
-  type BackgroundTaskToolDetails,
-} from "../src/tools/command.ts";
+import { backgroundLogLines, type BackgroundTaskToolDetails } from "../src/tools/command.ts";
 import {
   prepareBackgroundTaskArguments,
   type BackgroundTaskToolInput,
@@ -23,23 +20,14 @@ import {
   projectBackgroundTaskCompactSummary,
 } from "../src/ui/compact-summary.ts";
 import {
-  provideTaskService,
+  executeLogs,
+  executeWith,
   taskLogSlice,
   taskLogs,
-  taskServiceDouble,
   taskStatus,
   taskStop,
   taskWait,
 } from "./support/task-service-double.ts";
-
-const execute = (
-  input: Parameters<typeof executeBackgroundTaskCommand>[0],
-  service: Partial<BackgroundTaskServiceContract>,
-  maxTextBytes?: number,
-) =>
-  executeBackgroundTaskCommand(input, "/", maxTextBytes).pipe(
-    provideTaskService(taskServiceDouble(service)),
-  );
 
 const bufferService = (buffer: LogBuffer): Partial<BackgroundTaskServiceContract> => ({
   logs: (request) =>
@@ -77,12 +65,11 @@ describe("shared background task command", () => {
       const pages: string[] = [];
       let cursor = 0;
       for (let page = 0; page < 20; page++) {
-        const result = yield* execute(
+        const result = yield* executeLogs(
           { action: "logs", id: "task-0000000001", afterCursor: cursor },
           service,
         );
         expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(DEFAULT_MAX_BYTES);
-        if (result.details.action !== "logs") throw new Error("logs returned other details");
         const next = result.details.logs.nextCursor;
         expect(Str.split(result.text, "\n")[0]).toContain(`cursor=${next} `);
         pages.push(logBody(result.text, result.details));
@@ -100,7 +87,7 @@ describe("shared background task command", () => {
       expect(pages.length).toBeGreaterThan(1);
       expect(Arr.join(pages, "")).toBe(`${Arr.join(lines, "\n")}\n`);
 
-      const { contract } = yield* execute(
+      const { contract } = yield* executeWith(
         { action: "logs", id: "task-0000000001", afterCursor: 0 },
         service,
       );
@@ -121,11 +108,10 @@ describe("shared background task command", () => {
       const outputs: string[] = [];
       let cursor = 0;
       for (let page = 0; page < 5 && cursor < buffer.latestCursor; page++) {
-        const { contract } = yield* execute(
+        const { contract } = yield* executeLogs(
           { action: "logs", id: "task-0000000001", afterCursor: cursor },
           service,
         );
-        if (contract.action !== "logs") throw new Error("logs returned another contract");
         expect(Buffer.byteLength(contract.output)).toBeLessThanOrEqual(
           MAX_CONTRACT_LOG_OUTPUT_BYTES,
         );
@@ -143,11 +129,10 @@ describe("shared background task command", () => {
       const buffer = new LogBuffer();
       const lines = Array.from({ length: 300 }, (_, index) => `line ${index + 1}`);
       buffer.append("stdout", `${Arr.join(lines, "\n")}\n`, 0, 1 << 20);
-      const result = yield* execute(
+      const result = yield* executeLogs(
         { action: "logs", id: "task-0000000001" },
         bufferService(buffer),
       );
-      if (result.details.action !== "logs") throw new Error("logs returned other details");
       const [header, notice] = Str.split(result.text, "\n");
       expect(header).toBe(
         `[task-0000000001 state=running cursor=${buffer.latestCursor} earliest=0]`,
@@ -167,7 +152,7 @@ describe("shared background task command", () => {
         truncated: true,
       });
 
-      const all = yield* execute(
+      const all = yield* executeWith(
         { action: "logs", id: "task-0000000001", afterCursor: 0 },
         bufferService(buffer),
       );
@@ -184,12 +169,11 @@ describe("shared background task command", () => {
       const buffer = new LogBuffer();
       for (let index = 0; index < 8; index++)
         buffer.append("stdout", `${Fn.pipe(String(index), Str.repeat(3_000))}\n`, index, 4 * 3_097);
-      const result = yield* execute(
+      const result = yield* executeLogs(
         { action: "logs", id: "task-0000000001", afterCursor: 0 },
         bufferService(buffer),
         8_000,
       );
-      if (result.details.action !== "logs") throw new Error("logs returned other details");
       expect(result.details).toMatchObject({
         logs: { nextCursor: 6, earliestAvailableCursor: 4, droppedBytes: 4 * 3_001 },
         truncation: { omitted: "later", omittedBytes: 2 * 3_001, resumeAfterCursor: 6 },
@@ -218,10 +202,8 @@ describe("shared background task command", () => {
       const read = (window: { readonly afterCursor?: number; readonly tailLines?: number }) =>
         Effect.gen(function* () {
           const args = { action: "logs", id: "task-0000000001", ...window } as const;
-          const result = yield* execute(args, service);
-          if (result.details.action !== "logs") throw new Error("logs returned other details");
-          const issues = summarize(args, result)?.issues ?? [];
-          return { ...result, details: result.details, issues };
+          const result = yield* executeLogs(args, service);
+          return { ...result, issues: summarize(args, result)?.issues ?? [] };
         });
 
       for (const window of [{ afterCursor: 3 }, { afterCursor: 5 }, { tailLines: 3 }]) {
@@ -261,15 +243,7 @@ describe("shared background task command", () => {
       }
       const service = bufferService(buffer);
       const read = (afterCursor: number) =>
-        Effect.gen(function* () {
-          const result = yield* execute(
-            { action: "logs", id: "task-0000000001", afterCursor },
-            service,
-          );
-          if (result.details.action !== "logs") throw new Error("logs returned other details");
-          if (result.contract.action !== "logs") throw new Error("logs returned another contract");
-          return { details: result.details, contract: result.contract };
-        });
+        executeLogs({ action: "logs", id: "task-0000000001", afterCursor }, service);
 
       const textPages: number[] = [];
       for (let cursor = 0; cursor < buffer.latestCursor; ) {
@@ -297,11 +271,10 @@ describe("shared background task command", () => {
       const buffer = new LogBuffer();
       for (let index = 0; index <= 5_000; index++)
         buffer.append("stdout", "abc\n", index, BACKGROUND_LOG_BOUNDS.eventOverheadBytes + 4);
-      const { contract, text } = yield* execute(
+      const { contract, text } = yield* executeLogs(
         { action: "logs", id: "task-0000000001", afterCursor: 1 },
         bufferService(buffer),
       );
-      if (contract.action !== "logs") throw new Error("logs returned another contract");
       expect(contract.skippedBytesIsLowerBound).toBe(true);
       expect(contract.skippedBytes).toBeGreaterThan(0);
       expect(Str.split(text, "\n")[1]).toMatch(/at least/iu);
@@ -312,7 +285,7 @@ describe("shared background task command", () => {
     Effect.gen(function* () {
       const task = taskStatus({ id: "task-0000000001", state: "running", droppedLogBytes: 9_000 });
       const wait = (fields: Parameters<typeof taskWait>[2]) =>
-        execute(
+        executeWith(
           { action: "wait", id: task.id, until: "output", contains: "ready", afterCursor: 3 },
           { wait: () => Effect.succeed(taskWait(task, "timeout", fields)) },
         );
@@ -343,11 +316,10 @@ describe("shared background task command", () => {
       const service = bufferService(buffer);
       const expected =
         "building \n[stderr] warn: a\n[stderr] warn: b\n[stderr] Error: boom\ndone\n";
-      const result = yield* execute(
+      const result = yield* executeLogs(
         { action: "logs", id: "task-0000000001", afterCursor: 0 },
         service,
       );
-      if (result.details.action !== "logs") throw new Error("logs returned other details");
       expect(logBody(result.text, result.details)).toBe(expected);
       expect(result.contract).toMatchObject({ output: expected });
       expect(backgroundLogLines(result.text, result.details)).toEqual(
@@ -358,53 +330,29 @@ describe("shared background task command", () => {
 
   it.effect("cuts only an event larger than a whole result, and says so", () =>
     Effect.gen(function* () {
-      const event = {
-        cursor: 1,
-        stream: "stdout" as const,
-        text: Fn.pipe("y", Str.repeat(2_000)),
-        timestamp: 1,
-        bytes: 2_000,
-      };
-      const slice = {
-        id: "task-0000000001",
-        state: "running" as const,
-        nextCursor: 1,
-        earliestAvailableCursor: 0,
-        droppedBytes: 0,
-        retainedBytes: 2_000,
-        events: [event],
-      };
-      const result = yield* execute(
+      const text = Fn.pipe("y", Str.repeat(2_000));
+      const slice = taskLogSlice("task-0000000001", "running", [{ stream: "stdout", text }]);
+      const result = yield* executeLogs(
         { action: "logs", id: "task-0000000001" },
-        { logs: () => Effect.succeed(taskLogs(slice)) },
+        { logs: () => Effect.succeed(slice) },
         700,
       );
       expect(Buffer.byteLength(result.text)).toBeLessThanOrEqual(700);
-      if (result.details.action !== "logs") throw new Error("logs returned other details");
       const shown = logBody(result.text, result.details);
-      expect(result.details.truncation?.cutBytes).toBe(event.bytes - Buffer.byteLength(shown));
+      expect(result.details.truncation?.cutBytes).toBe(text.length - Buffer.byteLength(shown));
       // A tail read keeps the newest part of the event.
       expect(shown.length).toBeGreaterThan(0);
-      expect(Fn.pipe(event.text, Str.endsWith(shown))).toBe(true);
+      expect(Fn.pipe(text, Str.endsWith(shown))).toBe(true);
     }),
   );
 
   it.effect("names the task whose logs were read", () =>
     Effect.gen(function* () {
-      const slice = {
-        id: "bg-1",
-        state: "exited" as const,
-        nextCursor: 0,
-        earliestAvailableCursor: 0,
-        droppedBytes: 0,
-        retainedBytes: 0,
-        events: [],
-      };
       // The identity comes with the slice, so no separate status read can race it.
-      const subject = (task: Parameters<typeof taskLogs>[1]) =>
-        execute(
+      const subject = (task: NonNullable<Parameters<typeof taskLogs>[1]>) =>
+        executeWith(
           { action: "logs", id: "bg-1" },
-          { logs: () => Effect.succeed(taskLogs(slice, task)) },
+          { logs: () => Effect.succeed(taskLogSlice("bg-1", "exited", [], { task })) },
         ).pipe(Effect.map((result) => summarize({ action: "logs", id: "bg-1" }, result)?.subject));
       expect(yield* subject({ name: "api server", command: "pnpm dev" })).toBe("api server");
       expect(yield* subject({ command: "pnpm build" })).toBe("pnpm build");
@@ -441,7 +389,7 @@ describe("shared background task command", () => {
           (issue) => issue.message,
         );
       for (const input of [{ action: "status", id: "bg-2" }, { action: "list" }] as const) {
-        const result = yield* execute(input, service);
+        const result = yield* executeWith(input, service);
         expect(result.text).toContain(cause);
         const snapshots =
           "snapshot" in result.details
@@ -455,7 +403,9 @@ describe("shared background task command", () => {
         expect(messages[0]).toContain(cause);
       }
       // A cut or hook-rewritten text must not change the cause the row shows.
-      const cut = yield* execute({ action: "status", id: "bg-2" }, service, 30);
+      const cut = yield* executeWith({ action: "status", id: "bg-2" }, service, {
+        maxTextBytes: 30,
+      });
       expect(cut.text).not.toContain(cause);
       expect(errorMessages({ action: "status", id: "bg-2" }, cut.details)[0]).toContain(cause);
     }),
@@ -470,7 +420,7 @@ describe("shared background task command", () => {
         exitCode: 1,
         failureCause: `FAIL token=cause-secret \u001b[31m${Fn.pipe("x", Str.repeat(5_000))}`,
       });
-      const result = yield* execute(
+      const result = yield* executeWith(
         { action: "status", id: "bg-2" },
         { status: () => Effect.succeed(failed) },
       );
@@ -499,18 +449,7 @@ const recordingService = () => {
     start: record("start", running),
     list: record("list", [running]),
     status: record("status", running),
-    logs: record(
-      "logs",
-      taskLogs({
-        id: "task-0000000001",
-        state: "running" as const,
-        nextCursor: 0,
-        earliestAvailableCursor: 0,
-        retainedBytes: 0,
-        droppedBytes: 0,
-        events: [],
-      }),
-    ),
+    logs: record("logs", taskLogSlice("task-0000000001", "running", [])),
     wait: record("wait", taskWait(running, "timeout")),
     stop: record("stop", taskStop({ ...running, state: "stopped" as const, endedAt: 2 })),
     stopAll: record("stopAll", [running]),
@@ -545,9 +484,9 @@ describe("background task action parameters", () => {
       ];
       for (const [input, fields] of rejected) {
         const { calls, service } = recordingService();
-        const error = yield* Effect.flip(execute(input, service));
+        const error = yield* Effect.flip(executeWith(input, service));
         expect(calls, input.action).toEqual([]);
-        expect(error._tag).toBe("InvalidBackgroundCommandError");
+        expect(error).toBeInstanceOf(InvalidBackgroundCommandError);
         for (const name of [input.action, ...fields]) expect(error.message).toContain(name);
       }
     }),
@@ -577,7 +516,7 @@ describe("background task action parameters", () => {
       ];
       for (const input of accepted) {
         const { calls, service } = recordingService();
-        yield* execute(input, service);
+        yield* executeWith(input, service);
         expect(calls.length, input.action).toBeGreaterThan(0);
       }
     }),
@@ -627,7 +566,7 @@ describe("background task argument leniency", () => {
       ];
       for (const [input, expected] of lenient) {
         const { calls, requests, service } = recordingService();
-        yield* execute(input, service);
+        yield* executeWith(input, service);
         expect(calls, input.action).toHaveLength(1);
         expect(requests, input.action).toEqual(expected);
       }
@@ -679,7 +618,7 @@ describe("background task results", () => {
     Effect.gen(function* () {
       const running = taskStatus({ id: "task-0000000001", state: "running" });
       const waitFor = (waitSeconds: number | undefined, appliedWaitSeconds: number) =>
-        execute(
+        executeWith(
           {
             action: "wait",
             id: "task-0000000001",
@@ -715,7 +654,7 @@ describe("background task results", () => {
           { stream: "stdout", text: "  Local: http://localhost:5173/\n" },
         ]),
       };
-      const result = yield* execute(
+      const result = yield* executeWith(
         { action: "wait", id: running.id, until: "output", contains: ["error", "ready in"] },
         {
           wait: (request) => {
@@ -746,7 +685,7 @@ describe("background task results", () => {
         exitCode: 1,
       });
       const args = { action: "wait", id: failed.id, until: "output", contains: "ready" } as const;
-      const result = yield* execute(args, {
+      const result = yield* executeWith(args, {
         wait: () =>
           Effect.succeed(
             taskWait(failed, "completed", {
@@ -775,11 +714,11 @@ describe("background task results", () => {
       });
       const running = taskStatus({ id: "task-0000000002", state: "running" });
       const stopped = { ...running, state: "stopped" as const, endedAt: 3, signal: "SIGTERM" };
-      const noop = yield* execute(
+      const noop = yield* executeWith(
         { action: "stop", id: "task-0000000001" },
         { stop: () => Effect.succeed(taskStop(finished, true)) },
       );
-      const real = yield* execute(
+      const real = yield* executeWith(
         { action: "stop", id: "task-0000000002" },
         { stop: () => Effect.succeed(taskStop(stopped)) },
       );
@@ -805,12 +744,14 @@ describe("background task results", () => {
         return Effect.succeed(taskStatus({ id: "task-0000000001", state: "running", ...request }));
       };
       const command = "printf '<%s>\\n' 'trailing'\\ ";
-      const result = yield* execute({ action: "start", command, name: "  echo  " }, { start });
+      const result = yield* executeWith({ action: "start", command, name: "  echo  " }, { start });
       expect(submitted).toEqual([command]);
       expect(result.details).toMatchObject({ snapshot: { command, name: "echo" } });
 
-      const blank = yield* Effect.flip(execute({ action: "start", command: " \t\n" }, { start }));
-      expect(blank._tag).toBe("InvalidBackgroundCommandError");
+      const blank = yield* Effect.flip(
+        executeWith({ action: "start", command: " \t\n" }, { start }),
+      );
+      expect(blank).toBeInstanceOf(InvalidBackgroundCommandError);
       expect(submitted).toEqual([command]);
     }),
   );

@@ -8,7 +8,7 @@ import {
   type RunRecord,
   type StoredRunView,
 } from "./internal.ts";
-import { isTerminalRunState, type SubagentRunView } from "./model.ts";
+import { isTerminalRunState, type SubagentReportArchive, type SubagentRunView } from "./model.ts";
 
 export type SettlementState = PendingInitializationSettlement["state"];
 
@@ -82,6 +82,16 @@ export const settlementBlocked = (record: RunRecord, state: SettlementState): bo
   isTerminalRunState(record.view.state) ||
   (state !== "stopped" && (record.stoppedByParent || record.view.state === "stopping"));
 
+/** A settled failure's fields, alike on the run's view and on its completion. */
+export const settledErrorFields = (
+  error: GuidedText,
+  errorArchive: SubagentReportArchive | undefined,
+) => ({
+  error: error.message,
+  ...(error.userMessage !== error.message && { userError: error.userMessage }),
+  ...(errorArchive && { errorArchive }),
+});
+
 export const viewForSettlement = (
   record: RunRecord,
   state: SettlementState,
@@ -98,9 +108,5 @@ export const viewForSettlement = (
   question: undefined,
   ...(state === "completed" && { reportGeneration: record.completionGeneration }),
   ...(finalText && { finalText, ...report }),
-  ...(error !== undefined && {
-    error: error.message,
-    ...(error.userMessage !== error.message && { userError: error.userMessage }),
-    ...(errorArchive && { errorArchive }),
-  }),
+  ...(error !== undefined && settledErrorFields(error, errorArchive)),
 });

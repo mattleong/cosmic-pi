@@ -1,5 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as Rec from "effect/Record";
 import {
@@ -101,7 +102,7 @@ function builtinExpandLabel(tool: BuiltinCompactTool, summary: CompactSummary): 
   if (tool === "edit") return "diff";
   if (tool !== "write") return undefined;
   const [counter] = summary.counters ?? [];
-  return counter !== undefined && Str.startsWith("+")(counter) ? "diff" : "content";
+  return counter !== undefined && Fn.pipe(counter, Str.startsWith("+")) ? "diff" : "content";
 }
 
 function projectSummary(
@@ -131,10 +132,13 @@ function projectSummary(
   const settled = settledResultParts(tool, input, decoded);
   if (!settled) return undefined;
   const counters = [...live.counters, ...settled.counters];
-  if (tool === "grep" && counters.length === 0)
-    counters.push(...grepCounters(output, decoded.details));
-  if ((tool === "find" || tool === "ls") && counters.length === 0) {
-    const detail = pathListResultDetail(tool, output, decoded.details);
+  if (counters.length === 0) {
+    const detail =
+      tool === "grep"
+        ? grepResultDetail(output, decoded.details)
+        : tool === "find" || tool === "ls"
+          ? pathListResultDetail(tool, output, decoded.details)
+          : undefined;
     if (detail) counters.push(detail);
   }
   const merged = mergeCompactIssues([...issues, ...settled.issues]);
@@ -211,28 +215,17 @@ function writeParts(
   // A new file needs no fact: an overwrite shows its `+N −M` counts instead.
   if (beforeWrite.kind === "new") return { counters: [], metadata: [], issues };
   const projection = writeDiffProjection(before, content, input);
-  const counters =
+  const detail =
     projection.issues.length || projection.metadata.length
-      ? []
-      : writeCounters(before, content, input);
+      ? undefined
+      : beforeWrite.kind === "snapshot" && beforeWrite.counts
+        ? beforeWrite.counts.detail
+        : projectWriteResultDetail(before, content, input);
   return {
-    counters,
+    counters: detail ? [detail] : [],
     metadata: projection.metadata,
     issues: [...issues, ...projection.issues],
   };
-}
-
-function writeCounters(
-  before: HostObject | undefined,
-  content: string,
-  input: BuiltinCompactProjectionInput,
-): string[] {
-  const { beforeWrite } = input;
-  const detail =
-    beforeWrite.kind === "snapshot" && beforeWrite.counts
-      ? beforeWrite.counts.detail
-      : projectWriteResultDetail(before, content, input);
-  return detail ? [detail] : [];
 }
 
 function editParts(
@@ -249,11 +242,6 @@ function editParts(
       ? scanSecrets(input, [diff])
       : [{ severity: "info", code: "edit-diff-unavailable", message: "Diff unavailable" }],
   };
-}
-
-function grepCounters(output: string, details: HostObject | undefined): string[] {
-  const detail = grepResultDetail(output, details);
-  return detail ? [detail] : [];
 }
 
 function builtinFailure(tool: BuiltinCompactTool, output: string, issues: readonly CompactIssue[]) {

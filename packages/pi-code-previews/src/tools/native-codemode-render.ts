@@ -38,6 +38,7 @@ import {
 } from "./native-codemode-summary";
 import {
   nativeCodemodeEvidence,
+  nativeEvidenceComplete,
   nativeEvidenceCoverage,
   type NativeCallEvidence,
 } from "./native-codemode-evidence";
@@ -55,27 +56,32 @@ import {
   createNativeDiscoveryProjector,
   nativeDiscoveryLabel,
   nativeDiscoveryNote,
-  type NativeDiscoveryProjector,
 } from "./native-codemode-discovery";
 
 const programSource = (args: HostContainer | undefined): string => ownString(args, "code") ?? "";
 
-const renderSource =
-  (discovery: NativeDiscoveryProjector): RenderCall<unknown, RendererState> =>
-  (args, theme, context) => {
-    const input = hostContainer(args);
-    const program = renderNativeCodemodeProgram(
-      programSource(input),
-      theme,
-      {
-        expanded: true,
-        argumentsStreaming: argumentsStreaming(context),
-        invalidate: context.invalidate,
-      },
-      discovery(input) ? nativeDiscoveryNote : undefined,
-    );
-    return safeContent(() => expandedSection(theme, "Program", program), program);
+/** Rows cached until the width, the animation frame, or the timing setting changes. */
+function frameCachedRows(
+  state: RendererState,
+  animated: boolean,
+  draw: (width: number, animationFrame: number, timingEnabled: boolean) => string[],
+): Component {
+  let cached: { readonly key: string; readonly rows: string[] } | undefined;
+  return {
+    render(width) {
+      const animationFrame = animated ? getCodePreviewAnimationFrame({ state }) : 0;
+      const timingEnabled = codePreviewSettings.toolCallTiming;
+      const key = `${width}:${animationFrame}:${timingEnabled}`;
+      if (cached?.key === key) return cached.rows;
+      const rows = draw(width, animationFrame, timingEnabled);
+      cached = { key, rows };
+      return rows;
+    },
+    invalidate() {
+      cached = undefined;
+    },
   };
+}
 
 function renderCallList(
   children: NonNullable<CompactSummary["children"]>,
@@ -87,31 +93,17 @@ function renderCallList(
     children.entries,
     (child) => child.status === "pending" || child.status === "running",
   );
-  const coverage =
-    evidence.kind === "unavailable" || !evidence.complete
-      ? nativeEvidenceCoverage(evidence)
-      : undefined;
-  let cached: { readonly key: string; readonly rows: string[] } | undefined;
-  return {
-    render(width) {
-      const animationFrame = animated ? getCodePreviewAnimationFrame({ state }) : 0;
-      const timingEnabled = codePreviewSettings.toolCallTiming;
-      const key = `${width}:${animationFrame}:${timingEnabled}`;
-      if (cached?.key === key) return cached.rows;
-      const rows = renderCompactChildren(children, theme, width, {
-        all: true,
-        layout: "flat",
-        animationFrame,
-        timingEnabled,
-      });
-      if (coverage) rows.push(...new Text(theme.fg("muted", coverage), 0, 0).render(width));
-      cached = { key, rows };
-      return rows;
-    },
-    invalidate() {
-      cached = undefined;
-    },
-  };
+  const coverage = nativeEvidenceComplete(evidence) ? undefined : nativeEvidenceCoverage(evidence);
+  return frameCachedRows(state, animated, (width, animationFrame, timingEnabled) => {
+    const rows = renderCompactChildren(children, theme, width, {
+      all: true,
+      layout: "flat",
+      animationFrame,
+      timingEnabled,
+    });
+    if (coverage) rows.push(...new Text(theme.fg("muted", coverage), 0, 0).render(width));
+    return rows;
+  });
 }
 
 // Built outside the render call, so the heading holds only its text, never the call's arguments.
@@ -132,6 +124,35 @@ export function createNativeCodemodeRenderers(
   const previewStyle =
     (appearance.collapsedStyle ?? codePreviewSettings.toolCallCollapsedStyle) === "preview";
 
+  const program = (
+    input: HostContainer | undefined,
+    theme: Theme,
+    context: Parameters<RenderCall<unknown, RendererState>>[2],
+    expanded: boolean,
+  ) => {
+    const label = nativeDiscoveryLabel(discovery(input));
+    const body = renderNativeCodemodeProgram(
+      programSource(input),
+      theme,
+      {
+        expanded,
+        argumentsStreaming: argumentsStreaming(context),
+        invalidate: context.invalidate,
+      },
+      label ? nativeDiscoveryNote : undefined,
+    );
+    return { label, body };
+  };
+
+  const project = (
+    phase: "running" | "settled",
+    result: Parameters<typeof renderOutput>[0],
+    context: Parameters<typeof renderOutput>[3],
+  ) => {
+    const args = Predicate.isObject(context.args) ? context.args : {};
+    return summary({ phase, args, result, context: { ...context, args } });
+  };
+
   // The shared expanded composition states that the script is still running under its heading,
   // so only the tool's own expanded body, drawn without that composition, says so here.
   const outputRenderer =
@@ -146,7 +167,7 @@ export function createNativeCodemodeRenderers(
           context.isPartial ? "running" : "settled",
           cwd,
         );
-        if (children.entries.length || evidence.kind === "unavailable" || !evidence.complete)
+        if (children.entries.length || !nativeEvidenceComplete(evidence))
           body.addChild(
             expandedSection(
               theme,
@@ -224,8 +245,9 @@ export function createNativeCodemodeRenderers(
             : Result.failVoid,
         ),
       );
-      const complete = evidence.kind === "available" && evidence.complete;
-      const remaining = Str.trim(complete ? withoutCallSummary(unexplained) : unexplained);
+      const remaining = Str.trim(
+        nativeEvidenceComplete(evidence) ? withoutCallSummary(unexplained) : unexplained,
+      );
       if (remaining) sections.push(["Script error", rawText(remaining)]);
     }
     return sections;
@@ -235,35 +257,25 @@ export function createNativeCodemodeRenderers(
     result: Parameters<typeof renderOutput>[0],
     context: Parameters<typeof renderOutput>[3],
   ): boolean {
-    const args = Predicate.isObject(context.args) ? context.args : {};
-    const projected = summary({
-      phase: "settled",
-      args,
-      result,
-      context: { ...context, args },
-    });
-    return Arr.some(projected?.issues ?? [], (issue) => issue.code === "native-script-error");
+    return Arr.some(
+      project("settled", result, context)?.issues ?? [],
+      (issue) => issue.code === "native-script-error",
+    );
   }
 
   return withCodePreviewRenderers<unknown, unknown, RendererState>(
     { name: "codemode" },
     {
       renderCall(args, theme, context) {
-        const input = hostContainer(args);
-        const label = nativeDiscoveryLabel(discovery(input));
-        const program = renderNativeCodemodeProgram(
-          programSource(input),
+        const { label, body: source } = program(
+          hostContainer(args),
           theme,
-          {
-            expanded: context.expanded,
-            argumentsStreaming: argumentsStreaming(context),
-            invalidate: context.invalidate,
-          },
-          label ? nativeDiscoveryNote : undefined,
+          context,
+          context.expanded,
         );
         const fallback = new Container();
         fallback.addChild(new Text(label ? `codemode ${label}` : "codemode", 0, 0));
-        fallback.addChild(program);
+        fallback.addChild(source);
         return safeContent(() => {
           const body = new Container();
           body.addChild(
@@ -272,20 +284,14 @@ export function createNativeCodemodeRenderers(
             ),
           );
           body.addChild(previewIssuesSlot(context));
-          body.addChild(program);
+          body.addChild(source);
           return body;
         }, fallback);
       },
       renderResult(result, options, theme, context) {
         if (options.expanded) return renderOutput(result, options, theme, context);
         const { state, isError } = context;
-        const args = Predicate.isObject(context.args) ? context.args : {};
-        const projected = summary({
-          phase: options.isPartial ? "running" : "settled",
-          args,
-          result,
-          context: { ...context, args },
-        });
+        const projected = project(options.isPartial ? "running" : "settled", result, context);
         if (!projected)
           return safeContent(
             () => renderHiddenPreviewExpandHint({ state }, theme, "details"),
@@ -300,14 +306,9 @@ export function createNativeCodemodeRenderers(
                 isError || projected.outcome === "error" ? "error" : "output",
               )
             : "";
-        let cached: { readonly key: string; readonly rows: string[] } | undefined;
         return safeContent(
-          () => ({
-            render(width) {
-              const animationFrame = getCodePreviewAnimationFrame({ state });
-              const timingEnabled = codePreviewSettings.toolCallTiming;
-              const key = `${width}:${animationFrame}:${timingEnabled}`;
-              if (cached?.key === key) return cached.rows;
+          () =>
+            frameCachedRows(state, true, (width, animationFrame, timingEnabled) => {
               const rows = renderCompactChildren(projected.children, theme, width, {
                 animationFrame,
                 timingEnabled,
@@ -318,13 +319,8 @@ export function createNativeCodemodeRenderers(
               if (options.isPartial)
                 rows.push(...new Text(toolRunningLine(theme, animationFrame), 0, 0).render(width));
               if (hiddenOutput) rows.push(clipToWidth(hiddenOutput, width, ""));
-              cached = { key, rows };
               return rows;
-            },
-            invalidate() {
-              cached = undefined;
-            },
-          }),
+            }),
           "▸ details",
         );
       },
@@ -335,7 +331,10 @@ export function createNativeCodemodeRenderers(
       animateProgress: true,
       showShortTiming: true,
       expandedContent: {
-        renderCall: renderSource(discovery),
+        renderCall(args, theme, context) {
+          const { body } = program(hostContainer(args), theme, context, true);
+          return safeContent(() => expandedSection(theme, "Program", body), body);
+        },
         renderResult: outputRenderer(false),
       },
     },

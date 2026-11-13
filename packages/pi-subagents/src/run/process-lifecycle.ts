@@ -3,12 +3,18 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { BackendAgentMessaging, BackendHandle } from "../backend/model.ts";
-import { isCleanupOwed, type RunContext, type RunRecord, type WithRunLock } from "./internal.ts";
+import type { BackendHandle } from "../backend/model.ts";
+import {
+  isCleanupOwed,
+  isInactiveRunRecord,
+  isStopClaimedRunRecord,
+  type RunContext,
+  type RunRecord,
+  type WithRunLock,
+} from "./internal.ts";
 import type { SubagentError } from "./errors.ts";
 import { invalidRequest, SubagentProcessError } from "./errors.ts";
 import type { RunEventHandler } from "./events.ts";
-import { isTerminalRunState } from "./model.ts";
 import type { RunRecordCleanup } from "./record-cleanup.ts";
 import type { RunSettlement } from "./settlement.ts";
 import type { WriterPreparation } from "./writer-preparation.ts";
@@ -21,13 +27,7 @@ export function processControlOperations(withLock: WithRunLock) {
     const transport = yield* withLock(
       Effect.gen(function* () {
         const process = record.process;
-        if (
-          !process ||
-          record.stoppedByParent ||
-          isCleanupOwed(record) ||
-          record.view.state === "stopping" ||
-          isTerminalRunState(record.view.state)
-        )
+        if (!process || isInactiveRunRecord(record) || isCleanupOwed(record))
           return yield* SubagentProcessError.make({
             operation: "control",
             message: `Subagent ${record.view.id} has no active backend handle.`,
@@ -60,8 +60,6 @@ interface RunProcessInitializerDependencies extends Pick<
   readonly markCleanupPending: RunRecordCleanup["markCleanupPending"];
   readonly closeExitedScope: RunRecordCleanup["closeExitedScope"];
   readonly failRun: RunSettlement["failRun"];
-  /** `agent_*` operations bound to the run as their caller, for backends that host the tools. */
-  readonly agentMessagingFor?: ((runId: string, cwd: string) => BackendAgentMessaging) | undefined;
 }
 
 export function processInitializer(dependencies: RunProcessInitializerDependencies) {
@@ -75,7 +73,6 @@ export function processInitializer(dependencies: RunProcessInitializerDependenci
     markCleanupPending,
     closeExitedScope,
     failRun,
-    agentMessagingFor,
   } = dependencies;
 
   const installProcess = (record: RunRecord) => {
@@ -90,9 +87,7 @@ export function processInitializer(dependencies: RunProcessInitializerDependenci
             if (
               record.scope !== scope ||
               record.closingScope === scope ||
-              record.stoppedByParent ||
-              record.view.state === "stopping" ||
-              record.view.state === "stopped" ||
+              isStopClaimedRunRecord(record) ||
               record.backendSpawnAttempt !== undefined
             )
               return;
@@ -106,7 +101,7 @@ export function processInitializer(dependencies: RunProcessInitializerDependenci
             `Subagent ${record.view.id} was stopped before backend spawn.`,
           );
         return yield* record.driver
-          .spawn(record.launch, agentMessagingFor?.(record.view.id, record.view.cwd))
+          .spawn(record.launch)
           .pipe(Effect.provideService(Scope.Scope, scope));
       }).pipe(
         Effect.ensuring(
@@ -125,13 +120,7 @@ export function processInitializer(dependencies: RunProcessInitializerDependenci
       );
       const attached = yield* withLock(
         Effect.gen(function* () {
-          if (
-            record.scope !== scope ||
-            record.stoppedByParent ||
-            record.view.state === "stopping" ||
-            record.view.state === "stopped"
-          )
-            return false;
+          if (record.scope !== scope || isStopClaimedRunRecord(record)) return false;
           record.process = process;
           record.view = {
             ...record.view,

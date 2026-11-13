@@ -66,6 +66,8 @@ const DurationMillisecondsSchema = Schema.String.check(Schema.isPattern(DURATION
   ),
 );
 
+const ON_OFF = { values: ON_OFF_VALUES, decoder: OnOffSchema, rule: ON_OFF_RULE } as const;
+
 // Each label names its setting on every surface: inside its settings group, and in help, status,
 // and confirmations, where no group frames it.
 export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
@@ -73,10 +75,8 @@ export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolve
     id: "persistState",
     label: "Remember fast mode",
     currentValue: (cfg) => formatOnOff(cfg.persistState),
-    values: ON_OFF_VALUES,
+    ...ON_OFF,
     description: "Keep fast mode on or off in new sessions.",
-    decoder: OnOffSchema,
-    rule: ON_OFF_RULE,
   },
 ];
 export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
@@ -84,11 +84,9 @@ export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<R
     id: "compaction.enabled",
     label: "OpenAI compaction",
     currentValue: (cfg) => formatOnOff(cfg.compaction.enabled),
-    values: ON_OFF_VALUES,
+    ...ON_OFF,
     description:
       "Use OpenAI native compaction when Pi triggers compaction for OpenAI Responses models.",
-    decoder: OnOffSchema,
-    rule: ON_OFF_RULE,
   },
 ];
 export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
@@ -105,19 +103,15 @@ export const USAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolv
     id: "usage.showOnlyOnSubscriptionModels",
     label: "Usage on plans only",
     currentValue: (cfg) => formatOnOff(cfg.usage.showOnlyOnSubscriptionModels),
-    values: ON_OFF_VALUES,
+    ...ON_OFF,
     description: "Show usage only when the current OpenAI model signs in with a subscription plan.",
-    decoder: OnOffSchema,
-    rule: ON_OFF_RULE,
   },
   {
     id: "usage.showResetTimes",
     label: "Usage reset times",
     currentValue: (cfg) => formatOnOff(cfg.usage.showResetTimes),
-    values: ON_OFF_VALUES,
+    ...ON_OFF,
     description: "Show when each usage window resets.",
-    decoder: OnOffSchema,
-    rule: ON_OFF_RULE,
   },
 ];
 const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [
@@ -125,10 +119,8 @@ const IMAGE_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfi
     id: "image.enabled",
     label: "Image tool",
     currentValue: (cfg) => formatOnOff(cfg.image.enabled),
-    values: ON_OFF_VALUES,
+    ...ON_OFF,
     description: "Allow image requests from the openai_image tool and /openai image.",
-    decoder: OnOffSchema,
-    rule: ON_OFF_RULE,
   },
   {
     id: "image.defaultModel",

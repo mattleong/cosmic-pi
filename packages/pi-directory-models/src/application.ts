@@ -8,12 +8,9 @@ import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime
 import { notifyAtHostBoundary } from "pi-cosmic-core/host-session";
 import { nodePath } from "pi-cosmic-core/platform/node-builtins";
 import { captureExplicitPreferenceArgument } from "./boundary/host-cli.ts";
-import {
-  captureSelectedModel,
-  captureThinkingLevel,
-  directoryModelHost,
-} from "./boundary/host-model.ts";
+import { captureSelectedModel, directoryModelHost } from "./boundary/host-model.ts";
 import { captureDirectorySession } from "./boundary/host-session.ts";
+import { decodeThinkingLevel } from "./config/schema.ts";
 import { STORE_DIRECTORY } from "./config/store.ts";
 import { directoryModelsLayer } from "./layer.ts";
 import {
@@ -97,7 +94,7 @@ export function registerDirectoryModelsApplication(
   });
 
   pi.on("thinking_level_select", (event, ctx) => {
-    if (!slot.isActive() || !captureThinkingLevel(event.level)) return undefined;
+    if (!slot.isActive() || !decodeThinkingLevel(event.level)) return undefined;
     return persist(ctx);
   });
 

@@ -5,10 +5,9 @@ import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import {
+  decodeThinkingLevel,
   directoryModelPreference,
-  type DirectoryModelPreference,
   type SavedDirectoryModelPreference,
-  ThinkingLevelSchema,
   type ThinkingLevel,
 } from "../config/schema.ts";
 
@@ -16,20 +15,15 @@ const SelectedModelSchema = Schema.Struct({
   provider: Schema.String,
   id: Schema.String,
 });
-const decodeSelectedModel = Schema.decodeUnknownOption(SelectedModelSchema);
-const decodeThinkingLevel = Schema.decodeUnknownOption(ThinkingLevelSchema);
 
 export type SelectedModel = typeof SelectedModelSchema.Type;
 
-export class DirectoryModelHostError extends Schema.TaggedError<
+class DirectoryModelHostError extends Schema.TaggedError<
   DirectoryModelHostError,
   { readonly brand: unique symbol }
->()("DirectoryModelHostError", { operation: Schema.String, message: Schema.String }) {}
+>()("DirectoryModelHostError", { message: Schema.String }) {}
 
-const hostError = (operation: string, message: string) => () =>
-  DirectoryModelHostError.make({ operation, message });
-
-export const captureThinkingLevel = decodeUnknownOrUndefined(ThinkingLevelSchema);
+const hostError = (message: string) => () => DirectoryModelHostError.make({ message });
 
 export const captureSelectedModel = decodeUnknownOrUndefined(SelectedModelSchema);
 
@@ -42,7 +36,7 @@ export interface DirectoryModelHost {
 }
 
 export const directoryModelHost = (ctx: ExtensionContext): DirectoryModelHost => ({
-  currentModel: () => Option.getOrUndefined(decodeSelectedModel(ctx.model)),
+  currentModel: () => captureSelectedModel(ctx.model),
   findModel: (provider, id) => ctx.modelRegistry.find(provider, id),
 });
 
@@ -51,17 +45,16 @@ export function captureContextModel(host: DirectoryModelHost): SelectedModel | u
 }
 
 const thinkingReadError = hostError(
-  "thinking",
   "Couldn't read Pi's thinking level, so it wasn't saved for this directory\nPick it again with /thinking to save it",
 );
 
 const readThinkingLevel = (
   pi: ExtensionAPI,
 ): Effect.Effect<ThinkingLevel, DirectoryModelHostError> =>
-  Effect.try({
-    try: () => decodeThinkingLevel(pi.getThinkingLevel()),
-    catch: thinkingReadError,
-  }).pipe(Effect.flatMap(Effect.fromOption(thinkingReadError)));
+  Effect.try(() => decodeThinkingLevel(pi.getThinkingLevel())).pipe(
+    Effect.flatMap(Effect.fromNullishOr),
+    Effect.mapError(thinkingReadError),
+  );
 
 export const preferenceFromSelectedModel = Effect.fn("DirectoryModelHost.fromSelected")(function* (
   pi: ExtensionAPI,
@@ -77,12 +70,6 @@ export const savedModelLabel = (
   preference: Pick<SavedDirectoryModelPreference, "provider" | "model">,
 ) => `${preference.provider}/${preference.model}`;
 
-export interface AppliedPreference {
-  readonly preference: DirectoryModelPreference;
-  /** Whether the restore changed Pi's model or thinking level, so it is worth a notice. */
-  readonly changed: boolean;
-}
-
 export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(function* (
   pi: ExtensionAPI,
   host: DirectoryModelHost,
@@ -92,7 +79,6 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
   const current = yield* Effect.try({
     try: host.currentModel,
     catch: hostError(
-      "read",
       `Couldn't read Pi's current model, so ${saved}, saved for this directory, wasn't restored\nPick it with /model to use it`,
     ),
   });
@@ -101,13 +87,11 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
     const model = yield* Effect.try({
       try: () => host.findModel(preference.provider, preference.model),
       catch: hostError(
-        "find",
         `Couldn't read Pi's model list, so ${saved}, saved for this directory, wasn't restored\nPick it with /model to use it`,
       ),
     });
     if (!model)
       return yield* hostError(
-        "find",
         `${saved}, saved for this directory, isn't available\nPick another model with /model to replace it`,
       )();
     // Pi cannot cancel a model switch. Masking keeps an interrupted restore from abandoning a
@@ -116,14 +100,12 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
       Effect.tryPromise({
         try: () => pi.setModel(model),
         catch: hostError(
-          "set",
           `Couldn't switch to ${saved}, saved for this directory\nPick it with /model to try again`,
         ),
       }),
     );
     if (!applied)
       return yield* hostError(
-        "auth",
         `${saved}, saved for this directory, isn't signed in\nRun /login ${preference.provider}, or pick another model with /model`,
       )();
   }
@@ -133,7 +115,6 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
     yield* Effect.try({
       try: () => pi.setThinkingLevel(thinkingLevel),
       catch: hostError(
-        "thinking",
         `Couldn't restore thinking level ${thinkingLevel}, saved for this directory\nSet it with /thinking ${thinkingLevel} to try again`,
       ),
     });
@@ -145,6 +126,7 @@ export const applyHostPreference = Effect.fn("DirectoryModelHost.apply")(functio
       preference.model,
       after,
     ),
+    /** Whether the restore changed Pi's model or thinking level, so it is worth a notice. */
     changed: switching || Option.getOrUndefined(before) !== after,
-  } satisfies AppliedPreference;
+  };
 });

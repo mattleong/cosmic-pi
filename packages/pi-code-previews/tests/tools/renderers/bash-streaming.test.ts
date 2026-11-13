@@ -1,5 +1,6 @@
 import { beforeEach, expect, test } from "vitest";
 import * as Arr from "effect/Array";
+import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { applyPresentationSettings, renderContextFixture } from "../../../testing";
 import { bashPreviewRenderers } from "../../../src/tools/renderers/bash";
@@ -36,7 +37,7 @@ test("a running bash call shows its latest output and names the earlier lines it
   const rows = streamed(Arr.join(lines(12), "\n"));
   expect(rows).toContain("✓ tests/suite-12.test.ts");
   expect(rows).not.toContain("✓ tests/suite-1.test.ts");
-  const affordance = Arr.filter(rows, (row) => Str.startsWith("▸ ")(row));
+  const affordance = Arr.filter(rows, (row) => Fn.pipe(row, Str.startsWith("▸ ")));
   expect(affordance).toHaveLength(1);
   expect(affordance[0]).toMatch(/\b7\b/u);
   // The earlier lines are named where they would be: before the tail, not after it.
@@ -47,7 +48,7 @@ test("settled bash output longer than its preview names the hidden lines once, w
   const rows = rendered(Arr.join(lines(14), "\n"), false);
   const standIns = Arr.filter(
     rows,
-    (row) => Str.startsWith("▸ ")(row) || Str.includes("hidden")(row),
+    (row) => Fn.pipe(row, Str.startsWith("▸ ")) || Fn.pipe(row, Str.includes("hidden")),
   );
   expect(standIns).toHaveLength(1);
   expect(standIns[0]).toMatch(/\b7\b/u);
@@ -59,5 +60,5 @@ test("settled bash output longer than its preview names the hidden lines once, w
 test("a running bash call whose output fits shows all of it without an affordance", () => {
   const rows = streamed(Arr.join(lines(3), "\n"));
   expect(rows).toContain("✓ tests/suite-1.test.ts");
-  expect(Arr.filter(rows, (row) => Str.startsWith("▸ ")(row))).toHaveLength(0);
+  expect(Arr.filter(rows, (row) => Fn.pipe(row, Str.startsWith("▸ ")))).toHaveLength(0);
 });

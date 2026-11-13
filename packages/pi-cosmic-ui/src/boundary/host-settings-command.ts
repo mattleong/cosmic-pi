@@ -3,11 +3,11 @@ import type { Component, SettingsList } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import {
+  capturedHostSignal,
   captureHostSignal,
   invokeHostCallback,
   notifyAtHostBoundary,
@@ -37,7 +37,7 @@ import {
   type OwnedSurfaceHost,
   OwnedSurfaceOutcome,
 } from "./host-surface.ts";
-import { capturedHostSignal } from "./host-abort-signal.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 interface SettingsCommandScope {
   readonly name: string;
@@ -188,7 +188,7 @@ export const wrapNoticeText = (text: string, level: NoticeLevel = "info"): strin
       // A stand-in for Pi's level prefix holds its columns on the first row only, so continuation
       // rows keep the full width.
       const rows = wrapFacts(
-        `${Str.repeat(prefix)("x")}${Str.trim(line)}`,
+        `${Fn.pipe("x", Str.repeat(prefix))}${Str.trim(line)}`,
         NOTICE_COLUMNS - indent.length,
         NOTICE_HANGING,
       );
@@ -311,11 +311,10 @@ export function settingsSubcommand<Config>(
   const scopeNames = Arr.map(scopes, (scope) => scope.name);
   const unavailable = `${title} settings aren't available right now`;
   const { isCurrent } = options;
-  const label = (id: string) =>
-    Option.getOrUndefined(Arr.findFirst(descriptors, (entry) => entry.id === id))?.label;
+  const descriptorFor = (id: string) => findOrUndefined(descriptors, (entry) => entry.id === id);
   // `Label (id) <rule>`: how an invalid value reads, whether the shell or the owner rejected it.
   const invalidValue = (id: string, rule: string) => {
-    const named = label(id);
+    const named = descriptorFor(id)?.label;
     return named === undefined ? `${id} ${rule}` : `${named} (${id}) ${rule}`;
   };
   // The warning for an owner's rejected value, or undefined for a failure to save.
@@ -353,9 +352,7 @@ export function settingsSubcommand<Config>(
   ): Promise<void> =>
     owner.run(isCurrent, () => {
       invoked(ctx);
-      const descriptor = Option.getOrUndefined(
-        Arr.findFirst(descriptors, (entry) => entry.id === id),
-      );
+      const descriptor = descriptorFor(id);
       const persisted = (): string | undefined => {
         if (options.displayValue)
           return invokeHostCallback(() => options.displayValue?.(ctx, id, scope), undefined);
@@ -428,9 +425,7 @@ export function settingsSubcommand<Config>(
     });
 
   const rowSetting = (row: string): readonly [scope: string | undefined, id: string] => {
-    const scope = Option.getOrUndefined(
-      Arr.findFirst(scopeNames, (name) => Fn.pipe(row, Str.startsWith(`${name}:`))),
-    );
+    const scope = findOrUndefined(scopeNames, (name) => Fn.pipe(row, Str.startsWith(`${name}:`)));
     return scope === undefined
       ? [undefined, row]
       : [scope, Fn.pipe(row, Str.slice(scope.length + 1))];
@@ -574,9 +569,7 @@ export function settingsSubcommand<Config>(
     });
   // A value's allowed forms, when they're a short list worth naming.
   const valueForm = (id: string) => {
-    const descriptor = Option.getOrUndefined(
-      Arr.findFirst(descriptors, (entry) => entry.id === id),
-    );
+    const descriptor = descriptorFor(id);
     const values = descriptor?.values ? Arr.join(descriptor.values, "|") : "";
     return values && values.length <= 32 ? values : (descriptor?.valuePlaceholder ?? "<value>");
   };
@@ -586,9 +579,7 @@ export function settingsSubcommand<Config>(
       ? `${lead} ${form}`
       : `${lead}\n  ${form}`;
   const scopeArgument = (args: string) =>
-    Option.getOrUndefined(
-      Arr.findFirst(scopeNames, (name) => Str.split(Str.trim(args), /\s+/u)[0] === name),
-    );
+    findOrUndefined(scopeNames, (name) => Str.split(Str.trim(args), /\s+/u)[0] === name);
 
   const handle = (args: string, ctx: ExtensionContext) => {
     if (!isCurrent()) return;
@@ -622,7 +613,7 @@ export function settingsSubcommand<Config>(
                 "invalid-value": ({ id, allowedValues }) =>
                   invalidValue(id, oneOfRule(allowedValues)),
                 "missing-value": ({ id }) => {
-                  if (id && !Arr.some(descriptors, (entry) => entry.id === id)) return unknown(id);
+                  if (id && !descriptorFor(id)) return unknown(id);
                   return correctForm(
                     id ? "Add a value:" : "Add a setting and value:",
                     `/${command} ${scoped}${id || "<id>"} ${id ? valueForm(id) : "<value>"}`,

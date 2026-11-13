@@ -8,6 +8,7 @@ import { SafeFile, nodeFilePlatformLayer } from "pi-cosmic-core";
 import * as Layer from "effect/Layer";
 import { readWorkspaceRecord, saveWorkspaceRecord } from "../../src/boundary/git-worktree-store.ts";
 import { WorkspaceRecordSchema, type WorkspaceRecord } from "../../src/workspace/model.ts";
+import { workspaceRecord } from "../fixtures/workspace-record.ts";
 import { temporaryDirectory } from "./fixtures/repository.ts";
 import * as Str from "effect/String";
 
@@ -19,24 +20,12 @@ it.live(
       const workspaceId = "11111111-1111-1111-1111-111111111111";
       const directory = path.join(root, workspaceId);
       yield* Effect.promise(() => fs.mkdir(directory, { mode: 0o700 }));
-      const record: WorkspaceRecord = {
-        version: 2,
-        repository: "/source/.git",
-        handle: {
-          workspaceId,
-          ownerId: "parent",
-          sourceCwd: "/source",
-          sourceRoot: "/source",
-          artifactRoot: "/private",
-          cwd: "/private/worker",
-        },
+      const record = workspaceRecord(workspaceId, {
         status: "frozen",
-        baseline: "baseline",
-        ownerLease: "owner",
         revision: { revisionId: "revision", changedPaths: [""] },
         // Saving stamps the current time, which has as many digits as this one.
         lastChangedAt: yield* Clock.currentTimeMillis,
-      };
+      });
       const cap = 64 * 1024 * 1024;
       const overhead = Buffer.byteLength(
         yield* Schema.encodeEffect(Schema.fromJsonString(WorkspaceRecordSchema))(record),

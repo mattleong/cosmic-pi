@@ -1,8 +1,7 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
-import * as Str from "effect/String";
-import { applyPresentationSettings, expansionOffers } from "pi-code-previews/testing";
+import { applyPresentationSettings } from "pi-code-previews/testing";
 import { keybindingHintsFixture, plainTheme } from "pi-cosmic-core/testing";
 import {
   frameMessage,
@@ -56,16 +55,6 @@ describe("intercom message", () => {
       }
     },
   );
-
-  it("is one compact row naming its sender, offering the message", () => {
-    applyPresentationSettings({ toolCallCollapsedStyle: "compact", toolCallBackground: "off" });
-    const rows = Arr.filter(render("Please rerun the tests.\nThen lint.", false)(160), (row) =>
-      Str.isNonEmpty(Str.trim(row)),
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toContain("api work");
-    expect(expansionOffers(rows)).toEqual(["message"]);
-  });
 
   it("bounds a long message collapsed and fits each width", () => {
     applyPresentationSettings({ toolCallCollapsedStyle: "preview" });

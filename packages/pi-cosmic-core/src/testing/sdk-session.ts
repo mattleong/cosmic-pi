@@ -18,13 +18,18 @@ import {
   SettingsManager,
   type CreateAgentSessionOptions,
   type ExtensionFactory,
+  type InlineExtension,
 } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
+import { temporaryDirectory } from "./ipc-child.ts";
 import { step } from "./steps.ts";
+
+/** Pi's faux reply builders, for packages that don't declare `pi-ai`. */
+export { fauxAssistantMessage, fauxToolCall };
 
 export const fauxModels = Effect.fn("SdkSession.fauxModels")(function* (provider: string) {
   const fake = fauxProvider({ provider, tokensPerSecond: 0 });
@@ -103,6 +108,37 @@ export const scopedPrintSession = Effect.fn("SdkSession.scopedPrintSession")(fun
   );
   yield* step(() => session.bindExtensions({ mode: "print" }));
   return session;
+});
+
+/**
+ * A print-mode Pi session in a temporary directory with faux inference, an in-memory transcript,
+ * and only `extensionFactories` loaded, in order.
+ */
+export const fauxPrintSession = Effect.fn("SdkSession.fauxPrintSession")(function* (
+  prefix: string,
+  provider: string,
+  extensionFactories: ReadonlyArray<InlineExtension>,
+) {
+  const directory = yield* temporaryDirectory(prefix);
+  const { fake, models } = yield* fauxModels(provider);
+  const settings = quietSettings();
+  const loader = yield* quietLoader({
+    cwd: directory,
+    agentDir: directory,
+    settingsManager: settings,
+    noExtensions: true,
+    extensionFactories: [...extensionFactories],
+  });
+  const session = yield* scopedPrintSession({
+    cwd: directory,
+    agentDir: directory,
+    model: fake.getModel(),
+    modelRuntime: models,
+    settingsManager: settings,
+    sessionManager: SessionManager.inMemory(directory),
+    resourceLoader: loader,
+  });
+  return { directory, fake, models, session };
 });
 
 interface FauxCodemodeSessionOptions {

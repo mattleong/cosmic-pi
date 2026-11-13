@@ -1,6 +1,7 @@
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import type { WorktreeCreateSetup } from "../config/schema.ts";
+import { pathList } from "../workspace/diffstat.ts";
 import type { WorkspaceHandle } from "../workspace/model.ts";
 import type { WorkspaceServiceContract } from "../workspace/service.ts";
 import { invalidRequest as invalid, type SubagentError } from "./errors.ts";
@@ -39,14 +40,9 @@ export const runWorktreeCreateHooks = Effect.fn("SubagentWorkspace.runWorktreeCr
       );
     const changed = yield* service.hookChanges(target).pipe(Effect.mapError(mapWorkspaceError));
     if (changed.length === 0) return undefined;
-    const listed = Arr.join(changed.slice(0, MAX_LISTED_CHANGES), ", ");
-    const more =
-      changed.length > MAX_LISTED_CHANGES
-        ? `, and ${changed.length - MAX_LISTED_CHANGES} more`
-        : "";
     return yield* invalid(
       "workspace_hook_failed",
-      `Workspace setup changed project files; add its outputs to .gitignore.\nWorktreeCreate hooks changed ${listed}${more}.`,
+      `Workspace setup changed project files; add its outputs to .gitignore.\nWorktreeCreate hooks changed ${pathList(changed, MAX_LISTED_CHANGES)}.`,
     );
   },
 );

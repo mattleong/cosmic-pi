@@ -16,11 +16,7 @@ import {
   recoverRefreshFailure,
 } from "pi-cosmic-core/coordination/subscription-refresh";
 import { type RefreshRequest } from "pi-cosmic-core/coordination/refresh-coordinator";
-import {
-  emptyTotals,
-  createSessionUsageReader,
-  type FooterTotals,
-} from "../boundary/host-usage.ts";
+import { emptyTotals, type FooterTotals } from "../boundary/host-usage.ts";
 import type { ResolvedCosmicUiConfig } from "../config/schema.ts";
 import { CosmicUiConfigStore, type FooterPatch } from "../config/store.ts";
 import type { FooterRepositoryProjection } from "../footer/builtin-contributions.ts";
@@ -76,11 +72,10 @@ export const resetProjection = (
 
 export interface CosmicUiServiceOptions {
   readonly context: MutableRef.MutableRef<ExtensionContext>;
-  /** The originating session, whose persisted usage the footer reconciles. */
-  readonly sessionManager: ExtensionContext["sessionManager"];
   readonly cwd: string;
   readonly initialTotals?: FooterTotals;
-  readonly readUsageTotals?: () => FooterTotals | undefined;
+  /** Reads the originating session's persisted usage, which the footer reconciles. */
+  readonly readUsageTotals: () => FooterTotals | undefined;
   readonly projection: MutableRef.MutableRef<CosmicUiProjection>;
   readonly onChange: () => void;
   /** Runs before `onChange` when reconciled usage totals change. */
@@ -201,9 +196,9 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
         },
         spanName: "pi-cosmic-ui.refresh.pull-request",
       });
-      const refreshGit = Effect.fn("CosmicUiService.refreshGit")(function* (force?: boolean) {
-        yield* gitRefresh.request({ force: force === true });
-      });
+      const refreshGit = Effect.fn("CosmicUiService.refreshGit")((force?: boolean) =>
+        gitRefresh.request({ force: force === true }),
+      );
       const installConfig = (next: ResolvedCosmicUiConfig) =>
         commit((current) => ({ ...current, config: next }));
       /**
@@ -211,8 +206,6 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
        * commit leaves them behind, so the next reconciliation repairs the missed notification.
        */
       let notifiedTotals = initialTotals;
-      const readUsageTotals =
-        options.readUsageTotals ?? createSessionUsageReader(options.sessionManager);
       /**
        * Totals change when the host persists usage, and some of that, such as cache warming, has no
        * event. An unreadable session keeps the last complete totals, which the state already holds.
@@ -222,7 +215,7 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
         // Serialized so an older read cannot replace totals a newer read already committed.
         yield* usageLock.withPermit(
           Effect.gen(function* () {
-            const read = readUsageTotals();
+            const read = options.readUsageTotals();
             if (read !== undefined && !sameTotals(read, (yield* state.getState).totals))
               yield* updateState((current) => ({ ...current, totals: read }));
             const { totals } = yield* state.getState;
@@ -247,12 +240,12 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
       }
       return {
         refreshGit,
-        refreshAll: Effect.fn("CosmicUiService.refreshAll")(function* (force?: boolean) {
-          yield* Effect.all([refreshGit(force), pullRefresh.request({ force: force === true })], {
+        refreshAll: Effect.fn("CosmicUiService.refreshAll")((force?: boolean) =>
+          Effect.all([refreshGit(force), pullRefresh.request({ force: force === true })], {
             concurrency: 2,
             discard: true,
-          });
-        }),
+          }),
+        ),
         invalidateProbes: Effect.fn("CosmicUiService.invalidateProbes")(function* () {
           yield* gitRefresh.invalidateWith(
             pullRefresh.invalidateWith(
@@ -269,27 +262,23 @@ export class CosmicUiService extends Context.Service<CosmicUiService>()(
           yield* notifyChanged;
         }),
         reconcileUsage,
-        updateFooterConfig: Effect.fn("CosmicUiService.updateFooterConfig")(function* (
-          patch: FooterPatch,
-        ) {
-          return yield* settingsLock.withPermit(
+        updateFooterConfig: Effect.fn("CosmicUiService.updateFooterConfig")((patch: FooterPatch) =>
+          settingsLock.withPermit(
             configStore.updateFooter(options.cwd, patch, options.projectTrusted, installConfig),
-          );
-        }),
-        setFooterVisibility: Effect.fn("CosmicUiService.setFooterVisibility")(function* (
-          id: string,
-          visible: boolean,
-        ) {
-          return yield* settingsLock.withPermit(
-            configStore.setVisibility(
-              options.cwd,
-              id,
-              visible,
-              options.projectTrusted,
-              installConfig,
+          ),
+        ),
+        setFooterVisibility: Effect.fn("CosmicUiService.setFooterVisibility")(
+          (id: string, visible: boolean) =>
+            settingsLock.withPermit(
+              configStore.setVisibility(
+                options.cwd,
+                id,
+                visible,
+                options.projectTrusted,
+                installConfig,
+              ),
             ),
-          );
-        }),
+        ),
       };
     }),
   },

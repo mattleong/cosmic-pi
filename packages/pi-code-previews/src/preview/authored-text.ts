@@ -2,12 +2,12 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Markdown } from "@earendil-works/pi-tui";
 import { clipToWidth } from "pi-cosmic-ui/manager";
-import { renderExpansionAffordance } from "pi-cosmic-ui/tool";
-import { escapeControlChars } from "../shared/terminal-text";
-import { wrapPlainText } from "../shared/text-wrap";
+import { markdownTheme, renderExpansionAffordance } from "pi-cosmic-ui/tool";
+import { wrapIndentedLine } from "../shared/terminal-text";
 import { countLabel } from "pi-cosmic-core/display";
+import { compactPlainText } from "./compact-row";
 
 /** Wrapped rows of authored words a collapsed view shows before its expansion affordance. */
 export const COLLAPSED_AUTHORED_TEXT_ROWS = 10;
@@ -31,10 +31,7 @@ export interface AuthoredTextOptions {
 /** Authored text with its controls made visible and without surrounding blank lines. */
 export const authoredText = (text: string | undefined): string =>
   Fn.pipe(
-    text ?? "",
-    Str.replaceAll("\r\n", "\n"),
-    Str.replaceAll("\t", "  "),
-    escapeControlChars,
+    compactPlainText(text ?? ""),
     Str.split("\n"),
     Arr.map((line) => Str.trimEnd(line)),
     Arr.dropWhile((line) => line === ""),
@@ -47,26 +44,6 @@ export const authoredText = (text: string | undefined): string =>
 // Rows re-render on every frame; recent markdown layouts are reused until the theme changes.
 const MARKDOWN_CACHE_ENTRIES = 64;
 const markdownRows = new WeakMap<object, Map<string, ReadonlyArray<string>>>();
-
-const plain = (text: string) => text;
-
-// Pi's markdown colors, drawn with the row's own theme rather than the host's global one.
-const markdownTheme = (theme: AuthoredTextTheme): MarkdownTheme => ({
-  heading: (text) => theme.fg("mdHeading", theme.bold(text)),
-  link: (text) => theme.fg("mdLink", text),
-  linkUrl: (text) => theme.fg("mdLinkUrl", text),
-  code: (text) => theme.fg("mdCode", text),
-  codeBlock: (text) => theme.fg("mdCodeBlock", text),
-  codeBlockBorder: (text) => theme.fg("mdCodeBlockBorder", text),
-  quote: (text) => theme.fg("mdQuote", text),
-  quoteBorder: (text) => theme.fg("mdQuoteBorder", text),
-  hr: (text) => theme.fg("mdHr", text),
-  listBullet: (text) => theme.fg("mdListBullet", text),
-  bold: (text) => theme.bold(text),
-  italic: plain,
-  strikethrough: plain,
-  underline: plain,
-});
 
 const markdownLines = (
   text: string,
@@ -109,7 +86,7 @@ export const authoredTextLines = (
   if (words === "") return [];
   const rows = options.verbatim
     ? Arr.flatMap(Str.split(words, "\n"), (line) =>
-        line === "" ? [""] : Arr.map(wrapPlainText(line, inner), (row) => theme.fg(color, row)),
+        line === "" ? [""] : Arr.map(wrapIndentedLine(line, inner), (row) => theme.fg(color, row)),
       )
     : Arr.map(markdownLines(words, inner, theme, color), (row) => Str.trimEnd(row));
   if (rows.length === 0 || (rows.length === 1 && rows[0] === "")) return [];

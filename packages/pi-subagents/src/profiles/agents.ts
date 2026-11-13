@@ -9,6 +9,7 @@ import type {
   SubagentWriteIntent,
 } from "../domain/routing.ts";
 import { isProfileId, type ProfileCandidate, type ProfileId } from "./model.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export const MAX_CUSTOM_AGENTS = 32;
 export const MAX_CUSTOM_AGENT_NAME_CHARS = 48;
@@ -126,9 +127,7 @@ export const lookupCustomAgent = (
   resolved: ResolvedCustomAgents,
   name: string,
 ): CustomAgentLookup => {
-  const agent = Option.getOrUndefined(
-    Arr.findFirst(resolved.agents, (candidate) => candidate.name === name),
-  );
+  const agent = findOrUndefined(resolved.agents, (candidate) => candidate.name === name);
   if (agent) return { kind: "found", agent };
   // An invalid entry, or an invalid `agents` object that may have declared it, fails it closed.
   return Fn.pipe(

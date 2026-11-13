@@ -1,7 +1,6 @@
 import { expect, layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
-import type * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as References from "effect/References";
 import * as Schema from "effect/Schema";
@@ -9,9 +8,13 @@ import * as TestClock from "effect/testing/TestClock";
 import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import { makeCapturedTracer } from "pi-cosmic-core/testing";
 import { afterEach, vi } from "vitest";
-import type { intercomLayer } from "../src/layer.ts";
 import { listSessions, readSession, sendToSession } from "../src/tools/sessions.ts";
-import { sessionRuntime, sharedAgentDirectory } from "./support/session-harness.ts";
+import {
+  sessionRuntime,
+  sharedAgentDirectory,
+  writeForeignRecord,
+  type SessionRuntimeServices,
+} from "./support/session-harness.ts";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -39,22 +42,19 @@ layer(nodeFilePlatformLayer)("intercom telemetry", (it) => {
           ),
         );
       const shared = yield* sharedAgentDirectory();
-      yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", shared.agentDirectory));
-      const a = yield* capture(
-        sessionRuntime(identity("a"), "secret a reply", shared.fallbackRoot),
-      );
-      const b = yield* capture(
-        sessionRuntime(identity("b"), "secret b reply", shared.fallbackRoot),
-      );
+      const a = yield* capture(sessionRuntime(identity("a"), "secret a reply", shared));
+      const b = yield* capture(sessionRuntime(identity("b"), "secret b reply", shared));
       const secretText = "secret message body";
 
-      const fromA = <X, E>(
-        effect: Effect.Effect<X, E, Layer.Success<ReturnType<typeof intercomLayer>>>,
-      ) => capture(Effect.ignore(effect.pipe(Effect.provide(a.context))));
+      const fromA = <X, E>(effect: Effect.Effect<X, E, SessionRuntimeServices>) =>
+        capture(Effect.ignore(effect.pipe(Effect.provide(a.context))));
       yield* fromA(listSessions());
       yield* fromA(sendToSession(b.record.sessionId, secretText));
       yield* fromA(readSession(b.record.sessionId));
       yield* TestClock.withLive(fromA(sendToSession("secret-missing-id", secretText)));
+      // A record naming b's socket under another token: b refuses the caller's proof.
+      yield* writeForeignRecord(shared, "secret-foreign-id", { socket: b.record.socket });
+      yield* TestClock.withLive(fromA(sendToSession("secret-foreign-id", secretText)));
       b.delivery.setReceiving(false);
       yield* fromA(sendToSession(b.record.sessionId, secretText));
 

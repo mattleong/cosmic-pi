@@ -5,12 +5,12 @@ import { compactStatus, type CompactSummary } from "../../src/tools/compact-summ
 import { nativeMcpIdentity } from "../../src/tools/native-mcp-identity";
 import { nativeMcpSummary } from "../../src/tools/native-mcp-summary";
 import { scriptResult, settledSummary } from "../support/native-codemode";
+import { NATIVE_TRUNCATION_HEADER } from "../support/native-mcp";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 
-const header =
-  "Warning: truncated output (original token count: 9000)\nTotal output lines: 900\n\n";
+const header = NATIVE_TRUNCATION_HEADER;
 const saved = "\n\n[Full output: /tmp/full.txt (read with offset/limit)]";
 const unsaved = "\n\n[Could not save the full output: ENOSPC: disk full]";
 

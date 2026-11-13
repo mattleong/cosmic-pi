@@ -8,6 +8,7 @@ import {
 import { formatBytes, formatClockTime } from "pi-cosmic-core/display";
 import { joinInline } from "pi-cosmic-ui/manager";
 import { exitStatusMeaning } from "pi-code-previews";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import { safeTextSuffix } from "pi-cosmic-core/text";
 import { formatDisplayPath } from "pi-cosmic-core/platform/paths";
 import { sanitizeDiagnosticContent, sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -37,6 +38,9 @@ const ACTIVITY_STATUS = {
   timed_out: "failed",
 } as const satisfies Record<BackgroundTaskState, ActivityItem["status"]>;
 
+const bounded = (text: string, maximumLength: number): string =>
+  sanitizeDiagnosticContent(text, { maximumLength });
+
 const failureMessages = (task: BackgroundTaskView): readonly string[] =>
   isActiveTaskState(task.state)
     ? []
@@ -47,9 +51,7 @@ const failureMessages = (task: BackgroundTaskView): readonly string[] =>
 
 const firstFailure = (task: BackgroundTaskView): string | undefined => {
   const first = failureMessages(task)[0];
-  return first === undefined
-    ? undefined
-    : sanitizeDiagnosticContent(sanitizeTerminalLine(first), { maximumLength: 512 });
+  return first === undefined ? undefined : bounded(sanitizeTerminalLine(first), 512);
 };
 
 const LATEST_LINE_EVENTS = 8;
@@ -61,10 +63,7 @@ const latestOutputLine = (task: BackgroundTaskView): string | undefined => {
     const line = Arr.findLast(Str.split(event.text, "\n"), (part) =>
       Str.isNonEmpty(Str.trim(part)),
     );
-    if (Option.isSome(line))
-      return sanitizeDiagnosticContent(sanitizeTerminalLine(Str.trim(line.value)), {
-        maximumLength: 200,
-      });
+    if (Option.isSome(line)) return bounded(sanitizeTerminalLine(Str.trim(line.value)), 200);
   }
   return undefined;
 };
@@ -75,9 +74,7 @@ export function backgroundTaskActivityItems(
   const tasks = sortTasksByActivity(projection.tasks).slice(0, ACTIVITY_LIMITS.items);
   return Object.freeze(
     Arr.map(tasks, (task) => {
-      const title = sanitizeDiagnosticContent(task.name ?? task.command, {
-        maximumLength: ACTIVITY_LIMITS.title,
-      });
+      const title = bounded(task.name ?? task.command, ACTIVITY_LIMITS.title);
       const item: ActivityItem = {
         id: task.id,
         kind: "command",
@@ -153,9 +150,6 @@ const logTail = (task: BackgroundTaskView): string => {
   return Arr.join(Arr.reverse(chunks), "");
 };
 
-const bounded = (text: string, maximumLength: number): string =>
-  sanitizeDiagnosticContent(text, { maximumLength });
-
 /** What went wrong, in the same words the task's transcript row uses. */
 const failureSummary = (task: BackgroundTaskView): string | undefined => {
   const messages = failureMessages(task);
@@ -168,9 +162,7 @@ export function backgroundTaskActivityDetail(
   id: string,
   now: number = DateTime.toEpochMillis(DateTime.nowUnsafe()),
 ): ActivityDetail | undefined {
-  const task = Option.getOrUndefined(
-    Arr.findFirst(projection.tasks, (candidate) => candidate.id === id),
-  );
+  const task = findOrUndefined(projection.tasks, (candidate) => candidate.id === id);
   if (!task) return undefined;
   const failure = failureSummary(task);
   const output = logTail(task);

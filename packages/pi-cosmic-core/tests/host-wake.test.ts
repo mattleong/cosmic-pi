@@ -2,6 +2,7 @@ import type {
   AgentBeforeSettleEvent,
   BoundaryContextPreview,
   ExtensionAPI,
+  ExtensionContext,
   InputEvent,
   SessionBoundaryDraft,
 } from "@earendil-works/pi-coding-agent";
@@ -12,7 +13,14 @@ import * as Effect from "effect/Effect";
 import { vi } from "vitest";
 import { registerSessionWake, type SessionWakeOptions } from "../src/host-wake.ts";
 import { extensionContextFixture } from "../src/testing/host.ts";
+import {
+  agentBeforeSettleEventFixture,
+  type DefaultedEventName,
+  type ExtensionEventName,
+  type ExtensionEventNamed,
+} from "../src/testing/extension-events.ts";
 import { recordingExtensionHost } from "../src/testing/extension-host.ts";
+import { step } from "../src/testing/steps.ts";
 
 type ContextMessage = BoundaryContextPreview["contextMessages"][number];
 
@@ -40,19 +48,13 @@ const settleEvent = (
   contextMessages: ReadonlyArray<ContextMessage>,
   pendingMessages: ReadonlyArray<ContextMessage> = [],
   outcome: AgentBeforeSettleEvent["outcome"] = "completed",
-): AgentBeforeSettleEvent => ({
-  type: "agent_before_settle",
-  outcome,
-  entries: [earlierEntry],
-  continue: false,
-  context: {
-    contextEntries: [],
-    contextMessages: [...contextMessages],
-    llmMessages: [],
-    pendingMessages: [...pendingMessages],
-    canContinue: true,
-  },
-});
+): AgentBeforeSettleEvent =>
+  agentBeforeSettleEventFixture({
+    contextMessages,
+    pendingMessages,
+    outcome,
+    entries: [earlierEntry],
+  });
 
 const inputEvent = (source: InputEvent["source"]): InputEvent => ({
   type: "input",
@@ -61,6 +63,23 @@ const inputEvent = (source: InputEvent["source"]): InputEvent => ({
 });
 
 const dialog = { reason: "ui_prompt", kind: "confirm" } as const;
+
+/** The recording host's `emit`, bound to the harness's context and returned as an Effect. */
+interface ContextEmit {
+  <Name extends DefaultedEventName>(
+    name: Name,
+    event?: ExtensionEventNamed<Name>,
+  ): Effect.Effect<void>;
+  <Name extends ExtensionEventName>(
+    name: Name,
+    event: ExtensionEventNamed<Name>,
+  ): Effect.Effect<void>;
+}
+type UncheckedEmit<Name extends ExtensionEventName> = (
+  name: Name,
+  ctx: ExtensionContext,
+  event?: ExtensionEventNamed<Name>,
+) => Promise<void>;
 
 const harness = (options: Partial<SessionWakeOptions> = {}) => {
   let idle = true;
@@ -84,9 +103,13 @@ const harness = (options: Partial<SessionWakeOptions> = {}) => {
       turns.push(startTurn);
       return true;
     });
+  const emit: ContextEmit = <Name extends ExtensionEventName>(
+    name: Name,
+    event?: ExtensionEventNamed<Name>,
+  ) => step(() => (host.emit as UncheckedEmit<Name>)(name, ctx, event));
   const settle = (event: AgentBeforeSettleEvent) => {
     const [handler] = host.handlers.get("agent_before_settle");
-    return Promise.resolve(handler?.(event, ctx));
+    return Effect.promise(() => Promise.resolve(handler?.(event, ctx)));
   };
   const wakes = () =>
     Arr.filter(sendMessage.mock.calls, ([message]) => message.customType === WAKE_TYPE);
@@ -94,9 +117,9 @@ const harness = (options: Partial<SessionWakeOptions> = {}) => {
     ...host,
     sendMessage,
     wake,
-    ctx,
     turns,
     deliver,
+    emit,
     settle,
     wakes,
     onInterrupt,
@@ -109,6 +132,29 @@ const harness = (options: Partial<SessionWakeOptions> = {}) => {
   };
 };
 
+/** A second wake owner on the same session, with its own idle state and deferred checks. */
+const secondOwner = (test: ReturnType<typeof harness>, startsIdle: boolean) => {
+  let idle = startsIdle;
+  const checks: Array<() => void> = [];
+  const other = registerSessionWake(test.pi, {
+    noticeTypes: new Set(["other-notice"]),
+    wakeMessage: { customType: "other-wake", content: "Act on the other notices." },
+    isIdle: () => idle,
+    later: (check) => checks.push(check),
+  });
+  return {
+    other,
+    otherWakes: () =>
+      Arr.filter(test.sendMessage.mock.calls, ([message]) => message.customType === "other-wake"),
+    runOtherChecks: () => {
+      for (const check of checks.splice(0)) check();
+    },
+    setOtherIdle: (next: boolean) => {
+      idle = next;
+    },
+  };
+};
+
 describe("session wake", () => {
   it.effect("starts a turn for a notice that arrives while the session is idle", () =>
     Effect.gen(function* () {
@@ -116,10 +162,8 @@ describe("session wake", () => {
       expect(test.deliver()).toBe("woken");
       expect(test.turns).toEqual([true]);
 
-      expect(
-        yield* Effect.promise(() => test.settle(settleEvent([notice(), reply()]))),
-      ).toBeUndefined();
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      expect(yield* test.settle(settleEvent([notice(), reply()]))).toBeUndefined();
+      yield* test.emit("agent_settled");
       expect(test.wakes()).toHaveLength(0);
     }),
   );
@@ -131,15 +175,13 @@ describe("session wake", () => {
       expect(test.deliver()).toBe("queued");
       expect(test.turns).toEqual([false]);
 
-      const pending = yield* Effect.promise(() => test.settle(settleEvent([reply()], [notice()])));
+      const pending = yield* test.settle(settleEvent([reply()], [notice()]));
       expect(pending).toEqual({ entries: [earlierEntry], continue: true });
-      const appended = yield* Effect.promise(() => test.settle(settleEvent([reply(), notice()])));
+      const appended = yield* test.settle(settleEvent([reply(), notice()]));
       expect(appended).toMatchObject({ continue: true });
-      expect(
-        yield* Effect.promise(() => test.settle(settleEvent([notice(), reply()]))),
-      ).toBeUndefined();
+      expect(yield* test.settle(settleEvent([notice(), reply()]))).toBeUndefined();
 
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      yield* test.emit("agent_settled");
       expect(test.wakes()).toHaveLength(0);
     }),
   );
@@ -148,11 +190,11 @@ describe("session wake", () => {
     Effect.gen(function* () {
       const test = harness();
       test.setIdle(false);
-      yield* Effect.promise(() => test.settle(settleEvent([reply()])));
+      yield* test.settle(settleEvent([reply()]));
       test.deliver();
 
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      yield* test.emit("agent_settled");
+      yield* test.emit("agent_settled");
       expect(test.wakes()).toHaveLength(1);
       expect(test.wakes()[0]?.[1]).toMatchObject({ triggerTurn: true });
     }),
@@ -161,19 +203,15 @@ describe("session wake", () => {
   it.effect("holds wakes after the user interrupts, until the user's next prompt", () =>
     Effect.gen(function* () {
       const test = harness();
-      yield* Effect.promise(() =>
-        test.emit("agent_settled", test.ctx, { type: "agent_settled", aborted: true }),
-      );
+      yield* test.emit("agent_settled", { type: "agent_settled", aborted: true });
       expect(test.onInterrupt).toHaveBeenCalledOnce();
       expect(test.deliver()).toBe("held");
-      expect(
-        yield* Effect.promise(() => test.settle(settleEvent([reply()], [notice()]))),
-      ).toBeUndefined();
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      expect(yield* test.settle(settleEvent([reply()], [notice()]))).toBeUndefined();
+      yield* test.emit("agent_settled");
 
-      yield* Effect.promise(() => test.emit("input", test.ctx, inputEvent("extension")));
+      yield* test.emit("input", inputEvent("extension"));
       test.deliver();
-      yield* Effect.promise(() => test.emit("input", test.ctx, inputEvent("interactive")));
+      yield* test.emit("input", inputEvent("interactive"));
       test.deliver();
 
       expect(test.turns).toEqual([false, false, true]);
@@ -184,17 +222,13 @@ describe("session wake", () => {
   it.effect("appends while a dialog is open and wakes once the dialog closes", () =>
     Effect.gen(function* () {
       const test = harness({ holdDuringDialogs: true });
-      yield* Effect.promise(() =>
-        test.emit("ui_prompt_start", test.ctx, { type: "ui_prompt_start", ...dialog }),
-      );
+      yield* test.emit("ui_prompt_start", { type: "ui_prompt_start", ...dialog });
       expect(test.deliver()).toBe("held");
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      yield* test.emit("agent_settled");
       expect(test.turns).toEqual([false]);
       expect(test.wakes()).toHaveLength(0);
 
-      yield* Effect.promise(() =>
-        test.emit("ui_prompt_end", test.ctx, { type: "ui_prompt_end", ...dialog }),
-      );
+      yield* test.emit("ui_prompt_end", { type: "ui_prompt_end", ...dialog });
       expect(test.wakes()).toHaveLength(1);
     }),
   );
@@ -204,7 +238,7 @@ describe("session wake", () => {
       const test = harness();
       test.setIdle(false);
       expect(test.wake.deliver(() => false)).toBe("refused");
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      yield* test.emit("agent_settled");
       expect(test.wakes()).toHaveLength(0);
     }),
   );
@@ -212,9 +246,7 @@ describe("session wake", () => {
   it.effect("does not hold for dialogs unless asked to", () =>
     Effect.gen(function* () {
       const test = harness();
-      yield* Effect.promise(() =>
-        test.emit("ui_prompt_start", test.ctx, { type: "ui_prompt_start", ...dialog }),
-      );
+      yield* test.emit("ui_prompt_start", { type: "ui_prompt_start", ...dialog });
       test.deliver();
       expect(test.turns).toEqual([true]);
     }),
@@ -227,15 +259,13 @@ describe("session wake", () => {
         const test = harness();
         test.setIdle(false);
         test.deliver();
-        yield* Effect.promise(() =>
-          test.emit("session_compact_failed", test.ctx, {
-            type: "session_compact_failed",
-            reason: "manual",
-            aborted,
-            willRetry: false,
-            fromExtension: false,
-          }),
-        );
+        yield* test.emit("session_compact_failed", {
+          type: "session_compact_failed",
+          reason: "manual",
+          aborted,
+          willRetry: false,
+          fromExtension: false,
+        });
         for (let check = 0; check < 200; check += 1) test.runChecks();
         expect(test.wakes()).toHaveLength(0);
 
@@ -248,30 +278,11 @@ describe("session wake", () => {
   // The harness's owner settles first and starts a turn that shows both owners' notices.
   const twoOwners = () => {
     const test = harness();
-    let idle = false;
-    const checks: Array<() => void> = [];
-    const other = registerSessionWake(test.pi, {
-      noticeTypes: new Set(["other-notice"]),
-      wakeMessage: { customType: "other-wake", content: "Act on the other notices." },
-      isIdle: () => idle,
-      later: (check) => checks.push(check),
-    });
+    const second = secondOwner(test, false);
     test.setIdle(false);
     test.deliver();
-    other.deliver(() => true);
-    const otherWakes = () =>
-      Arr.filter(test.sendMessage.mock.calls, ([message]) => message.customType === "other-wake");
-    const runOtherChecks = () => {
-      for (const check of checks.splice(0)) check();
-    };
-    return {
-      test,
-      otherWakes,
-      runOtherChecks,
-      setOtherIdle: (next: boolean) => {
-        idle = next;
-      },
-    };
+    second.other.deliver(() => true);
+    return { test, ...second };
   };
 
   it.effect(
@@ -279,7 +290,7 @@ describe("session wake", () => {
     () =>
       Effect.gen(function* () {
         const { test, otherWakes, runOtherChecks, setOtherIdle } = twoOwners();
-        yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+        yield* test.emit("agent_settled");
         expect(test.wakes()).toHaveLength(1);
         expect(otherWakes()).toHaveLength(0);
 
@@ -289,58 +300,44 @@ describe("session wake", () => {
       }),
   );
 
-  it.effect("appends a notice to another owner's coming turn, waking if that turn fails", () =>
-    Effect.sync(() => {
-      const test = harness();
-      const turns: Array<boolean> = [];
-      let otherIdle = true;
-      const checks: Array<() => void> = [];
-      const other = registerSessionWake(test.pi, {
-        noticeTypes: new Set(["other-notice"]),
-        wakeMessage: { customType: "other-wake", content: "Act on the other notices." },
-        isIdle: () => otherIdle,
-        later: (check) => checks.push(check),
+  it("appends a notice to another owner's coming turn, waking if that turn fails", () => {
+    const test = harness();
+    const { other, otherWakes, runOtherChecks, setOtherIdle } = secondOwner(test, true);
+    const turns: Array<boolean> = [];
+    const deliverOther = () =>
+      other.deliver((startTurn) => {
+        turns.push(startTurn);
+        return true;
       });
-      const deliverOther = () =>
-        other.deliver((startTurn) => {
-          turns.push(startTurn);
-          return true;
-        });
-      const otherWakes = () =>
-        Arr.filter(test.sendMessage.mock.calls, ([message]) => message.customType === "other-wake");
 
-      // Pi still emits agent_settled, so the turn this owner started has not begun.
-      expect(test.deliver()).toBe("woken");
-      expect(deliverOther()).toBe("queued");
-      expect(turns).toEqual([false]);
-      otherIdle = false;
-      for (const check of checks.splice(0)) check();
-      expect(otherWakes()).toHaveLength(0);
+    // Pi still emits agent_settled, so the turn this owner started has not begun.
+    expect(test.deliver()).toBe("woken");
+    expect(deliverOther()).toBe("queued");
+    expect(turns).toEqual([false]);
+    setOtherIdle(false);
+    runOtherChecks();
+    expect(otherWakes()).toHaveLength(0);
 
-      // That turn failed before it began, leaving the session idle.
-      otherIdle = true;
-      for (const check of checks.splice(0)) check();
-      expect(otherWakes()).toHaveLength(1);
-      expect(deliverOther()).toBe("woken");
-      expect(turns).toEqual([false, true]);
-    }),
-  );
+    // That turn failed before it began, leaving the session idle.
+    setOtherIdle(true);
+    runOtherChecks();
+    expect(otherWakes()).toHaveLength(1);
+    expect(deliverOther()).toBe("woken");
+    expect(turns).toEqual([false, true]);
+  });
 
   it.effect("lets the turn another owner started at settle answer its notice", () =>
     Effect.gen(function* () {
       const { test, otherWakes, runOtherChecks, setOtherIdle } = twoOwners();
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      yield* test.emit("agent_settled");
       runOtherChecks();
-      yield* Effect.promise(() => test.emit("agent_start", test.ctx));
+      yield* test.emit("agent_start");
       runOtherChecks();
-      yield* Effect.promise(() =>
-        test.emit(
-          "agent_before_settle",
-          test.ctx,
-          settleEvent([notice(), notice("other-notice"), reply()]),
-        ),
+      yield* test.emit(
+        "agent_before_settle",
+        settleEvent([notice(), notice("other-notice"), reply()]),
       );
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      yield* test.emit("agent_settled");
       setOtherIdle(true);
       runOtherChecks();
       expect(test.wakes()).toHaveLength(1);
@@ -351,11 +348,9 @@ describe("session wake", () => {
   it.effect("treats a run as busy until this owner's settle handler runs", () =>
     Effect.gen(function* () {
       const test = harness();
-      yield* Effect.promise(() => test.emit("agent_start", test.ctx));
+      yield* test.emit("agent_start");
       expect(test.deliver()).toBe("queued");
-      yield* Effect.promise(() =>
-        test.emit("agent_settled", test.ctx, { type: "agent_settled", aborted: true }),
-      );
+      yield* test.emit("agent_settled", { type: "agent_settled", aborted: true });
       expect(test.turns).toEqual([false]);
       expect(test.wakes()).toHaveLength(0);
     }),
@@ -371,16 +366,16 @@ describe("session wake", () => {
         const test = harness();
         test.setIdle(false);
         test.deliver();
-        yield* Effect.promise(() => test.emit(event.type, test.ctx, event));
+        yield* test.emit(event.type, event);
         expect(test.wake.closing()).toBe(true);
-        yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+        yield* test.emit("agent_settled");
         test.setIdle(true);
         expect(test.deliver()).toBe("closing");
-        yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+        yield* test.emit("agent_settled");
         expect(test.wakes()).toHaveLength(0);
 
         // Pi reports no cancelled or failed switch; the session is still open when its user prompts again.
-        yield* Effect.promise(() => test.emit("input", test.ctx, inputEvent("interactive")));
+        yield* test.emit("input", inputEvent("interactive"));
         expect(test.wake.closing()).toBe(false);
         expect(test.deliver()).toBe("woken");
         expect(test.turns).toEqual([false, false, true]);
@@ -394,10 +389,10 @@ describe("session wake", () => {
       const test = harness({ beforeSettle });
       test.setIdle(false);
       test.deliver();
-      yield* Effect.promise(() => test.settle(settleEvent([reply()], [], "aborted")));
+      yield* test.settle(settleEvent([reply()], [], "aborted"));
       expect(beforeSettle).not.toHaveBeenCalled();
 
-      yield* Effect.promise(() => test.settle(settleEvent([reply()], [notice()])));
+      yield* test.settle(settleEvent([reply()], [notice()]));
       const [, , settle] = beforeSettle.mock.calls[0] ?? [];
       expect(settle?.landed).toBe(true);
       expect(settle?.takeOwed()).toBe(false);
@@ -412,20 +407,14 @@ describe("session wake", () => {
       const test = harness({ holdDuringDialogs: true });
       test.setIdle(false);
       expect(test.deliver()).toBe("queued");
-      yield* Effect.promise(() =>
-        test.emit("ui_prompt_start", test.ctx, { type: "ui_prompt_start", ...dialog }),
-      );
+      yield* test.emit("ui_prompt_start", { type: "ui_prompt_start", ...dialog });
 
-      expect(
-        yield* Effect.promise(() => test.settle(settleEvent([reply()], [notice()]))),
-      ).toBeUndefined();
-      yield* Effect.promise(() => test.emit("agent_settled", test.ctx));
+      expect(yield* test.settle(settleEvent([reply()], [notice()]))).toBeUndefined();
+      yield* test.emit("agent_settled");
       expect(test.wakes()).toHaveLength(0);
 
       test.setIdle(true);
-      yield* Effect.promise(() =>
-        test.emit("ui_prompt_end", test.ctx, { type: "ui_prompt_end", ...dialog }),
-      );
+      yield* test.emit("ui_prompt_end", { type: "ui_prompt_end", ...dialog });
       expect(test.wakes()).toHaveLength(1);
     }),
   );

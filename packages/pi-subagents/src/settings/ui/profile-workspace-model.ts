@@ -2,7 +2,6 @@ import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
@@ -23,6 +22,7 @@ import {
   type ProfileSettingsScope,
   type ProfileWorkspaceTarget,
 } from "../profile-route-editor.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 export type ProfileWorkspacePane = "profiles" | "fields";
 
@@ -303,20 +303,18 @@ export const candidateFieldChoices = (
         description: "May change files within its assigned safety restrictions",
       },
     ];
-  if (field === "openaiFastMode")
-    return [
-      { value: "false", label: "Off", description: "Do not request priority service" },
-      ...(options.fastModeAvailable === true
-        ? [
-            {
-              value: "true",
-              label: "On, fast",
-              description: "Request OpenAI priority service for this choice",
-            },
-          ]
-        : []),
-    ];
-  return [];
+  return [
+    { value: "false", label: "Off", description: "Do not request priority service" },
+    ...(options.fastModeAvailable === true
+      ? [
+          {
+            value: "true",
+            label: "On, fast",
+            description: "Request OpenAI priority service for this choice",
+          },
+        ]
+      : []),
+  ];
 };
 
 const invalidSelection = (field: SelectableCandidateField): CandidateUpdate => ({
@@ -330,8 +328,9 @@ const selectEffort = (
   options: CandidateFieldChangeOptions,
 ): CandidateUpdate => {
   if (value === "default") return { candidate: { ...candidate, effort: "default" }, notices: [] };
-  const effort = Option.getOrUndefined(
-    Arr.findFirst(candidateEfforts(options.supportedEfforts), (entry) => entry === value),
+  const effort = findOrUndefined(
+    candidateEfforts(options.supportedEfforts),
+    (entry) => entry === value,
   );
   return effort ? { candidate: { ...candidate, effort }, notices: [] } : invalidSelection("effort");
 };

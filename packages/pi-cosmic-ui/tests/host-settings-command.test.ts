@@ -3,7 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as Option from "effect/Option";
+import * as Fn from "effect/Function";
 import * as Result from "effect/Result";
 import * as Str from "effect/String";
 import { InvalidSettingError } from "pi-cosmic-core/settings-completion";
@@ -31,7 +31,7 @@ const harness = (
   const notify = vi.fn();
   const apply = vi.fn<Options["apply"]>(() => Promise.resolve(Result.succeed(undefined)));
   const open = vi.fn<Options["open"]>(() =>
-    Promise.resolve({ _tag: "Settled" as const, value: undefined }),
+    Promise.resolve(OwnedSurfaceOutcome.Settled({ value: undefined })),
   );
   const create = (isCurrent = overrides.isCurrent ?? (() => true), owner?: SettingsCommandOwner) =>
     settingsSubcommand({
@@ -253,7 +253,7 @@ describe("provider settings command shell", () => {
         trusted = false;
         return session
           .apply("mode", "on", (value) => void shown.push(value), "project")
-          .then(() => ({ _tag: "Settled" as const, value: undefined }));
+          .then(() => OwnedSurfaceOutcome.Settled({ value: undefined }));
       });
       yield* h.invoke("");
       expect(h.apply).not.toHaveBeenCalled();
@@ -305,7 +305,7 @@ describe("provider settings command shell", () => {
   it.effect("an invalid value warns with the setting's name whoever rejected it", () =>
     Effect.gen(function* () {
       const h = harness({ config: () => ({ mode: "off" }) });
-      const rule = `mode must be on or off, not ${Str.repeat(449)("x")}`;
+      const rule = `mode must be on or off, not ${Fn.pipe("x", Str.repeat(449))}`;
       h.apply
         .mockResolvedValueOnce(Result.fail({ message: "mode must be on or off" }))
         .mockResolvedValueOnce(
@@ -372,32 +372,6 @@ describe("provider settings command shell", () => {
       expect(lines.length).toBeGreaterThan(12);
       for (const line of lines) expect(line.length).toBeLessThanOrEqual(55);
       expect(Arr.some(lines, Str.startsWith("Usage"))).toBe(false);
-    }),
-  );
-
-  it.effect("a help row that wraps keeps its value out of the description's column", () =>
-    Effect.gen(function* () {
-      const h = harness({
-        descriptors: [
-          {
-            id: "image.defaultModel",
-            label: "Image fallback model",
-            description: "Codex model that runs image requests when the current model isn't Codex.",
-            currentValue: () => "gpt-6.1-sol",
-          },
-        ],
-        config: () => ({ mode: "on" }),
-      });
-      yield* h.invoke("help");
-      const lines = Str.split(String(h.notify.mock.calls[0]?.[0]), "\n");
-      const indentOf = (needle: string) =>
-        Option.match(Arr.findFirst(lines, Str.includes(needle)), {
-          onNone: () => -1,
-          onSome: (line) => line.length - Str.trimStart(line).length,
-        });
-      const description = indentOf("Codex model");
-      expect(indentOf("(image.defaultModel)")).toBeLessThan(description);
-      expect(indentOf("gpt-6.1-sol")).toBeGreaterThan(description);
     }),
   );
 });

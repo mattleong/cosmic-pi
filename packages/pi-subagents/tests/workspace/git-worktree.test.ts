@@ -1,7 +1,6 @@
 import { expect, vi } from "vitest";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import { nodeFsPromises as fs, nodePath as path } from "../support/node-builtins.ts";
 import * as gitProcess from "../../src/boundary/git-worktree-process.ts";
 import { type WorkspaceHandle } from "../../src/workspace/model.ts";
@@ -10,6 +9,7 @@ import {
   failureOf,
   fails,
   integrateFailingRemoval,
+  interruptAtRecordSave,
   io,
   prepareIntegration,
   readText,
@@ -34,30 +34,12 @@ const test = workspaceTests(
   ],
   [".env"],
 );
-interface PendingInterrupt {
-  current?: () => void;
-}
 
 test("reports and owns a create interrupted while it commits the active record", function* (service, root) {
   const reported: WorkspaceHandle[] = [];
-  const rename = fs.rename;
-  const pendingInterrupt: PendingInterrupt = {};
-  const spy = vi.spyOn(fs, "rename").mockImplementation((from, to) =>
-    fs.readFile(from, "utf8").then((text) => {
-      if (
-        Fn.pipe(String(to), Str.endsWith("record.json")) &&
-        Fn.pipe(text, Str.includes('"status":"active"'))
-      )
-        pendingInterrupt.current?.();
-      return rename(from, to);
-    }),
-  );
-  const launch = yield* Effect.forkChild(
+  const exit = yield* interruptAtRecordSave(
     service.create({ sourceCwd: root, ownerId: "parent", onAcquired: (h) => reported.push(h) }),
-  );
-  pendingInterrupt.current = () => launch.interruptUnsafe();
-  const exit = yield* Fiber.await(launch).pipe(
-    Effect.ensuring(Effect.sync(() => spy.mockRestore())),
+    (text) => Fn.pipe(text, Str.includes('"status":"active"')),
   );
   expect(Exit.hasInterrupts(exit)).toBe(true);
   expect(reported).toHaveLength(1);
@@ -199,7 +181,10 @@ const stopCheckoutBeforeLast = () => {
   return vi.spyOn(gitProcess, "git").mockImplementation((cwd, args, options) => {
     if (args[0] !== "checkout-index" || options?.stdin === undefined)
       return original(cwd, args, options);
-    const paths = Arr.filter(Str.split(new TextDecoder().decode(options.stdin), "\0"), Boolean);
+    const paths = Arr.filter(
+      Str.split(new TextDecoder().decode(options.stdin), "\0"),
+      Str.isNonEmpty,
+    );
     const written = new TextEncoder().encode(
       Arr.join(
         Arr.map(paths.slice(0, -1), (name) => `${name}\0`),
@@ -332,6 +317,9 @@ test("carries every new worker file, whatever its name or extension", function* 
     "assets/icon.svg",
     "src/__snapshots__/main.test.ts.snap",
     "src/auth/credentials.ts",
+    // Names Git could mistake for an option or a pathspec.
+    "-draft.ts",
+    "notes: today.md",
   ];
   for (const name of created) {
     yield* io(() => fs.mkdir(path.dirname(path.join(handle.cwd, name)), { recursive: true }));
@@ -346,18 +334,6 @@ test("carries every new worker file, whatever its name or extension", function* 
   expect(yield* exists(path.join(root, "ignored.ts"))).toBe(false);
   expect(yield* exists(integrated.workerRoot)).toBe(false);
   expect(yield* exists(prepared.cwd)).toBe(false);
-});
-
-test("carries worker files Git can name, such as one starting with a dash", function* (service, root) {
-  const handle = yield* service.create({ sourceCwd: root, ownerId: "parent" });
-  yield* writeFile(path.join(handle.cwd, "-draft.ts"), "draft\n");
-  yield* writeFile(path.join(handle.cwd, "notes: today.md"), "notes\n");
-  const { revision, integration } = yield* prepareIntegration(service, handle);
-  expect(revision.changedPaths).toEqual(["-draft.ts", "notes: today.md"]);
-  expect(revision.uncapturedPaths).toBeUndefined();
-  yield* service.integrate(integration);
-  expect(yield* readText(root, "-draft.ts")).toBe("draft\n");
-  expect(yield* readText(root, "notes: today.md")).toBe("notes\n");
 });
 
 test("leaves ignored dependencies out and carries unignored ones like any other file", function* (service, root) {

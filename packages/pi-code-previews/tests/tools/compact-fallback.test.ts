@@ -5,8 +5,7 @@ import { beforeEach, test } from "vitest";
 import { applyPresentationSettings, renderContextFixture } from "../../testing";
 import { defaultCodePreviewSettings } from "../../src/config/defaults";
 import { withCodePreviewShell } from "../../src/tools/cooperative-tools";
-import { plainTheme } from "../support/render";
-import * as Str from "effect/String";
+import { occurrences, plainTheme } from "../support/render";
 import * as Arr from "effect/Array";
 
 type Definition = ReturnType<typeof createReadToolDefinition>;
@@ -14,7 +13,6 @@ type Context = Parameters<NonNullable<Definition["renderCall"]>>[2];
 type Result = Awaited<ReturnType<Definition["execute"]>>;
 const result: Result = { content: [{ type: "text", text: "raw result" }], details: undefined };
 const modes = ["on", "off", "border"] as const;
-const count = (text: string, phrase: string) => Str.split(text, phrase).length - 1;
 
 beforeEach(() =>
   applyPresentationSettings({
@@ -117,7 +115,7 @@ test("render-time failures revoke component ownership before invalidation and re
   });
   const ctx = context();
   const failed = paint(tool, ctx);
-  assert.equal(count(Arr.join(failed.rows, "\n"), "Check cleanup"), 1);
+  assert.equal(occurrences(Arr.join(failed.rows, "\n"), "Check cleanup"), 1);
   assert.doesNotThrow(() => {
     failed.call.invalidate();
     failed.output.invalidate();

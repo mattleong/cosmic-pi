@@ -5,6 +5,7 @@ import {
   signalProcessGroup,
   type BoundedProcessResult,
 } from "pi-cosmic-core";
+import { pollUntil } from "pi-cosmic-core/testing";
 import { once } from "node:events";
 import * as Effect from "effect/Effect";
 import {
@@ -116,8 +117,7 @@ setInterval(() => {}, 1000);`,
           if (commandPid > 0) signalProcessGroup(commandPid, "SIGKILL");
         }),
       );
-      for (let attempt = 0; attempt < 200 && !Fn.pipe(output, Str.includes("\n")); attempt++)
-        yield* Effect.sleep("10 millis");
+      yield* pollUntil(() => Fn.pipe(output, Str.includes("\n")));
       const commandPid = Number(Str.trim(output));
       expect(Number.isSafeInteger(commandPid) && commandPid > 0).toBe(true);
       expect(yield* detachedDescendantGroups(leader.pid ?? 0)).toEqual([commandPid]);

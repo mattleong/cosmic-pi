@@ -25,6 +25,10 @@ import {
   type CodePreviewToolStatus,
 } from "../../tools/status";
 
+/** A submenu's list theme: the surface's own when it has one, else the host's. */
+export const settingsListTheme = (theme: Theme | undefined) =>
+  theme ? managerSettingsTheme(theme) : getSettingsListTheme();
+
 /** The `Enabled tools` list: a toggle per tool, read-only where a setting or owner decides. */
 export function createToolPreviewSettingsSubmenu(
   tools: readonly CodePreviewToolName[],
@@ -47,7 +51,7 @@ export function createToolPreviewSettingsSubmenu(
     },
     done,
     summary,
-    listTheme: theme ? managerSettingsTheme(theme) : getSettingsListTheme(),
+    listTheme: settingsListTheme(theme),
   });
 }
 
@@ -142,7 +146,7 @@ export function createThemeSelectSubmenu(
     description: "Shiki theme for code previews.",
     values: Arr.sort(Rec.keys(bundledThemes), Order.String),
     current: currentTheme,
-    theme: theme ? managerSettingsTheme(theme) : getSettingsListTheme(),
+    theme: settingsListTheme(theme),
     done,
     maxVisible: 12,
   });

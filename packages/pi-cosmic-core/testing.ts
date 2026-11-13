@@ -25,6 +25,7 @@ export {
   type HostModel,
   type HostModelRegistry,
 } from "./src/testing/model.ts";
+export { sessionMessageEntryFixture } from "./src/testing/session.ts";
 export { failingTheme, plainTheme } from "./src/testing/theme.ts";
 export {
   footerDataFixture,
@@ -36,13 +37,14 @@ export {
 export { deferredPromise } from "./src/testing/deferred.ts";
 export { keybindingHintsFixture, piKeybindingsFixture } from "./src/testing/pi-keybindings.ts";
 export { recordingExtensionHost, type RecordedHandlers } from "./src/testing/extension-host.ts";
-export type {
-  DefaultedEventName,
-  ExtensionEventName,
-  ExtensionEventNamed,
+export {
+  agentBeforeSettleEventFixture,
+  type DefaultedEventName,
+  type ExtensionEventName,
+  type ExtensionEventNamed,
 } from "./src/testing/extension-events.ts";
 export { spawnIpcChild, temporaryDirectory } from "./src/testing/ipc-child.ts";
-export { yieldUntil } from "./src/testing/polling.ts";
+export { pollUntil, yieldUntil } from "./src/testing/polling.ts";
 export { reusedProcessIdentity } from "./src/testing/process.ts";
 export { NodeChildProcess } from "./src/platform/node-builtins.ts";
 export { eventLoopTurn, macrotask, maybe, settle, step } from "./src/testing/steps.ts";

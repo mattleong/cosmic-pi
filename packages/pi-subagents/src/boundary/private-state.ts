@@ -18,7 +18,7 @@ import {
   replacePrivateFile,
 } from "pi-cosmic-core/platform/private-file";
 import { synchronousRandomHex } from "pi-cosmic-core/platform/native-crypto";
-import { safeAgentDirectory } from "./harness-shared.ts";
+import { hasControlCharacter } from "pi-cosmic-core/security";
 
 /** Private state nobody has touched for this long is abandoned unless a recorded owner may be live. */
 export const PRIVATE_STATE_RETENTION_MILLIS = 7 * 24 * 60 * 60 * 1000;
@@ -53,12 +53,13 @@ export const recordPrivateStateOwner = (directory: string): Effect.Effect<void, 
     return replacePrivateFile(target, `${target}.${synchronousRandomHex(6)}.tmp`, source);
   });
 
-const io = <A>(evaluate: () => PromiseLike<A>): Effect.Effect<Option.Option<A>> =>
+/** A housekeeping file operation whose failure only means there is nothing to act on. */
+export const attempt = <A>(evaluate: () => PromiseLike<A>): Effect.Effect<Option.Option<A>> =>
   Effect.tryPromise(evaluate).pipe(Effect.option);
 
 const readOwner = (directory: string): Effect.Effect<Option.Option<ProcessIdentity>> => {
   const file = nodePath.join(directory, PRIVATE_STATE_OWNER_FILE);
-  return io(() =>
+  return attempt(() =>
     fs
       .lstat(file)
       .then((stat) =>
@@ -68,7 +69,7 @@ const readOwner = (directory: string): Effect.Effect<Option.Option<ProcessIdenti
 };
 
 const newestModification = (directory: string): Effect.Effect<Option.Option<number>> =>
-  io(() =>
+  attempt(() =>
     fs.lstat(directory).then((stat) =>
       fs.readdir(directory).then((names) =>
         Promise.all(
@@ -121,7 +122,7 @@ const isAbandoned = Effect.fnUntraced(function* (
  */
 const removeEntry = (parent: string, name: string): Effect.Effect<boolean> => {
   const tombstone = nodePath.join(parent, `${TOMBSTONE_PREFIX}${name}-${synchronousRandomHex(6)}`);
-  return io(() => fs.rename(nodePath.join(parent, name), tombstone)).pipe(
+  return attempt(() => fs.rename(nodePath.join(parent, name), tombstone)).pipe(
     Effect.flatMap((renamed) =>
       Option.isNone(renamed)
         ? Effect.succeed(false)
@@ -131,12 +132,31 @@ const removeEntry = (parent: string, name: string): Effect.Effect<boolean> => {
 };
 
 const isRealDirectory = (path: string): Effect.Effect<boolean> =>
-  io(() => fs.lstat(path)).pipe(
+  attempt(() => fs.lstat(path)).pipe(
     Effect.map(Option.exists((stat) => stat.isDirectory() && !stat.isSymbolicLink())),
   );
 
+const MAX_PATH_CHARS = 4_096;
+
+/** The canonical path of an absolute agent directory that is a real directory, never a link. */
+const safeAgentDirectory = Effect.fn("PrivateState.safeAgentDirectory")(function* (
+  agentDirectory: string,
+): Effect.fn.Return<Option.Option<string>> {
+  if (
+    !nodePath.isAbsolute(agentDirectory) ||
+    agentDirectory.length > MAX_PATH_CHARS ||
+    hasControlCharacter(agentDirectory)
+  )
+    return Option.none();
+  const requested = nodePath.resolve(agentDirectory);
+  if (!(yield* isRealDirectory(requested))) return Option.none();
+  const canonical = yield* attempt(() => fs.realpath(requested));
+  if (Option.isNone(canonical) || !(yield* isRealDirectory(canonical.value))) return Option.none();
+  return canonical;
+});
+
 const directoryEntries = (directory: string) =>
-  io(() => fs.readdir(directory, { withFileTypes: true })).pipe(
+  attempt(() => fs.readdir(directory, { withFileTypes: true })).pipe(
     Effect.map(Option.getOrElse(() => [])),
   );
 
@@ -173,7 +193,7 @@ const sweepEntries = Effect.fn("PrivateState.sweepEntries")(function* (
 export const sweepAbandonedPrivateState = Effect.fn("PrivateState.sweepAbandonedPrivateState")(
   function* (agentDirectory: string): Effect.fn.Return<void> {
     const context: SweepContext = { now: yield* Clock.currentTimeMillis, liveness: new Map() };
-    const canonical = yield* Effect.option(safeAgentDirectory(agentDirectory));
+    const canonical = yield* safeAgentDirectory(agentDirectory);
     if (Option.isNone(canonical)) return;
     const root = nodePath.join(canonical.value, SUBAGENT_STATE_ROOT);
     if (!(yield* isRealDirectory(root))) return;
@@ -188,7 +208,7 @@ export const sweepAbandonedPrivateState = Effect.fn("PrivateState.sweepAbandoned
       yield* sweepEntries(context, session);
       // Removes the session directory only once it is empty, including one an interrupted spawn's
       // late cleanup had to leave because it couldn't prove it created the directory.
-      yield* io(() => fs.rmdir(session));
+      yield* attempt(() => fs.rmdir(session));
     }
   },
 );

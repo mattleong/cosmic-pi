@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import * as Predicate from "effect/Predicate";
 import * as Rec from "effect/Record";
@@ -17,6 +16,7 @@ import type {
 import type { RendererState } from "./renderers/shared/types";
 import {
   nativeCodemodeEvidence,
+  nativeEvidenceComplete,
   type NativeCallEvidence,
   type NativeCodemodeCall,
 } from "./native-codemode-evidence";
@@ -33,6 +33,7 @@ import { nativeCodemodeCallSubject, nativeMcpCall } from "./native-codemode-subj
 import { nativeMcpResourceAction } from "./native-mcp-identity";
 import { visibleDiagnosticLine } from "./native-safe-content";
 import { nativeTruncationIssues, parseNativeTruncatedOutput } from "./native-truncation";
+import { splitScriptError } from "./native-codemode-output";
 import {
   createNativeDiscoveryProjector,
   nativeDiscoveryLabel,
@@ -45,7 +46,6 @@ import { errnoMessage } from "./system-diagnostics";
 import { shellFailure } from "./builtin-failure-shell";
 
 const nativeModelCalls: ReadonlySet<string> = new Set(["models.classify", "models.generateImages"]);
-const SCRIPT_ERROR = "Script error:\n";
 const SCRIPT_STOPPED = /^\s*Script aborted(?:: stopped)?\s*$/u;
 
 function issue(code: string, text: string): CompactIssue {
@@ -249,14 +249,9 @@ function settledExpandLabel(summary: CompactSummary, result: AgentToolResult<unk
 // Pi appends its error trailer after all script output and may join it with the preceding text,
 // so only the last trailer at a line start is Pi's; earlier ones are guest-printed text.
 function scriptErrorText(content: AgentToolResult<unknown>["content"]): string {
-  for (let index = content.length - 1; index >= 0; index -= 1) {
-    const part = content[index];
-    if (part?.type !== "text") continue;
-    const lineStart = Fn.pipe(part.text, Str.lastIndexOf(`\n${SCRIPT_ERROR}`));
-    if (Option.isSome(lineStart))
-      return Fn.pipe(part.text, Str.slice(lineStart.value + 1 + SCRIPT_ERROR.length));
-    if (Fn.pipe(part.text, Str.startsWith(SCRIPT_ERROR)))
-      return Fn.pipe(part.text, Str.slice(SCRIPT_ERROR.length));
+  for (const part of Arr.reverse(content)) {
+    const scriptError = part.type === "text" ? splitScriptError(part.text).scriptError : undefined;
+    if (scriptError !== undefined) return scriptError;
   }
   return "";
 }
@@ -335,7 +330,7 @@ export const nativeCodemodeSummary =
     if (!result) return phase === "settled" ? undefined : heading;
     const evidence = nativeCodemodeEvidence(hostContainer(result.details));
     const calls = evidence.kind === "available" ? evidence.calls : [];
-    const complete = evidence.kind === "available" && evidence.complete;
+    const complete = nativeEvidenceComplete(evidence);
     const header = nativeCodemodeHeader(result);
     const output = result.content[1];
     const truncatedEnvelope =

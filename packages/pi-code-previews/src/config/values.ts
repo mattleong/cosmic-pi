@@ -10,12 +10,13 @@ import {
 import { type JsonObject } from "pi-cosmic-core/platform/json-document";
 import {
   ALL_CODE_PREVIEW_TOOLS,
+  isCodePreviewToolName,
   parseCodePreviewTools,
   type CodePreviewToolName,
 } from "../tools/names";
 import {
-  CODE_PREVIEW_SETTING_KEYS,
   CodePreviewSettingsSchema,
+  isCodePreviewSettingKey,
   type CodePreviewEditableSettingId,
   type CodePreviewSettings,
 } from "./schema";
@@ -49,14 +50,12 @@ const decodeSettingsFields = decodeTolerantFields(
   { ...CodePreviewSettingsSchema.fields, tools: Schema.Array(Schema.Unknown) },
   { path: "settings", maxDiagnostics: MAX_SETTINGS_DIAGNOSTICS },
 );
-const decodeToolName = Schema.decodeUnknownOption(Schema.Literals(ALL_CODE_PREVIEW_TOOLS));
 
 function decodeToolEntries(entries: readonly unknown[]) {
   const tools = new Set<CodePreviewToolName>();
   const diagnostics: TolerantFieldDiagnostic[] = [];
   Arr.forEach(entries, (entry, index) => {
-    const tool = decodeToolName(entry);
-    if (Option.isSome(tool)) tools.add(tool.value);
+    if (isCodePreviewToolName(entry)) tools.add(entry);
     else diagnostics.push({ path: `settings.tools[${index}]`, issue: "invalid" });
   });
   // Like the CLI parser, a selection with no known names keeps the fallback.
@@ -105,13 +104,10 @@ export function updateSetting(
   id: string,
   value: string,
 ): CodePreviewSettings {
-  const key = Option.getOrUndefined(
-    Arr.findFirst(CODE_PREVIEW_SETTING_KEYS, (candidate) => candidate === id),
-  );
-  if (!key) return cloneCodePreviewSettings(current);
+  if (!isCodePreviewSettingKey(id)) return cloneCodePreviewSettings(current);
   const decoded = Schema.decodeOption(CodePreviewSettingsSchema)({
     ...current,
-    [key]: uiSettingCandidate(key, current[key], value),
+    [id]: uiSettingCandidate(id, current[id], value),
   });
   return Option.isSome(decoded)
     ? { ...decoded.value, tools: [...decoded.value.tools] }

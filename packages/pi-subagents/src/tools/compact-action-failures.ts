@@ -9,6 +9,7 @@ import type { AgentMessageRefusalCode } from "../run/errors.ts";
 import type { CompactToolActionFailure, SubagentRunCard } from "./details-schema.ts";
 import { CODED_FAILURE, type RejectedFailure } from "./failure-details.ts";
 import { actionFailureDisposition, isUncertainToolFailure } from "./outcome.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 type Phrase = (subject: string) => string;
 
@@ -84,10 +85,8 @@ function failedActionMessage(
   oneOfMany = false,
 ): string {
   const code = failure.code === undefined ? "" : Str.toLowerCase(failure.code);
-  const phrase = Option.getOrUndefined(
-    Arr.findFirst(FAILURE_PHRASES, ([codes]) =>
-      Arr.some(codes, (needle) => Fn.pipe(code, Str.includes(needle))),
-    ),
+  const phrase = findOrUndefined(FAILURE_PHRASES, ([codes]) =>
+    Arr.some(codes, (needle) => Fn.pipe(code, Str.includes(needle))),
   );
   if (phrase) return phrase[1](name ?? (oneOfMany ? "A subagent" : "The subagent"));
   const readable = readableFailure(failure.message, [failure.id]);
@@ -159,24 +158,18 @@ type AgentFailureCode =
   | "message_required"
   | "message_too_large";
 
-interface AgentFailurePresentation {
-  readonly message: (subject: string) => string;
-}
+const AGENT_FAILURES: Record<AgentFailureCode, Phrase> = {
+  agent_self_target: () => "An agent can't message itself",
+  agent_not_found: (subject) => `${subject} isn't in this session`,
+  agent_unavailable: (subject) => `${subject} can't receive messages right now`,
+  too_many_targets: () => "Too many agents were named",
+  agent_ids_required: () => "No agent was named",
+  scripted_agent_send_not_supported: () => "Scripts can't send agent messages",
+  message_required: () => "The message is empty",
+  message_too_large: () => "The message is too long",
+};
 
-const AGENT_FAILURES = {
-  agent_self_target: { message: () => "An agent can't message itself" },
-  agent_not_found: { message: (subject) => `${subject} isn't in this session` },
-  agent_unavailable: { message: (subject) => `${subject} can't receive messages right now` },
-  too_many_targets: { message: () => "Too many agents were named" },
-  agent_ids_required: { message: () => "No agent was named" },
-  scripted_agent_send_not_supported: { message: () => "Scripts can't send agent messages" },
-  message_required: { message: () => "The message is empty" },
-  message_too_large: { message: () => "The message is too long" },
-} satisfies Record<AgentFailureCode, AgentFailurePresentation>;
-
-const AGENT_FAILURE_CODES: ReadonlyMap<string, AgentFailurePresentation> = new Map(
-  Rec.toEntries(AGENT_FAILURES),
-);
+const AGENT_FAILURE_CODES: ReadonlyMap<string, Phrase> = new Map(Rec.toEntries(AGENT_FAILURES));
 
 /**
  * The issue for a rejected run action with a code, phrased from the code so the IDs its failure
@@ -209,16 +202,18 @@ export function agentFailureIssues(
 ): CompactIssue[] {
   const code = failure.code;
   const known = code === undefined ? undefined : AGENT_FAILURE_CODES.get(code);
+  if (code !== undefined && known !== undefined)
+    return [
+      {
+        severity: "error",
+        code: `agent:${code}`,
+        message: known(subject),
+        detail: failure.message,
+      },
+    ];
   // A message to a run can also fail delivery, with the same codes and recovery as other actions.
-  const delivery = known ? undefined : codedActionFailureIssue(failure, action, { name: subject });
-  if (delivery) return [delivery];
-  if (!known) return [rejectedCallIssue(action, failure.message, Str.toLowerCase(subject))];
   return [
-    {
-      severity: "error",
-      code: `agent:${code ?? "failed"}`,
-      message: known.message(subject),
-      detail: failure.message,
-    },
+    codedActionFailureIssue(failure, action, { name: subject }) ??
+      rejectedCallIssue(action, failure.message, Str.toLowerCase(subject)),
   ];
 }

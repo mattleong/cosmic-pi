@@ -39,6 +39,7 @@ import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Str from "effect/String";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 type ProxyResponse = Extract<LocalPiParentControl, { readonly type: "proxy_response" }>;
 
@@ -65,11 +66,9 @@ const offerProxyCancel = (control: FakeChildControl, requestId: string) => {
 };
 
 const responseFor = (control: FakeChildControl, requestId: string): ProxyResponse | undefined =>
-  Option.getOrUndefined(
-    Arr.findFirst(
-      Arr.filter(control.ipc, (message) => message.type === "proxy_response"),
-      (message) => message.requestId === requestId,
-    ),
+  findOrUndefined(
+    Arr.filter(control.ipc, (message) => message.type === "proxy_response"),
+    (message) => message.requestId === requestId,
   );
 
 const proxyLayer = (
@@ -91,48 +90,44 @@ const hangingHandlerLayer = (
 ) => proxyLayer(fake, started, () => Deferred.await(release).pipe(Effect.as(proxyResult())));
 
 /** Routes proxied calls like the root coordinator: the caller is the authenticated channel's run. */
-const coordinatorProxyOptions = (): SubagentServiceOptions => {
+const coordinatorProxyHandler = (
+  cwd: string,
+  onUpdate?: () => void,
+  intercept: (service: SubagentServiceContract) => SubagentServiceContract = (service) => service,
+): NonNullable<SubagentServiceOptions["proxyHandler"]> => {
   const host = recordingExtensionHost();
   const context = extensionContextFixture();
-  return {
-    proxyHandler: (service, callerRunId, proxyRequest) => {
-      const input = decodeSubagentProxyRequest(proxyRequest);
-      if (Result.isFailure(input)) return Effect.fail(input.failure);
-      return executeSubagentActionEffect(
-        host.pi,
-        { cwd: "/repo", projectTrusted: true },
-        input.success,
-        undefined,
-        context,
-        callerRunId,
-      ).pipe(Effect.provideService(SubagentService, service));
-    },
+  return (service, callerRunId, proxyRequest) => {
+    const input = decodeSubagentProxyRequest(proxyRequest);
+    if (Result.isFailure(input)) return Effect.fail(input.failure);
+    return executeSubagentActionEffect(
+      host.pi,
+      { cwd, projectTrusted: true },
+      input.success,
+      onUpdate,
+      context,
+      callerRunId,
+    ).pipe(Effect.provideService(SubagentService, intercept(service)));
   };
 };
 
-/** A root coordinator for nested awaits, optionally over an intercepted service. */
+/**
+ * A root coordinator for nested awaits, optionally over an intercepted service. `progress` counts
+ * the awaits' updates and the proxied calls that ended.
+ */
 const nestedAwaitFixture = (
-  intercept: (service: SubagentServiceContract) => SubagentServiceContract = (service) => service,
+  intercept?: (service: SubagentServiceContract) => SubagentServiceContract,
 ) => {
-  const host = recordingExtensionHost();
-  const context = extensionContextFixture();
-  const progress = { observed: 0 };
+  const progress = { observed: 0, finalized: 0 };
+  const handler = coordinatorProxyHandler(
+    "/project",
+    () => void (progress.observed += 1),
+    intercept,
+  );
   const fixture = localServiceFixture({
     notify: acknowledgeCompletions,
-    proxyHandler: (service, callerRunId, proxyRequest) => {
-      const input = decodeSubagentProxyRequest(proxyRequest);
-      if (Result.isFailure(input)) return Effect.fail(input.failure);
-      return executeSubagentActionEffect(
-        host.pi,
-        { cwd: "/project", projectTrusted: true },
-        input.success,
-        () => {
-          progress.observed += 1;
-        },
-        context,
-        callerRunId,
-      ).pipe(Effect.provideService(SubagentService, intercept(service)));
-    },
+    proxyHandler: (...call) =>
+      handler(...call).pipe(Effect.ensuring(Effect.sync(() => void (progress.finalized += 1)))),
   });
   return { ...fixture, progress };
 };
@@ -302,7 +297,10 @@ describe("nested await messages", () => {
 describe("SubagentService parent proxy executions", () => {
   it.effect("binds proxied workspace calls to the authenticated caller", () => {
     const fake = fakeChildLayer();
-    const f = workspaceFixture({ children: fake, serviceOptions: coordinatorProxyOptions() });
+    const f = workspaceFixture({
+      children: fake,
+      serviceOptions: { proxyHandler: coordinatorProxyHandler("/repo") },
+    });
     return withService(f.layer, function* (service) {
       const writer = yield* stoppedWriter(service);
       const workspaceId = writer.workspaceId!;
@@ -345,49 +343,15 @@ describe("SubagentService parent proxy executions", () => {
 
   for (const ending of ["crash", "report"] as const)
     it.effect(`releases a proxied await when its caller ends by ${ending}`, () => {
-      const host = recordingExtensionHost();
-      const context = extensionContextFixture();
-      let observed = false;
-      let finalized = false;
-      const { fake, layer, notifications } = localServiceFixture({
-        notify: acknowledgeCompletions,
-        proxyHandler: (service, callerRunId, proxyRequest) => {
-          const input = decodeSubagentProxyRequest(proxyRequest);
-          if (Result.isFailure(input)) return Effect.fail(input.failure);
-          return executeSubagentActionEffect(
-            host.pi,
-            { cwd: "/project", projectTrusted: true },
-            input.success,
-            () => {
-              observed = true;
-            },
-            context,
-            callerRunId,
-          ).pipe(
-            Effect.provideService(SubagentService, service),
-            Effect.ensuring(
-              Effect.sync(() => {
-                finalized = true;
-              }),
-            ),
-          );
-        },
-      });
+      const { fake, layer, notifications, progress } = nestedAwaitFixture();
       return withService(layer, function* (service) {
-        const parent = yield* service.start(request({ name: "awaiting-parent" }));
-        const child = yield* service.startSessionOwnedFrom(parent.id, request({ name: "child" }));
+        const { child } = yield* nestedParentAndChild(service);
         const caller = fake.controls[0]!;
-        caller.offerIpc({
-          channel: "pi-subagents",
-          type: "proxy_request",
-          requestId: "await-child",
-          tool: "agent_await",
-          argumentsJson: JSON.stringify({ runIds: [child.id], until: "all_finished" }),
-        });
-        yield* yieldUntil(() => observed);
+        offerAwait(caller, "await-child", { runIds: [child.id] });
+        yield* yieldUntil(() => progress.observed > 0);
         if (ending === "crash") caller.exit(1);
         else caller.settle("Parent report.");
-        yield* yieldUntil(() => finalized && caller.released() === 1);
+        yield* yieldUntil(() => progress.finalized > 0 && caller.released() === 1);
         expect((yield* runView(service, child.id)).state).toBe("running");
         expect(fake.controls[1]!.released()).toBe(0);
 

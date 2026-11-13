@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import * as Num from "effect/Number";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
@@ -120,12 +119,7 @@ function renderPathListLine(
 ): string {
   if (!line) return "";
   if (isToolOutputNoticeLine(line)) return theme.fg("warning", escapeControlChars(line));
-  const indent = Fn.pipe(
-    line,
-    Str.match(/^\s*/),
-    Option.map((match) => match[0]),
-    Option.getOrElse(() => ""),
-  );
+  const indent = /^\s*/.exec(line)?.[0] ?? "";
   const body = Fn.pipe(line, Str.slice(indent.length));
   const prefix = entryPrefix(body, Fn.pipe(body, Str.endsWith("/")), indent, theme, iconMode);
   return prefix + renderDisplayPath(body, cwd, theme, body);

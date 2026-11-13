@@ -1,6 +1,5 @@
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
-import * as Option from "effect/Option";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { countLabel } from "pi-cosmic-core/display";
@@ -28,11 +27,13 @@ import { agentFactLines, savedAgentFactLines } from "../ui/run-facts.ts";
 import {
   runRowStateLabel,
   runStateColor,
+  runStateLabel,
   runStateSnapshotGlyph,
   SNAPSHOT_RUNNING_GLYPH,
 } from "../ui/run-state.ts";
 import { quotesWhole } from "./compact-run-issues.ts";
 import type { AgentToolDetails } from "./details-schema.ts";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 type ListDetails = Extract<AgentToolDetails, { readonly action: "agent_list" }>;
 
@@ -42,8 +43,14 @@ type SendDetails = Extract<AgentToolDetails, { readonly action: "agent_send" }>;
 type ReadDetails = Extract<AgentToolDetails, { readonly action: "agent_read" }>;
 type AgentState = ReadDetails["agents"][number]["state"];
 
-const runState = (state: AgentState) =>
-  Option.getOrUndefined(Arr.findFirst(SUBAGENT_RUN_STATES, (known) => known === state));
+const runState = (state: string) =>
+  findOrUndefined(SUBAGENT_RUN_STATES, (known) => known === state);
+
+/** A run state in words; the main agent's states read as they are. */
+export const agentStateLabel = (state: string): string => {
+  const run = runState(state);
+  return run === undefined ? state : runStateLabel(run);
+};
 
 interface AgentStatePresentation {
   readonly glyph: string;
@@ -53,7 +60,7 @@ interface AgentStatePresentation {
 }
 
 /** The glyph, tone, and label of a run's state or the main agent's. */
-export const agentStatePresentation = (state: AgentState): AgentStatePresentation => {
+const agentStatePresentation = (state: AgentState): AgentStatePresentation => {
   const run = runState(state);
   if (run !== undefined)
     return {
@@ -151,14 +158,12 @@ const listRowLines = (
   );
 };
 
-/** Undefined when saved details carry no entries; their content then renders as text. */
 export const renderListResult = (
   details: ListDetails,
   expanded: boolean,
   theme: Theme,
-): Component | undefined => {
+): Component => {
   const entries = details.entries;
-  if (entries === undefined) return undefined;
   const rows = (width: number): string[] => {
     const safeWidth = Math.max(1, width);
     const shown =
@@ -195,7 +200,7 @@ export const renderListResult = (
     expandedFactDetails(
       theme,
       Arr.flatMap(entries, (entry) =>
-        entry.kind === "main" ? [] : agentFactLines(entry.name, [entry.facts ?? entry.id]),
+        entry.kind === "main" ? [] : agentFactLines(entry.name, [entry.facts]),
       ),
     ),
   );
@@ -215,6 +220,15 @@ const READ_SOURCE_LABELS = {
   question: "Question",
 } as const;
 
+/** An agent's notes, then what its words lack: any at all, or the part past a shown copy's limit. */
+const readNotes = (agent: ReadDetails["agents"][number], textShown: boolean): string[] => [
+  ...(agent.notes ?? []),
+  ...(agent.text === undefined && !agent.notes?.length
+    ? [agent.source === "report" ? "Report saved to a file" : "No message yet"]
+    : []),
+  ...(agent.textCut && textShown ? ["Shown up to its display limit"] : []),
+];
+
 /**
  * One agent read, expanded: its heading names it and states its state, so the body is its words
  * under a label naming what they are, then its notes and `Details`. A question its issue quotes
@@ -224,13 +238,7 @@ const singleReadBody = (agent: ReadDetails["agents"][number], theme: Theme): Com
   const source = agent.source ?? "assistant";
   const quoted = source === "question" && agent.text !== undefined && quotesWhole(agent.text);
   const text = quoted ? undefined : agent.text;
-  const notes = [
-    ...(agent.notes ?? []),
-    ...(agent.text === undefined && !agent.notes?.length
-      ? [agent.source === "report" ? "Report saved to a file" : "No message yet"]
-      : []),
-    ...(agent.textCut && text !== undefined ? ["Shown up to its display limit"] : []),
-  ];
+  const notes = readNotes(agent, text !== undefined);
   return expandedBody(
     text === undefined
       ? undefined
@@ -285,13 +293,7 @@ export const renderReadResult = (
         " · ",
       ),
       text: hidden ? undefined : agent.text,
-      notes: [
-        ...(agent.notes ?? []),
-        ...(agent.text === undefined && !agent.notes?.length
-          ? [agent.source === "report" ? "Report saved to a file" : "No message yet"]
-          : []),
-        ...(agent.textCut && !hidden ? ["Shown up to its display limit"] : []),
-      ],
+      notes: readNotes(agent, !hidden),
     };
   });
   const rows = (width: number) => agentTextBlockLines(blocks, width, theme, expanded);

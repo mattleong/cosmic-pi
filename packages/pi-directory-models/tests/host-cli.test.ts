@@ -9,4 +9,9 @@ describe("explicit CLI preference detection", () => {
       captureExplicitPreferenceArgument(["--thinking", "low", "--", "--model", "prompt"]),
     ).toBe(true);
   });
+
+  test("ignores arguments after the end-of-options marker and a trailing flag without a value", () => {
+    expect(captureExplicitPreferenceArgument(["--", "--model", "x"])).toBe(false);
+    expect(captureExplicitPreferenceArgument(["--model"])).toBe(false);
+  });
 });

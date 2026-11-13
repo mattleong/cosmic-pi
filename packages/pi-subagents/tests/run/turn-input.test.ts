@@ -3,7 +3,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Semaphore from "effect/Semaphore";
-import { settlementOperations } from "../../src/run/settlement.ts";
 import { turnInputGates } from "../../src/run/turn-input.ts";
 import { view } from "../fixtures/run-view.ts";
 import {
@@ -11,6 +10,7 @@ import {
   runningAssignment,
   runRecordFixture,
   quietDelivery,
+  testSettlement,
 } from "./fixtures/run-context.ts";
 import { yieldTurns } from "./fixtures/service-harness.ts";
 
@@ -47,10 +47,8 @@ describe("turn-input admission", () => {
         assignment: runningAssignment(1),
       });
       let claims = 0;
-      const settlement = settlementOperations({
-        ...context,
+      const settlement = testSettlement(context, {
         delivery: quietDelivery,
-        closeRecordScope: () => Effect.void,
         claimTurnInputDrain: (claimed, drained) => {
           gates.claimTurnInputDrain(claimed, drained);
           // Guidance is admitted once the first drain has completed, before the report commits.
@@ -69,6 +67,6 @@ describe("turn-input admission", () => {
       expect(record.view.state).toBe("completed");
       expect(record.view.finalText).toBe("Report.");
       expect(claims).toBe(3);
-    }).pipe(Effect.scoped),
+    }),
   );
 });

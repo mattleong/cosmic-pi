@@ -1,5 +1,4 @@
 import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
@@ -29,6 +28,7 @@ import {
   type SearchableSelectHostOptions,
   type SearchableSelectPageChoice,
 } from "pi-cosmic-ui/manager/searchable-select";
+import { findOrUndefined } from "pi-cosmic-core/array";
 
 interface SharedSelectorOptions extends SearchableSelectHostOptions {
   readonly theme: Theme;
@@ -79,7 +79,7 @@ interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
   readonly fastModeAvailable?: boolean | undefined;
   readonly notice?: string | undefined;
-  readonly select: (update: CandidateUpdate, value: string) => void;
+  readonly select: (update: CandidateUpdate) => void;
   readonly cancel: () => void;
 }
 
@@ -89,17 +89,15 @@ const currentFieldValue = (candidate: ProfileCandidate, field: SelectableCandida
 export const candidateFieldSelector = (
   options: CandidateFieldSelectorOptions,
 ): SearchableSelectPage<string> => {
-  const row = Option.getOrUndefined(
-    Arr.findFirst(
-      candidateFieldRows(
-        options.candidate,
-        options.profile,
-        options.parentEffort,
-        options.parentModel,
-        true,
-      ),
-      (entry) => entry.field === options.field,
+  const row = findOrUndefined(
+    candidateFieldRows(
+      options.candidate,
+      options.profile,
+      options.parentEffort,
+      options.parentModel,
+      true,
     ),
+    (entry) => entry.field === options.field,
   );
   const label = row === undefined ? options.field : Str.trim(row.label);
   const current = currentFieldValue(options.candidate, options.field);
@@ -128,10 +126,7 @@ export const candidateFieldSelector = (
     notice: options.notice,
     emptyText: "No matching values",
     select: (value: string) =>
-      options.select(
-        selectCandidateField(options.candidate, options.field, value, changeOptions),
-        value,
-      ),
+      options.select(selectCandidateField(options.candidate, options.field, value, changeOptions)),
     cancel: options.cancel,
   });
 };
@@ -147,9 +142,8 @@ interface RouteActionsSelectorOptions extends SharedSelectorOptions {
 
 export const routeActionsSelector = (
   options: RouteActionsSelectorOptions,
-): SearchableSelectPage<string> => {
-  const choices = profileWorkspaceActionChoices(options);
-  return new SearchableSelectPage<string>({
+): SearchableSelectPage<CandidateMenuAction> =>
+  new SearchableSelectPage<CandidateMenuAction>({
     ...selectHost(options),
     breadcrumb: profileBreadcrumb(
       shortTargetLabel(options.target),
@@ -159,25 +153,18 @@ export const routeActionsSelector = (
     ),
     title: `Manage ${profileRouteOptionLabel(options.candidateIndex)}`,
     subtitle: "",
-    choices: Arr.map(choices, (choice) =>
+    choices: Arr.map(profileWorkspaceActionChoices(options), (choice) =>
       selectChoice(choice.action, choice.label, choice.description, choice.action),
     ),
     current: "",
     emptyText: "No actions are available",
-    select: (value: string) => {
-      const choice = Option.getOrUndefined(
-        Arr.findFirst(choices, (entry) => entry.action === value),
-      );
-      if (choice) options.select(choice.action);
-    },
+    select: options.select,
     cancel: options.cancel,
   });
-};
 
 interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
   readonly inspection: ProfileSettingsInspection;
   readonly current: ProfileId;
-  readonly initialQuery?: string | undefined;
   readonly target: ProfileWorkspaceTarget;
   readonly parentModel?: string | undefined;
   readonly select: (profile: ProfileId) => void;
@@ -186,8 +173,8 @@ interface ProfileSearchSelectorOptions extends SharedSelectorOptions {
 
 export const profileSearchSelector = (
   options: ProfileSearchSelectorOptions,
-): SearchableSelectPage<string> => {
-  return new SearchableSelectPage<string>({
+): SearchableSelectPage<ProfileId> =>
+  new SearchableSelectPage<ProfileId>({
     ...selectHost(options),
     breadcrumb: profileBreadcrumb(shortTargetLabel(options.target), "Search"),
     title: "Search profiles",
@@ -208,14 +195,9 @@ export const profileSearchSelector = (
       );
     }),
     current: options.current,
-    initialQuery: options.initialQuery,
     initialSearchMode: true,
     cancelBehavior: "close",
     emptyText: "No matching profiles",
-    select: (value: string) => {
-      const profile = Option.getOrUndefined(Arr.findFirst(PROFILE_IDS, (entry) => entry === value));
-      if (profile) options.select(profile);
-    },
+    select: options.select,
     cancel: options.cancel,
   });
-};

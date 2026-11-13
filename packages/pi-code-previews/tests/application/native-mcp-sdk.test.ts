@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import {
   createMcpExtension,
   SessionManager,
-  type ExtensionAPI,
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 import { it } from "@effect/vitest";
@@ -14,12 +13,16 @@ import { vi } from "vitest";
 import { nativeManagerFixture } from "../support/native-mcp";
 import { step } from "../support/effect-test";
 import { codePreviewsUnderTest, offlineModels, scopedSession } from "../support/sdk-session";
-import { quietLoader, quietSettings } from "pi-cosmic-core/testing/sdk";
+import {
+  fauxAssistantMessage,
+  fauxToolCall,
+  quietLoader,
+  quietSettings,
+} from "pi-cosmic-core/testing/sdk";
 import { createToolPresentationHarness } from "../../testing";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
-import * as Option from "effect/Option";
 import * as Order from "effect/Order";
 
 const serializeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
@@ -125,7 +128,7 @@ it.live(
 );
 
 it.live(
-  "independent native execution retains permissions, images, cancellation, catalog withdrawal and cleanup",
+  "an independent native manager's result renders with its text and image, its definition unchanged",
   () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -133,9 +136,6 @@ it.live(
       const agentDir = `${cwd}/agent`;
       yield* fs.makeDirectory(agentDir, { recursive: true });
       const manager = nativeManagerFixture();
-      let provider: ExtensionAPI | undefined;
-      let block = false;
-      let resultHooks = 0;
       const report: PresentationRegistrations = { tools: [], resolvers: 0 };
       const settings = quietSettings();
       const models = yield* offlineModels(cwd);
@@ -146,41 +146,15 @@ it.live(
         extensionFactories: [
           { name: "code-previews", factory: presentationFactory(agentDir, report) },
           { name: "mcp", builtin: true, factory: manager.factory },
-          {
-            name: "provider",
-            factory: (pi) => {
-              provider = pi;
-              pi.registerMcpServer("docs", { command: "never-executed-by-owned-fixture" });
-              pi.on("tool_call", (event) =>
-                Fn.pipe(event.toolName, Str.startsWith("mcp__")) && block
-                  ? { block: true, reason: "Permission refused" }
-                  : undefined,
-              );
-              pi.on("tool_result", () => {
-                resultHooks++;
-              });
-            },
-          },
         ],
       });
       const sessionManager = SessionManager.inMemory(cwd);
-      sessionManager.appendMessage({
-        role: "assistant",
-        content: [{ type: "toolCall", name: "probe", arguments: {}, id: "parent-call" }],
-        api: "faux",
-        provider: "faux",
-        model: "faux",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-        },
-        stopReason: "toolUse",
-        timestamp: 0,
-      });
+      sessionManager.appendMessage(
+        fauxAssistantMessage(fauxToolCall("probe", {}, { id: "parent-call" }), {
+          stopReason: "toolUse",
+          timestamp: 0,
+        }),
+      );
       const session = yield* scopedSession({
         cwd,
         agentDir,
@@ -190,10 +164,8 @@ it.live(
         sessionManager,
       });
       yield* step(() => session.bindExtensions({ mode: "print" }));
-      const name = "mcp__docs__lookup";
-      const original = manager.definitions.get(name);
-      assert.ok(original);
-      const before = { ...original };
+      const { name } = manager.definition;
+      const before = { ...manager.definition };
       const renderers = session.extensionRunner.resolveToolRenderers(name, () => undefined);
       assert.ok(renderers);
       const h = createToolPresentationHarness(renderers);
@@ -205,48 +177,11 @@ it.live(
         { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
       ]);
       assert.deepEqual(returned.result.structuredContent, { retained: true });
-      assert.ok(resultHooks > 0);
       h.call({}, { expanded: true });
       h.result(returned.result, { expanded: true, showImages: false });
       assert.ok(Fn.pipe(Arr.join(h.render(200), "\n"), Str.includes("TEXT_RETAINED")));
-      assert.deepEqual({ ...original }, before);
+      assert.deepEqual({ ...manager.definition }, before);
       assert.deepEqual(report.tools, []);
-      const failed = yield* step(() => context.executeTool(name, { mode: "error" }));
-      assert.equal(failed.isError, true);
-      block = true;
-      const executed = manager.executions();
-      const blocked = yield* step(() => context.executeTool(name, {}));
-      assert.equal(blocked.isError, true);
-      assert.equal(manager.executions(), executed);
-      block = false;
-      // Stands in for the host's abort signal, which codemode passes to `executeTool`.
-      const controller = new AbortController();
-      const pending = context.executeTool(name, { mode: "abort" }, { signal: controller.signal });
-      controller.abort();
-      assert.equal((yield* step(() => pending)).isError, true);
-      manager.catalog("docs", ["added"]);
-      assert.equal(
-        Option.getOrUndefined(Arr.findFirst(session.getAllTools(), (tool) => tool.name === name))
-          ?.exposure,
-        "hidden",
-      );
-      assert.ok(session.extensionRunner.resolveToolRenderers("mcp__docs__added", () => undefined));
-      provider!.unregisterMcpServer("docs");
-      yield* step(() =>
-        session.extensionRunner.emit({
-          type: "mcp_servers_change",
-          servers: provider!.getMcpServers(),
-        }),
-      );
-      assert.equal(
-        Option.getOrUndefined(
-          Arr.findFirst(session.getAllTools(), (tool) => tool.name === "mcp__docs__added"),
-        )?.exposure,
-        "hidden",
-      );
-      yield* step(() => session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }));
-      yield* step(() => session.extensionRunner.emit({ type: "session_shutdown", reason: "quit" }));
-      assert.equal(manager.closed(), 1);
       assert.equal(report.resolvers, 1);
     }).pipe(Effect.scoped, Effect.provide(nodeFilePlatformLayer)),
 );

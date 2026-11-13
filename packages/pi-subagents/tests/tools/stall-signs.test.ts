@@ -1,16 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Clock from "effect/Clock";
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
-import { MAIN_AGENT_ID } from "../../src/run/agent-messaging.ts";
+import { MAIN_AGENT_ID, mainListEntry, runListEntry } from "../../src/run/agent-messaging.ts";
 import type { SubagentRunView, SubagentSessionEvent } from "../../src/run/model.ts";
 import { decodeSubagentContract } from "../../src/tools/contract-schema.ts";
 import { eventLoopTurn, step } from "../support/effect-test.ts";
 import { subagentServiceDouble } from "./fixtures/subagent-service-double.ts";
-import { captureSubagentTools, executeTool, view } from "./fixtures/tool-harness.ts";
+import { captureSubagentTools, executeTool, observedCall, view } from "./fixtures/tool-harness.ts";
 import { readoutOf } from "../fixtures/run-view.ts";
 
 const NOW = 60 * 60_000;
@@ -48,17 +47,8 @@ const service = subagentServiceDouble({
   agentList: () =>
     Effect.succeed({
       agents: [
-        { id: MAIN_AGENT_ID, name: MAIN_AGENT_ID, kind: "main", state: "busy", self: true },
-        ...Arr.map(RUNS, (run) => ({
-          id: run.id,
-          name: run.name,
-          kind: "run" as const,
-          state: run.state,
-          parentId: MAIN_AGENT_ID,
-          depth: 1,
-          self: false,
-          run,
-        })),
+        mainListEntry("busy", MAIN_AGENT_ID),
+        ...Arr.map(RUNS, (run) => runListEntry(run, MAIN_AGENT_ID)),
       ],
       missingIds: [],
     }),
@@ -115,16 +105,15 @@ describe("stall signs in parent run views", () => {
   it.effect("a stall never ends a wait early; its timeout result names the stall", () =>
     Effect.gen(function* () {
       const tools = yield* toolsOnTestClock;
-      const progress = Deferred.makeUnsafe<void>();
       let settled = false;
-      const pending = executeTool(
-        tools.get("agent_await")!,
-        { runIds: Arr.map(RUNS, (run) => run.id), timeoutSeconds: 120 },
-        { update: () => Deferred.doneUnsafe(progress, Effect.void) },
-      ).finally(() => {
+      const call = observedCall(tools.get("agent_await")!, {
+        runIds: Arr.map(RUNS, (run) => run.id),
+        timeoutSeconds: 120,
+      });
+      const pending = call.pending.finally(() => {
         settled = true;
       });
-      yield* Deferred.await(progress);
+      yield* call.observing;
       yield* TestClock.adjust(Duration.seconds(119));
       yield* step(eventLoopTurn);
       expect(settled).toBe(false);
@@ -144,19 +133,15 @@ describe("stall signs in parent run views", () => {
   it.effect("a cancelled wait names stall signs on the runtime's clock", () =>
     Effect.gen(function* () {
       const tools = yield* toolsOnTestClock;
-      const progress = Deferred.makeUnsafe<void>();
       const controller = new AbortController();
-      const pending = executeTool(
+      const call = observedCall(
         tools.get("agent_await")!,
         { runIds: Arr.map(RUNS, (run) => run.id) },
-        {
-          signal: controller.signal,
-          update: () => Deferred.doneUnsafe(progress, Effect.void),
-        },
+        { signal: controller.signal },
       );
-      yield* Deferred.await(progress);
+      yield* call.observing;
       controller.abort();
-      const result = yield* step(() => pending);
+      const result = yield* call.result;
       const contract = decodeSubagentContract("agent_await")(result.structuredContent);
       expect(contract?.outcome).toBe("cancelled");
       expect(stallsOf(contract?.targets ?? [])).toEqual([

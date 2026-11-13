@@ -1,6 +1,4 @@
 import { Container, Image } from "@earendil-works/pi-tui";
-import * as Arr from "effect/Array";
-import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
@@ -9,6 +7,7 @@ import {
   type CodePreviewMessagePresenter,
   type CompactSummary,
 } from "pi-code-previews";
+import { findOrUndefined } from "pi-cosmic-core/array";
 import {
   imageHeadingsShowPrompt,
   imagePromptSubject,
@@ -43,9 +42,7 @@ export const presentImageMessage =
     const compact = options.collapsedStyle === "compact";
     const record = imageRecord(message.details);
     const content = message.content;
-    const image = Predicate.isString(content)
-      ? undefined
-      : Option.getOrUndefined(Arr.findFirst(content, isImagePart));
+    const image = Predicate.isString(content) ? undefined : findOrUndefined(content, isImagePart);
     const summary = record && imageRecordSummary(record, { hasImage: image !== undefined });
     const { collapsedSummary } = planCompactPresentation({
       summary: summary && withoutAction(summary),

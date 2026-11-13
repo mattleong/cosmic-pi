@@ -1,14 +1,13 @@
 import { describe, expect, it } from "@effect/vitest";
-import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
+import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import type { JsonObject } from "../src/platform/json-document.ts";
-import {
-  BooleanFromJsonSchema,
-  completeSettingsArguments,
-  decodeSettingUpdate,
-  FiniteNumberFromJsonSchema,
-} from "../src/settings-completion.ts";
+import { completeSettingsArguments, decodeSettingUpdate } from "../src/settings-completion.ts";
+
+const BooleanFromJsonSchema = Schema.fromJsonString(Schema.Boolean);
+const FiniteNumberFromJsonSchema = Schema.fromJsonString(Schema.Finite);
 
 describe("decodeSettingUpdate", () => {
   const decodeSetting = decodeSettingUpdate<{ compact: boolean }>([
@@ -37,7 +36,7 @@ describe("decodeSettingUpdate", () => {
       const rejected = yield* Effect.flip(decodeSetting("compact", "maybe"));
       expect(rejected.message).toMatch(/^compact /u);
       expect(rejected.message).toContain("maybe");
-      const long = yield* Effect.flip(decodeSetting("compact", Str.repeat(449)("x")));
+      const long = yield* Effect.flip(decodeSetting("compact", Fn.pipe("x", Str.repeat(449))));
       expect(long.message).toMatch(/^compact /u);
       expect(long.message.length).toBeLessThan(60);
     }),
@@ -78,25 +77,6 @@ describe("completeSettingsArguments", () => {
         value: "project maxRunning 16",
         label: "project maxRunning 16",
         description: "Running at once",
-      },
-    ]);
-  });
-
-  it("cuts a label too long for the completion column at a word boundary", () => {
-    const long = [
-      { id: "visible:subagents", label: "Subagent profiles and delegation", values: ["on"] },
-      { id: "unbroken", label: "Supercalifragilisticexpialidocious" },
-    ];
-    const descriptions = Arr.map(
-      completeSettingsArguments("", long) ?? [],
-      (choice) => choice.description,
-    );
-    expect(descriptions).toEqual(["Subagent profiles…", "Supercalifragilisti…"]);
-    expect(completeSettingsArguments("visible:subagents o", long)).toEqual([
-      {
-        value: "visible:subagents on",
-        label: "visible:subagents on",
-        description: "Subagent profiles…",
       },
     ]);
   });

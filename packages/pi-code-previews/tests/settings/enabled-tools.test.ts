@@ -27,6 +27,25 @@ test("a tool whose collapsed output a preview setting hides stays enabled, with 
   );
 });
 
+test("every tool whose preview setting is off stays enabled with no tool configured", () => {
+  const settings = {
+    ...defaultCodePreviewSettings,
+    writeContentPreview: false,
+    editDiffPreview: false,
+    grepResultPreview: false,
+    findResultPreview: false,
+    lsResultPreview: false,
+  };
+  assert.deepEqual(Arr.sort([...getEffectiveCodePreviewToolSet([], settings)], Order.String), [
+    "bash",
+    "edit",
+    "find",
+    "grep",
+    "ls",
+    "write",
+  ]);
+});
+
 test("bash names its own result setting first when that is what hides its output", () => {
   const required = requiredCodePreviewTools({
     ...defaultCodePreviewSettings,

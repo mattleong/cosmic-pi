@@ -26,8 +26,10 @@ import {
   execOk,
   execResult,
   nativeUsage,
+  usageEntry,
   type ExecResult,
 } from "./support/host.ts";
+import { createSessionUsageReader } from "../src/boundary/host-usage.ts";
 import { CosmicUiConfigStore } from "../src/config/store.ts";
 import { CosmicUiService, createProjection, resetProjection } from "../src/protocol/service.ts";
 import { PiExec } from "../src/boundary/host-exec.ts";
@@ -64,7 +66,7 @@ function serviceLayer(
   );
   const layer = CosmicUiService.layer({
     context: contextRef,
-    sessionManager: MutableRef.get(contextRef).sessionManager,
+    readUsageTotals: createSessionUsageReader(MutableRef.get(contextRef).sessionManager),
     cwd: "/project",
     projection,
     onChange: options.onChange ?? (() => undefined),
@@ -77,16 +79,6 @@ function serviceLayer(
 }
 
 type SessionEntries = ReturnType<ExtensionContext["sessionManager"]["getEntries"]>;
-const usageEntry = (input: number, usage = nativeUsage(input)): SessionEntries[number] => ({
-  id: "entry",
-  parentId: null,
-  timestamp: "2026-01-01T00:00:00Z",
-  type: "usage",
-  kind: "cache_warm",
-  provider: "test",
-  model: "test",
-  usage,
-});
 
 type Resolve = (value: ExecResult) => void;
 const resolveWith = (resolve: Resolve | undefined, value: ExecResult) =>
@@ -437,7 +429,7 @@ describe("Cosmic UI host service", () => {
       expect(yield* reconciled).toBe(10);
       entries = [...entries, usageEntry(5)];
       expect(yield* reconciled).toBe(15);
-      entries = [...entries, usageEntry(1, { ...nativeUsage(1), input: -1 })];
+      entries = [...entries, usageEntry(1, { usage: { ...nativeUsage(1), input: -1 } })];
       expect(yield* reconciled).toBe(15);
 
       entries = [usageEntry(3)];
@@ -489,7 +481,7 @@ describe("Cosmic UI host service", () => {
         unreadable = true;
         yield* TestClock.adjust("1 second");
         unreadable = false;
-        entries = [usageEntry(10), usageEntry(5, { ...nativeUsage(5), input: -1 })];
+        entries = [usageEntry(10), usageEntry(5, { usage: { ...nativeUsage(5), input: -1 } })];
         yield* TestClock.adjust("1 second");
         expect(input()).toBe(10);
         expect(usageChanges).toBe(1);
