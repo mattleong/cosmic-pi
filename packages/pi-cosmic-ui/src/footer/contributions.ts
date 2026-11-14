@@ -72,9 +72,9 @@ export function tone(
     return Arr.join(
       Arr.map(Arr.filter(Str.split(text, " "), Str.isNonEmpty), (value) => {
         const color = Fn.pipe(value, Str.startsWith("+"))
-          ? "success"
+          ? "toolDiffAdded"
           : Fn.pipe(value, Str.startsWith("−"))
-            ? "error"
+            ? "toolDiffRemoved"
             : Fn.pipe(value, Str.startsWith("~"))
               ? "syntaxNumber"
               : "dim";

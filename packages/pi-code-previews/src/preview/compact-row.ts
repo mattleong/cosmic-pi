@@ -15,6 +15,7 @@ import {
   type ManagerActivityKind,
   type StatusGlyphMeaning,
 } from "pi-cosmic-ui/manager";
+import { paintLineCounts } from "pi-cosmic-ui/tool";
 import { escapeControlChars } from "../shared/terminal-text";
 import {
   compactStatus,
@@ -182,7 +183,7 @@ const COMPACT_SEPARATOR = (theme: Theme) => theme.fg("dim", " · ");
 const mutedParts = (theme: Theme, values: readonly string[] | undefined): string[] =>
   values
     ? Arr.map(Arr.filter(Arr.map(values, compactSingleLine), Str.isNonEmpty), (text) =>
-        theme.fg("muted", text),
+        paintLineCounts(theme, text, "muted"),
       )
     : [];
 

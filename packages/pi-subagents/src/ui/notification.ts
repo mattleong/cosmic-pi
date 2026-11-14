@@ -7,7 +7,7 @@ import * as Option from "effect/Option";
 import { countLabel, nameListForms } from "pi-cosmic-core/display";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { clipToWidth, managerActivityGlyph, managerActivityColor } from "pi-cosmic-ui/manager";
-import { composeToolComponent } from "pi-cosmic-ui/tool";
+import { composeToolComponent, paintLineCounts } from "pi-cosmic-ui/tool";
 import type { CodePreviewMessagePresenter, CompactIssue, CompactSummary } from "pi-code-previews";
 import { askingIssue, failureQuote, quotesPartOfQuestion } from "../tools/compact-run-issues.ts";
 import {
@@ -258,7 +258,11 @@ const completedBody = (
               ? []
               : agentTextLines(only.text, width, theme, { expanded, indent })),
             ...Arr.flatMap(only.notes ?? [], (note) =>
-              indentedLines(theme.fg("muted", sanitizeTerminalLine(note)), width, indent),
+              indentedLines(
+                paintLineCounts(theme, sanitizeTerminalLine(note), "muted"),
+                width,
+                indent,
+              ),
             ),
           ]
         : agentTextBlockLines(

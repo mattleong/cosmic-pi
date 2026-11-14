@@ -10,6 +10,7 @@ import {
   managerNoticeGlyph,
   wrapFacts,
 } from "pi-cosmic-ui/manager";
+import { paintLineCounts } from "pi-cosmic-ui/tool";
 import { compactIssueSeverity, type CompactIssue } from "../tools/compact-issues";
 import type { CompactDetail } from "../tools/compact-summary";
 import { compactPlainText, compactSingleLine } from "./compact-row";
@@ -127,7 +128,7 @@ export function renderCompactIssues(
     return rows.concat(
       Arr.flatMap(Str.split(compactPlainText(issue.detail), "\n"), (line) =>
         wrapHanging(line, width, pad, pad, 0, {
-          style: (row) => theme.fg("dim", row),
+          style: (row) => paintLineCounts(theme, row, "dim"),
           hang: DETAIL_HANG,
         }),
       ),
