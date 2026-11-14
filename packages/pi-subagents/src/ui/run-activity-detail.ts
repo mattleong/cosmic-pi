@@ -31,7 +31,7 @@ const section = (
   title: string | undefined,
   body: string,
   maximumLength: number,
-  format?: "markdown",
+  format?: "markdown" | "facts",
   expandedBody?: string,
 ): ActivityDetailSection[] =>
   Str.isNonEmpty(Str.trim(body))
@@ -216,6 +216,7 @@ export const runActivityDetail = (
       undefined,
       run.workspaceOutcome ? Str.capitalize(workspaceOutcomeLabel(run.workspaceOutcome)) : "",
       512,
+      "facts",
     ),
     ...section("Result", run.finalText ?? "", 6_000, "markdown"),
     ...section(

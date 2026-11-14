@@ -3,7 +3,7 @@ import { renderPlainDiff, renderSyntaxHighlightedDiff } from "../../../diff/rend
 import { previewFooter, showingFooter } from "../../../preview/format";
 import type { CodePreviewSettings } from "../../../config/schema";
 import { shouldSkipHighlight } from "../../../syntax/render";
-import { paintLineCounts } from "pi-cosmic-ui/tool";
+import { paintFacts } from "pi-cosmic-ui/tool";
 import { diffCountLabel } from "../../builtin-result-detail";
 
 export function formatDiffPreview(
@@ -34,7 +34,7 @@ export function formatDiffPreview(
 
 /** `+4 −2` in the muted tone of the summary around it, its nonzero counts in the diff's colours. */
 export function diffCounts(theme: Theme, counts: { additions: number; removals: number }): string {
-  return paintLineCounts(theme, diffCountLabel(counts), "muted");
+  return paintFacts(theme, diffCountLabel(counts), "muted");
 }
 
 export function diffSkippedNote(theme: Theme, guard: "size" | "complexity"): string {

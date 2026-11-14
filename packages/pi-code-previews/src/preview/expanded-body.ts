@@ -5,7 +5,7 @@ import * as Str from "effect/String";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Container, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { wrapFacts } from "pi-cosmic-ui/manager";
-import { cachedComponent, paintLineCounts } from "pi-cosmic-ui/tool";
+import { cachedComponent, paintFacts } from "pi-cosmic-ui/tool";
 import { escapeControlChars, wrapIndentedLine } from "../shared/terminal-text";
 import { authoredTextLines } from "./authored-text";
 import { compactPlainText } from "./compact-row";
@@ -45,8 +45,8 @@ const DETAILS_HANGING = pad(NESTED_INDENT * 2);
 /**
  * A plain line wrapped to `width` and drawn in its tone; long paths break after a separator. A
  * line of facts wraps between whole `·` facts with continuation rows hanging by `hanging` (two
- * columns unless given), so no row ends with `·` or `→`, and a count summary in a fact row takes
- * the diff's colours (`paintLineCounts`).
+ * columns unless given), so no row ends with `·` or `→`, and the facts in a row take their colours
+ * (`paintFacts`).
  */
 const wrappedLine = (
   theme: BodyTheme,
@@ -63,8 +63,7 @@ const wrappedLine = (
       facts
         ? wrapFacts(part, Math.max(1, width), hanging)
         : wrapIndentedLine(part, Math.max(1, width)),
-      (row) =>
-        row === "" ? "" : facts ? paintLineCounts(theme, row, color) : theme.fg(color, row),
+      (row) => (row === "" ? "" : facts ? paintFacts(theme, row, color) : theme.fg(color, row)),
     ),
   );
 };

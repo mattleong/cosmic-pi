@@ -2,6 +2,7 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Component, MarkdownTheme } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
+import * as Order from "effect/Order";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
@@ -67,54 +68,96 @@ export interface ToolHeader {
 // `+4 −2`: a count summary, with the Unicode minus. A lone `+1` or an ASCII `-` is not one.
 const LINE_COUNT_PAIR = /(?<![\p{L}\p{N}_])\+(\d+) −(\d+)/gu;
 const ZERO_COUNT = /^0+$/u;
+// A whole fact between separators that counts work needing someone: `1 failed`, `1 of 3 needs
+// your input`. The same words inside a subject or a longer fact are not one.
+const PROBLEM_COUNT =
+  /(?<=^\s*(?:· )?| · )[1-9]\d*(?: of \d+)? (failed|needs? your input)(?=\s*$| · )/gu;
+const FAST_MODE = /⚡/gu;
+
+interface FactMark {
+  readonly start: number;
+  readonly end: number;
+  readonly color: ThemeColor;
+}
+
+const lineCountMarks = (text: string): FactMark[] =>
+  Arr.flatMap([...Fn.pipe(text, Str.matchAll(LINE_COUNT_PAIR))], (match) => {
+    const [, added = "", removed = ""] = match;
+    const start = match.index ?? 0;
+    const removedStart = start + added.length + 2;
+    return [
+      ...(ZERO_COUNT.test(added)
+        ? []
+        : [{ start, end: start + added.length + 1, color: "toolDiffAdded" as const }]),
+      ...(ZERO_COUNT.test(removed)
+        ? []
+        : [
+            {
+              start: removedStart,
+              end: removedStart + removed.length + 1,
+              color: "toolDiffRemoved" as const,
+            },
+          ]),
+    ];
+  });
+
+const factMarks = (text: string): FactMark[] =>
+  Arr.sortWith(
+    [
+      ...lineCountMarks(text),
+      ...Arr.map([...Fn.pipe(text, Str.matchAll(PROBLEM_COUNT))], (match) => ({
+        start: match.index ?? 0,
+        end: (match.index ?? 0) + match[0].length,
+        color:
+          match[1] === "failed" ? managerActivityColor("failed") : managerNoticeColor("attention"),
+      })),
+      ...Arr.map([...Fn.pipe(text, Str.matchAll(FAST_MODE))], (match) => ({
+        start: match.index ?? 0,
+        end: (match.index ?? 0) + match[0].length,
+        color: "warning" as const,
+      })),
+    ],
+    (mark) => mark.start,
+    Order.Number,
+  );
 
 /**
- * `text` painted in `base`, except that in each count summary, `+4 −2` with the Unicode minus, a
- * nonzero added count takes the diff's added colour (`toolDiffAdded`) and a nonzero removed count its
- * removed colour (`toolDiffRemoved`), signs included. A zero count keeps `base`, so a pure addition
- * shows one coloured number, and a lone `+1` is not a line count. Text without a pair comes back
- * exactly as `theme.fg(base, text)`. Pass plain text: each segment is painted with its own `fg`.
+ * A fact, or a `·`-joined line of facts, painted in `base`, except for what the suite colours
+ * wherever it appears as a fact:
+ * - a count summary, `+4 −2` with the Unicode minus: a nonzero added count takes the diff's added
+ *   colour (`toolDiffAdded`) and a nonzero removed count its removed colour (`toolDiffRemoved`),
+ *   signs included. A zero count keeps `base`, and a lone `+1` is not a line count.
+ * - a problem count that is a whole fact: `1 failed` takes the failed colour and `1 needs your
+ *   input` the attention colour. Other state counts keep `base`.
+ * - the fast-mode mark `⚡`, in the warning colour.
+ *
+ * Text with none of these comes back exactly as `theme.fg(base, text)`. Pass plain text: each
+ * segment is painted with its own `fg`. Don't pass authored prose or output.
  */
-export const paintLineCounts = (
-  theme: Pick<Theme, "fg">,
-  text: string,
-  base: ThemeColor,
-): string => {
-  const segments: Array<readonly [ThemeColor, string]> = [];
-  const push = (color: ThemeColor, part: string) => {
-    const last = segments.at(-1);
-    if (last?.[0] === color) segments[segments.length - 1] = [color, last[1] + part];
-    else if (part !== "") segments.push([color, part]);
-  };
-  const count = (color: ThemeColor, sign: string, digits: string) =>
-    push(ZERO_COUNT.test(digits) ? base : color, `${sign}${digits}`);
-  let last = 0;
-  for (const match of Fn.pipe(text, Str.matchAll(LINE_COUNT_PAIR))) {
-    const start = match.index ?? last;
-    push(base, Fn.pipe(text, Str.slice(last, start)));
-    count("toolDiffAdded", "+", match[1] ?? "");
-    push(base, " ");
-    count("toolDiffRemoved", "−", match[2] ?? "");
-    last = start + match[0].length;
+export const paintFacts = (theme: Pick<Theme, "fg">, text: string, base: ThemeColor): string => {
+  const marks = factMarks(text);
+  if (marks.length === 0) return theme.fg(base, text);
+  let painted = "";
+  let at = 0;
+  for (const mark of marks) {
+    if (mark.start < at) continue;
+    if (mark.start > at) painted += theme.fg(base, Fn.pipe(text, Str.slice(at, mark.start)));
+    painted += theme.fg(mark.color, Fn.pipe(text, Str.slice(mark.start, mark.end)));
+    at = mark.end;
   }
-  if (last === 0) return theme.fg(base, text);
-  push(base, Fn.pipe(text, Str.slice(last)));
-  return Arr.join(
-    Arr.map(segments, ([color, part]) => theme.fg(color, part)),
-    "",
-  );
+  return at < text.length ? `${painted}${theme.fg(base, Fn.pipe(text, Str.slice(at)))}` : painted;
 };
 
 /**
  * A tool's heading on one logical line, never cut: the caller lays it out for the row, wrapping an
  * expanded heading and shortening a collapsed subject before its facts, so the heading it measures
- * is the heading it draws. Producers bound their own subjects. A count summary in the subtitle takes
- * the diff's colours (`paintLineCounts`).
+ * is the heading it draws. Producers bound their own subjects. Facts in the subtitle take their
+ * colours (`paintFacts`).
  */
 export const renderToolHeader = (header: ToolHeader, theme: Pick<Theme, "bold" | "fg">): string => {
   const title = theme.fg("toolTitle", theme.bold(sanitizeTerminalLine(header.title)));
   if (!header.subtitle) return title;
-  return `${title} ${paintLineCounts(theme, sanitizeTerminalLine(header.subtitle), "dim")}`;
+  return `${title} ${paintFacts(theme, sanitizeTerminalLine(header.subtitle), "dim")}`;
 };
 
 type ToolStatusKind = ManagerActivityKind | ManagerNoticeKind;

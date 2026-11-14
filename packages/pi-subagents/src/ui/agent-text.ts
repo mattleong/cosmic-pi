@@ -12,7 +12,7 @@ import {
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
 import { indexOfFrom, lastIndexOfFrom } from "pi-cosmic-core/text-scan";
 import { clipToWidth, wrapFacts, type ManagerStatusColor } from "pi-cosmic-ui/manager";
-import { composeToolComponent, paintLineCounts } from "pi-cosmic-ui/tool";
+import { composeToolComponent, paintFacts } from "pi-cosmic-ui/tool";
 
 /**
  * Words an agent wrote, laid out by Code Previews' authored text: wrapped to the width with their
@@ -103,8 +103,8 @@ const colorAt = (spans: ReadonlyArray<FactSpan>, offset: number): ThemeColor | u
 };
 
 /**
- * The spans' text from `start` to `end`, each part in its span's color; a count summary in a colored
- * span takes the diff's colours (`paintLineCounts`).
+ * The spans' text from `start` to `end`, each part in its span's color; facts in a colored span
+ * take their own colours (`paintFacts`).
  */
 const paintRange = (
   spans: ReadonlyArray<FactSpan>,
@@ -126,7 +126,7 @@ const paintRange = (
             : theme.fg(color, theme.bold(part))
           : color === undefined
             ? part
-            : paintLineCounts(theme, part, color);
+            : paintFacts(theme, part, color);
     }
     offset += text.length;
   }
@@ -319,7 +319,7 @@ export const agentTextBlockLines = (
       ...heading,
       ...authoredTextLines(block.text, safeWidth, theme, { expanded, verbatim: block.verbatim }),
       ...Arr.flatMap(block.notes ?? [], (note) =>
-        indentedLines(paintLineCounts(theme, sanitizeTerminalLine(note), "muted"), safeWidth),
+        indentedLines(paintFacts(theme, sanitizeTerminalLine(note), "muted"), safeWidth),
       ),
     ];
   });

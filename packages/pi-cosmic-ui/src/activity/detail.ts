@@ -17,7 +17,7 @@ const SectionSchema = Schema.Struct({
   title: Schema.optional(Schema.String),
   body: Schema.String,
   expandedBody: Schema.optional(Schema.String),
-  format: Schema.optional(Schema.Literals(["plain", "markdown"])),
+  format: Schema.optional(Schema.Literals(["plain", "markdown", "facts"])),
 });
 const FieldSchema = Schema.Struct({ label: Schema.String, value: Schema.String });
 const DetailShape = Schema.Struct({
@@ -64,7 +64,7 @@ const cleanSections = (
       ...(title && { title }),
       body,
       ...(expandedBody && { expandedBody }),
-      ...(section.format === "markdown" && { format: "markdown" as const }),
+      ...(section.format !== undefined && section.format !== "plain" && { format: section.format }),
     });
   }
   return cleaned;

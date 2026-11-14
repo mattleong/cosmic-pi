@@ -153,7 +153,9 @@ const providerSections = (
     return [
       ...(index > 0 ? [spacer] : []),
       ...(section.title ? [text(theme.fg("muted", theme.bold(section.title)))] : []),
-      section.format === "markdown" ? { kind: "markdown" as const, text: body } : text(body),
+      section.format === "markdown" || section.format === "facts"
+        ? { kind: section.format, text: body }
+        : text(body),
     ];
   });
 

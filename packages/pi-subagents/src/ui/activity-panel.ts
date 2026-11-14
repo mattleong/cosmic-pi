@@ -17,6 +17,7 @@ import {
   SPINNER_FRAME_MS,
   spinnerFrameAt,
 } from "pi-cosmic-ui/manager";
+import { paintFacts } from "pi-cosmic-ui/tool";
 import {
   isActiveRunState,
   isTerminalRunState,
@@ -342,7 +343,7 @@ const renderRunIdentity = (
   const { profile } = projectRunRoutePresentation(run);
   const { model, detail } = projectRunModel(run);
   const routed = (text: string) =>
-    `${theme.fg(tone, profile)}${theme.fg("dim", " → ")}${theme.fg(tone, text)}`;
+    `${theme.fg(tone, profile)}${theme.fg("dim", " → ")}${paintFacts(theme, text, tone)}`;
   return {
     full: routed(detail ? `${model}:${detail}` : model),
     short: routed(model),

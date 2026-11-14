@@ -6,6 +6,7 @@ import * as Option from "effect/Option";
 import * as Str from "effect/String";
 import { clipToWidth } from "../manager/chrome.ts";
 import { managerTone } from "../manager/style.ts";
+import { paintFacts } from "../tool/presentation.ts";
 
 type Tone = Parameters<Theme["fg"]>[0];
 
@@ -161,12 +162,14 @@ interface RowLayout {
   readonly row: ActivityRowVisual;
   readonly interactive: boolean;
   readonly paint: Paint;
+  /** `paint` for a row's facts, which take their own colours (`paintFacts`). */
+  readonly facts: Paint;
   readonly focusedStyle: ((text: string) => string) | undefined;
   readonly omitted: string;
 }
 
 const quietName = (
-  { row, interactive, paint, focusedStyle, omitted }: RowLayout,
+  { row, interactive, paint, facts, focusedStyle, omitted }: RowLayout,
   title: string,
   suffix: string,
 ): string => {
@@ -174,7 +177,7 @@ const quietName = (
   if (focusedStyle) return `${focusedStyle(`${title}${quiet}`)}${paint("dim", omitted)}`;
   const recede = row.history && interactive ? "muted" : undefined;
   const identityTone = recede ?? (interactive ? managerTone.identity : "text");
-  return `${paint(identityTone, title)}${paint("dim", omitted)}${paint(recede ?? "muted", quiet)}`;
+  return `${paint(identityTone, title)}${paint("dim", omitted)}${facts(recede ?? "muted", quiet)}`;
 };
 
 const nameWidth = (title: string, omitted: string, suffix: string): number =>
@@ -270,8 +273,9 @@ export function renderActivityRowLines(
 ): readonly string[] {
   const interactive = presentation === "manager";
   const paint: Paint = (tone, text) => theme?.fg(tone, text) ?? text;
+  const facts: Paint = (tone, text) => (theme ? paintFacts(theme, text, tone) : text);
   const { continuations, awaited, fold, omitted } = rowMarkers(row, interactive);
-  const layout: RowLayout = { row, interactive, paint, focusedStyle, omitted };
+  const layout: RowLayout = { row, interactive, paint, facts, focusedStyle, omitted };
   const markerWidth = visibleWidth(awaited);
   const narrowest = rowSuffixes(row).at(-1) ?? "";
   const fullGuide = treeGuide(continuations, Math.min(12, continuations.length), fold);
@@ -295,7 +299,7 @@ export function renderActivityRowLines(
   const withStatus = (left: string) =>
     rightWidth === undefined ? left : `${padTo(left, width - rightWidth)}${statusText}`;
   if (fit.lines === 1) {
-    const activity = fit.activity ? paint("muted", ` · ${fit.activity}`) : "";
+    const activity = fit.activity ? facts("muted", ` · ${fit.activity}`) : "";
     const name = quietName(layout, fit.title, fit.suffix);
     return [withStatus(clipToWidth(`${prefix}${name}${activity}`, leftWidth, "…"))];
   }
@@ -314,6 +318,6 @@ export function renderActivityRowLines(
     Arr.findFirst(rowSuffixes(row), (suffix) => visibleWidth(suffix) <= identityRoom),
     () => clipToWidth(narrowest, identityRoom, "…"),
   );
-  const quiet = focusedStyle ? focusedStyle(identity) : paint("muted", identity);
+  const quiet = focusedStyle ? focusedStyle(identity) : facts("muted", identity);
   return [withStatus(title), `${paint("dim", below)}${quiet}`];
 }

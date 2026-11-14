@@ -104,8 +104,11 @@ export interface ActivityDetailSection {
    * their output where `body` lists one line per call. It counts toward the detail limit too.
    */
   readonly expandedBody?: string | undefined;
-  /** Agent-authored prose renders as Markdown; everything else, such as logs, stays verbatim. */
-  readonly format?: "plain" | "markdown" | undefined;
+  /**
+   * Agent-authored prose renders as Markdown, and a line of `·`-joined facts, such as a worktree's
+   * `Proposal: 3 files, +12 −4`, as facts; everything else, such as logs, stays verbatim.
+   */
+  readonly format?: "plain" | "markdown" | "facts" | undefined;
 }
 export interface ActivityDetailField {
   readonly label: string;

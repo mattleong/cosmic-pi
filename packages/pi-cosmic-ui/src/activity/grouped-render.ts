@@ -64,7 +64,7 @@ import type { ActivityComponentOptions } from "./component.ts";
 import type { ActivityDetailRequest } from "./service.ts";
 import { activityPath, type ActivityAction, type ActivityRow } from "./model.ts";
 import type { ActivityDetail } from "./protocol.ts";
-import { markdownTheme } from "../tool/presentation.ts";
+import { markdownTheme, paintFacts } from "../tool/presentation.ts";
 
 const CURSOR = `${LIST_CURSOR} `;
 // The list needs room for a tree, a title, and a whole `provider/model` beside the detail pane.
@@ -92,7 +92,7 @@ function rowLines(
   const summary = Option.getOrElse(Arr.findFirst(tiers, fits), () => tiers.at(-1) ?? "");
   return [
     clipToWidth(
-      `${theme.fg("dim", fold)}${focused ? focusedField(theme, entry.title) : theme.fg("accent", entry.title)}${summary ? theme.fg("muted", ` · ${summary}`) : ""}`,
+      `${theme.fg("dim", fold)}${focused ? focusedField(theme, entry.title) : theme.fg("accent", entry.title)}${summary ? paintFacts(theme, ` · ${summary}`, "muted") : ""}`,
       width,
       "…",
     ),
@@ -434,7 +434,8 @@ const renderBlocks = (
     Match.value(block).pipe(
       Match.discriminatorsExhaustive("kind")({
         markdown: ({ text }) => new Markdown(text, 0, 0, markdownTheme(theme)).render(width),
-        facts: ({ text }) => Arr.map(wrapFacts(text, width), (line) => theme.fg("muted", line)),
+        facts: ({ text }) =>
+          Arr.map(wrapFacts(text, width), (line) => paintFacts(theme, line, "muted")),
         fields: ({ fields }) => [...detailFieldRows(theme, fields, width)],
         text: ({ text }) => wrapVerbatim(text, width),
         line: ({ text }) => [clipToWidth(text, width, "…")],
