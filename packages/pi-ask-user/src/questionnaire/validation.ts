@@ -33,14 +33,15 @@ const fail = (position: string, problem: string): AskUserValidationError =>
   AskUserValidationError.make({ message: `${position} ${problem}` });
 
 interface QuestionnaireInput {
+  readonly askedBy?: string | undefined;
   readonly questions: ReadonlyArray<
     | Exclude<AskUserQuestion, AskUserChoiceQuestion>
     | (Omit<AskUserChoiceQuestion, "choices"> & { readonly choices: ReadonlyArray<AskUserChoice> })
   >;
 }
 
-export const normalizeAskUserRequest = (request: QuestionnaireInput): AskUserRequest => ({
-  questions: Arr.map(request.questions, (question) => {
+const questionsOf = (request: QuestionnaireInput): AskUserRequest["questions"] =>
+  Arr.map(request.questions, (question) => {
     const base = {
       key: Str.trim(question.key),
       title: Str.trim(question.title),
@@ -62,8 +63,13 @@ export const normalizeAskUserRequest = (request: QuestionnaireInput): AskUserReq
           : { ...baseChoice, preview: Str.trim(choice.preview) };
       }),
     };
-  }),
-});
+  });
+
+export const normalizeAskUserRequest = (request: QuestionnaireInput): AskUserRequest => {
+  // A blank asker is no asker: the questionnaire is then the caller's own.
+  const askedBy = Str.trim(request.askedBy ?? "");
+  return { ...(askedBy.length > 0 && { askedBy }), questions: questionsOf(request) };
+};
 
 export function validateAskUserRequest(
   request: AskUserRequest,

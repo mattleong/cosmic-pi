@@ -74,6 +74,7 @@ export function registerAskUserTool(
       "Use ask_user text mode without choices when the user must supply wording or information rather than select alternatives. Text answers must be nonblank and at most 4000 code units after trimming.",
       "Every ask_user choice needs a stable value, concise label, and useful trade-off description. Use previews only for concrete artifacts that benefit from visual comparison.",
       "When ask_user offers alternatives and one choice is the main agent's recommendation, place it first, append (Recommended) to its label, and explain why in its description; do not force a recommendation for preference-only choices.",
+      "When another agent, such as a subagent, asks you something only the user can decide, put it to the user with ask_user, naming that agent in askedBy, then pass the answer on to it. Don't decide for the user.",
       "Never ask users to enter passwords, API keys, tokens, private keys, or other credentials through ask_user.",
       "Native codemode receives structured pi-ask-user/questionnaire version-1 results. Check contract, version, tool, and outcome before branching on answers. Rejected or cancelled scripts do not undo answers; do not blindly retry a questionnaire. Codemode scripts share a small pool of Pi workers, so call ask_user or await an async questionnaire directly rather than from codemode, where a long user wait blocks other scripts.",
     ],

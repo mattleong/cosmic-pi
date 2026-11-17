@@ -198,6 +198,7 @@ const decodeRequestView = decodeUnknownOrUndefined(
         ),
       }),
     ).check(Schema.isMaxLength(MAX_QUESTIONS)),
+    askedBy: Schema.optional(Schema.String),
     independentWork: Schema.optional(Schema.String),
     blockedWork: Schema.optional(Schema.String),
   }),

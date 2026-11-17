@@ -56,6 +56,13 @@ describe("ask-user validation", () => {
     expect(validateQuestionnaireInput(Fn.pipe("x", Str.repeat(2001)), "note").error).toBeDefined();
   });
 
+  it("keeps a named asker trimmed and treats a blank one as the caller's own question", () => {
+    expect(normalizeAskUserRequest({ ...base(), askedBy: "  Pane tour " }).askedBy).toBe(
+      "Pane tour",
+    );
+    expect(normalizeAskUserRequest({ ...base(), askedBy: " \t " })).toEqual(base());
+  });
+
   it("rejects blank fields before duplicate checks and collisions by position without content", () => {
     const blank = " \t ";
     const [q1, c1, c2] = ["Question 1", "Question 1, choice 1", "Question 1, choice 2"];

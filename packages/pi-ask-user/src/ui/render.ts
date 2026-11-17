@@ -16,6 +16,7 @@ import {
   appendPacked,
   appendHintBar,
   appendWrapped,
+  askerLabel,
   borderLine,
   joinColumns,
   titleLabel,
@@ -86,11 +87,25 @@ function renderProgress(model: QuestionnaireRenderModel, width: number): string[
   return lines;
 }
 
-function renderHeading(model: QuestionnaireRenderModel, width: number): string[] {
-  if (!isSingleQuestion(model.state))
-    return [...renderTabs(model, width), ...renderProgress(model, width)];
-  const [question] = model.state.request.questions;
+/** Whose questions these are, when another agent's: the answers go to it, not to this session. */
+function renderAsker(model: QuestionnaireRenderModel, width: number): string[] {
+  const asker = model.state.request.askedBy;
   const lines: string[] = [];
+  if (asker !== undefined)
+    appendWrapped(
+      lines,
+      " ",
+      `${model.theme.fg("text", askerLabel(asker))} ${model.theme.fg("dim", "asks")}`,
+      width,
+    );
+  return lines;
+}
+
+function renderHeading(model: QuestionnaireRenderModel, width: number): string[] {
+  const lines = renderAsker(model, width);
+  if (!isSingleQuestion(model.state))
+    return [...lines, ...renderTabs(model, width), ...renderProgress(model, width)];
+  const [question] = model.state.request.questions;
   if (question)
     appendWrapped(
       lines,

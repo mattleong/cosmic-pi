@@ -31,7 +31,7 @@ import type {
   AskUserAsyncRequest,
   AskUserRequest,
 } from "../questionnaire/schema.ts";
-import { appendWrapped, titleLabel } from "./layout.ts";
+import { appendWrapped, askerLabel, titleLabel } from "./layout.ts";
 import {
   headingAnswer,
   requestArguments,
@@ -276,6 +276,10 @@ function requestRows(request: RequestView, theme: Theme, width: number): string[
   const lines: string[] = [];
   const append = (prefix: string, text: string, hang = 0) =>
     appendWrapped(lines, prefix, text, width, hang);
+  // The asker reads as the questions' titles do; arguments normalization hasn't run on a replay.
+  const asker = Str.trim(request.askedBy ?? "");
+  if (asker.length > 0)
+    append("", `${theme.fg("muted", "Asked by:")} ${theme.fg("text", askerLabel(asker))}`);
   for (const question of request.questions) {
     const note = MODE_NOTES[question.mode ?? "single"];
     append(

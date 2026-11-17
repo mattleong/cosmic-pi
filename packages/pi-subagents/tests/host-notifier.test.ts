@@ -51,6 +51,33 @@ describe("subagent host notifier", () => {
     expect(options).toEqual(steer);
   });
 
+  it("points a question only the user can decide at the questionnaire, when the session has one", () => {
+    for (const tools of [["read", "ask_user"], ["read"]]) {
+      const sendMessage = vi.fn<SendMessage>();
+      const notify = hostNotifier(
+        extensionApiFixture({ sendMessage, getActiveTools: () => tools }),
+      );
+
+      notify({
+        type: "question",
+        id: "agent-1",
+        name: "Pane tour",
+        requestId: "question-1",
+        message: "Red or blue?",
+        generation: 1,
+      });
+
+      const content = messageContent(sendMessage.mock.calls[0]?.[0].content);
+      expect(content).toContain("Red or blue?");
+      expect(content).toContain("agent_send");
+      // Naming the asker lets the questionnaire show the user whose question it is.
+      expect(Fn.pipe(content, Str.includes("ask_user"))).toBe(tools.includes("ask_user"));
+      expect(Fn.pipe(content, Str.includes('askedBy to "Pane tour"'))).toBe(
+        tools.includes("ask_user"),
+      );
+    }
+  });
+
   it("sends a full batch as one bounded notice that names every run", () => {
     const { sendMessage, notify, content } = notifier();
     const finalText = Fn.pipe("x", Str.repeat(32 * 1024));

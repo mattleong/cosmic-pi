@@ -19,7 +19,7 @@ import {
 } from "../questionnaire/schema.ts";
 import { validateQuestionnaireInput } from "../questionnaire/validation.ts";
 import type { AskUserPromptGate } from "./host-prompt.ts";
-import { titleLabel } from "../ui/layout.ts";
+import { askerLabel, titleLabel } from "../ui/layout.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
 
 const hostError = (operation: string) =>
@@ -211,9 +211,11 @@ const askOptionalNote = Effect.fn("AskUserHost.askOptionalNote")(function* (
 const askRpcQuestion = Effect.fn("AskUserHost.askRpcQuestion")(function* (
   ui: ExtensionUIContext,
   question: AskUserQuestion,
+  asker: string | undefined,
   existingNote?: string,
 ): Effect.fn.Return<AskUserAnswerDraft | undefined, AskUserHostError> {
-  const title = `[${titleLabel(question.title)}] ${stripTerminalControls(question.prompt)}${previewText(question)}`;
+  // A native dialog has one title, so it names another agent's question there too.
+  const title = `${asker === undefined ? "" : `${askerLabel(asker)} asks: `}[${titleLabel(question.title)}] ${stripTerminalControls(question.prompt)}${previewText(question)}`;
   const answer = yield* Match.value(question).pipe(
     Match.when({ mode: "text" }, () =>
       boundedInput(ui, title, "Your answer", "text").pipe(
@@ -250,7 +252,7 @@ const runRpc = Effect.fn("AskUserHost.runRpc")(function* (
 ): Effect.fn.Return<AskUserOutcome, AskUserHostError> {
   const drafts: AskUserAnswerDraft[] = [];
   for (const question of request.questions) {
-    const draft = yield* askRpcQuestion(ctx.ui, question);
+    const draft = yield* askRpcQuestion(ctx.ui, question, request.askedBy);
     if (!draft) return cancelQuestionnaire();
     drafts.push(draft);
   }
@@ -285,7 +287,12 @@ const runRpc = Effect.fn("AskUserHost.runRpc")(function* (
     const editIndex = editOptions.indexOf(selected);
     const question = request.questions[editIndex];
     if (question === undefined) return cancelQuestionnaire();
-    const replacement = yield* askRpcQuestion(ctx.ui, question, drafts[editIndex]?.note);
+    const replacement = yield* askRpcQuestion(
+      ctx.ui,
+      question,
+      request.askedBy,
+      drafts[editIndex]?.note,
+    );
     if (!replacement) return cancelQuestionnaire();
     drafts[editIndex] = replacement;
   }

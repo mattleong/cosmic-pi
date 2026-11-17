@@ -80,6 +80,15 @@ describe("AskUserDialog", () => {
     );
   });
 
+  it("names the agent whose questions it shows, whether one question or several", () => {
+    for (const asked of [request(), severalQuestions]) {
+      expect(rendered(makeDialog(asked).dialog, 80)).not.toContain("Pane tour");
+      expect(rendered(makeDialog({ ...asked, askedBy: "Pane tour" }).dialog, 80)).toContain(
+        "Pane tour",
+      );
+    }
+  });
+
   it("opens text input directly, preserves literal shortcuts and drafts across escape, notes and hide", () => {
     const { dialog, done, collapse } = makeDialog(textRequest);
     dialog.focused = true;

@@ -59,6 +59,14 @@ const attachRelay = (bus: QuestionnaireEvents, relay: QuestionnaireRelay) =>
 afterEach(() => vi.unstubAllEnvs());
 it("decodes bounded structured transport data and rejects hostile or semantically invalid requests", () => {
   expect(decodeQuestionnaireRequest(request)).toEqual(request);
+  // The asker's name crosses the relay with its questions; anything but text does not.
+  expect(decodeQuestionnaireRequest({ ...request, askedBy: " Pane tour " })).toEqual({
+    ...request,
+    askedBy: "Pane tour",
+  });
+  expect(
+    decodeQuestionnaireRequest({ ...request, askedBy: { name: "Pane tour" } }),
+  ).toBeUndefined();
   expect(decodeQuestionnaireOutcome(answer)).toEqual(answer);
   for (const input of [
     { questions: Array(10000).fill(request.questions[0]) },

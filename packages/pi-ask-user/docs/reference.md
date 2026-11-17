@@ -34,6 +34,8 @@ The tool is named `ask_user`:
 
 Question keys and choice values must be unique in their scope. Titles label tabs and review rows, which shorten long titles; answers match questions by `key`. A choice cannot be labeled "Write a custom answer", because it would pose as the built-in custom-answer action.
 
+An optional `askedBy`, beside `questions`, names the agent whose questions these are when the caller asks on another agent's behalf, such as a subagent whose question only the user can decide. The dialog shows the name above the questions, so the user knows where the answers go; the answers still return to the caller, which passes them on. A blank `askedBy` is dropped.
+
 Arguments are prepared before validation: null or blank optional fields, blank choice previews, and null or empty `choices` on text questions are dropped. An invalid question reports only the issues of the shape its `mode` selects, or the allowed modes when `mode` is unrecognized.
 
 For a required free-text answer, use `mode: "text"` and omit `choices`:
@@ -143,7 +145,7 @@ This is an additive tool-result boundary: normal text, persisted details, render
 
 ## Activity view and child questions
 
-In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Hidden questionnaires keep their drafts and release keyboard focus until resumed. Run cancellation or session replacement cancels a child's waiting or mounted requests. Only authenticated child requests appear beneath their owning subagent run; their answers return to that caller rather than automatically steering the root agent. The [lifecycle note](lifecycle.md#branch-and-child-authority) explains ownership and revocation.
+In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Hidden questionnaires keep their drafts and release keyboard focus until resumed. Run cancellation or session replacement cancels a child's waiting or mounted requests. Only authenticated child requests appear beneath their owning subagent run; their answers return to that caller rather than automatically steering the root agent. The root names that run as the request's `askedBy`, so its dialog says whose it is. The [lifecycle note](lifecycle.md#branch-and-child-authority) explains ownership and revocation.
 
 ## TUI controls
 

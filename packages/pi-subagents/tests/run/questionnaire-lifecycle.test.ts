@@ -27,14 +27,16 @@ const askUser = (child: FakeChildControl, requestId: string) =>
 
 interface QuestionnaireProbe {
   owner?: QuestionnaireOwner;
+  askedBy?: string | undefined;
   interrupted: boolean;
   cleaned: boolean;
 }
 
 const blockingQuestionnaire = (release: Deferred.Deferred<void>) => {
   const state: QuestionnaireProbe = { interrupted: false, cleaned: false };
-  const handler = (_request: AskUserRequest, owner: QuestionnaireOwner) => {
+  const handler = (asked: AskUserRequest, owner: QuestionnaireOwner) => {
     state.owner = owner;
+    state.askedBy = asked.askedBy;
     return Effect.never.pipe(
       Effect.onInterrupt(() =>
         Effect.sync(() => void (state.interrupted = true)).pipe(
@@ -147,6 +149,8 @@ describe("assignment-owned questionnaire proxy", () => {
           askUser(child, "q-1");
           yield* yieldUntil(() => state.owner !== undefined);
           expect(state.owner).toMatchObject({ runId: run.id, requestId: "q-1" });
+          // The root names the run that asked, so the user sees whose questionnaire it is.
+          expect(state.askedBy).toBe("question");
           expect(state.owner!.assignmentEpoch).toBeGreaterThan(0);
           if (ending === "stop") yield* service.stop(run.id);
           if (ending === "interrupt") {

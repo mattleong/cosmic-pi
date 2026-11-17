@@ -15,6 +15,12 @@ const MAX_TITLE_LABEL_WIDTH = 24;
 export const titleLabel = (title: string): string =>
   stripTerminalControls(clipToWidth(stripTerminalControls(title), MAX_TITLE_LABEL_WIDTH));
 
+// An asker is an agent's display name; one line names it, however long the name it was given.
+const MAX_ASKER_LABEL_WIDTH = 48;
+
+export const askerLabel = (asker: string): string =>
+  stripTerminalControls(clipToWidth(stripTerminalControls(asker), MAX_ASKER_LABEL_WIDTH));
+
 /**
  * Wraps `value` after `prefix`. Continuation lines hang `hang` columns further in, under the text
  * that follows a list number or label; every line wraps at the narrower width so they align.

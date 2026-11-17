@@ -169,11 +169,31 @@ const completionContent = (runs: ReadonlyArray<SubagentCompletionNotification>):
   );
 };
 
+const ASK_USER_TOOL_NAME = "ask_user";
+
+/** Whether this session can put a subagent's question to the user as a questionnaire. */
+export const canAskUser = (pi: Pick<ExtensionAPI, "getActiveTools">): boolean =>
+  invokeHostCallback(() => pi.getActiveTools().includes(ASK_USER_TOOL_NAME), false);
+
+/**
+ * What the parent does with a question only the user can decide: the questionnaire names the
+ * subagent, so the user sees whose question it is, and the parent passes the answer on.
+ */
+export const userDecisionStep = (askUser: boolean, asker?: string): string =>
+  askUser
+    ? `If only the user can decide it, don't decide for them: ask them with ${ASK_USER_TOOL_NAME}, ${
+        asker === undefined
+          ? "naming the subagent in askedBy"
+          : `setting askedBy to ${JSON.stringify(asker)}`
+      }, then send their answer on with agent_send.`
+    : "If only the user can decide it, don't decide for them: ask the user, then send their answer on with agent_send.";
+
 const questionContent = (
   notification: Extract<SubagentNotification, { readonly type: "question" }>,
+  askUser: boolean,
 ): string => {
   const reply = `agent_send({ to: "${notification.id}", message: "..." })`;
-  return `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion:\n${indentQuestionLines(notification.message, "  ")}\n\nIf it isn't answered yet, reply with ${reply}, then call agent_await again.`;
+  return `Subagent ${notification.name} (${notification.id}) is waiting for a parent reply.\n\nQuestion:\n${indentQuestionLines(notification.message, "  ")}\n\nIf it isn't answered yet, reply with ${reply}, then call agent_await again. ${userDecisionStep(askUser, notification.name)}`;
 };
 
 /** A completion notice's display receipt: counts for its heading, and each run's words. */
@@ -271,7 +291,7 @@ export function hostNotifier(
             {
               customType: QUESTION_MESSAGE_TYPE,
               details: questionNoticeDetails(notification),
-              content: clip(questionContent(notification)),
+              content: clip(questionContent(notification, canAskUser(pi))),
             },
             startTurn,
           ),

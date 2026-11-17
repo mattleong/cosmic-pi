@@ -12,7 +12,12 @@ import { registerSessionWake, type SessionWake } from "pi-cosmic-core/host-wake"
 import type { SubagentProjection, SubagentRunView } from "../run/model.ts";
 import { isActiveRunState, SUBAGENT_ROOT_RUN_ID } from "../run/model.ts";
 import { AGENT_MESSAGE_TYPE } from "./host-agent-messages.ts";
-import { COMPLETION_MESSAGE_TYPE, QUESTION_MESSAGE_TYPE } from "./host-notifier.ts";
+import {
+  canAskUser,
+  COMPLETION_MESSAGE_TYPE,
+  QUESTION_MESSAGE_TYPE,
+  userDecisionStep,
+} from "./host-notifier.ts";
 import { displayName } from "../ui/notice-details.ts";
 
 export const QUESTION_REMINDER_MESSAGE_TYPE = "pi-subagents-question-reminder";
@@ -52,27 +57,28 @@ const pendingQuestions = (projection: SubagentProjection): ReadonlyArray<Pending
 
 const questionKey = (run: PendingQuestion): string => `${run.id}:${run.question.requestId}`;
 
-const reminderText = (runs: ReadonlyArray<PendingQuestion>): string =>
+const reminderText = (runs: ReadonlyArray<PendingQuestion>, askUser: boolean): string =>
   Arr.join(
     [
       runs.length === 1
         ? "A subagent is still waiting for your reply:"
         : `${runs.length} subagents are still waiting for your replies:`,
       ...Arr.map(runs, (run) => `- ${run.name} (${run.id}): ${run.question.message}`),
-      "Answer with agent_send within the authority the user has already given you, or ask the user. Don't approve anything on the user's behalf.",
+      `Answer with agent_send within the authority the user has already given you. ${userDecisionStep(askUser)} Don't approve anything on the user's behalf.`,
     ],
     "\n\n",
   );
 
 const questionReminder = (
   runs: ReadonlyArray<PendingQuestion>,
+  askUser: boolean,
 ): ReadonlyArray<CustomMessageEntryDraft> =>
   runs.length > 0
     ? [
         {
           type: "custom_message",
           customType: QUESTION_REMINDER_MESSAGE_TYPE,
-          content: reminderText(runs),
+          content: reminderText(runs, askUser),
           display: false,
         },
       ]
@@ -131,7 +137,7 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Sess
       for (const key of escalated) if (!live.has(key)) escalated.delete(key);
       const fresh = Arr.filter(questions, (run) => !reminded.has(questionKey(run)));
       for (const run of fresh) reminded.add(questionKey(run));
-      const reminder = questionReminder(fresh);
+      const reminder = questionReminder(fresh, canAskUser(pi));
       if (fresh.length === 0) {
         const ignored = Arr.filter(questions, (run) => !escalated.has(questionKey(run)));
         if (ignored.length > 0 && hasUi(ctx)) {
@@ -162,7 +168,7 @@ export function registerParentWake(pi: ExtensionAPI, host: ParentWakeHost): Sess
         for (const run of arrivedQuestions) reminded.add(questionKey(run));
         return settleResult(
           event.entries,
-          questionReminder(arrivedQuestions),
+          questionReminder(arrivedQuestions, canAskUser(pi)),
           arrived || arrivedQuestions.length > 0,
         );
       });

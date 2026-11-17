@@ -82,6 +82,13 @@ export const AskUserParameters = Type.Object({
     maxItems: MAX_QUESTIONS,
     description: "One to six questions presented as one questionnaire.",
   }),
+  askedBy: Type.Optional(
+    Type.String({
+      maxLength: MAX_TITLE_LENGTH,
+      description:
+        "Name of the agent whose question this is, when you ask on another agent's behalf, such as a subagent's. Shown above the questions; omit it for your own questions.",
+    }),
+  ),
 });
 
 export const MAX_WORK_DESCRIPTION_LENGTH = 500;

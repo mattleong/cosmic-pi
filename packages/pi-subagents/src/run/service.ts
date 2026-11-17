@@ -448,8 +448,9 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     }),
     ...(questionnaireHandler && {
       executeQuestionnaire: (record, requestId, request, shown) =>
+        // The root names the run that asked, whatever the request says: the answers go to it.
         questionnaires.own(record, requestId, (owner) =>
-          questionnaireHandler(request, owner, shown),
+          questionnaireHandler({ ...request, askedBy: record.launch.name }, owner, shown),
         ),
     }),
   });

@@ -82,6 +82,8 @@ export const QuestionnaireRequestSchema = Schema.Struct({
       }),
     ]),
   ).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_QUESTIONS)),
+  /** Whose question this is, when not the caller's own; blank means the caller's. */
+  askedBy: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_TITLE_LENGTH))),
 });
 const answerFields = {
   key: text(MAX_KEY_LENGTH),
@@ -120,7 +122,10 @@ export const QuestionnaireOutcomeSchema = Schema.Union([
   }),
 ]);
 export type AskUserOutcome = typeof QuestionnaireOutcomeSchema.Type;
-const RawRequest = Schema.Struct({ questions: Schema.Unknown });
+const RawRequest = Schema.Struct({
+  questions: Schema.Unknown,
+  askedBy: Schema.optionalKey(Schema.Unknown),
+});
 const RawQuestion = Schema.Struct({
   key: Schema.Unknown,
   title: Schema.Unknown,
@@ -173,7 +178,10 @@ const captureRequest = (root: typeof RawRequest.Type): AskUserRequest | undefine
     }
     captured.push(Object.assign({}, question, { choices }));
   }
-  const decoded = decodeRequest({ questions: captured });
+  const decoded = decodeRequest({
+    questions: captured,
+    ...(root.askedBy !== undefined && { askedBy: root.askedBy }),
+  });
   if (!decoded) return undefined;
   const request = normalizeAskUserRequest(decoded);
   return validateAskUserRequest(request) ? undefined : request;
