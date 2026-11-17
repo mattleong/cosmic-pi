@@ -29,7 +29,8 @@ function contextUsageCandidates(
   const percentage = theme.fg(color, `${Math.round(percent)}%`);
   const counts = theme.fg("syntaxNumber", `${formatTokens(tokens)}/${formatTokens(contextWindow)}`);
   return [
-    `${label} ${meter} ${percentage} ${counts}`,
+    // A session that reports only its share has no window to count against.
+    ...(contextWindow > 0 ? [`${label} ${meter} ${percentage} ${counts}`] : []),
     `${label} ${meter} ${percentage}`,
     `${label} ${percentage}`,
   ];

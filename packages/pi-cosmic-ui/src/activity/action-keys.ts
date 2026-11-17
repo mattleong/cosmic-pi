@@ -7,6 +7,7 @@ import { findOrUndefined } from "pi-cosmic-core/array";
 export const ACTIVITY_ACTION_PAGE_SIZE = 9;
 
 const ACTIVITY_ACTION_KEYS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
+  ["o", ["open"]],
   ["x", ["stop"]],
   ["i", ["interrupt"]],
   ["u", ["resume"]],

@@ -13,6 +13,8 @@ tool result's text parts with newlines, the same projection the builtin renderer
 
 For tools registered during `session_start`, install `registerCodePreviewReplay(pi, { command, tools })` at factory time. Use its `shell` in place of `withCodePreviewShell` after trusted settings load, then `publish()` after every eligible tool is registered. Call `finishStartup()` when the first startup settles (including failure/cancellation), and `retire()` on shutdown. Continue passing the owner's token-checked animation scheduler through shell options.
 
+A surface that draws tool calls Pi isn't drawing itself, such as another conversation's transcript, gets a tool's renderers with `lookupToolRenderers(pi.events, name)`. Pi resolves renderers only for its own rows, so the lookup asks the live owners in the same Pi process: Code Previews answers for the builtin, codemode, tool-search, and MCP tools it previews, and each `registerCodePreviewReplay` owner for its published tools. It returns `undefined` when no owner answers, including for third-party adapters, which need the provider's own renderers from Pi's resolver chain; draw such a call with Pi's default row.
+
 `withCodePreviewRenderers({ name, label? }, renderers, options)` returns only public `renderShell`, `renderCall`, and `renderResult` callbacks. Its `selfShell` option and resolver registration follow [registration and policy](../../../docs/architecture/tool-presentation.md#registration-and-policy).
 
 ## Compact summaries

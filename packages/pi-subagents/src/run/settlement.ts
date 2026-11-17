@@ -285,6 +285,7 @@ export function settlementOperations(dependencies: RunSettlementDependencies) {
       generation,
       ...(warning && { warning }),
       ...(userWarning && userWarning !== warning && { userWarning }),
+      ...(record.view.userGuidance && { userGuidance: record.view.userGuidance }),
     });
   };
 

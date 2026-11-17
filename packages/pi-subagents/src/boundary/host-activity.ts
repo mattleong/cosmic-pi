@@ -125,6 +125,8 @@ export function registerSubagentActivity(options: {
     signal: AbortSignal,
     expected: SubagentControlExpectation,
   ) => Promise<void>;
+  /** Shows the run's session until the user leaves it; absent where there is no screen for it. */
+  readonly open?: (id: string, signal: AbortSignal) => Promise<void>;
 }): () => void {
   let disposed = false;
   const dispose = registerRevisionedActivityProvider(options.events, {
@@ -146,6 +148,11 @@ export function registerSubagentActivity(options: {
       const expected = captureSubagentControlExpectation(before);
       if (action === "stop" || action === "interrupt")
         return options.act(item.id, { action }, signal, expected);
+      if (action === "open") {
+        if (!options.open || !offers(before, item.title, action))
+          throw new Error("Subagent action is unavailable");
+        return options.open(item.id, signal);
+      }
       if (!isInputAction(action)) throw new Error("Subagent action is unavailable");
       if (!options.input) throw new Error("Subagent input isn't available");
       return options.input(before, action, signal).then((input) => {

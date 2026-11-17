@@ -31,17 +31,28 @@ export const renderSubagentMessage: MessageRenderer = withCodePreviewMessageShel
 export const renderAgentMessageEntry: MessageRenderer =
   withCodePreviewMessageShell(presentAgentMessage);
 
+const SUBAGENT_MESSAGE_RENDERERS: ReadonlyMap<string, MessageRenderer> = new Map([
+  [AGENT_MESSAGE_TYPE, renderAgentMessageEntry],
+  ...Arr.map(
+    [
+      COMPLETION_MESSAGE_TYPE,
+      QUESTION_MESSAGE_TYPE,
+      PROXY_NOTIFICATION_MESSAGE_TYPE,
+      PEER_NOTICE_MESSAGE_TYPE,
+      STOPPED_RUNS_MESSAGE_TYPE,
+    ],
+    (type) => [type, renderSubagentMessage] as const,
+  ),
+]);
+
 export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
-  pi.registerMessageRenderer(AGENT_MESSAGE_TYPE, renderAgentMessageEntry);
-  for (const type of [
-    COMPLETION_MESSAGE_TYPE,
-    QUESTION_MESSAGE_TYPE,
-    PROXY_NOTIFICATION_MESSAGE_TYPE,
-    PEER_NOTICE_MESSAGE_TYPE,
-    STOPPED_RUNS_MESSAGE_TYPE,
-  ])
-    pi.registerMessageRenderer(type, renderSubagentMessage);
+  for (const [type, renderer] of SUBAGENT_MESSAGE_RENDERERS)
+    pi.registerMessageRenderer(type, renderer);
 }
+
+/** How this extension draws one of its own custom messages, in any conversation that holds one. */
+export const subagentMessageRenderer = (customType: string): MessageRenderer | undefined =>
+  SUBAGENT_MESSAGE_RENDERERS.get(customType);
 
 const other = (relays: string): MessageOrigin => ({ author: "other", relays });
 const subagentList = (ids: ReadonlyArray<string>): string =>

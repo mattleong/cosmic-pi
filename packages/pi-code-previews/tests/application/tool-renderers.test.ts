@@ -9,7 +9,12 @@ import { Text } from "@earendil-works/pi-tui";
 import { afterEach, it } from "vitest";
 import { extensionApiFixture, plainTheme } from "pi-cosmic-core/testing";
 import {
+  answerToolRendererLookups,
+  lookupToolRenderers,
+} from "../../src/application/renderer-lookup";
+import {
   CodePreviewPresentationOwner,
+  createCodePreviewRendererLookup,
   createCodePreviewRendererResolver,
   publishPreviewToolStatuses,
 } from "../../src/application/tool-renderers";
@@ -209,6 +214,35 @@ it("compact/off ready rows keep output when each slot is resolved separately", (
   );
   assert.match(Arr.join(result.render(100), "\n"), /COMPLETE OUTPUT/);
   owner.retire();
+});
+
+it("a lookup draws a previewed builtin without Pi's resolver, and declines foreign or retired owners", () => {
+  setPlainPreviewSettings({ tools: ["bash"] });
+  const { pi, owner } = presentationResolver(
+    {
+      getAllTools: () => [
+        info("bash"),
+        { ...info("read"), sourceInfo: { ...info("read").sourceInfo, source: "foreign" } },
+      ],
+    },
+    ["bash", "read"],
+  );
+  answerToolRendererLookups(
+    pi.events,
+    createCodePreviewRendererLookup(pi, () => owner, new Set()),
+  );
+  const args = { command: "echo exact" };
+  const result = lookupToolRenderers(pi.events, "bash")!.renderResult!(
+    { content: [{ type: "text", text: "COMPLETE OUTPUT" }], details: {} },
+    { expanded: true, isPartial: false },
+    plainTheme,
+    renderContextFixture({ args, executionStarted: true, expanded: true, isPartial: false }),
+  );
+  assert.match(Arr.join(result.render(100), "\n"), /COMPLETE OUTPUT/);
+  assert.equal(lookupToolRenderers(pi.events, "read"), undefined);
+  assert.equal(lookupToolRenderers(pi.events, "unrelated"), undefined);
+  owner.retire();
+  assert.equal(lookupToolRenderers(pi.events, "bash"), undefined);
 });
 
 it("new rows keep origin-owner appearance and tool selection until the next session", () => {

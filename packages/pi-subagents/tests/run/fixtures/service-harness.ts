@@ -237,6 +237,8 @@ export interface FakeChildControl {
   readonly gateRelease: (gate: Deferred.Deferred<void>) => void;
   readonly beforeNextResponse: (type: FakeCommandType, value: RpcWireValue) => void;
   readonly offer: (value: RpcWireValue) => void;
+  /** The session entries the child answers `get_entries` with, after its `since` cursor. */
+  readonly sessionEntries: Array<{ readonly id: string } & { readonly [key: string]: Schema.Json }>;
   readonly offerIpc: (value: IpcWireValue) => void;
   readonly offerOversizedLine: (line: OversizedLine) => void;
   readonly exit: (
@@ -314,6 +316,14 @@ export function fakeChildLayer(
           const events = yield* Queue.unbounded<ChildWireEvent, Cause.Done>();
           const exited = yield* Deferred.make<ProcessExit, SubagentProcessError>();
           const commands: RpcCommand[] = [];
+          const sessionEntries: FakeChildControl["sessionEntries"] = [];
+          const entriesReply = (since: string | undefined) => {
+            const cursor = Arr.findFirstIndex(sessionEntries, (entry) => entry.id === since);
+            return {
+              entries: sessionEntries.slice(Option.getOrElse(cursor, () => -1) + 1),
+              leafId: sessionEntries.at(-1)?.id ?? null,
+            };
+          };
           const ipc: LocalPiParentControl[] = [];
           const terminations: Array<"graceful" | "force"> = [];
           const cleanup = cleanupFixture();
@@ -459,6 +469,9 @@ export function fakeChildLayer(
                         ...(command.type === "get_session_stats" && {
                           data: { tokens: { ...tokens }, cost },
                         }),
+                        ...(command.type === "get_entries" && {
+                          data: entriesReply(command.since),
+                        }),
                         ...(command.type === "prompt" && {
                           data: {
                             disposition:
@@ -523,6 +536,7 @@ export function fakeChildLayer(
             gateRelease: (gate) => void (releaseGate = gate),
             beforeNextResponse: (type, value) => void beforeResponses.push({ type, value }),
             offer,
+            sessionEntries,
             offerIpc,
             offerOversizedLine,
             exit,

@@ -548,6 +548,45 @@ describe("subagent activity provider", () => {
     },
   );
 
+  effectTest(
+    "opens the session of a run that has one, and only through its own door",
+    function* () {
+      const transport = fakeActivityHost();
+      const bridge = subagentProjectionBridge();
+      bridge.publish({
+        revision: 1,
+        runs: [view({ id: "live", pid: 42 }), view({ id: "unstarted", state: "starting" })],
+      });
+      const open = vi.fn(() => Promise.resolve());
+      const act = vi.fn(() => Promise.resolve());
+      const dispose = registerSubagentActivity({
+        events: transport.events,
+        sessionId: "session",
+        bridge,
+        isCurrent: () => true,
+        act,
+        open,
+      });
+      announceHost(transport, true);
+      const items = subagentActivityItems(bridge.get(), bridge.getActivityPresentation());
+      const item = (id: string) => findOrUndefined(items, (candidate) => candidate.id === id)!;
+      const offered = (id: string) => Arr.map(item(id).actions ?? [], (action) => action.id);
+      expect(offered("live")).toContain("open");
+      expect(offered("unstarted")).not.toContain("open");
+      const signal = new AbortController().signal;
+      const invoke = (id: string) =>
+        Promise.resolve<unknown>(
+          transport.capability()!.invoke!(id, "open", item(id).revision, signal),
+        );
+      yield* step(() => invoke("live"));
+      expect(open).toHaveBeenCalledWith("live", signal);
+      yield* step(() => expect(invoke("unstarted")).rejects.toThrow());
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(act).not.toHaveBeenCalled();
+      dispose();
+    },
+  );
+
   effectTest("sends reply and message actions through the shared send path", function* () {
     const selected = view({ id: "selected", state: "waiting_for_parent", question });
     const expected = captureSubagentControlExpectation(selected);

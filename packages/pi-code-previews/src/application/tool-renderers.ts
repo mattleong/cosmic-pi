@@ -140,6 +140,25 @@ export function createCodePreviewRendererResolver(
   };
 }
 
+/**
+ * How this session draws a previewed tool, for a surface that draws calls Pi isn't drawing itself.
+ * It answers only once the owner is ready, and never for a third-party adapter, which wraps the
+ * provider's own renderers that only Pi's resolver chain supplies.
+ */
+export function createCodePreviewRendererLookup(
+  pi: ExtensionAPI,
+  currentOwner: () => CodePreviewPresentationOwner,
+  ownedTools: ReadonlySet<CodePreviewToolName>,
+): (name: string) => ToolRenderers | undefined {
+  return (name) => {
+    const owner = currentOwner();
+    if (!owner.live || !owner.ready || !owner.session || !isPreviewName(name)) return undefined;
+    const host = capturePreviewHostTools(pi);
+    if (thirdPartyAdapter(name, host.tools.get(name))) return undefined;
+    return select(name, undefined, owner.session, host, ownedTools, false);
+  };
+}
+
 export function publishPreviewToolStatuses(
   host: PreviewHostTools,
   enabled: Set<CodePreviewToolName>,

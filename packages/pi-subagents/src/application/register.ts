@@ -45,6 +45,8 @@ import { registerParentWake } from "../boundary/host-parent-wake.ts";
 import { agentMainCapabilities } from "../boundary/host-agent-messages.ts";
 import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { restoreSessionUsage, sessionUsageRecorder } from "../boundary/host-session-usage.ts";
+import { discoverActivityView } from "pi-cosmic-ui/activity/view";
+import { openSubagentSessionView } from "../boundary/host-session-view.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { registerUserInputSignal } from "../boundary/host-user-input.ts";
 import { subagentProjectionBridge } from "../boundary/host-ui.ts";
@@ -58,7 +60,12 @@ import type { SubagentProjection } from "../run/model.ts";
 import { InvalidSubagentRequestError } from "../run/errors.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
-import { ROOT_TOOL_NAMES, SUBAGENT_TOOL_NAME } from "../run/tool-policy.ts";
+import {
+  CONTACT_PARENT_TOOL_NAME,
+  ROOT_TOOL_NAMES,
+  SUBAGENT_TOOL_NAME,
+} from "../run/tool-policy.ts";
+import { contactParentToolRenderers } from "../tools/render-parent.ts";
 import { executeAgentActionEffect } from "../tools/execute-agents.ts";
 import { executeSubagentActionEffect, type SubagentToolRuntime } from "../tools/execute.ts";
 import {
@@ -68,7 +75,11 @@ import {
 } from "../tools/proxy-protocol.ts";
 import { registerSubagentTools } from "../tools/subagent.ts";
 import { registerApplicationCommands } from "./commands.ts";
-import { orphanSweepNotice, registerSubagentMessageRenderers } from "./messages.ts";
+import {
+  orphanSweepNotice,
+  registerSubagentMessageRenderers,
+  subagentMessageRenderer,
+} from "./messages.ts";
 import { createProfileOverrideHandoff } from "./profile-override-handoff.ts";
 import {
   profileReloadHandoff,
@@ -473,6 +484,30 @@ export function registerSubagentApplication(
                 ),
                 signal,
               ),
+            open: (runId, signal) =>
+              slot
+                .run(
+                  openSubagentSessionView({
+                    ctx: activation.ctx,
+                    events: pi.events,
+                    runId,
+                    projection: bridge.get,
+                    subscribeProjection: bridge.subscribe,
+                    isCurrent,
+                    messageRenderer: subagentMessageRenderer,
+                    childToolRenderers: (name) =>
+                      name === CONTACT_PARENT_TOOL_NAME ? contactParentToolRenderers() : undefined,
+                  }),
+                  signal,
+                )
+                .then(() => {
+                  // Leaving a session returns to the list it was opened from.
+                  if (isCurrent() && !signal.aborted && activation.sessionKey)
+                    void discoverActivityView(pi.events, activation.sessionKey)
+                      ?.open("subagents")
+                      .catch(() => undefined);
+                  return undefined;
+                }),
           });
         if (!slot.isCurrent(token)) detachActivation(false);
       },

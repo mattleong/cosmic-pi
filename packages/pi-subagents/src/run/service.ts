@@ -74,6 +74,7 @@ import {
 import { sessionStartOperations } from "./session-starts.ts";
 import { sessionClosed } from "./session-owned.ts";
 import { subtreeStopper } from "./subtree-stop.ts";
+import { transcriptOperations, type SubagentTranscriptListener } from "./transcript.ts";
 import { turnInputGates } from "./turn-input.ts";
 import { visibilityOperations } from "./visibility.ts";
 import { proxyExecutionHandler } from "./proxy-execution.ts";
@@ -241,6 +242,11 @@ export interface SubagentServiceContract extends WorkspaceCoordinatorContract {
     ids: ReadonlyArray<string>,
   ) => Effect.Effect<AgentReadResult, SubagentError>;
   readonly projection: Effect.Effect<SubagentProjection>;
+  /** Shows the listener a run's conversation, live while it has a process, until the scope closes. */
+  readonly watchTranscript: (
+    id: string,
+    listener: SubagentTranscriptListener,
+  ) => Effect.Effect<void, SubagentError, Scope.Scope>;
   /**
    * As the root session ends, sends every notice to it from now on, hands it the reports runs
    * took, and delivers every eligible completion now.
@@ -554,6 +560,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     agentSend: Effect.fn("SubagentService.agentSend")(agentMessages.send),
     agentRead: Effect.fn("SubagentService.agentRead")(agentMessages.read),
     projection,
+    ...transcriptOperations(runContext),
     retireDelivery: delivery.retireDelivery,
     awaitParentDrain: parentDrainAwaiter({
       records,

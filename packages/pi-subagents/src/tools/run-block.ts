@@ -21,6 +21,7 @@ import {
   type SubagentReportArchive,
   type SubagentReportTruncation,
   type SubagentRunView,
+  type SubagentUserGuidance,
 } from "../run/model.ts";
 import { failureFileText, reportFileText, reportTruncationText } from "../run/state.ts";
 import { runStateLabel } from "../ui/run-state.ts";
@@ -53,7 +54,7 @@ const MAX_PREVIEW_LINE_CHARS =
 /** A label, an archived path, and the file's size. */
 const MAX_FILE_LINE_CHARS = MAX_OUTCOME_FILE_PATH_CHARS + 112;
 
-const ACTION_KINDS = ["attention", "candidate", "workspace", "warning"] as const;
+const ACTION_KINDS = ["attention", "candidate", "workspace", "warning", "user"] as const;
 
 /** The one-line action items a block may carry, at most one of each kind. */
 export type RunBlockActions = Partial<Record<(typeof ACTION_KINDS)[number], string | undefined>>;
@@ -350,6 +351,18 @@ const attentionAction = (run: SubagentRunView): string | undefined => {
 export const nextCandidateAction = (next: SubagentNextCandidate | undefined): string | undefined =>
   next && `Next candidate: ${nextCandidateText(next)}.`;
 
+/**
+ * Tells a run's parent what it couldn't see: the user spoke to the run directly, in its session
+ * or from Activity, so its outcome may answer them and not only the parent's assignment.
+ */
+export const userGuidanceAction = (
+  guidance: SubagentUserGuidance | undefined,
+): string | undefined =>
+  guidance &&
+  (guidance.count === 1
+    ? `The user messaged this agent directly: ${guidance.latest}`
+    : `The user messaged this agent directly ${guidance.count} times; latest: ${guidance.latest}`);
+
 const runViewActions = (run: SubagentRunView): RunBlockActions => ({
   attention: attentionAction(run),
   candidate: nextCandidateAction(run.state === "failed" ? failedRunNextCandidate(run) : undefined),
@@ -358,6 +371,7 @@ const runViewActions = (run: SubagentRunView): RunBlockActions => ({
       ? `Workspace: ${proposalGuidance(run.workspaceId, run.workspaceOutcome)}`
       : undefined,
   warning: run.warning ?? run.systemWarning,
+  user: userGuidanceAction(run.userGuidance),
 });
 
 const WITHHELD_REPORT_NOTES = {

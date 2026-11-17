@@ -37,6 +37,7 @@ import {
   SUBAGENT_ROOT_RUN_ID,
   type SubagentRunView,
   type SubagentControlExpectation,
+  withUserGuidance,
 } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProcessInitializer } from "./process-lifecycle.ts";
@@ -242,15 +243,19 @@ export function resumeOperations(dependencies: RunResumeDependencies) {
           if (issued.state !== "running") return snapshotRun(resumed);
           if (agentMessage) agentMessage.recordNoticeLocked(resumed, now);
           else
-            resumed.view = {
-              ...resumed.view,
-              sessionEvents: appendNoticeSessionEvent(
-                resumed.view.sessionEvents,
-                "parent",
-                `Resume: ${prompt}`,
-                now,
-              ),
-            };
+            // Only the user resumes a run without an agent message, so its parent is told.
+            resumed.view = withUserGuidance(
+              {
+                ...resumed.view,
+                sessionEvents: appendNoticeSessionEvent(
+                  resumed.view.sessionEvents,
+                  "parent",
+                  `Resume: ${prompt}`,
+                  now,
+                ),
+              },
+              prompt,
+            );
           yield* publish;
           return snapshotRun(resumed);
         }),

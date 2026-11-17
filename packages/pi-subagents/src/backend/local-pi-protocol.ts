@@ -312,6 +312,12 @@ type CorrelatedRpcCommand =
       readonly streamingBehavior?: "steer" | undefined;
     }
   | { readonly type: "clear_queue"; readonly id?: string | undefined }
+  | {
+      readonly type: "get_entries";
+      readonly id?: string | undefined;
+      /** A session entry ID; the reply holds only the entries appended after it. */
+      readonly since?: string | undefined;
+    }
   | { readonly type: "abort"; readonly id?: string | undefined };
 
 export type RpcCommand =

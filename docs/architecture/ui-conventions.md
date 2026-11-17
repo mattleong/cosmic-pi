@@ -64,7 +64,7 @@ rex capture -s "$REX_SESSION" -b "$block" --format=html > screen.html   # with c
 
 ### Action keys
 
-- Each action has exactly one key. Use its letter wherever one exists: `x` Stop, `i` Interrupt, `m` Message, `e` Rename, `c` Clear.
+- Each action has exactly one key. Use its letter wherever one exists: `o` Open, `x` Stop, `i` Interrupt, `m` Message, `e` Rename, `c` Clear.
 - An action list shows that same key, `[x] Stop`, and the hint bar names the same key, `x Stop`. Never offer the same action under a letter in one place and a digit in another.
 - An action reads the same on every row: `[x] Stop` on a parent and on its child, never `Stop agent` on one and `Stop` on another. The pane and the confirmation already name the item. Producers supply the label; Activity shows it as given.
 - A confirmation names the item and what else the action affects, such as `Stop "Review authentication" and its 5 subagents?`. Never write `this agent`.
@@ -90,6 +90,7 @@ rex capture -s "$REX_SESSION" -b "$block" --format=html > screen.html   # with c
 - Expanded, every key that leaves the level is named, in one pair: if `C-c` closes a settings surface, picker, or panel, its expanded exit reads `Esc/C-c/h/q Close` like Activity's `Esc/C-c/q Close`.
 - A surface with a pending sub-state backs that out first: with a settings or picker filter applied, `Esc Clear` clears the filter, and the next `Esc` closes. A picker opened straight into search, where the search is the whole surface, reads `Esc Cancel` instead.
 - Nothing closes on "any key".
+- A subagent's session view is a session, not a manager, so its keys and chrome are Pi's own: `Esc` interrupts the run while it works, the working status sits in the editor's border, and a footer closes the screen. It has no hint bar; its header names only the keys that differ from a native session: how to leave (`C-d Back` while the run works, `Esc Back` once it is idle; `C-d` leaves whenever the editor is empty) and what Enter does when it isn't a plain send (`Enter Reply`, `Enter Resume`).
 
 ## Lists and selection
 

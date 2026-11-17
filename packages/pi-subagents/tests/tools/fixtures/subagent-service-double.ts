@@ -38,6 +38,7 @@ const unexpectedService: SubagentServiceContract = {
   setWriterWorkspaceMode: () => unexpected("setWriterWorkspaceMode"),
   // Read-only lookups such as a worktree heading's writer name find no runs by default.
   projection: Effect.succeed({ revision: 0, runs: [] }),
+  watchTranscript: () => unexpected("watchTranscript"),
   awaitParentDrain: unexpected("awaitParentDrain"),
   retireDelivery: unexpected("retireDelivery"),
 };

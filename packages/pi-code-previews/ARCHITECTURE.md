@@ -61,6 +61,11 @@ renderer-only composition. Shell mode and collapsed style are captured when wrap
 messages render through the [message shell](src/preview/message-shell.ts), which reuses the tool-row
 frames under the owner's loaded settings and never executes anything or acquires resources.
 
+The same owners answer [renderer lookups](src/application/renderer-lookup.ts) on `pi.events`, for a
+surface that draws another conversation's tool calls: the extension for the tools it previews, once
+its owner is ready, and each replay bridge for the tools it published. An answer is the renderers
+alone; a retired owner, a foreign tool under an owned name, and a third-party adapter stay silent.
+
 Third-party support stays behind the isolated registry, with exact package/source/name admission.
 Adapters never import providers, inspect executions, change activation, or read stored artifacts.
 They preserve downstream components and append full raw evidence because an external renderer may

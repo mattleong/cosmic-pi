@@ -123,6 +123,7 @@ const completionNotification = (
     ...(record.view.workspaceId !== undefined && { workspaceId: record.view.workspaceId }),
     ...(record.view.workspaceOutcome && { workspaceOutcome: record.view.workspaceOutcome }),
     ...(completion.handOns && { handOns: completion.handOns }),
+    ...(completion.userGuidance && { userGuidance: completion.userGuidance }),
   };
 };
 

@@ -42,6 +42,7 @@
     "./boundary/host-surface": "./src/boundary/host-surface.ts",
     "./boundary/host-viewport": "./src/boundary/host-viewport.ts",
     "./client": "./src/footer/client.ts",
+    "./footer/session": "./src/footer/session-footer.ts",
     "./manager": "./src/manager/chrome.ts",
     "./manager/key-labels": "./src/manager/key-labels.ts",
     "./manager/keymap": "./src/manager/keymap.ts",

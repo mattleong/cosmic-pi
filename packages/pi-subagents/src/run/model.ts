@@ -1,4 +1,5 @@
 import type * as Effect from "effect/Effect";
+import { clipText } from "pi-cosmic-core/display";
 import type * as Redacted from "effect/Redacted";
 import type { SubagentError } from "./errors.ts";
 import type {
@@ -257,7 +258,33 @@ export interface SubagentRunView {
   readonly toolUses?: number | undefined;
   /** Agent messages this run sent or received; `sessionEvents` keeps only the newest. */
   readonly messageCount?: number | undefined;
+  /** What the user told this run directly during its current assignment. */
+  readonly userGuidance?: SubagentUserGuidance | undefined;
 }
+
+/**
+ * The user's own messages to a run: typed into its session or sent from Activity. The run's parent
+ * never saw them, so the run's next outcome carries this note.
+ */
+export interface SubagentUserGuidance {
+  readonly count: number;
+  /** The newest message, cut to `MAX_USER_GUIDANCE_CHARS`. */
+  readonly latest: string;
+}
+
+export const MAX_USER_GUIDANCE_CHARS = 240;
+
+/** `view` with one more message from the user counted and kept as the latest. */
+export const withUserGuidance = <View extends Pick<SubagentRunView, "userGuidance">>(
+  view: View,
+  text: string,
+): View => ({
+  ...view,
+  userGuidance: {
+    count: Math.min(Number.MAX_SAFE_INTEGER, (view.userGuidance?.count ?? 0) + 1),
+    latest: clipText(text, MAX_USER_GUIDANCE_CHARS),
+  },
+});
 
 export type SubagentControlExpectation = Pick<
   SubagentRunView,

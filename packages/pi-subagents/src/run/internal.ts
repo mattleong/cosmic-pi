@@ -18,6 +18,7 @@ import {
   type SubagentReportArchive,
   type SubagentReportTruncation,
   type SubagentRunView,
+  type SubagentUserGuidance,
 } from "./model.ts";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
 import type { CapturedOutputText } from "./state.ts";
@@ -74,6 +75,8 @@ export interface CompletionGenerationRecord {
   readonly userWarning?: string | undefined;
   /** Times an ancestor run took this report and then failed, paused, or stopped. */
   readonly handOns?: number | undefined;
+  /** What the user told the run directly during the assignment that ended in this outcome. */
+  readonly userGuidance?: SubagentUserGuidance | undefined;
 }
 
 interface AssignmentState {

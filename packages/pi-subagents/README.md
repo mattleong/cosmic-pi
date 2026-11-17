@@ -14,6 +14,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step, or reviews and tests before applying. Proposals can also be revised onto the parent's current files.
 - **Workflow templates:** `/parallel-review`, `/review-loop`, and `/gather-context` prompt templates for common delegation patterns.
 - **Live view:** a run tree above the editor and the shared Activity manager, where you can also rename runs.
+- **Open a subagent's session:** in Activity, `o` opens the selected run's conversation in place of yours, drawn as Pi draws its own, with its working status and footer. Type to message it, answer its question, or resume it once it has finished; `Esc` interrupts it while it works and otherwise returns to Activity, as `C-d` always does with an empty editor. Its parent is told what you said along with the run's next report.
 
 ## Install
 

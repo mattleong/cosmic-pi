@@ -57,6 +57,7 @@ const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): Sub
 interface PendingRpcResponse {
   readonly command: string;
   readonly deferred: Deferred.Deferred<RpcResponse, SubagentError>;
+  readonly onResponse?: ((response: RpcResponse) => void) | undefined;
 }
 
 export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContactControl">) => {
@@ -73,15 +74,20 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
     ipcAcks.clear();
   };
 
+  /**
+   * `onResponse` runs where the child's reply is read, before any later child event, so a caller
+   * can act on the reply at its exact place in the stream.
+   */
   const rpc = (
     command: RpcCommand,
     timeout: Duration.Input = RPC_TIMEOUT,
+    onResponse?: (response: RpcResponse) => void,
   ): Effect.Effect<RpcResponse, SubagentError> =>
     correlatedRequest<string, RpcResponse>({
       timeout,
       register: (deferred) => {
         const id = `backend-rpc-${nextRpcId++}`;
-        responses.set(id, { command: command.type, deferred });
+        responses.set(id, { command: command.type, deferred, onResponse });
         return {
           frame: id,
           unregister: Effect.sync(() => {
@@ -162,6 +168,7 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
       Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
       return "mismatched";
     }
+    pending.onResponse?.(envelope);
     Deferred.doneUnsafe(pending.deferred, Effect.succeed(envelope));
     return "resolved";
   };

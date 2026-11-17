@@ -65,7 +65,7 @@ describe("activity presentation", () => {
   it("keeps selection identity when live rows reorder and dispatches only explicit actions", () => {
     let rows = [
       activityRow("a"),
-      { ...activityRow("b"), actions: [{ id: "open", label: "Open" }] },
+      { ...activityRow("b"), actions: [{ id: "export", label: "Export" }] },
     ];
     const { component, closed } = mountActivity(() => rows);
     component.render(80);
@@ -74,21 +74,26 @@ describe("activity presentation", () => {
     component.render(80);
     expect(component.shell.state.selectedId).toBe(activityRow("b").key);
     component.handleInput("1");
-    expect(closed[0]).toMatchObject({ key: activityRow("b").key, revision: "1", actionId: "open" });
+    expect(closed[0]).toMatchObject({
+      key: activityRow("b").key,
+      revision: "1",
+      actionId: "export",
+    });
   });
   it("dispatches the displayed capability rather than a changed action occupying its key", () => {
-    let current = { ...activityRow("a"), actions: [{ id: "open", label: "Open" }] };
+    let current = { ...activityRow("a"), actions: [{ id: "export", label: "Export" }] };
     const { component, closed } = mountActivity(() => [current]);
     component.render(80);
     current = { ...current, revision: "2", actions: [{ id: "stop", label: "Stop" }] };
     component.handleInput("1");
-    expect(closed[0]).toMatchObject({ revision: "1", actionId: "open" });
+    expect(closed[0]).toMatchObject({ revision: "1", actionId: "export" });
   });
   it("runs each action from exactly one key: its letter, or a digit when it has none", () => {
     const actions = [
       { id: "export", label: "Export" },
       { id: "stop", label: "Stop" },
       { id: "pin", label: "Pin" },
+      { id: "open", label: "Open" },
     ];
     const run = (key: string) => {
       const { component, closed } = mountActivity(() => [{ ...activityRow("a"), actions }]);
@@ -97,6 +102,7 @@ describe("activity presentation", () => {
       return closed[0]?.actionId;
     };
     expect(run("x")).toBe("stop");
+    expect(run("o")).toBe("open");
     expect(run("1")).toBe("export");
     expect(run("2")).toBe("pin");
     expect(run("3")).toBeUndefined();

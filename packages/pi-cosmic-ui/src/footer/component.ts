@@ -106,7 +106,7 @@ function detailLines(
   return lines;
 }
 
-function footerLines(
+export function footerLines(
   text: readonly CosmicFooterTextContribution[],
   width: number,
   theme: CosmicFooterTheme,

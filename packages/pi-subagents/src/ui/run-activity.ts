@@ -27,6 +27,7 @@ import {
 } from "./run-live-activity.ts";
 import {
   canInterruptRun,
+  canOpenRunSession,
   canRenameRun,
   canResumeRun,
   canStopRun,
@@ -82,6 +83,7 @@ const stopConfirmation = (title: string, activeDescendants: number): string =>
 export function runActions(run: SubagentRunView, title: string, activeDescendants = 0) {
   const mode = runMessageMode(run);
   return [
+    ...(canOpenRunSession(run) ? [handoff("open", "Open")] : []),
     ...(isActiveRunState(run.state) || canStopRun(run)
       ? [
           {

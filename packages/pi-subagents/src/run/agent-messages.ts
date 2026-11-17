@@ -42,11 +42,12 @@ import type { RunControlMessage } from "./control.ts";
 import { requireControlExpectation } from "./control-admission.ts";
 import type { AgentMessageWatches } from "./message-watches.ts";
 import type { AgentMessageResume } from "./resume.ts";
-import type {
-  SubagentControlExpectation,
-  SubagentRunView,
-  SubagentSendDelivery,
-  SubagentSendOutcome,
+import {
+  withUserGuidance,
+  type SubagentControlExpectation,
+  type SubagentRunView,
+  type SubagentSendDelivery,
+  type SubagentSendOutcome,
 } from "./model.ts";
 import { sortRuns } from "./projection.ts";
 import { appendMessageSessionEvent, appendNoticeSessionEvent } from "./session-events.ts";
@@ -119,16 +120,19 @@ const recordUserMessageLocked = (
   text: string,
   now: number,
 ) => {
-  record.view = {
-    ...record.view,
-    lastActivityAt: now,
-    sessionEvents: appendNoticeSessionEvent(
-      record.view.sessionEvents,
-      "parent",
-      `${delivery === "answered" ? "Reply" : "Guidance"}: ${text}`,
-      now,
-    ),
-  };
+  record.view = withUserGuidance(
+    {
+      ...record.view,
+      lastActivityAt: now,
+      sessionEvents: appendNoticeSessionEvent(
+        record.view.sessionEvents,
+        "parent",
+        `${delivery === "answered" ? "Reply" : "Guidance"}: ${text}`,
+        now,
+      ),
+    },
+    text,
+  );
 };
 
 type ClaimedSend =

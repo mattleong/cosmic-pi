@@ -3,6 +3,7 @@ import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { capturePreviewHostTools } from "../boundary/host-tool-renderers";
 import { withCodePreviewShell } from "../tools/cooperative-tools";
 import { isSameExtensionSource } from "../tools/preview-admission";
+import { answerToolRendererLookups } from "./renderer-lookup";
 import { rendererFields, RetainedRendererGate, retainedCodePreviewRenderers } from "./renderer-row";
 
 export interface CodePreviewReplayOptions {
@@ -24,7 +25,13 @@ export function registerCodePreviewReplay(
   const names = new Set(options.tools);
   const staged = new Map<string, ToolRenderers>();
   const selected = new Map<string, ToolRenderers>();
+  // The live rows' renderers, which a surface drawing another conversation's calls looks up.
+  const stagedLive = new Map<string, ToolRenderers>();
+  const live = new Map<string, ToolRenderers>();
   const gate = new RetainedRendererGate();
+  answerToolRendererLookups(pi.events, (name) =>
+    gate.live && gate.ready ? live.get(name) : undefined,
+  );
   pi.registerToolRenderer((name, next) => {
     const downstream = rendererFields(next());
     if (!gate.live || gate.ready || !names.has(name) || downstream) return downstream;
@@ -37,6 +44,8 @@ export function registerCodePreviewReplay(
       const replay = withCodePreviewShell(tool, { ...shellOptions, selfShell: true });
       const renderers = rendererFields(defineTool(replay));
       if (renderers) staged.set(tool.name, renderers);
+      const liveRenderers = rendererFields(defineTool(wrapped));
+      if (liveRenderers) stagedLive.set(tool.name, liveRenderers);
     }
     return wrapped;
   };
@@ -44,6 +53,8 @@ export function registerCodePreviewReplay(
     gate.retire();
     staged.clear();
     selected.clear();
+    stagedLive.clear();
+    live.clear();
   };
   return {
     shell,
@@ -53,10 +64,12 @@ export function registerCodePreviewReplay(
         () => capturePreviewHostTools(pi, options.command),
         undefined,
       );
-      for (const [name, renderers] of staged)
-        if (host && isSameExtensionSource(host.tools.get(name), host.previewSource))
-          selected.set(name, renderers);
+      const owns = (name: string) =>
+        host !== undefined && isSameExtensionSource(host.tools.get(name), host.previewSource);
+      for (const [name, renderers] of staged) if (owns(name)) selected.set(name, renderers);
+      for (const [name, renderers] of stagedLive) if (owns(name)) live.set(name, renderers);
       staged.clear();
+      stagedLive.clear();
       gate.markReady();
     },
     finishStartup: () => {

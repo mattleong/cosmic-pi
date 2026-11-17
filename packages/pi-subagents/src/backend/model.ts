@@ -145,6 +145,30 @@ export const toBackendExit = (exit: {
   readonly stderr: string;
 }): BackendExit => ({ type: "exit", exitCode: exit.exitCode, diagnostic: exit.stderr });
 
+/**
+ * What a transcript watcher receives, in the child's own order: the session entries appended
+ * since the watcher's cursor, then each conversation event as the child emitted it. `gap` marks
+ * an event too large to carry, after which only a new watch is complete again.
+ */
+export type BackendTranscriptEvent =
+  | { readonly type: "entries"; readonly data: Schema.Json | undefined }
+  | { readonly type: "event"; readonly value: Schema.Json }
+  | { readonly type: "gap" };
+
+export type BackendTranscriptListener = (event: BackendTranscriptEvent) => void;
+
+export interface BackendTranscript {
+  /**
+   * Watches the child's conversation until the scope closes. The listener first receives the
+   * entries after `since` (every entry without it), delivered where the child's reply is read, so
+   * no event falls between them and the events that follow.
+   */
+  readonly watch: (
+    since: string | undefined,
+    listener: BackendTranscriptListener,
+  ) => Effect.Effect<void, SubagentError, Scope.Scope>;
+}
+
 interface BackendControls {
   readonly initialize: Effect.Effect<BackendStartupState, SubagentError>;
   readonly start: (message: string, assignmentEpoch: number) => Effect.Effect<void, SubagentError>;
@@ -175,6 +199,8 @@ export interface BackendHandle {
   readonly cleanupVerifier?: BackendCleanupVerifier | undefined;
   readonly pid?: number | undefined;
   readonly events: Queue.Dequeue<BackendEvent, Cause.Done>;
+  /** The child's conversation for a live view; absent when the backend can't supply one. */
+  readonly transcript?: BackendTranscript | undefined;
   readonly awaitExit: Effect.Effect<BackendExit, SubagentError>;
   readonly controls: BackendControls;
   readonly acknowledge: (event: BackendEvent) => void;

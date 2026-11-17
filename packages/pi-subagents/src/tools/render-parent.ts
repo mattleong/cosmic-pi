@@ -1,4 +1,4 @@
-import type { Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { Theme, ToolDefinition, ToolRenderers } from "@earendil-works/pi-coding-agent";
 import type { TUnknown } from "typebox";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import * as Fn from "effect/Function";
@@ -11,6 +11,7 @@ import {
   expandedText,
   getTextContent,
   previewIssuesSlot,
+  withCodePreviewRenderers,
   type CodePreviewShellOptions,
   type CompactIssue,
   type CompactSummary,
@@ -31,6 +32,7 @@ import {
   textResultBody,
 } from "./render-preview.ts";
 import { agentTextLines } from "../ui/agent-text.ts";
+import { CONTACT_PARENT_TOOL_NAME } from "../run/tool-policy.ts";
 
 /** A sent question's live status: it waits on the parent's reply. */
 const waitingLine = (theme: Parameters<typeof toolRunningLine>[0]): string =>
@@ -265,3 +267,17 @@ export const contactParentRenderers = {
     );
   },
 } satisfies Required<Pick<ToolDefinition<TUnknown>, "renderCall" | "renderResult">>;
+
+/**
+ * How a session other than the child's own draws `agent_contact_parent`, which only a child
+ * registers: the root showing a run's conversation composes the same renderers without the tool.
+ */
+export const contactParentToolRenderers = (): ToolRenderers =>
+  withCodePreviewRenderers(
+    { name: CONTACT_PARENT_TOOL_NAME, label: CONTACT_PARENT_LABEL },
+    contactParentRenderers,
+    {
+      compactSummary: contactParentCompactSummary,
+      expandedContent: contactParentExpandedContent,
+    },
+  );

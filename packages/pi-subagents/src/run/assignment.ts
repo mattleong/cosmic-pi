@@ -55,6 +55,7 @@ export const beginNextAssignmentLocked = (
     ...viewPatch,
     state: "starting",
     // Older report payloads remain owned by their completion generations.
+    userGuidance: undefined,
     finalText: undefined,
     finalTextTruncation: undefined,
     reportArchive: undefined,

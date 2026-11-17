@@ -71,6 +71,10 @@ export const runMessageMode = (run: SubagentRunView): RunMessageMode | undefined
   return run.state === "running" ? "guidance" : undefined;
 };
 
+/** A run with a conversation to show: it has a process now, or left a session file behind. */
+export const canOpenRunSession = (run: SubagentRunView): boolean =>
+  run.pid !== undefined || run.sessionFile !== undefined;
+
 export const canInterruptRun = (run: SubagentRunView): boolean =>
   run.state === "running" || run.state === "waiting_for_parent";
 

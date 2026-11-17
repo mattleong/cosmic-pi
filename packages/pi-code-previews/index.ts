@@ -12,6 +12,8 @@ export {
   type CodePreviewReplayOptions,
 } from "./src/application/owned-replay";
 
+export { lookupToolRenderers } from "./src/application/renderer-lookup";
+
 export {
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,

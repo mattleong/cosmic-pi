@@ -47,9 +47,26 @@ import {
   type BackendEvent,
   type BackendLaunchRequest,
   type BackendResumeToken,
+  type BackendTranscript,
+  type BackendTranscriptEvent,
+  type BackendTranscriptListener,
 } from "./model.ts";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 
 const STARTUP_RPC_TIMEOUT = "30 seconds";
+const RPC_TIMEOUT = "10 seconds";
+/** The child events a transcript view draws; every other event stays with the run's own state. */
+const TRANSCRIPT_EVENT_TYPES: ReadonlySet<string> = new Set([
+  "agent_start",
+  "agent_end",
+  "message_start",
+  "message_update",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+  "compaction_end",
+]);
 // Pi exits 1 at startup when `--model` names a model no loaded provider offers.
 const MODEL_NOT_FOUND = /\bModel "[^"\n]{1,512}" not found\b/u;
 const CHILD_EXTENSIONS_REMEDY =
@@ -214,10 +231,36 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     );
   };
 
+  const transcriptListeners = new Set<BackendTranscriptListener>();
+  const publishTranscript = (event: BackendTranscriptEvent): void => {
+    for (const listener of transcriptListeners)
+      invokeHostCallback(() => listener(event), undefined);
+  };
+  const forwardTranscript = (envelope: RpcChildEnvelope, value: Schema.Json): void => {
+    if (transcriptListeners.size === 0) return;
+    const type = envelope.type === "ignored" ? envelope.eventType : envelope.type;
+    if (TRANSCRIPT_EVENT_TYPES.has(type)) publishTranscript({ type: "event", value });
+  };
+  const transcript: BackendTranscript = {
+    watch: Effect.fnUntraced(function* (since, listener) {
+      yield* Effect.addFinalizer(() => Effect.sync(() => transcriptListeners.delete(listener)));
+      yield* rpc(
+        { type: "get_entries", ...(since !== undefined && { since }) },
+        RPC_TIMEOUT,
+        (response) => {
+          if (!response.success) return;
+          transcriptListeners.add(listener);
+          invokeHostCallback(() => listener({ type: "entries", data: response.data }), undefined);
+        },
+      );
+    }),
+  };
+
   const consumeChildEvent = (event: ChildWireEvent): Effect.Effect<void> => {
     if (event.type === "protocol_error")
       return offer({ type: "protocol_error", message: event.message }, event);
     if (event.type === "oversized_line") {
+      publishTranscript({ type: "gap" });
       const envelope = oversizedRpcEnvelope(event);
       return envelope
         ? consumeEnvelope(envelope, event).pipe(
@@ -238,6 +281,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
       return offer(normalizeParentContact(contact, assignmentEpoch, child), event);
     }
     return decodeRpcEnvelope(event.value).pipe(
+      Effect.tap((envelope) => Effect.sync(() => forwardTranscript(envelope, event.value))),
       Effect.flatMap((envelope) => consumeEnvelope(envelope, event)),
       Effect.catch(() =>
         offer(
@@ -464,6 +508,7 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
   return {
     pid: child.pid,
     events,
+    transcript,
     awaitExit,
     controls,
     acknowledge,

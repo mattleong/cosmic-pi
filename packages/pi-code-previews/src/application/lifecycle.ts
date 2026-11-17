@@ -32,8 +32,10 @@ import type { CodePreviewToolName } from "../tools/names";
 import { registerWritePreviewTool } from "../tools/renderers/registration";
 import { getEnabledCodePreviewTools } from "../tools/selection";
 import { capturePreviewHostTools } from "../boundary/host-tool-renderers";
+import { answerToolRendererLookups } from "./renderer-lookup";
 import {
   CodePreviewPresentationOwner,
+  createCodePreviewRendererLookup,
   createCodePreviewRendererResolver,
   publishPreviewToolStatuses,
 } from "./tool-renderers";
@@ -100,6 +102,10 @@ export function codePreviewsWithDependencies(
   let presentation = new CodePreviewPresentationOwner();
   let started = false;
   pi.registerToolRenderer(createCodePreviewRendererResolver(pi, () => presentation, ownedTools));
+  answerToolRendererLookups(
+    pi.events,
+    createCodePreviewRendererLookup(pi, () => presentation, ownedTools),
+  );
   dependencies.registerCommands(pi);
 
   const startup = Effect.fn("CodePreviews.startup")(function* (input: SessionInput) {

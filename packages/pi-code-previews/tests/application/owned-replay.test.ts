@@ -10,7 +10,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { beforeAll, expect, it } from "vitest";
 import { extensionApiFixture } from "pi-cosmic-core/testing";
-import { registerCodePreviewReplay } from "../../index";
+import { lookupToolRenderers, registerCodePreviewReplay } from "../../index";
 import {
   createToolPresentationHarness,
   drawToolRow,
@@ -88,6 +88,7 @@ const fixture = () => {
   return {
     replay,
     stage,
+    lookup: (name = "owned") => lookupToolRenderers(pi.events, name),
     resolve: (downstream?: ToolRenderers) => resolver!("owned", () => downstream),
     tool,
     get observed() {
@@ -202,4 +203,24 @@ it("finishStartup before publication permanently leaves raw history", () => {
   expect(Arr.join(row.render(), "\n")).not.toContain("OWNED_CALL");
   expect(Arr.join(row.render(), "\n")).toContain("COMPLETE_OUTPUT");
   expect(h.resolve()).toBeUndefined();
+});
+
+it("answers a renderer lookup only for a tool it owns, from publication until it retires", () => {
+  const h = fixture();
+  h.stage();
+  expect(h.lookup()).toBeUndefined();
+  h.replay.publish();
+  const row = hostToolRow("owned", args, h.lookup(), { result });
+  expect(drawToolRow(row, true, 160)).toContain("COMPLETE_OUTPUT recovery /tmp/evidence.txt");
+  expect(h.lookup("other")).toBeUndefined();
+  h.replay.retire();
+  expect(h.lookup()).toBeUndefined();
+});
+
+it("answers no renderer lookup for a tool another extension registered under its name", () => {
+  const h = fixture();
+  h.stage();
+  h.foreign();
+  h.replay.publish();
+  expect(h.lookup()).toBeUndefined();
 });

@@ -11,6 +11,7 @@ import type {
   SubagentNextCandidate,
   SubagentReportArchive,
   SubagentReportTruncation,
+  SubagentUserGuidance,
   SubagentWorkspaceOutcome,
 } from "../run/model.ts";
 import { indentQuestionLines, proposalGuidance } from "../tools/format.ts";
@@ -19,6 +20,7 @@ import { displayName, noticeName, noticeText, type NoticeDetails } from "../ui/n
 import {
   formatRunBlocks,
   nextCandidateAction,
+  userGuidanceAction,
   wholeSavedReport,
   withInlineReports,
   type InlineReport,
@@ -51,6 +53,8 @@ export interface SubagentCompletionNotification {
   readonly workspaceOutcome?: SubagentWorkspaceOutcome | undefined;
   /** Times the report was handed on by an ancestor run that took it; see `CompletionGenerationRecord`. */
   readonly handOns?: number | undefined;
+  /** What the user told the run directly during the assignment that ended in this outcome. */
+  readonly userGuidance?: SubagentUserGuidance | undefined;
 }
 
 export type SubagentNotification =
@@ -125,6 +129,7 @@ export const completionBlock = (run: SubagentCompletionNotification): RunBlock =
       candidate: nextCandidateAction(run.nextCandidate),
       workspace: workspaceAction(run),
       warning: warning && warning !== error ? warning : undefined,
+      user: userGuidanceAction(run.userGuidance),
     },
   };
 };
