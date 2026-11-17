@@ -9,7 +9,7 @@ Structured questionnaires that let the agent ask you for decisions instead of gu
 - **Markdown previews** beside choices on wide terminals, stacked below them on narrow ones.
 - **Review before submit** for several questions, with unanswered questions highlighted. A single question skips the review step: choosing an answer submits it.
 - **Hide and resume** without losing drafts, from `/ask-user` or the Cosmic UI Activity view.
-- **Subagent questions** from local Pi children appear in the root session under the agent that asked, and the dialog names it. The main agent can name a subagent the same way when it asks you something on that subagent's behalf.
+- **Subagent questions.** When the main agent asks you something on a subagent's behalf, the dialog names that subagent, and opens in the subagent's own pane when you have it open.
 
 ## Install
 

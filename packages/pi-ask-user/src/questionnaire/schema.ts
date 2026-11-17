@@ -86,7 +86,7 @@ export const AskUserParameters = Type.Object({
     Type.String({
       maxLength: MAX_TITLE_LENGTH,
       description:
-        "Name of the agent whose question this is, when you ask on another agent's behalf, such as a subagent's. Shown above the questions; omit it for your own questions.",
+        "The agent whose question this is, by its ID or name, when you ask on another agent's behalf, such as a subagent's. Its name is shown above the questions, which open in that agent's own pane when it is on screen; omit it for your own questions.",
     }),
   ),
 });

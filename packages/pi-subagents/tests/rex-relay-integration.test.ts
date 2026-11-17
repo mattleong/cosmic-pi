@@ -3,12 +3,13 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import { nodePath } from "pi-cosmic-core/platform/node-builtins";
+import { nodePath, nodeTemporaryRoot } from "pi-cosmic-core/platform/node-builtins";
 import { pollUntil } from "pi-cosmic-core/testing";
 import { ChildProcess, type ChildWireEvent } from "../src/boundary/child-process.ts";
 import { rexSessionHost } from "../src/boundary/rex-session-host.ts";
@@ -24,6 +25,13 @@ const decodeResponse = Schema.decodeUnknownOption(
       pid: Schema.Int,
     }),
   }),
+);
+const encodeBlocks = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      blocks: Schema.Array(Schema.Struct({ block_id: Schema.String, placement: Schema.String })),
+    }),
+  ),
 );
 const alive = (pid: number): boolean => {
   try {
@@ -47,9 +55,13 @@ describe("a Rex-hosted launch", () => {
           `#!/bin/sh\nexec '${process.execPath}' '${fixturePath("fake-rex.ts")}' "$@"\n`,
         );
         yield* fs.chmod(`${directory}/rex`, 0o755);
+        // The fixture records which block a window shows in a file named for the session.
+        const session = `session-${String(process.pid)}`;
+        const placement = nodePath.join(nodeTemporaryRoot(), `fake-rex-${session}.json`);
+        yield* Effect.addFinalizer(() => Effect.ignore(fs.remove(placement)));
         const host = rexSessionHost({
           environment: {
-            REX_SESSION: "session:1",
+            REX_SESSION: session,
             REX_BLOCK: "block:root",
             REX_BIN_DIR: directory,
           },
@@ -105,6 +117,41 @@ describe("a Rex-hosted launch", () => {
           value: { type: "user_input", text: "typed" },
         });
         expect(host.pane("hosted-run")).toBe("hidden");
+
+        // A questionnaire for the user goes to the pane only once a window shows it.
+        const settled: Array<Schema.Json | undefined> = [];
+        let shown = 0;
+        const ask = (questions: Schema.Json) =>
+          host.ask("hosted-run", questions, {
+            shown: () => {
+              shown += 1;
+            },
+            settled: (outcome) => settled.push(outcome),
+          });
+        ask({ answer: "hidden" });
+        expect(settled).toEqual([undefined]);
+        expect(host.togglePane("hosted-run")).toBe(true);
+        ask({ answer: "red" });
+        // The launcher's word reaches the host as the run's events are read.
+        const drain = yield* Effect.forkScoped(Effect.forever(next));
+        expect(yield* pollUntil(() => settled.length === 2)).toBe(true);
+        expect(settled[1]).toEqual({ answered: "red" });
+        expect(shown).toBe(1);
+        // The user hides the pane in Rex itself, which only the launcher notices: the
+        // questionnaire it still shows comes back to be asked where the user can see it.
+        ask({});
+        expect(yield* pollUntil(() => shown === 2)).toBe(true);
+        yield* fs.writeFileString(
+          placement,
+          encodeBlocks({
+            blocks: [
+              { block_id: `block:${String(response?.data.pid ?? 0)}`, placement: "detached" },
+            ],
+          }),
+        );
+        expect(yield* pollUntil(() => settled.length === 3, 800)).toBe(true);
+        expect(settled[2]).toBeUndefined();
+        yield* Fiber.interrupt(drain);
 
         const pid = response?.data.pid ?? 0;
         expect(alive(pid)).toBe(true);

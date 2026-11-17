@@ -89,6 +89,9 @@ describe("subagent child process boundary", () => {
         "session_list",
         "session_send",
         "session_read",
+        // The main agent decides what the user is asked; a subagent asks its parent.
+        "ask_user",
+        "ask_user_async",
         "bash",
       ]);
       const policy = childToolPolicy(snapshot, "writer");
@@ -107,6 +110,9 @@ describe("subagent child process boundary", () => {
         "session_list",
         "session_send",
         "session_read",
+        "ask_user",
+        "ask_user_async",
+        "ask_user_async_control",
       ]);
       expect(Str.split(policy.excluded, ",")).not.toContain("agent_start");
       for (const name of AGENT_TOOL_NAMES)

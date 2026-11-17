@@ -1,4 +1,10 @@
-import { queryQuestionnaireRelay } from "pi-ask-user/protocol";
+import {
+  queryQuestionnaireRelay,
+  QuestionnaireRequestSchema,
+  type AskUserOutcome,
+  type AskUserRequest,
+} from "pi-ask-user/protocol";
+import type { RexPaneAsks, RexPanePresenter } from "../src/boundary/host-child-rex.ts";
 import { createEventBus, defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -22,7 +28,9 @@ import { beforeAgentStartEvent } from "./fixtures/pi-host.ts";
 import { view } from "./fixtures/run-view.ts";
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, eventLoopTurn, settle, step } from "./support/effect-test.ts";
-import { pickQuestionnaire } from "./support/questionnaire.ts";
+import { answerCapabilityQueries, pickQuestionnaire } from "./support/questionnaire.ts";
+
+const encodeRequest = Schema.encodeSync(QuestionnaireRequestSchema);
 import * as Arr from "effect/Array";
 import * as Option from "effect/Option";
 import { findOrUndefined } from "pi-cosmic-core/array";
@@ -39,6 +47,8 @@ interface HarnessOptions {
   readonly loadSettings?: SubagentChildBridgeBoundaries["loadSettings"] | undefined;
   readonly failSend?: (contact: LocalPiContact) => ParentContactError | undefined;
   readonly throwAtRegistration?: number;
+  /** A Rex-hosted child's pane, where the root shows the user its questionnaires. */
+  readonly paneAsks?: RexPaneAsks | undefined;
 }
 
 const childContext = (cwd = "/child", isIdle = () => true) =>
@@ -100,6 +110,7 @@ const makeHarness = (options: HarnessOptions = {}) => {
   registerSubagentChildBridge(host.pi, {
     loadSettings: options.loadSettings ?? (() => Promise.resolve()),
     openIpc: () => ipc,
+    paneAsks: options.paneAsks,
   });
   const start = (cwd?: string) =>
     host.emit(
@@ -217,6 +228,54 @@ afterEach(() => {
 });
 
 describe("local Pi child bridge", () => {
+  effectTest("shows the root's questionnaire through this session's own Ask User", function* () {
+    const presenters: RexPanePresenter[] = [];
+    let detached = 0;
+    const harness = makeHarness({
+      paneAsks: {
+        listen: (present) => {
+          presenters.push(present);
+          return () => {
+            detached += 1;
+          };
+        },
+      },
+    });
+    const outcome: AskUserOutcome = {
+      outcome: "submitted",
+      answers: [{ key: "pick", kind: "choices", values: ["a"], labels: ["A"] }],
+    };
+    const asked: AskUserRequest[] = [];
+    answerCapabilityQueries(harness.events, () => ({
+      version: 1,
+      sessionId: "/pane",
+      generation: "g1",
+      ask: (request, _owner, _signal, shown) => {
+        asked.push(request);
+        shown?.();
+        return Promise.resolve(outcome);
+      },
+      cancel: () => Promise.resolve(),
+    }));
+    yield* step(() => harness.start("/pane"));
+    const present = presenters.at(-1)!;
+    let shown = 0;
+    const signal = new AbortController().signal;
+    const report = () => {
+      shown += 1;
+    };
+    expect(yield* step(() => present(encodeRequest(pickQuestionnaire), signal, report))).toEqual(
+      outcome,
+    );
+    expect(asked).toEqual([pickQuestionnaire]);
+    expect(shown).toBe(1);
+    // Anything but a questionnaire is the root's to ask elsewhere.
+    expect(yield* step(() => present({ questions: "none" }, signal, report))).toBeUndefined();
+    expect(asked).toHaveLength(1);
+    yield* step(harness.shutdown);
+    expect(detached).toBeGreaterThan(0);
+  });
+
   effectTest("cancels an owned questionnaire on reload and revokes the old relay", function* () {
     const harness = makeHarness();
     yield* step(() => harness.start("/old"));

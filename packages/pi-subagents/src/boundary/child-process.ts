@@ -376,15 +376,21 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
           ? send({ type: "pi_subagents_park", ...park }).pipe(Effect.ignore)
           : requestCooperativeAbort(send);
       },
-      attach: (child, offer) =>
-        attachLocalPiParentIpc(child, {
+      attach: (child, offer) => {
+        // The launcher also takes, over the same channel, what the root shows in the run's pane.
+        if (hosted)
+          rexHost?.attach(request.runId, (message) => {
+            if (child.connected) child.send(message);
+          });
+        return attachLocalPiParentIpc(child, {
           onContact: (contact) =>
             offer(
               { type: "parent_contact", value: contact },
               Buffer.byteLength(JSON.stringify(contact), "utf8"),
             ),
           onProtocolError: (message) => offer({ type: "protocol_error", message }),
-        }),
+        });
+      },
     },
     runtime,
   );

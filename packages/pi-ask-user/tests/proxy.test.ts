@@ -23,6 +23,7 @@ import {
   decodeQuestionnaireRequest,
   decodeQuestionnaireOutcome,
   queryQuestionnaireCapability,
+  QUESTIONNAIRE_ASKERS_QUERY,
   QUESTIONNAIRE_RELAY_QUERY,
   type QuestionnaireEvents,
   type QuestionnaireOwner,
@@ -159,6 +160,72 @@ it.effect(
       expect(Exit.isFailure(yield* Effect.exit(ask))).toBe(true);
       expect(local).toBe(0);
       expect(forwarded).toBe(1);
+    }),
+);
+
+it.effect(
+  "a questionnaire asked for another agent opens where that agent is on screen, or here under its name",
+  () =>
+    Effect.gen(function* () {
+      const bus = createEventBus();
+      const local: AskUserRequest[] = [];
+      const elsewhere: AskUserRequest[] = [];
+      const layer = AskUserService.layer((asked) =>
+        Effect.sync(() => {
+          local.push(asked);
+          return answer;
+        }),
+      );
+      const paneAnswer = submitted({ key: "route", kind: "choices", values: ["b"], labels: ["B"] });
+      // What the agent's own session does with the questionnaire, as each case sets it.
+      type Presented = Promise<AskUserOutcome | { readonly outcome: string } | undefined>;
+      let present: (asked: AskUserRequest) => Presented = () => Promise.resolve(paneAnswer);
+      const off = bus.on(QUESTIONNAIRE_ASKERS_QUERY, (data) => {
+        relayQueries.normalizeQuery(data)?.respond({
+          version: 1,
+          sessionId: "root",
+          find: (askedBy: string) =>
+            askedBy === "agent-1"
+              ? {
+                  name: "Banner colour",
+                  present: (asked: AskUserRequest) => {
+                    elsewhere.push(asked);
+                    return present(asked);
+                  },
+                }
+              : undefined,
+        });
+      });
+      const ask = (askedBy: string) =>
+        askAtQuestionnaireBoundary(bus, "root", { ...request, askedBy }).pipe(
+          Effect.provide(layer),
+        );
+
+      // On screen there: answered there, by its name, and never opened here.
+      expect(yield* ask("agent-1")).toEqual(paneAnswer);
+      expect(elsewhere).toEqual([{ ...request, askedBy: "Banner colour" }]);
+      expect(local).toEqual([]);
+
+      // Not on screen, a session that fails, or one that answers nonsense: it opens here.
+      for (const unavailable of [
+        () => Promise.resolve(undefined),
+        () => Promise.reject(new Error("pane closed")),
+        () => Promise.resolve({ outcome: "maybe" }),
+        () => {
+          throw new Error("hostile asker");
+        },
+      ]) {
+        present = unavailable;
+        local.length = 0;
+        expect(yield* ask("agent-1")).toEqual(answer);
+        expect(local).toEqual([{ ...request, askedBy: "Banner colour" }]);
+      }
+
+      // An agent nobody knows keeps the name it was given.
+      local.length = 0;
+      expect(yield* ask("somebody")).toEqual(answer);
+      expect(local).toEqual([{ ...request, askedBy: "somebody" }]);
+      off();
     }),
 );
 

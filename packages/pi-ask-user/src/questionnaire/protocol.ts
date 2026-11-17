@@ -23,6 +23,7 @@ import {
 export type { AskUserRequest } from "./schema.ts";
 export const QUESTIONNAIRE_CAPABILITY_QUERY = "pi-ask-user:capability-query:v1";
 export const QUESTIONNAIRE_RELAY_QUERY = "pi-ask-user:relay-query:v1";
+export const QUESTIONNAIRE_ASKERS_QUERY = "pi-ask-user:askers-query:v1";
 export type QuestionnaireEvents = Pick<ExtensionAPI["events"], "on" | "emit">;
 const text = (max: number) => Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(max));
 export const QuestionnaireOwnerSchema = Schema.Struct({
@@ -43,6 +44,28 @@ export interface QuestionnaireCapability {
     signal: AbortSignal,
     shown?: () => void,
   ) => Promise<AskUserOutcome>;
+}
+/** The agent a questionnaire is asked for, as the extension that runs such agents knows it. */
+export interface QuestionnaireAsker {
+  /** The agent's display name, shown above its questions. */
+  readonly name: string;
+  /**
+   * Shows the questionnaire where the agent's own session is on screen, and resolves with what
+   * the user answered there. Resolves `undefined` when that session isn't on screen, or stops
+   * being before the user answers, so the caller asks in its own session instead.
+   */
+  readonly present: (
+    request: AskUserRequest,
+    signal: AbortSignal,
+    shown: () => void,
+  ) => Promise<AskUserOutcome | undefined>;
+}
+/** Resolves the `askedBy` of a questionnaire asked in this session to the agent it names. */
+export interface QuestionnaireAskers {
+  readonly version: 1;
+  readonly sessionId: string;
+  /** `askedBy` is the agent's ID or name, as the caller wrote it. */
+  readonly find: (askedBy: string) => QuestionnaireAsker | undefined;
 }
 export interface QuestionnaireRelay {
   readonly version: 1;
@@ -233,6 +256,18 @@ const DiscoveredCapabilitySchema = Schema.Struct({
     [request: AskUserRequest, owner: QuestionnaireOwner, signal: AbortSignal, shown?: () => void]
   >(),
 });
+const DiscoveredAskersSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  sessionId: Schema.String,
+  find: ForeignCallable<[askedBy: string]>(),
+});
+const DiscoveredAskerSchema = Schema.Struct({
+  name: text(MAX_TITLE_LENGTH),
+  present: ForeignCallable<[request: AskUserRequest, signal: AbortSignal, shown: () => void]>(),
+});
+const isDiscoveredAskers = Schema.is(DiscoveredAskersSchema);
+/** What an askers capability found: admitted only as a name and a callable. */
+export const decodeQuestionnaireAsker = decodeUnknownOrUndefined(DiscoveredAskerSchema);
 type DiscoveredQuestionnaireRelay = typeof DiscoveredRelaySchema.Type;
 type DiscoveredQuestionnaireCapability = typeof DiscoveredCapabilitySchema.Type;
 const isDiscoveredRelay = Schema.is(DiscoveredRelaySchema);
@@ -251,4 +286,11 @@ export const queryQuestionnaireCapability = (events: QuestionnaireEvents, sessio
     QUESTIONNAIRE_CAPABILITY_QUERY,
     { version: 1, sessionId },
     (value) => (isDiscoveredCapability(value) && value.sessionId === sessionId ? value : undefined),
+  ).candidates.at(-1);
+export const queryQuestionnaireAskers = (events: QuestionnaireEvents, sessionId: string) =>
+  querySessionCapability<unknown, typeof DiscoveredAskersSchema.Type>(
+    events,
+    QUESTIONNAIRE_ASKERS_QUERY,
+    { version: 1, sessionId },
+    (value) => (isDiscoveredAskers(value) && value.sessionId === sessionId ? value : undefined),
   ).candidates.at(-1);

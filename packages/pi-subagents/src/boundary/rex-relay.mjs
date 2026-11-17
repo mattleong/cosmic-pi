@@ -9,6 +9,9 @@
  *   stdout / stdin   backend events and commands (`R` frames)
  *   process IPC      parent-contact messages (`C` frames)
  *
+ * It also carries a questionnaire the root shows the user in the session's open pane (`Q`
+ * frames), and takes it back when the pane leaves its window, which only Rex can tell.
+ *
  * It exits when the session ends, and it ends the session when the root ends it or goes away:
  * its exit is the root's evidence that the block's Pi is gone. The one exception is parking, where
  * the root asks it to leave an open pane's session alive on the root's own socket.
@@ -25,6 +28,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as Predicate from "effect/Predicate";
 import {
+  REX_ANSWER_NOTE,
+  REX_ASK_MESSAGE,
   REX_FRAME,
   REX_SOCKET_ENV,
   REX_TOKEN_ENV,
@@ -36,6 +41,7 @@ const CONNECT_TIMEOUT_MS = 30_000;
 const EXIT_WAIT_MS = 5_000;
 const EXIT_POLL_MS = 50;
 const PARK_WAIT_MS = 5_000;
+const PANE_WATCH_MS = 2_000;
 const REX_TIMEOUT_MS = 10_000;
 const TERMINAL_FLAVOR = "com.superlogical.terminal.shell";
 /** Lines the launcher itself says to the root, beside the child's own events. */
@@ -102,6 +108,9 @@ let parked = false;
 let parking = false;
 /** Root commands that arrived before the child connected. @type {string[]} */
 const pending = [];
+/** The questionnaires the child is showing in its pane, by ID. @type {Set<string>} */
+const asking = new Set();
+let watching = false;
 
 /**
  * @param {string[]} args
@@ -219,6 +228,67 @@ const startBlock = () =>
     return created;
   });
 
+/** @param {string} id */
+const declineAsk = (id) => {
+  asking.delete(id);
+  child?.write(rexFrame(REX_FRAME.ask, { id, withdraw: true }));
+  note({ type: REX_ANSWER_NOTE, answer: { id, declined: true } });
+};
+
+/** Whether a window shows the block now; true when Rex couldn't say. */
+const paneOpen = () =>
+  rex(["api", "call", "session.list_blocks", JSON.stringify({ session_id: config.session })]).then(
+    (output) => {
+      const listed = parseJson(output);
+      /** @type {unknown[]} */
+      const blocks =
+        Predicate.hasProperty(listed, "blocks") && Array.isArray(listed.blocks)
+          ? listed.blocks
+          : [];
+      const own = blocks.find((entry) => stringField(entry, "block_id") === block);
+      return own === undefined || stringField(own, "placement") === "placed";
+    },
+    () => true,
+  );
+
+/**
+ * A questionnaire in a pane no window shows can't be answered, and only Rex knows when the user
+ * hides one. While any is pending, the pane is checked, and they go back to the root when it left.
+ */
+const watchPane = () => {
+  if (watching || asking.size === 0) return;
+  watching = true;
+  setTimeout(() => {
+    paneOpen()
+      .then((open) => {
+        watching = false;
+        if (!open) for (const id of asking) declineAsk(id);
+        return watchPane();
+      })
+      .catch(() => undefined);
+  }, PANE_WATCH_MS).unref();
+};
+
+/** @param {unknown} ask The root's `ask` frame for the child. */
+const askFromRoot = (ask) => {
+  const id = stringField(ask, "id");
+  if (id === undefined) return;
+  if (Predicate.hasProperty(ask, "withdraw")) {
+    asking.delete(id);
+    child?.write(rexFrame(REX_FRAME.ask, { id, withdraw: true }));
+    return;
+  }
+  if (!child || !block) {
+    note({ type: REX_ANSWER_NOTE, answer: { id, declined: true } });
+    return;
+  }
+  asking.add(id);
+  child.write(rexFrame(REX_FRAME.ask, ask));
+  // The question is for the user, so the pane that shows it takes the focus; failing to is harmless.
+  rex(["block", "focus", "-s", config.session, block]).catch(() => undefined);
+  watchPane();
+};
+
 /** @param {string} line One command from the root. */
 const fromRoot = (line) => {
   if (line.startsWith(`{"type":"${PARK_COMMAND}"`)) {
@@ -254,6 +324,14 @@ const fromChild = (socket, kind, body) => {
   } else if (kind === REX_FRAME.contact) {
     const contact = parseJson(body);
     if (Predicate.isObject(contact)) process.send?.(contact);
+  }
+  // The child's word on a questionnaire the root sent it; once it has settled, it is no longer watched.
+  else if (kind === REX_FRAME.ask) {
+    const answer = parseJson(body);
+    const id = stringField(answer, "id");
+    if (id === undefined) return;
+    if (!Predicate.hasProperty(answer, "shown")) asking.delete(id);
+    note({ type: REX_ANSWER_NOTE, answer });
   }
   // The user asked, inside the session, to hide its pane: the block leaves its window and runs on.
   else if (kind === REX_FRAME.hide) {
@@ -331,7 +409,11 @@ process.stdin.on("end", rootLeft);
 process.on("disconnect", rootLeft);
 process.on("SIGTERM", rootLeft);
 process.on("SIGINT", rootLeft);
-process.on("message", (message) => child?.write(rexFrame(REX_FRAME.contact, message)));
+process.on("message", (message) => {
+  if (stringField(message, "type") === REX_ASK_MESSAGE)
+    askFromRoot(Predicate.hasProperty(message, "ask") ? message.ask : undefined);
+  else child?.write(rexFrame(REX_FRAME.contact, message));
+});
 
 server.listen(socketPath, () => {
   note({ type: NOTE.listening, socket: socketPath, token });

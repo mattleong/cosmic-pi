@@ -1,4 +1,4 @@
-import { openRexChildSession } from "./host-child-rex.ts";
+import { openRexChildSession, type RexPaneAsks, type RexPanePresenter } from "./host-child-rex.ts";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -24,6 +24,8 @@ import {
   isProjectTrusted,
 } from "pi-cosmic-core/host-session";
 import { isSubagentChildProcess } from "pi-cosmic-core/host-environment";
+import { synchronousRandomUuid } from "pi-cosmic-core/platform/native-crypto";
+import { decodeQuestionnaireRequest, QuestionnaireOutcomeSchema } from "pi-ask-user/protocol";
 import { makePiManagedRuntime } from "pi-cosmic-core/runtime";
 import { makePiSessionRuntimeSlot } from "pi-cosmic-core/runtime/session-runtime";
 import { safeTextPrefix } from "pi-cosmic-core/text";
@@ -58,7 +60,7 @@ import {
   type ProxyWaitBackstop,
 } from "../tools/execute-await.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
-import { publishChildQuestionnaireRelay } from "./host-ask-user.ts";
+import { askSessionQuestionnaire, publishChildQuestionnaireRelay } from "./host-ask-user.ts";
 import {
   CONTACT_PARENT_LABEL,
   contactParentCompactSummary,
@@ -120,6 +122,8 @@ export interface SubagentChildBridgeBoundaries {
     signal: AbortSignal,
   ) => PromiseLike<CodePreviewSettings | void>;
   readonly openIpc: () => LocalPiChildIpcChannel;
+  /** The questionnaires the root shows the user in this session, which only a Rex-hosted child has. */
+  readonly paneAsks?: RexPaneAsks | undefined;
 }
 
 const LIVE_CHILD_BRIDGE_BOUNDARIES: SubagentChildBridgeBoundaries = {
@@ -127,6 +131,7 @@ const LIVE_CHILD_BRIDGE_BOUNDARIES: SubagentChildBridgeBoundaries = {
   openIpc: openLocalPiChildIpc,
 };
 const ignoreShown = (): void => undefined;
+const encodeQuestionnaireOutcome = Schema.encodeSync(QuestionnaireOutcomeSchema);
 
 interface ProxyCallOptions {
   readonly onInterruption?: (() => void) | undefined;
@@ -142,6 +147,7 @@ interface ChildSessionInput {
   /** Pending `ask_user` proxy calls, each with its report that the root shows the questionnaire. */
   readonly questionnaires: Map<string, () => void>;
   detachRelay?: (() => void) | undefined;
+  detachPaneAsks?: (() => void) | undefined;
   readonly cwd: string;
   readonly projectTrusted: boolean;
   readonly isIdle: () => boolean;
@@ -199,6 +205,8 @@ export function registerSubagentChildBridge(
       input.token = undefined;
       input.detachRelay?.();
       input.detachRelay = undefined;
+      input.detachPaneAsks?.();
+      input.detachPaneAsks = undefined;
     }
     if (currentSession === input) currentSession = undefined;
     removeProxyNames();
@@ -458,7 +466,24 @@ export function registerSubagentChildBridge(
         scripted && toolInput.tool === AGENT_TOOL_NAME.send
           ? Promise.reject(new Error(scriptedAgentSendRefusal().message))
           : proxyCall(input, token, encodeSubagentProxyInput(toolInput), signal);
+      // The root decided the user must answer and found this session's pane open: the
+      // questionnaire opens here, through this session's own Ask User, and the answer goes back.
+      const presentInPane: RexPanePresenter = (request, signal, shown) => {
+        const questionnaire = decodeQuestionnaireRequest(request);
+        const { sessionId } = input;
+        if (!questionnaire || !sessionId || !isActivationCurrent(input, token))
+          return Promise.resolve(undefined);
+        // The root asks here on the main agent's behalf; each ask is its own owner.
+        const asker = { runId: "root", assignmentEpoch: 0, requestId: synchronousRandomUuid() };
+        return slot
+          .run(askSessionQuestionnaire(pi.events, sessionId, questionnaire, asker, shown), signal)
+          .then(
+            (result) => encodeQuestionnaireOutcome(result.details),
+            () => undefined,
+          );
+      };
       try {
+        input.detachPaneAsks = boundaries.paneAsks?.listen(presentInPane);
         if (input.sessionId)
           input.detachRelay = publishChildQuestionnaireRelay(
             pi.events,
@@ -527,6 +552,8 @@ export default function subagentChildBridge(pi: ExtensionAPI): void {
   const rex = openRexChildSession(pi);
   registerSubagentChildBridge(
     pi,
-    rex ? { ...LIVE_CHILD_BRIDGE_BOUNDARIES, openIpc: () => rex.ipc } : undefined,
+    rex
+      ? { ...LIVE_CHILD_BRIDGE_BOUNDARIES, openIpc: () => rex.ipc, paneAsks: rex.paneAsks }
+      : undefined,
   );
 }

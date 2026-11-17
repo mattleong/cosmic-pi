@@ -5,8 +5,14 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { nodeCreateConnection } from "pi-cosmic-core/platform/node-builtins";
 import { pollUntil } from "pi-cosmic-core/testing";
-import { REX_FRAME, rexFrame, splitRexFrames } from "../src/boundary/rex-session-frames.mjs";
-import { rexSessionHost } from "../src/boundary/rex-session-host.ts";
+import {
+  REX_ANSWER_NOTE,
+  REX_ASK_MESSAGE,
+  REX_FRAME,
+  rexFrame,
+  splitRexFrames,
+} from "../src/boundary/rex-session-frames.mjs";
+import { rexSessionHost, type RexLauncherMessage } from "../src/boundary/rex-session-host.ts";
 
 const REX = { REX_SESSION: "session:1", REX_BLOCK: "block:root", REX_BIN_DIR: "/opt/rex" };
 const run = { runId: "run-1", name: "auth-review", cwd: "/project" };
@@ -235,6 +241,75 @@ describe("Rex session host", () => {
       expect(Arr.filter(h.calls, (call) => call[1] === "close")).toHaveLength(1);
     }),
   );
+});
+
+describe("a questionnaire for the user in a hosted run's pane", () => {
+  const request = { questions: [] };
+  /** A hosted run whose launcher the host can speak to, and what each ask settled with. */
+  const asking = () => {
+    const h = fixture();
+    h.hosted();
+    const sent: RexLauncherMessage[] = [];
+    h.host.attach(run.runId, (message) => sent.push(message));
+    const settled: Array<Schema.Json | undefined> = [];
+    let shown = 0;
+    const ask = () =>
+      h.host.ask(run.runId, request, {
+        shown: () => {
+          shown += 1;
+        },
+        settled: (outcome) => settled.push(outcome),
+      });
+    const answer = (word: {
+      readonly shown?: boolean;
+      readonly declined?: boolean;
+      readonly outcome?: Schema.Json;
+    }) =>
+      h.host.observe(run.runId, {
+        type: REX_ANSWER_NOTE,
+        answer: { id: sent.at(-1)?.ask.id ?? "", ...word },
+      });
+    return { ...h, sent, settled, shownCount: () => shown, ask, answer };
+  };
+
+  it("goes to the run's pane only while a window shows it", () => {
+    const h = asking();
+    // Hidden: the caller is told at once, and nothing reaches the launcher.
+    h.ask();
+    expect(h.settled).toEqual([undefined]);
+    expect(h.sent).toEqual([]);
+
+    h.host.togglePane(run.runId);
+    h.ask();
+    expect(h.sent).toMatchObject([{ type: REX_ASK_MESSAGE, ask: { request } }]);
+    h.answer({ shown: true });
+    expect(h.shownCount()).toBe(1);
+    expect(h.settled).toHaveLength(1);
+    const outcome = { outcome: "cancelled", answers: [] };
+    h.answer({ outcome });
+    expect(h.settled.at(-1)).toEqual(outcome);
+    // A settled questionnaire hears nothing more.
+    h.answer({ outcome });
+    expect(h.settled).toHaveLength(2);
+  });
+
+  it("comes back to the caller when the user can no longer answer it in the pane", () => {
+    for (const leave of ["declined", "hidden", "released", "withdrawn"] as const) {
+      const h = asking();
+      h.host.togglePane(run.runId);
+      const withdraw = h.ask();
+      const id = h.sent.at(-1)?.ask.id;
+      if (leave === "declined") h.answer({ declined: true });
+      if (leave === "hidden") h.host.togglePane(run.runId);
+      if (leave === "released") h.host.released(run.runId);
+      if (leave === "withdrawn") withdraw();
+      expect(h.settled).toEqual([undefined]);
+      // The pane is told to stop showing what the root took back itself.
+      expect(
+        Arr.some(h.sent, (message) => "withdraw" in message.ask && message.ask.id === id),
+      ).toBe(leave === "hidden" || leave === "withdrawn");
+    }
+  });
 });
 
 describe("Rex session frames", () => {

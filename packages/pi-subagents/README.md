@@ -8,7 +8,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Custom agents** you define in `pi-subagents.json`: named roles with their own instructions, effort, and tool lists, routed through a profile.
 - **Any model Pi can run**, Claude models included through a Pi provider, with ordered fallback candidates per profile.
 - **Background by default.** Reports and failures arrive automatically; the agent waits only when it needs a result.
-- **Two-way supervision:** children can ask the parent questions and report progress; the parent can answer or guide them, interrupt, resume, or stop them. A question only you can decide comes to you as an Ask User questionnaire that names the subagent, when that extension is installed.
+- **Two-way supervision:** children can ask the parent questions and report progress; the parent can answer or guide them, interrupt, resume, or stop them. The main agent decides whether a subagent's question is yours to answer; one that is comes to you as an Ask User questionnaire that names the subagent, when that extension is installed, and opens in the subagent's own pane when you have it open. Subagents never question you directly.
 - **Agent messaging:** any agent in the session can list, message, and read any other, including the main agent.
 - **Nesting:** children can launch their own subagents, up to depth 3 with 12 direct children each by default.
 - **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step, or reviews and tests before applying. Proposals can also be revised onto the parent's current files.

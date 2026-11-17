@@ -139,7 +139,9 @@ export function askUserWithDependencies(
       const root = !requiresQuestionnaireRelay();
       if (sessionId)
         invokeHostCallback(() => input.activity?.activate(pi.events, sessionId), undefined);
-      if (sessionId && root) {
+      // A child with a screen of its own, which only a Rex-hosted one has, shows there the
+      // questionnaires its root sends it, through the same capability.
+      if (sessionId && (root || ctx.mode === "tui")) {
         input.revokeCapability = invokeHostCallback(
           () =>
             registerQuestionnaireCapability({

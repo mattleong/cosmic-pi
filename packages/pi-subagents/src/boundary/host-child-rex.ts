@@ -64,6 +64,35 @@ const decodeLink = decodeUnknownOrUndefined(
   Schema.Struct({ socket: Schema.String, token: Schema.String }),
 );
 
+const decodeAsk = decodeUnknownOrUndefined(
+  Schema.Union([
+    Schema.Struct({ id: Schema.String, request: Schema.Json }),
+    Schema.Struct({ id: Schema.String, withdraw: Schema.Literal(true) }),
+  ]),
+);
+
+/**
+ * Shows the user a questionnaire the root sent, in this session, and resolves with the outcome,
+ * or `undefined` when this session can't show one.
+ */
+export type RexPanePresenter = (
+  request: Schema.Json,
+  signal: AbortSignal,
+  shown: () => void,
+) => Promise<Schema.Json | undefined>;
+
+/** The questionnaires the root shows the user in this session's pane, while one is open. */
+export interface RexPaneAsks {
+  /** Shows them through `present` until the returned function runs, which declines any still open. */
+  readonly listen: (present: RexPanePresenter) => () => void;
+}
+
+/** What this session says of a questionnaire the root sent it. */
+type PaneAnswer =
+  | { readonly id: string; readonly shown: true }
+  | { readonly id: string; readonly declined: true }
+  | { readonly id: string; readonly outcome: Schema.Json };
+
 interface Link {
   readonly socket: Socket;
   /** A parked session answers no commands and starts no turns; it waits to be resumed. */
@@ -140,7 +169,8 @@ type OutgoingFrame =
   | ({ readonly type: "response"; readonly id?: string; readonly command: string } & CommandOutcome)
   | { readonly token: string; readonly pid: number; readonly parked: boolean }
   | { readonly ok: true }
-  | { readonly text: string };
+  | { readonly text: string }
+  | PaneAnswer;
 
 const send = (target: Link | undefined, kind: string, frame: OutgoingFrame): boolean => {
   if (!target || target.socket.destroyed) return false;
@@ -169,6 +199,7 @@ const assistantUsageTotals = (ctx: ExtensionContext) => {
 export interface RexChildSession {
   /** The parent-contact channel, carried by the same socket as the commands and events. */
   readonly ipc: LocalPiChildIpcChannel;
+  readonly paneAsks: RexPaneAsks;
 }
 
 /**
@@ -299,6 +330,48 @@ export function openRexChildSession(
     if (!handled) respond(command, { success: false, error: "The command failed." });
   };
 
+  // Questionnaires the root shows the user here, by the root's ID for each.
+  let presenter: RexPanePresenter | undefined;
+  const paneAsks = new Map<string, AbortController>();
+  /** Hands every open questionnaire back: the user can no longer answer it in this session. */
+  const declineAsks = (): void => {
+    for (const [id, showing] of paneAsks) {
+      paneAsks.delete(id);
+      showing.abort();
+      send(link, REX_FRAME.ask, { id, declined: true });
+    }
+  };
+  const receiveAsk = (from: Link, value: Schema.Json): void => {
+    const ask = decodeAsk(value);
+    if (!ask) return;
+    if (!Predicate.hasProperty(ask, "request")) {
+      paneAsks.get(ask.id)?.abort();
+      paneAsks.delete(ask.id);
+      return;
+    }
+    const { id } = ask;
+    const present = presenter;
+    if (!present || from.parked) {
+      send(from, REX_FRAME.ask, { id, declined: true });
+      return;
+    }
+    const showing = new AbortController();
+    paneAsks.set(id, showing);
+    // Only the questionnaire still open here may speak for its ID: a withdrawn one is the root's again.
+    const say = (word: PaneAnswer): void => {
+      if (paneAsks.get(id) === showing) send(link, REX_FRAME.ask, word);
+    };
+    const settle = (outcome: Schema.Json | undefined): void => {
+      say(outcome === undefined ? { id, declined: true } : { id, outcome });
+      if (paneAsks.get(id) === showing) paneAsks.delete(id);
+    };
+    invokeBestEffort(() => {
+      present(ask.request, showing.signal, () => say({ id, shown: true }))
+        .then(settle)
+        .catch(() => settle(undefined));
+    });
+  };
+
   const connect = (path: string, linkToken: string, parked: boolean, onLinked?: () => void) => {
     const socket = nodeCreateConnection(path);
     const next: Link = { socket, parked };
@@ -339,7 +412,8 @@ export function openRexChildSession(
       if (parking && ctx && !ctx.isIdle()) invokeBestEffort(() => ctx.abort());
       const acknowledge = () => send(from, REX_FRAME.park, { ok: true });
       connect(target.socket, target.token, parking, acknowledge);
-    } else if (kind === REX_FRAME.notice) {
+    } else if (kind === REX_FRAME.ask) receiveAsk(from, value);
+    else if (kind === REX_FRAME.notice) {
       const notice = decodeUnknownOrUndefined(Schema.Struct({ message: Schema.String }))(value);
       const ctx = context;
       if (notice && ctx) notifyAtHostBoundary(ctx, notice.message, "warning");
@@ -350,6 +424,7 @@ export function openRexChildSession(
   // Quitting Pi here would end the run with it, so the session's own way out hides its pane:
   // the run goes on, and Activity shows the pane again.
   const hide = (): void => {
+    declineAsks();
     send(link, REX_FRAME.hide, { ok: true });
   };
   pi.registerCommand("hide", {
@@ -453,5 +528,14 @@ export function openRexChildSession(
         callback(send(link, REX_FRAME.contact, message) ? null : new Error("Rex link is closed."));
       },
     }),
+    paneAsks: {
+      listen: (present) => {
+        presenter = present;
+        return () => {
+          if (presenter === present) presenter = undefined;
+          declineAsks();
+        };
+      },
+    },
   };
 }

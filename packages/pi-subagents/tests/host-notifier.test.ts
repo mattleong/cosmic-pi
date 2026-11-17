@@ -70,9 +70,9 @@ describe("subagent host notifier", () => {
       const content = messageContent(sendMessage.mock.calls[0]?.[0].content);
       expect(content).toContain("Red or blue?");
       expect(content).toContain("agent_send");
-      // Naming the asker lets the questionnaire show the user whose question it is.
+      // Naming the asker lets the questionnaire show whose question it is, in that run's pane.
       expect(Fn.pipe(content, Str.includes("ask_user"))).toBe(tools.includes("ask_user"));
-      expect(Fn.pipe(content, Str.includes('askedBy to "Pane tour"'))).toBe(
+      expect(Fn.pipe(content, Str.includes('askedBy to "agent-1"'))).toBe(
         tools.includes("ask_user"),
       );
     }

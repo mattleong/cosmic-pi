@@ -27,7 +27,18 @@ export const REX_FRAME = Object.freeze({
   resume: "U",
   /** The user asked, inside the session, to hide its pane: `{ ok }`. */
   hide: "D",
+  /**
+   * A questionnaire for the user, shown in the child's own session: `{ id, request }`, taken back
+   * with `{ id, withdraw }`. The child answers `{ id, shown }` once it is on screen, then
+   * `{ id, outcome }`, or `{ id, declined }` when it could not show it or stopped showing it.
+   */
+  ask: "Q",
 });
+
+/** How the root hands its launcher an `ask` frame for the child: `{ type, ask }` over process IPC. */
+export const REX_ASK_MESSAGE = "pi_subagents_rex_ask";
+/** How the launcher hands the root the child's `ask` frames: `{ type, answer }` on stdout. */
+export const REX_ANSWER_NOTE = "pi_subagents_rex_answer";
 
 /**
  * @param {string} kind

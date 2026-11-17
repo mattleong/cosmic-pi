@@ -1,17 +1,22 @@
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { invokeBestEffort } from "pi-cosmic-core/host-session";
+import { invokeBestEffort, invokeHostCallback } from "pi-cosmic-core/host-session";
 import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
 import { makeSessionCapabilityProtocol } from "pi-cosmic-core/session-capability";
 import {
   decodeQuestionnaireOutcome,
   decodeQuestionnaireRequest,
   queryQuestionnaireCapability,
+  QUESTIONNAIRE_ASKERS_QUERY,
   QUESTIONNAIRE_RELAY_QUERY,
   QuestionnaireRequestSchema,
   QuestionnaireOutcomeSchema,
+  type AskUserOutcome,
   type AskUserRequest,
+  type QuestionnaireAskers,
   type QuestionnaireOwner,
   type QuestionnaireRelay,
 } from "pi-ask-user/protocol";
@@ -30,10 +35,11 @@ const unavailable = () =>
   );
 
 /**
- * Asks the root's questionnaire for an authenticated child. `shown` runs at most once, when the
- * root opens the questionnaire on screen, and never once the ask has settled or lost its owner.
+ * Asks a session's questionnaire on an owner's behalf: the root's for an authenticated child, or
+ * a Rex-hosted child's own for its root. `shown` runs at most once, when the questionnaire opens
+ * on screen, and never once the ask has settled or lost its owner.
  */
-export const askParentQuestionnaire = (
+export const askSessionQuestionnaire = (
   events: ExtensionAPI["events"],
   sessionId: string,
   request: AskUserRequest,
@@ -148,3 +154,84 @@ export const publishChildQuestionnaireRelay = (
     if (query !== undefined && isCurrent() && query.sessionId === sessionId) query.respond(relay);
   });
 };
+
+const encodeQuestions = Schema.encodeSync(QuestionnaireRequestSchema);
+
+interface QuestionnaireAskerRun {
+  readonly id: string;
+  readonly name: string;
+  readonly state: string;
+}
+
+/**
+ * The run an `askedBy` names: by its ID, or by a name only one run carries. Among namesakes, the
+ * one waiting on its parent is the one whose question the parent is passing on.
+ */
+const namedRun = (
+  runs: ReadonlyArray<QuestionnaireAskerRun>,
+  askedBy: string,
+): QuestionnaireAskerRun | undefined => {
+  const byId = Arr.findFirst(runs, (run) => run.id === askedBy);
+  if (Option.isSome(byId)) return byId.value;
+  const named = Arr.filter(runs, (run) => run.name === askedBy);
+  const waiting = Arr.filter(named, (run) => run.state === "waiting_for_parent");
+  const [only, ...others] = waiting.length > 0 ? waiting : named;
+  return others.length === 0 ? only : undefined;
+};
+
+interface QuestionnaireAskersHost {
+  /** The root session these runs belong to, while it has one. */
+  readonly sessionId: () => string | undefined;
+  readonly runs: () => ReadonlyArray<QuestionnaireAskerRun>;
+  /** Shows a questionnaire in a run's own pane; `undefined` when the user can't answer it there. */
+  readonly present: (
+    runId: string,
+    request: Schema.Json,
+    shown: () => void,
+    signal: AbortSignal,
+  ) => Promise<Schema.Json | undefined>;
+}
+
+/**
+ * Tells the root's questionnaire who it is asked for. The parent decides that a subagent's
+ * question is the user's to answer and names the subagent; this names the run for the dialog and
+ * shows the questions in that run's own pane when the user has it open.
+ */
+export const publishQuestionnaireAskers = (
+  events: ExtensionAPI["events"],
+  host: QuestionnaireAskersHost,
+): (() => void) =>
+  events.on(QUESTIONNAIRE_ASKERS_QUERY, (input) => {
+    const query = relayQueries.normalizeQuery(input);
+    const sessionId = invokeHostCallback(host.sessionId, undefined);
+    if (query === undefined || sessionId === undefined || query.sessionId !== sessionId) return;
+    const askers: QuestionnaireAskers = {
+      version: 1,
+      sessionId,
+      find: (askedBy) => {
+        const run = namedRun(host.runs(), askedBy);
+        return (
+          run && {
+            name: run.name,
+            present: (asked, signal, shown): Promise<AskUserOutcome | undefined> => {
+              const request = decodeQuestionnaireRequest(asked);
+              if (!request || signal.aborted) return Promise.resolve(undefined);
+              // In the run's own pane the questions need no name above them.
+              const reportShown = (): void => {
+                if (isShownCallback(shown)) invokeBestEffort(() => shown());
+              };
+              return host
+                .present(
+                  run.id,
+                  encodeQuestions({ questions: request.questions }),
+                  reportShown,
+                  signal,
+                )
+                .then(decodeQuestionnaireOutcome);
+            },
+          }
+        );
+      },
+    };
+    query.respond(askers);
+  });

@@ -68,9 +68,20 @@ const CROSS_SESSION_TOOL_NAMES: ReadonlySet<string> = new Set([
   "session_read",
 ]);
 
-/** Tools a Pi child never loads: competing orchestrators and cross-session messaging. */
+// Whether a question is the user's to answer is the main agent's call, which knows what the user
+// already said. A subagent asks its parent, and never puts a questionnaire to the user itself.
+const USER_QUESTION_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "ask_user",
+  "ask_user_async",
+  "ask_user_async_control",
+]);
+
+/**
+ * Tools a Pi child never loads: competing orchestrators, cross-session messaging, and
+ * questionnaires for the user.
+ */
 export const PI_CHILD_EXCLUDED_TOOL_ARGUMENT = Arr.join(
-  ["workflow", "workflow_control", ...CROSS_SESSION_TOOL_NAMES],
+  ["workflow", "workflow_control", ...CROSS_SESSION_TOOL_NAMES, ...USER_QUESTION_TOOL_NAMES],
   ",",
 );
 
@@ -81,7 +92,8 @@ const MAX_INHERITED_PI_TOOL_ARGUMENT_BYTES = 32_768;
 const isChildExcludedTool = (name: string): boolean =>
   name === "workflow" ||
   Fn.pipe(name, Str.startsWith("workflow_")) ||
-  CROSS_SESSION_TOOL_NAMES.has(name);
+  CROSS_SESSION_TOOL_NAMES.has(name) ||
+  USER_QUESTION_TOOL_NAMES.has(name);
 
 const unrepresentableToolSnapshot = () =>
   invalidRequest(

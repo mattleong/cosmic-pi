@@ -15,7 +15,13 @@ import {
   nodeTemporaryRoot,
 } from "pi-cosmic-core/platform/node-builtins";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
-import { REX_FRAME, rexFrame, splitRexFrames } from "./rex-session-frames.mjs";
+import {
+  REX_ANSWER_NOTE,
+  REX_ASK_MESSAGE,
+  REX_FRAME,
+  rexFrame,
+  splitRexFrames,
+} from "./rex-session-frames.mjs";
 
 /**
  * The root's side of Rex-hosted subagents: which runs have a block, whether its pane is open, and
@@ -46,6 +52,30 @@ interface RexEntry {
   parked?: Socket | undefined;
   /** A launcher is taking the parked session back, so its connection closing is expected. */
   adopting: boolean;
+  /** Speaks to the run's launcher, while it has one. */
+  send?: ((message: RexLauncherMessage) => void) | undefined;
+}
+
+/** What the root says to a run's launcher beside the backend's own channel. */
+export interface RexLauncherMessage {
+  readonly type: typeof REX_ASK_MESSAGE;
+  readonly ask:
+    | { readonly id: string; readonly request: Schema.Json }
+    | { readonly id: string; readonly withdraw: true };
+}
+
+export interface RexPaneAskHandlers {
+  /** Runs when the questionnaire is on screen in the pane. */
+  readonly shown: () => void;
+  readonly settled: (outcome: Schema.Json | undefined) => void;
+}
+
+/** A questionnaire a run's pane is showing for the root. */
+interface PaneAsk {
+  readonly runId: string;
+  readonly shown: () => void;
+  readonly settle: (outcome: Schema.Json | undefined) => void;
+  readonly withdraw: () => void;
 }
 
 /** What a launch needs in place of Pi's own command: the launcher and its configuration. */
@@ -66,6 +96,15 @@ export interface RexSessionHost {
   ) => RexLaunch | undefined;
   /** Reads what a run's launcher says about itself, beside the child's own events. */
   readonly observe: (runId: string, value: Schema.Json) => void;
+  /** Gives the host a way to speak to a run's launcher, for as long as the run has one. */
+  readonly attach: (runId: string, send: (message: RexLauncherMessage) => void) => void;
+  /**
+   * Shows the user a questionnaire in a run's open pane, which takes the focus. `settled` runs
+   * once with what the session answered, or with `undefined` when the pane isn't open or leaves
+   * its window before the user answers: the caller then asks somewhere the user can see. The
+   * returned function takes the questionnaire back.
+   */
+  readonly ask: (runId: string, request: Schema.Json, handlers: RexPaneAskHandlers) => () => void;
   /** Where a run's session should wait instead of ending, when its pane is open. */
   readonly parkTarget: (
     runId: string,
@@ -90,6 +129,15 @@ const decodeNote = decodeUnknownOrUndefined(
       type: Schema.Literal("pi_subagents_rex_listening"),
       socket: Schema.String,
       token: Schema.String,
+    }),
+    Schema.Struct({
+      type: Schema.Literal(REX_ANSWER_NOTE),
+      answer: Schema.Struct({
+        id: Schema.String,
+        shown: Schema.optional(Schema.Boolean),
+        declined: Schema.optional(Schema.Boolean),
+        outcome: Schema.optional(Schema.Json),
+      }),
     }),
   ]),
 );
@@ -166,6 +214,7 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
   const isOpen = (entry: RexEntry): boolean => refreshPlacement(entry, placedBlocks());
 
   const entries = new Map<string, RexEntry>();
+  const asks = new Map<string, PaneAsk>();
   const listeners = new Set<() => void>();
   let enabled = false;
   let parking = true;
@@ -184,6 +233,10 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
   };
   const forget = (runId: string): void => {
     if (entries.delete(runId)) changed();
+  };
+  /** Takes back the questionnaires a run's pane shows: no one can answer them there any more. */
+  const withdrawAsks = (runId: string): void => {
+    for (const ask of asks.values()) if (ask.runId === runId) ask.withdraw();
   };
   const closeBlock = (entry: RexEntry): void => {
     if (entry.blockId && session) rex(["block", "close", "-s", session, entry.blockId]);
@@ -294,6 +347,13 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
         changed();
         return;
       }
+      if (note.type === REX_ANSWER_NOTE) {
+        const ask = asks.get(note.answer.id);
+        if (ask?.runId !== runId) return;
+        if (note.answer.shown) invokeBestEffort(ask.shown);
+        else ask.settle(note.answer.declined ? undefined : note.answer.outcome);
+        return;
+      }
       // The launcher of a resumed run takes its parked session back.
       const parked = entry.parked;
       if (!parked) return;
@@ -301,6 +361,30 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
       invokeBestEffort(() =>
         parked.write(rexFrame(REX_FRAME.adopt, { socket: note.socket, token: note.token })),
       );
+    },
+    attach: (runId, send) => {
+      const entry = entries.get(runId);
+      if (entry) entry.send = (message) => invokeBestEffort(() => send(message));
+    },
+    ask: (runId, request, handlers) => {
+      const entry = entries.get(runId);
+      const send = entry?.send;
+      if (closed || !send || !entry?.blockId || entry.parked || !isOpen(entry)) {
+        invokeBestEffort(() => handlers.settled(undefined));
+        return Fn.constVoid;
+      }
+      const id = synchronousRandomHex(12);
+      const settle = (outcome: Schema.Json | undefined): void => {
+        if (asks.delete(id)) invokeBestEffort(() => handlers.settled(outcome));
+      };
+      const withdraw = (): void => {
+        if (!asks.has(id)) return;
+        send({ type: REX_ASK_MESSAGE, ask: { id, withdraw: true } });
+        settle(undefined);
+      };
+      asks.set(id, { runId, shown: handlers.shown, settle, withdraw });
+      send({ type: REX_ASK_MESSAGE, ask: { id, request } });
+      return withdraw;
     },
     parkTarget: (runId) => {
       const entry = entries.get(runId);
@@ -315,6 +399,9 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
     released: (runId) => {
       const entry = entries.get(runId);
       if (!entry) return;
+      // The launcher that carried them is gone, so its pane's questionnaires go back to the caller.
+      entry.send = undefined;
+      for (const ask of asks.values()) if (ask.runId === runId) ask.settle(undefined);
       // A parked session keeps its block until its pane closes or a launcher takes it back.
       if (entry.parked || entry.parkToken) return;
       forget(runId);
@@ -345,7 +432,10 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
         return true;
       }
       const hidden = api("session.detach_block", { block_id: entry.blockId });
-      if (hidden) entry.placed = false;
+      if (hidden) {
+        entry.placed = false;
+        withdrawAsks(runId);
+      }
       changed();
       return hidden;
     },
@@ -363,6 +453,7 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
     close: () => {
       if (closed) return;
       closed = true;
+      for (const ask of asks.values()) ask.settle(undefined);
       for (const entry of entries.values()) if (entry.parked) closeBlock(entry);
       entries.clear();
       invokeBestEffort(() => park?.close());

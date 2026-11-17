@@ -20,7 +20,11 @@ import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 import { AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 import { ASYNC_MESSAGE_TYPE, ASYNC_RECEIPT_TYPE } from "../src/boundary/host-delivery.ts";
-import { QUESTIONNAIRE_RELAY_QUERY, type QuestionnaireRelay } from "../src/protocol.ts";
+import {
+  queryQuestionnaireCapability,
+  QUESTIONNAIRE_RELAY_QUERY,
+  type QuestionnaireRelay,
+} from "../src/protocol.ts";
 
 withoutRelayMarker();
 afterEach(() => {
@@ -204,6 +208,8 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         queries.normalizeQuery(data)?.respond({ version: 1, sessionId: "child", ask });
       });
       yield* Effect.promise(() => h.emit("session_start"));
+      // A child without a screen has nowhere to show a questionnaire of its root's.
+      expect(queryQuestionnaireCapability(h.pi.events, "child")).toBeUndefined();
       const tool = h.tools.get("ask_user")!;
       const result = yield* Effect.promise(() =>
         tool.execute("call", request, undefined, undefined, h.ctx),
@@ -286,11 +292,16 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       Effect.gen(function* () {
         vi.stubEnv("PI_SUBAGENT_CHILD", "1");
         vi.stubEnv("PI_SUBAGENT_RUN_ID", "child-run");
-        const h = yield* harness(() => Promise.resolve(), { mode: "tui" });
+        const h = yield* harness(() => Promise.resolve(), {
+          mode: "tui",
+          sessionManager: { getSessionId: () => "pane" },
+        });
         yield* Effect.promise(() => h.emit("session_start"));
         expect(h.tools.has("ask_user")).toBe(true);
         expect(h.tools.has("ask_user_async")).toBe(false);
         expect(h.tools.has("ask_user_async_control")).toBe(false);
+        // Its own screen can show the questionnaires its root sends it.
+        expect(queryQuestionnaireCapability(h.pi.events, "pane")).toBeDefined();
         yield* Effect.promise(() =>
           expect(
             h.tools.get("ask_user")!.execute("call", request, undefined, undefined, h.ctx),

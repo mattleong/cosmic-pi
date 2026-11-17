@@ -34,7 +34,9 @@ The tool is named `ask_user`:
 
 Question keys and choice values must be unique in their scope. Titles label tabs and review rows, which shorten long titles; answers match questions by `key`. A choice cannot be labeled "Write a custom answer", because it would pose as the built-in custom-answer action.
 
-An optional `askedBy`, beside `questions`, names the agent whose questions these are when the caller asks on another agent's behalf, such as a subagent whose question only the user can decide. The dialog shows the name above the questions, so the user knows where the answers go; the answers still return to the caller, which passes them on. A blank `askedBy` is dropped.
+An optional `askedBy`, beside `questions`, names the agent whose questions these are, by its ID or name, when the caller asks on another agent's behalf, such as a subagent whose question only the user can decide. The dialog shows the agent's name above the questions, so the user knows where the answers go; the answers still return to the caller, which passes them on. A blank `askedBy` is dropped.
+
+The extension that runs such agents can say who an `askedBy` names, through the askers query in `pi-ask-user/protocol`. It supplies the agent's display name, and may show the questionnaire where that agent's own session is on screen, as pi-subagents does for a subagent whose Rex pane is open. When that session isn't on screen, or leaves it before the user answers, the questionnaire opens in the caller's session. An `askedBy` nobody recognizes is shown as written.
 
 Arguments are prepared before validation: null or blank optional fields, blank choice previews, and null or empty `choices` on text questions are dropped. An invalid question reports only the issues of the shape its `mode` selects, or the allowed modes when `mode` is unrecognized.
 
@@ -145,7 +147,7 @@ This is an additive tool-result boundary: normal text, persisted details, render
 
 ## Activity view and child questions
 
-In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Hidden questionnaires keep their drafts and release keyboard focus until resumed. Run cancellation or session replacement cancels a child's waiting or mounted requests. Only authenticated child requests appear beneath their owning subagent run; their answers return to that caller rather than automatically steering the root agent. The root names that run as the request's `askedBy`, so its dialog says whose it is. The [lifecycle note](lifecycle.md#branch-and-child-authority) explains ownership and revocation.
+In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Hidden questionnaires keep their drafts and release keyboard focus until resumed. Run cancellation or session replacement cancels a child's waiting or mounted requests. Only authenticated child requests appear beneath their owning subagent run; their answers return to that caller rather than automatically steering the root agent. pi-subagents no longer gives its children `ask_user`, so the main agent asks on their behalf with `askedBy`. The [lifecycle note](lifecycle.md#branch-and-child-authority) explains ownership and revocation.
 
 ## TUI controls
 

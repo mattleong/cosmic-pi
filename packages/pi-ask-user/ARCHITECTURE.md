@@ -65,6 +65,11 @@ a cancelled or failed result is labeled automated.
   answers remain recoverable and delivery IDs support deduplication.
 - Child ownership is authenticated by the coordinator's capabilities, not launch markers alone.
   Owned answers return to their caller instead of automatically steering the root agent.
+- A questionnaire asked for another agent (`askedBy`) is still the caller's: the
+  [session boundary](src/boundary/host-relay.ts) asks whoever runs that agent for its name and
+  for a screen it is on, shows the questions there, and opens them in the caller's session
+  whenever that screen can't answer. A child with a screen publishes the same capability the root
+  does, so its root can show a questionnaire there.
 - Dialog settlement revokes callbacks and joins admitted editor cleanup before another dialog
   or session takes over the TUI. Hidden dialogs retain drafts while the host owns hide/resume.
 - Decision strings remain lossless in native results. Display sanitization is separate, and

@@ -5,6 +5,8 @@ import * as Result from "effect/Result";
 import { deferredPromise } from "pi-cosmic-core/testing";
 import { describe, expect, it } from "vitest";
 import {
+  decodeQuestionnaireAsker,
+  queryQuestionnaireAskers,
   queryQuestionnaireRelay,
   type AskUserRequest,
   type AskUserOutcome,
@@ -12,7 +14,8 @@ import {
   type QuestionnaireOwner,
 } from "pi-ask-user/protocol";
 import {
-  askParentQuestionnaire,
+  askSessionQuestionnaire,
+  publishQuestionnaireAskers,
   publishChildQuestionnaireRelay,
 } from "../src/boundary/host-ask-user.ts";
 import {
@@ -54,7 +57,7 @@ const relayToRoot = (rootCapability: QuestionnaireCapability, asker: Questionnai
     (wire, signal) => {
       const decoded = decodeQuestionnaireProxyRequest(wire);
       if (Result.isFailure(decoded)) return Promise.reject(decoded.failure);
-      return Effect.runPromise(askParentQuestionnaire(root, "root", decoded.success, asker), {
+      return Effect.runPromise(askSessionQuestionnaire(root, "root", decoded.success, asker), {
         signal,
       });
     },
@@ -163,7 +166,7 @@ describe("structured questionnaire proxy boundary", () => {
         },
       }));
       const asking = yield* Effect.forkChild(
-        Effect.result(askParentQuestionnaire(events, "root", request, questionOwner)),
+        Effect.result(askSessionQuestionnaire(events, "root", request, questionOwner)),
       );
       yield* step(() => cancelled.promise);
       expect(asking.pollUnsafe()).toBeUndefined();
@@ -192,7 +195,7 @@ describe("structured questionnaire proxy boundary", () => {
       }),
     );
     const outcome = yield* Effect.result(
-      askParentQuestionnaire(events, "different-session", request, owner("q")),
+      askSessionQuestionnaire(events, "different-session", request, owner("q")),
     );
     expect(rejection(outcome)).toBeInstanceOf(InvalidSubagentRequestError);
     expect(entered).toBe(false);
@@ -212,8 +215,74 @@ describe("structured questionnaire proxy boundary", () => {
       }),
     );
     const outcome = yield* Effect.result(
-      askParentQuestionnaire(events, "root", request, owner("q")),
+      askSessionQuestionnaire(events, "root", request, owner("q")),
     );
     expect(rejection(outcome)).toBeInstanceOf(InvalidSubagentRequestError);
+  });
+});
+
+describe("who a root questionnaire is asked for", () => {
+  const runs = [
+    { id: "agent-1", name: "Banner colour", state: "waiting_for_parent" },
+    { id: "agent-2", name: "Banner colour", state: "completed" },
+    { id: "agent-3", name: "reviewer", state: "running" },
+    { id: "agent-4", name: "reviewer", state: "running" },
+  ];
+  const published = () => {
+    const events = bus();
+    const presented: Array<readonly [string, unknown]> = [];
+    let answer: AskUserOutcome | undefined = { outcome: "cancelled", answers: [] };
+    publishQuestionnaireAskers(events, {
+      sessionId: () => "root",
+      runs: () => runs,
+      present: (runId, asked, shown) => {
+        presented.push([runId, asked]);
+        shown();
+        return Promise.resolve(answer);
+      },
+    });
+    return {
+      presented,
+      find: (askedBy: string) => queryQuestionnaireAskers(events, "root")?.find(askedBy),
+      elsewhere: queryQuestionnaireAskers(events, "another-session"),
+      decline: () => {
+        answer = undefined;
+      },
+    };
+  };
+
+  it("names a run by its ID, or by a name only one waiting run carries", () => {
+    const { find, elsewhere } = published();
+    expect(decodeQuestionnaireAsker(find("agent-2"))?.name).toBe("Banner colour");
+    expect(decodeQuestionnaireAsker(find("agent-3"))?.name).toBe("reviewer");
+    // Of two namesakes, the one waiting on its parent is the one being asked for.
+    expect(decodeQuestionnaireAsker(find("Banner colour"))).toBeDefined();
+    expect(find("reviewer")).toBeUndefined();
+    expect(find("nobody")).toBeUndefined();
+    expect(elsewhere).toBeUndefined();
+  });
+
+  effectTest("shows the questions in that run's pane, without a name above them", function* () {
+    const { find, presented, decline } = published();
+    const asker = decodeQuestionnaireAsker(find("Banner colour"))!;
+    let shown = 0;
+    const ask = () =>
+      step(() =>
+        Promise.resolve<unknown>(
+          asker.present(
+            { ...request, askedBy: "Banner colour" },
+            new AbortController().signal,
+            () => {
+              shown += 1;
+            },
+          ),
+        ),
+      );
+    expect(yield* ask()).toEqual({ outcome: "cancelled", answers: [] });
+    expect(presented).toEqual([["agent-1", request]]);
+    expect(shown).toBe(1);
+    // A pane that can't show it sends the questionnaire back to be asked in the root.
+    decline();
+    expect(yield* ask()).toBeUndefined();
   });
 });

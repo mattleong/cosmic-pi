@@ -7,6 +7,7 @@ import {
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import type * as Schema from "effect/Schema";
 import {
   CodePreviewSchedulerService,
   type CodePreviewSchedulerServiceContract,
@@ -31,7 +32,7 @@ import {
   registerSubagentActivity,
   runSubagentActivityAction,
 } from "../boundary/host-activity.ts";
-import { askParentQuestionnaire } from "../boundary/host-ask-user.ts";
+import { askSessionQuestionnaire, publishQuestionnaireAskers } from "../boundary/host-ask-user.ts";
 import { registerActiveRunsPrompt } from "../boundary/host-active-runs-prompt.ts";
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
 import { hostNotifier } from "../boundary/host-notifier.ts";
@@ -224,6 +225,22 @@ export function registerSubagentApplication(
     },
   });
   const notify = hostNotifier(pi, { delivery: wake });
+  const retireAskers = publishQuestionnaireAskers(pi.events, {
+    sessionId: () => currentActivation?.ctx.sessionManager.getSessionId(),
+    runs: () => (currentActivation ? bridge.get().runs : []),
+    present: (runId, request, shown, signal) =>
+      slot.run(
+        Effect.callback<Schema.Json | undefined>((resume) => {
+          const withdraw = rexHost.ask(runId, request, {
+            shown,
+            settled: (outcome) => resume(Effect.succeed(outcome)),
+          });
+          // The parent's call ended first: the pane stops showing what no one waits on.
+          return Effect.sync(withdraw);
+        }),
+        signal,
+      ),
+  });
   let startupFailureTools: ReadonlyArray<string> = [];
   let hasRegisteredTools = false;
   // A reload handoff no runtime has applied yet, and resets no activation has announced: a failed
@@ -335,7 +352,7 @@ export function registerSubagentApplication(
           questionnaireHandler: (request, questionnaireOwner, shown) =>
             Effect.suspend(() =>
               isLive()
-                ? askParentQuestionnaire(
+                ? askSessionQuestionnaire(
                     pi.events,
                     activation.ctx.sessionManager.getSessionId(),
                     request,
@@ -656,6 +673,9 @@ export function registerSubagentApplication(
     wake.hold();
     return retireActivation(ctx, event.reason === "reload" ? "reload" : "session")
       .then(() => shutdownSession(event, ctx))
-      .finally(() => rexHost.close());
+      .finally(() => {
+        invokeHostCallback(retireAskers, undefined);
+        rexHost.close();
+      });
   });
 }

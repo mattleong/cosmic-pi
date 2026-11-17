@@ -13,6 +13,7 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import { nodeCreateServer } from "pi-cosmic-core/platform/node-builtins";
 import {
+  deferredPromise,
   extensionApiFixture,
   extensionContextFixture,
   piKeybindingsFixture,
@@ -410,6 +411,66 @@ describe("a Rex-hosted child", () => {
         expect(h.calls).toEqual([]);
       }),
     ),
+  );
+
+  it.live(
+    "shows the user the root's questionnaires and answers each for as long as it shows it",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const h = yield* fixture;
+          h.emit("session_start");
+          const asks = () => Arr.map(h.launcher.of(REX_FRAME.ask), (frame) => frame.value);
+          const request = { questions: [] };
+          // Before anything in this session can show one, the root is told to ask elsewhere.
+          h.launcher.send(REX_FRAME.ask, { id: "early", request });
+          expect(yield* pollUntil(() => asks().length === 1)).toBe(true);
+          expect(asks()).toEqual([{ id: "early", declined: true }]);
+
+          const showing: Array<{
+            readonly signal: AbortSignal;
+            readonly shown: () => void;
+            readonly answer: (outcome: Schema.Json | undefined) => void;
+          }> = [];
+          const detach = h.session.paneAsks.listen((_request, signal, shown) => {
+            const answered = deferredPromise<Schema.Json | undefined>();
+            showing.push({ signal, shown, answer: answered.resolve });
+            return answered.promise;
+          });
+          const outcome = { outcome: "cancelled", answers: [] };
+          h.launcher.send(REX_FRAME.ask, { id: "answered", request });
+          expect(yield* pollUntil(() => showing.length === 1)).toBe(true);
+          showing[0]?.shown();
+          showing[0]?.answer(outcome);
+          expect(yield* pollUntil(() => asks().length === 3)).toBe(true);
+          expect(asks().slice(1)).toEqual([
+            { id: "answered", shown: true },
+            { id: "answered", outcome },
+          ]);
+
+          // One the root takes back stops showing, and its late answer is no longer this session's.
+          h.launcher.send(REX_FRAME.ask, { id: "withdrawn", request });
+          expect(yield* pollUntil(() => showing.length === 2)).toBe(true);
+          h.launcher.send(REX_FRAME.ask, { id: "withdrawn", withdraw: true });
+          expect(yield* pollUntil(() => showing[1]?.signal.aborted === true)).toBe(true);
+          showing[1]?.answer(outcome);
+
+          // Hiding the pane from inside hands back what it shows, and so does the session ending.
+          h.launcher.send(REX_FRAME.ask, { id: "hidden", request });
+          expect(yield* pollUntil(() => showing.length === 3)).toBe(true);
+          yield* Effect.promise(() => h.runCommand("hide") ?? Promise.resolve());
+          h.launcher.send(REX_FRAME.ask, { id: "ended", request });
+          expect(yield* pollUntil(() => showing.length === 4)).toBe(true);
+          detach();
+          expect(yield* pollUntil(() => asks().length === 5)).toBe(true);
+          expect(asks().slice(3)).toEqual([
+            { id: "hidden", declined: true },
+            { id: "ended", declined: true },
+          ]);
+          expect(showing[2]?.signal.aborted).toBe(true);
+          expect(showing[3]?.signal.aborted).toBe(true);
+        }),
+      ),
   );
 
   it.live("stops and exits when its parent's end goes away", () =>

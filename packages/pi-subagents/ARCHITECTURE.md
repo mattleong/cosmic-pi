@@ -13,6 +13,7 @@
 - `application/messages.ts` owns message renderers and who writes each custom message type the model reads; the root (`extension.ts`) and each child (`boundary/host-child.ts`) register its [origin markers](docs/completion-delivery.md#framing-and-authority) once.
 - `tools/` owns public contracts, execution, and compact presentation. `settings/` owns commands and editors. `ui/` and settings rendering consume immutable projections, and Activity actions recheck activation, revision, and action availability before reaching services.
 - `boundary/rex-session-host.ts`, `rex-relay.mjs`, and `host-child-rex.ts` host a run's Pi as an interactive session in a Rex block when the [setting](docs/local-backends.md#rex-hosted-sessions) asks for it; the backend and everything above it are the same for both kinds of child.
+- `boundary/host-ask-user.ts` tells Ask User which run a root questionnaire is asked for and shows it in that run's open pane; a subagent has no questionnaire tool of its own, so [what the user is asked](docs/local-backends.md#questions-for-the-user) is the main agent's decision.
 - `boundary/host-session-view.ts` opens a run's [session view](docs/completion-delivery.md#session-view) in the root's own Pi. `run/transcript.ts` shows it the conversation; `ui/session-transcript.ts` and `ui/session-view.ts` hold only rows, input, and scroll state.
 
 ## Lifecycle

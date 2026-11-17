@@ -7,6 +7,14 @@ const socket = createConnection(process.env.PI_SUBAGENT_REX_SOCKET ?? "");
 const decodeCommand = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ type: Schema.String, id: Schema.optional(Schema.String) })),
 );
+const decodeAsk = Schema.decodeUnknownSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      id: Schema.String,
+      request: Schema.optional(Schema.Struct({ answer: Schema.optional(Schema.String) })),
+    }),
+  ),
+);
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 const frame = (kind: string, value: Schema.Json) => socket.write(`${kind}${encode(value)}\n`);
 let buffered = "";
@@ -18,6 +26,15 @@ socket.on("data", (chunk: string) => {
   const lines = (buffered + chunk).split("\n");
   buffered = lines.pop() ?? "";
   for (const line of lines) {
+    // A questionnaire from the root is on screen at once, and answered only when it asks to be.
+    if (line.startsWith("Q")) {
+      const ask = decodeAsk(line.slice(1));
+      if (ask.request === undefined) continue;
+      frame("Q", { id: ask.id, shown: true });
+      if (ask.request.answer !== undefined)
+        frame("Q", { id: ask.id, outcome: { answered: ask.request.answer } });
+      continue;
+    }
     if (!line.startsWith("R")) continue;
     const command = decodeCommand(line.slice(1));
     frame("R", {
