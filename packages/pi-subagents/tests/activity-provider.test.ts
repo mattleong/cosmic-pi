@@ -18,6 +18,7 @@ import { view } from "./fixtures/run-view.ts";
 import { normalizeRpcEvent } from "../src/backend/local-pi-events.ts";
 import { awaitDetails, startDetails } from "../src/tools/details.ts";
 import * as Arr from "effect/Array";
+import * as Schema from "effect/Schema";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import { findOrUndefined } from "pi-cosmic-core/array";
@@ -586,6 +587,58 @@ describe("subagent activity provider", () => {
       dispose();
     },
   );
+
+  effectTest("offers a hosted run's pane and toggles it through the host", function* () {
+    const transport = fakeActivityHost();
+    const bridge = subagentProjectionBridge();
+    bridge.publish({ revision: 1, runs: [view({ id: "hosted" }), view({ id: "headless" })] });
+    let pane: "hidden" | "open" = "hidden";
+    const listeners = new Set<() => void>();
+    const toggle = vi.fn((_runId: string) => {
+      pane = pane === "hidden" ? "open" : "hidden";
+      for (const listener of listeners) listener();
+      return true;
+    });
+    const dispose = registerSubagentActivity({
+      events: transport.events,
+      sessionId: "session",
+      bridge,
+      isCurrent: () => true,
+      act: () => Promise.resolve(),
+      panes: {
+        state: (runId) => (runId === "hosted" ? pane : undefined),
+        toggle,
+        subscribe: (listener) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+    });
+    announceHost(transport, true);
+    const published = Schema.decodeUnknownSync(
+      Schema.Array(
+        Schema.Struct({
+          id: Schema.String,
+          revision: Schema.String,
+          actions: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.String }))),
+        }),
+      ),
+    );
+    const item = (id: string) =>
+      findOrUndefined(published(transport.get()?.items), (row) => row.id === id)!;
+    const offered = (id: string) => Arr.map(item(id).actions ?? [], (action) => action.id);
+    expect(offered("hosted")).toContain("pane");
+    expect(offered("headless")).not.toContain("pane");
+    const signal = new AbortController().signal;
+    const hidden = item("hosted").revision;
+    yield* step(() =>
+      Promise.resolve<unknown>(transport.capability()!.invoke!("hosted", "pane", hidden, signal)),
+    );
+    expect(toggle).toHaveBeenCalledWith("hosted");
+    // One action toggles: only Rex knows whether the user has hidden the pane since.
+    expect(offered("hosted")).toContain("pane");
+    dispose();
+  });
 
   effectTest("sends reply and message actions through the shared send path", function* () {
     const selected = view({ id: "selected", state: "waiting_for_parent", question });

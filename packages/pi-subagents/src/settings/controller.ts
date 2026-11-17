@@ -10,7 +10,7 @@ import { captureHostSignal, notifyAtHostBoundary } from "pi-cosmic-core/host-ses
 import { registerExtensionCommand, type ExtensionSubcommand } from "pi-cosmic-core/host-command";
 import { type JsonObject } from "pi-cosmic-core/platform/json-document";
 import type { WriterWorkspaceInspection } from "../run/workspace-control.ts";
-import type { WriterWorkspaceMode } from "../config/schema.ts";
+import type { SessionHost, WriterWorkspaceMode } from "../config/schema.ts";
 import type {
   SubagentCopyProfileSetPatch,
   SubagentCreateProfileSetFromSnapshotPatch,
@@ -62,6 +62,9 @@ export interface SubagentCommandActions {
   readonly inspectWriterWorkspace: () => Promise<WriterWorkspaceInspection>;
   readonly runDoctor: (ctx: ExtensionCommandContext) => Promise<ReadonlyArray<DoctorCheck>>;
   readonly setWriterWorkspaceMode: (mode: WriterWorkspaceMode) => Promise<void>;
+  /** Where new subagents' Pi sessions run now. */
+  readonly sessionHost: () => SessionHost;
+  readonly setSessionHost: (host: SessionHost) => Promise<void>;
   readonly patchSessionProfile: (patch: SessionProfilePatch) => Promise<SessionProfileSnapshot>;
   readonly replaceSessionProfiles: (
     patch: SessionProfileSetPatch,

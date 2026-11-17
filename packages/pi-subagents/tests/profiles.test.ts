@@ -79,6 +79,7 @@ const loadedConfigStore = (config: ResolvedSubagentConfig): SubagentConfigStoreC
   return {
     load: () => Effect.succeed(config),
     inspect: unexpectedStoreCall,
+    patchSessionHost: unexpectedStoreCall,
     patchProfile: unexpectedStoreCall,
     restoreProfileDeclaration: unexpectedStoreCall,
     patchDefaultProfileSet: unexpectedStoreCall,

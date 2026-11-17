@@ -12,6 +12,7 @@
 - `delegation/` owns each delegation mode's prompt guidance, applied to the root session through `boundary/host-delegation-prompt.ts`.
 - `application/messages.ts` owns message renderers and who writes each custom message type the model reads; the root (`extension.ts`) and each child (`boundary/host-child.ts`) register its [origin markers](docs/completion-delivery.md#framing-and-authority) once.
 - `tools/` owns public contracts, execution, and compact presentation. `settings/` owns commands and editors. `ui/` and settings rendering consume immutable projections, and Activity actions recheck activation, revision, and action availability before reaching services.
+- `boundary/rex-session-host.ts`, `rex-relay.mjs`, and `host-child-rex.ts` host a run's Pi as an interactive session in a Rex block when the [setting](docs/local-backends.md#rex-hosted-sessions) asks for it; the backend and everything above it are the same for both kinds of child.
 - `boundary/host-session-view.ts` opens a run's [session view](docs/completion-delivery.md#session-view) in the root's own Pi. `run/transcript.ts` shows it the conversation; `ui/session-transcript.ts` and `ui/session-view.ts` hold only rows, input, and scroll state.
 
 ## Lifecycle
@@ -51,7 +52,7 @@ Runs belong to one live root session, which owns their processes, authority, rep
 - **Watchdog reviewer.** Stall detection and the parent's own review supervise runs; a second reviewer would split the parent's authority.
 - **Agent memory.** Profiles and [custom agents](docs/routing.md#custom-agents) route to a model; the parent writes each assignment, and runs carry no memory between sessions.
 - **Lazy tool loader.** Tools register with the activation, and children receive the root's active tools at launch.
-- **Pane inspectors.** The root's Activity view shows every run's details and recent activity from one projection, and its session view shows one run's conversation; neither attaches a second process or terminal to a run.
+- **Pane inspectors.** The root's Activity view shows every run's details and recent activity from one projection, and its session view shows one run's conversation; neither attaches a second process or terminal to a run. A Rex-hosted run's pane is that run's own Pi, shown or hidden, never a second view of it.
 - **Cross-session messaging.** It belongs to [pi-intercom](../pi-intercom/ARCHITECTURE.md); pi-subagents never reaches another root.
 - **Workflow scripts.** Orchestration is the parent agent's job, optionally through native codemode scripts calling the ordinary tools.
 

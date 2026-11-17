@@ -13,6 +13,19 @@ describe("writer workspace configuration", () => {
   });
 });
 
+describe("session host configuration", () => {
+  it("defaults to headless, follows the trusted project, and reports a value it can't read", () => {
+    expect(resolve({ version: 6 }).sessionHost).toBe("headless");
+    const global = { version: 6, sessionHost: "rex" };
+    expect(resolve(global).sessionHost).toBe("rex");
+    expect(resolve(global, { version: 6, sessionHost: "headless" }).sessionHost).toBe("headless");
+    expect(resolve(global, { version: 6, sessionHost: "headless" }, false).sessionHost).toBe("rex");
+    const invalid = resolve({ version: 6, sessionHost: "tmux" });
+    expect(invalid.sessionHost).toBe("headless");
+    expect(invalid.diagnostics).toContain("global.sessionHost");
+  });
+});
+
 describe("nesting configuration", () => {
   it("merges each declared field over the scope below it", () => {
     const global = { version: 6, nesting: { maxDepth: 5 } };

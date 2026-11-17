@@ -160,6 +160,8 @@ export const normalizeParentContact = (
       };
     case "proxy_cancel":
       return { type: "proxy_cancel", requestId: contact.requestId };
+    case "user_input":
+      return { type: "user_input", assignmentEpoch, text: contact.text };
   }
   return Fn.absurd(contact);
 };

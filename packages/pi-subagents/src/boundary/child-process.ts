@@ -43,6 +43,7 @@ import {
 import { nodeErrorCode } from "pi-cosmic-core/platform/errors";
 import { recordPrivateStateOwner, SUBAGENT_STATE_ROOT } from "./private-state.ts";
 import { attachLocalPiParentIpc } from "./local-pi-ipc.ts";
+import type { RexSessionHost } from "./rex-session-host.ts";
 import {
   type LocalPiContact,
   type LocalPiParentControl,
@@ -304,6 +305,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   runDir: string,
   request: ChildLaunchRequest,
   runtime?: ProcessTransportRuntime,
+  rexHost?: RexSessionHost,
 ) {
   yield* createRunDirectory(runDir);
   yield* recordPrivateStateOwner(runDir).pipe(
@@ -320,9 +322,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
 
   const cliEntry = nodePath.join(getPackageDir(), "dist", "bundle", "cli.js");
   const toolPolicy = childToolPolicy(request.activeTools, request.writeIntent);
-  const cliArgs = [
-    "--mode",
-    "rpc",
+  const sessionArgs = [
     "--model",
     request.model,
     "--thinking",
@@ -345,7 +345,12 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         ? ["--session", sessionFile]
         : ["--session-dir", runDir]),
   ];
-  const args = [cliEntry, ...cliArgs];
+  // A Rex-hosted run starts its launcher in Pi's place, which starts the same Pi interactively
+  // in a Rex block; a headless one is Pi itself, speaking RPC.
+  const hosted = rexHost?.launch(request, [process.execPath, cliEntry, ...sessionArgs]);
+  const args = hosted ? [...hosted.args] : [cliEntry, "--mode", "rpc", ...sessionArgs];
+  if (hosted && rexHost)
+    yield* Effect.addFinalizer(() => Effect.sync(() => rexHost.released(request.runId)));
   const { attachment: ipc, ...transport } = yield* acquireProcessTransport(
     {
       spawn: (spawn) =>
@@ -357,9 +362,20 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         }),
       label: "Subagent RPC",
       error: processError,
-      message: (value): ChildWireEvent => ({ type: "rpc_message", value }),
-      confirmDetachedDescendants: request.writeIntent === "writer",
-      requestAbort: requestCooperativeAbort,
+      message: (value): ChildWireEvent => {
+        if (hosted) rexHost?.observe(request.runId, value);
+        return { type: "rpc_message", value };
+      },
+      // A hosted run's commands run under Rex, outside this process tree; its launcher's exit
+      // attests only that its Pi is gone.
+      confirmDetachedDescendants: !hosted && request.writeIntent === "writer",
+      requestAbort: (send) => {
+        // A session whose pane is open outlives its run's backend, parked on the root's socket.
+        const park = hosted ? rexHost?.parkTarget(request.runId) : undefined;
+        return park
+          ? send({ type: "pi_subagents_park", ...park }).pipe(Effect.ignore)
+          : requestCooperativeAbort(send);
+      },
       attach: (child, offer) =>
         attachLocalPiParentIpc(child, {
           onContact: (contact) =>
@@ -382,6 +398,8 @@ export class ChildProcess extends Context.Service<ChildProcess, ChildProcessCont
     options: {
       readonly agentDirectory?: string;
       readonly transportRuntime?: ProcessTransportRuntime;
+      /** Hosts runs as interactive Pi sessions in Rex blocks while its setting is on. */
+      readonly rexHost?: RexSessionHost | undefined;
     } = {},
   ) => {
     const agentDirectory = options.agentDirectory ?? getAgentDir();
@@ -390,7 +408,8 @@ export class ChildProcess extends Context.Service<ChildProcess, ChildProcessCont
       return {
         // Left interruptible: the run record's reclaim owns the run directory whatever the spawn
         // outcome, and the transport masks only its own spawn-to-finalizer handoff.
-        spawn: (request) => acquireChild(runDirectory(request), request, options.transportRuntime),
+        spawn: (request) =>
+          acquireChild(runDirectory(request), request, options.transportRuntime, options.rexHost),
         reclaimRunState: (request) => reclaimChildRunState(runDirectory(request)),
       };
     });

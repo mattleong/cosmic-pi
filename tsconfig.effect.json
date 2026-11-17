@@ -189,6 +189,27 @@
             }
           },
           {
+            "include": [
+              "**/packages/pi-subagents/src/boundary/rex-relay.mjs",
+              "**/packages/pi-subagents/src/boundary/rex-session-frames.mjs",
+              "**/packages/pi-subagents/tests/fixtures/fake-rex.ts",
+              "**/packages/pi-subagents/tests/fixtures/fake-rex-child.ts"
+            ],
+            "options": {
+              "diagnosticSeverity": {
+                "globalDate": "off",
+                "globalTimers": "off",
+                "newPromise": "off",
+                "nodeBuiltinImport": "off",
+                "preferEffectArray": "off",
+                "preferEffectRecord": "off",
+                "preferEffectString": "off",
+                "preferSchemaOverJson": "off",
+                "processEnv": "off"
+              }
+            }
+          },
+          {
             "include": ["**/packages/pi-cosmic-core/src/platform/node-builtins.ts"],
             "options": {
               "diagnosticSeverity": {

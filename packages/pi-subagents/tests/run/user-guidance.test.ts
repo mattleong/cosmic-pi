@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import * as TestClock from "effect/testing/TestClock";
@@ -47,6 +48,30 @@ describe("what the user told a run directly", () => {
       expect(formatRunBlock(completionBlock(second.runs[0]!))).toContain(
         "The user messaged this agent directly: Now document it.",
       );
+    });
+  });
+
+  it.effect("counts what the user typed into the run's own session", () => {
+    const { fake, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request());
+      fake.controls[0]!.offerIpc({
+        channel: "pi-subagents",
+        type: "user_input",
+        text: "Look at the tests first.",
+      });
+      yield* yieldUntil(() => fake.controls[0] !== undefined);
+      let guided = yield* runView(service, run.id);
+      for (let attempt = 0; attempt < 50 && !guided.userGuidance; attempt += 1) {
+        yield* Effect.yieldNow;
+        guided = yield* runView(service, run.id);
+      }
+      expect(guided.userGuidance).toEqual({ count: 1, latest: "Look at the tests first." });
+      expect(guided.sessionEvents.at(-1)).toMatchObject({
+        type: "notice",
+        kind: "parent",
+        text: "Guidance: Look at the tests first.",
+      });
     });
   });
 

@@ -64,7 +64,7 @@ rex capture -s "$REX_SESSION" -b "$block" --format=html > screen.html   # with c
 
 ### Action keys
 
-- Each action has exactly one key. Use its letter wherever one exists: `o` Open, `x` Stop, `i` Interrupt, `m` Message, `e` Rename, `c` Clear.
+- Each action has exactly one key. Use its letter wherever one exists: `o` Open, `p` Pane, `x` Stop, `i` Interrupt, `m` Message, `e` Rename, `c` Clear.
 - An action list shows that same key, `[x] Stop`, and the hint bar names the same key, `x Stop`. Never offer the same action under a letter in one place and a digit in another.
 - An action reads the same on every row: `[x] Stop` on a parent and on its child, never `Stop agent` on one and `Stop` on another. The pane and the confirmation already name the item. Producers supply the label; Activity shows it as given.
 - A confirmation names the item and what else the action affects, such as `Stop "Review authentication" and its 5 subagents?`. Never write `this agent`.

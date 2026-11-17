@@ -14,6 +14,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step, or reviews and tests before applying. Proposals can also be revised onto the parent's current files.
 - **Workflow templates:** `/parallel-review`, `/review-loop`, and `/gather-context` prompt templates for common delegation patterns.
 - **Live view:** a run tree above the editor and the shared Activity manager, where you can also rename runs.
+- **Subagents as real Pi sessions:** inside Rex, `/subagents settings sessionHost rex` runs each subagent as an interactive Pi in a hidden Rex pane. `p` in Activity opens it beside your session, focused, and hides it again; an open pane stays after its run reports, and typing into it resumes the run. Closing the pane in Rex ends the subagent unless Rex is told to hide it instead; see [Rex panes](#rex-panes).
 - **Open a subagent's session:** in Activity, `o` opens the selected run's conversation in place of yours, drawn as Pi draws its own, with its working status and footer. Type to message it, answer its question, or resume it once it has finished; `Esc` interrupts it while it works and otherwise returns to Activity, as `C-d` always does with an empty editor. Its parent is told what you said along with the run's next report.
 
 ## Install
@@ -56,8 +57,37 @@ Read-only subagents don't get Pi's `edit` and `write` tools and are told not to 
 | --------------------- | ----------------------------------------------------------- |
 | `/subagents`          | Open subagents in the Activity manager                      |
 | `/subagents profiles` | Choose models and fallbacks for each profile                |
-| `/subagents settings` | Delegation, nesting limits, writer workspace                |
+| `/subagents settings` | Delegation, nesting limits, writer workspace, session host  |
 | `/subagents doctor`   | Check Pi, configuration, and each profile's route readiness |
+
+### Rex panes
+
+Rex's close ends whatever a pane runs, and a hosted subagent's pane runs the subagent. Each such pane is labelled `subagent: <name>`, so a Rex action can hide it where it would close any other pane. In `~/.config/rex/init.lua`:
+
+```lua
+local SUBAGENT_LABEL = "subagent: "
+rex.action({
+  name = "close_pane_or_hide_subagent",
+  title = "Close Pane (Hide a Subagent's)",
+  run = function(ctx)
+    local view = rex.session.view({ session_id = ctx.session_id })
+    for _, window in ipairs((view and view.windows) or {}) do
+      for _, layer in ipairs(window.layers or {}) do
+        for _, block in ipairs(layer.blocks or {}) do
+          if block.block_id == ctx.block_id and (block.label or ""):sub(1, #SUBAGENT_LABEL) == SUBAGENT_LABEL then
+            rex.call("session.detach_block", { session_id = ctx.session_id, block_id = ctx.block_id })
+            return
+          end
+        end
+      end
+    end
+    rex.client.queue("client.close")
+  end,
+})
+rex.bind("ctrl+b>x", "close_pane_or_hide_subagent")
+```
+
+A hidden subagent keeps running, and Activity's `p` shows it again. Inside the pane, `/hide` and Pi's exit key on an empty editor (`ctrl+d`) hide it too, where they would otherwise end the subagent.
 
 ### Prompt templates
 
@@ -133,6 +163,7 @@ Most people configure routes in `/subagents profiles`. Saved settings live in `~
   "nesting": { "maxDirectChildren": 12, "maxDepth": 3 },
   "writerWorkspaceMode": "shared-checkout",
   "delegation": "normal",
+  "sessionHost": "headless",
   "hooks": {
     "WorktreeCreate": [{ "command": ["pnpm", "install", "--offline", "--frozen-lockfile"] }]
   }

@@ -36,7 +36,9 @@ import {
   SUBAGENT_CONFIG_BASENAME,
   SUBAGENT_CONFIG_VERSION,
   type DelegationMode,
+  type SessionHost,
   isDelegationMode,
+  isSessionHost,
   type SubagentNestingOverrides,
   type WriterWorkspaceMode,
   isWriterWorkspaceMode,
@@ -117,6 +119,10 @@ interface SubagentWriterWorkspacePatch extends SubagentConfigPatchBase {
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
 }
 
+interface SubagentSessionHostPatch extends SubagentConfigPatchBase {
+  readonly sessionHost?: SessionHost | undefined;
+}
+
 export interface SubagentDelegationPatch extends SubagentConfigPatchBase {
   readonly delegation?: DelegationMode | undefined;
 }
@@ -146,6 +152,7 @@ export interface SubagentConfigStoreContract {
   readonly patchWriterWorkspace: ConfigPatch<SubagentWriterWorkspacePatch>;
   readonly patchNesting: ConfigPatch<SubagentNestingPatch>;
   readonly patchDelegation: ConfigPatch<SubagentDelegationPatch>;
+  readonly patchSessionHost: ConfigPatch<SubagentSessionHostPatch>;
 }
 
 export class SubagentConfigStore extends Context.Service<
@@ -406,6 +413,15 @@ const applyWriterWorkspacePatch: ApplyPatch<SubagentWriterWorkspacePatch> = Effe
   },
 );
 
+const applySessionHostPatch: ApplyPatch<SubagentSessionHostPatch> = Effect.fnUntraced(
+  function* (current, patch, path) {
+    const host = patch.sessionHost;
+    if (host !== undefined && !isSessionHost(host))
+      return yield* mutationError(path, "Invalid session host.");
+    return withEntry(current, "sessionHost", host);
+  },
+);
+
 const applyDelegationPatch: ApplyPatch<SubagentDelegationPatch> = Effect.fnUntraced(
   function* (current, patch, path) {
     const mode = patch.delegation;
@@ -513,6 +529,7 @@ export const subagentConfigStoreLayer = Layer.effect(
       patchWriterWorkspace: patchVoid(applyWriterWorkspacePatch),
       patchNesting: patchVoid(applyNestingPatch),
       patchDelegation: patchVoid(applyDelegationPatch),
+      patchSessionHost: patchVoid(applySessionHostPatch),
     });
   }),
 );

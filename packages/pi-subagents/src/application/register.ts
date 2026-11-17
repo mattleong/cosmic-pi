@@ -47,6 +47,7 @@ import { subagentSessionFooter } from "../boundary/host-session-footer.ts";
 import { restoreSessionUsage, sessionUsageRecorder } from "../boundary/host-session-usage.ts";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
 import { openSubagentSessionView } from "../boundary/host-session-view.ts";
+import { rexSessionHost } from "../boundary/rex-session-host.ts";
 import { registerSubagentErrorReceipts } from "../boundary/host-tool-result.ts";
 import { registerUserInputSignal } from "../boundary/host-user-input.ts";
 import { subagentProjectionBridge } from "../boundary/host-ui.ts";
@@ -57,7 +58,7 @@ import {
   type SubagentRuntimeError,
 } from "../layer.ts";
 import type { SubagentProjection } from "../run/model.ts";
-import { InvalidSubagentRequestError } from "../run/errors.ts";
+import { InvalidSubagentRequestError, userFailureText } from "../run/errors.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
 import { SubagentService, type SubagentServiceContract } from "../run/service.ts";
 import {
@@ -189,6 +190,22 @@ export function registerSubagentApplication(
   const receipts = registerSubagentErrorReceipts(pi);
   const userInput = registerUserInputSignal(pi);
   const bridge = subagentProjectionBridge(pi.events);
+  // One per root Pi: hosted sessions and their panes outlive a runtime replaced by /tree.
+  const rexHost = rexSessionHost({
+    onResume: (runId, text) => {
+      slot
+        .run(
+          SubagentService.use((service) => service.resume(runId, text)).pipe(
+            Effect.asVoid,
+            // The words were typed into the session's own pane, so the reason is shown there.
+            Effect.catch((error) =>
+              Effect.sync(() => rexHost.notify(runId, userFailureText(error))),
+            ),
+          ),
+        )
+        .catch(() => rexHost.notify(runId, "This subagent can't be resumed right now"));
+    },
+  });
   const profileOverrideHandoff = createProfileOverrideHandoff();
   const sessionFooter = subagentSessionFooter(pi.events);
   let releaseActivity: (() => void) | undefined;
@@ -223,6 +240,8 @@ export function registerSubagentApplication(
     if (currentActivation && session) sessionFooter.show(currentActivation.ctx, session);
   };
   const detachActivation = (keepTools: boolean): void => {
+    // The runtime that owned these runs is ending, so none of their sessions waits behind it.
+    rexHost.setParking(false);
     receipts.deactivate();
     releaseActivity?.();
     releaseActivity = undefined;
@@ -267,6 +286,7 @@ export function registerSubagentApplication(
         const sessionBaseConfig = profileOverrideHandoff.captureBaseConfig();
         let worktreeSeen = false;
         const layer = subagentApplicationLayer({
+          rexHost,
           sessionKey: activation.sessionKey,
           sweepPrivateState: activation.trigger === "start",
           cwd: activation.cwd,
@@ -449,6 +469,15 @@ export function registerSubagentApplication(
         );
         startupFailureTools = [];
         const isCurrent = () => slot.isCurrent(token) && currentActivation === activation;
+        rexHost.setParking(true);
+        // A new or reloaded session takes the saved choice; /tree keeps the session's own.
+        if (activation.trigger !== "tree")
+          run(SubagentProfileService.use((profiles) => profiles.capture))
+            .then(({ baseConfig }) => {
+              if (isCurrent()) rexHost.setEnabled(baseConfig.sessionHost === "rex");
+              return undefined;
+            })
+            .catch(() => undefined);
         // Once per session start, in the background; the notice reaches only the user. Worktrees
         // the sweep keeps from ended sessions need agent_worktree to adopt or discard them.
         if (activation.trigger === "start")
@@ -484,6 +513,11 @@ export function registerSubagentApplication(
                 ),
                 signal,
               ),
+            panes: {
+              state: rexHost.pane,
+              toggle: rexHost.togglePane,
+              subscribe: rexHost.subscribe,
+            },
             open: (runId, signal) =>
               slot
                 .run(
@@ -522,6 +556,7 @@ export function registerSubagentApplication(
     });
 
   registerApplicationCommands(pi, {
+    rexHost,
     run: slot.run,
     current: () => currentActivation,
     captureAuthority: slot.captureAuthority,
@@ -619,8 +654,8 @@ export function registerSubagentApplication(
 
   pi.on("session_shutdown", (event, ctx) => {
     wake.hold();
-    return retireActivation(ctx, event.reason === "reload" ? "reload" : "session").then(() =>
-      shutdownSession(event, ctx),
-    );
+    return retireActivation(ctx, event.reason === "reload" ? "reload" : "session")
+      .then(() => shutdownSession(event, ctx))
+      .finally(() => rexHost.close());
   });
 }

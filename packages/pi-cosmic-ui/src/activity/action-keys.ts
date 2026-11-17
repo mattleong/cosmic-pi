@@ -8,6 +8,7 @@ export const ACTIVITY_ACTION_PAGE_SIZE = 9;
 
 const ACTIVITY_ACTION_KEYS: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ["o", ["open"]],
+  ["p", ["pane"]],
   ["x", ["stop"]],
   ["i", ["interrupt"]],
   ["u", ["resume"]],

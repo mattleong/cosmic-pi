@@ -142,8 +142,13 @@ const ProxyQuestionnaireShownSchema = piSubagentsMessage("proxy_questionnaire_sh
 const TurnInputBarrierSchema = piSubagentsMessage("turn_input_barrier", {
   requestId: ProtocolIdSchema,
 });
+/** What the user typed into the child's own session, where a Rex-hosted child shows one. */
+const UserInputSchema = piSubagentsMessage("user_input", {
+  text: Schema.String.check(Schema.isMaxLength(MAX_PARENT_MESSAGE_CHARS)),
+});
 const LocalPiContactSchema = Schema.Union([
   ContactParentSchema,
+  UserInputSchema,
   ContactCancelSchema,
   ParentReplyAckSchema,
   ProxyRequestSchema,
@@ -322,4 +327,11 @@ type CorrelatedRpcCommand =
 
 export type RpcCommand =
   | CorrelatedRpcCommand
+  /** For a Rex-hosted run's launcher: leave the session alive, waiting on the root's socket. */
+  | {
+      readonly type: "pi_subagents_park";
+      readonly id?: string | undefined;
+      readonly socket: string;
+      readonly token: string;
+    }
   | { readonly type: "extension_ui_response"; readonly id: string; readonly cancelled: true };

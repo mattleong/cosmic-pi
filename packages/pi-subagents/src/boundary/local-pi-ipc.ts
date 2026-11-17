@@ -126,7 +126,9 @@ export interface LocalPiChildIpcChannel {
   readonly listen: (handlers: LocalPiChildIpcHandlers) => () => void;
 }
 
-const localPiChildIpcChannel = (port: LocalPiIpcPort<LocalPiContact>): LocalPiChildIpcChannel => ({
+export const localPiChildIpcChannel = (
+  port: LocalPiIpcPort<LocalPiContact>,
+): LocalPiChildIpcChannel => ({
   sendContact: (contact) =>
     boundedSend(
       port,

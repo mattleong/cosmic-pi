@@ -46,6 +46,15 @@ export const DEFAULT_DELEGATION_MODE: DelegationMode = "normal";
 export const DelegationModeSchema = Schema.Literals(DELEGATION_MODES);
 export const isDelegationMode = Schema.is(DelegationModeSchema);
 
+/**
+ * Where a subagent's Pi runs: `headless`, driven over RPC, or `rex`, as an interactive session in
+ * a Rex block that stays hidden until its pane is opened. Rex hosting applies only inside Rex.
+ */
+export const SESSION_HOSTS = ["headless", "rex"] as const;
+export type SessionHost = (typeof SESSION_HOSTS)[number];
+export const DEFAULT_SESSION_HOST: SessionHost = "headless";
+export const isSessionHost = Schema.is(Schema.Literals(SESSION_HOSTS));
+
 export const WORKTREE_HOOK_EVENTS = ["WorktreeCreate", "WorktreeRemove"] as const;
 export type WorktreeHookEvent = (typeof WORKTREE_HOOK_EVENTS)[number];
 const MAX_WORKTREE_HOOKS_PER_EVENT = 16;
@@ -107,6 +116,7 @@ interface SubagentConfigFile {
   readonly nesting?: SubagentNestingOverrides | undefined;
   readonly writerWorkspaceMode?: WriterWorkspaceMode | undefined;
   readonly delegation?: DelegationMode | undefined;
+  readonly sessionHost?: SessionHost | undefined;
   readonly hooks?: WorktreeHooks | undefined;
   readonly agents?: Readonly<Record<string, CustomAgentDefinition>> | undefined;
 }
@@ -456,6 +466,7 @@ const ROOT_KEYS: ReadonlySet<string> = new Set([
   "nesting",
   "writerWorkspaceMode",
   "delegation",
+  "sessionHost",
   "hooks",
   "agents",
 ]);
@@ -613,6 +624,9 @@ const decodeCurrentBody = (
   const delegation = isDelegationMode(root.delegation) ? root.delegation : undefined;
   if (delegation === undefined && Rec.has(root, "delegation"))
     diagnostics.push(`${scope}.delegation`);
+  const sessionHost = isSessionHost(root.sessionHost) ? root.sessionHost : undefined;
+  if (sessionHost === undefined && Rec.has(root, "sessionHost"))
+    diagnostics.push(`${scope}.sessionHost`);
   const hooks = Rec.has(root, "hooks")
     ? decodeWorktreeHooks(root.hooks, `${scope}.hooks`, diagnostics)
     : undefined;
@@ -637,6 +651,7 @@ const decodeCurrentBody = (
       ...(nesting !== undefined && { nesting }),
       ...(writerWorkspaceMode !== undefined && { writerWorkspaceMode }),
       ...(delegation !== undefined && { delegation }),
+      ...(sessionHost !== undefined && { sessionHost }),
       ...(hooks?.hooks !== undefined && { hooks: hooks.hooks }),
       ...(agents && Rec.size(agents.agents) > 0 && { agents: agents.agents }),
     },

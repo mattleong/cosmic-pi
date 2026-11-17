@@ -2,6 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import * as Effect from "effect/Effect";
 import { isProjectTrusted } from "pi-cosmic-core/host-session";
 import { discoverActivityView } from "pi-cosmic-ui/activity/view";
+import type { RexSessionHost } from "../boundary/rex-session-host.ts";
 import { SubagentConfigStore, type SubagentConfigStoreContract } from "../config/store.ts";
 import type { SubagentApplication } from "../layer.ts";
 import { SubagentProfileService } from "../profiles/service.ts";
@@ -24,6 +25,7 @@ interface ApplicationCommandHost {
     signal?: AbortSignal,
   ) => Promise<A>;
   readonly current: () => CommandActivation | undefined;
+  readonly rexHost: Pick<RexSessionHost, "isEnabled" | "setEnabled">;
   readonly isActive: () => boolean;
   readonly captureAuthority: () => () => boolean;
 }
@@ -158,6 +160,33 @@ export function registerApplicationCommands(pi: ExtensionAPI, host: ApplicationC
                   Effect.andThen(profiles.recordWriterWorkspaceMode(mode)),
                 ),
             );
+          }),
+        );
+      }),
+    sessionHost: () => (host.rexHost.isEnabled() ? "rex" : "headless"),
+    setSessionHost: (mode) =>
+      withCurrentActivation((activation) => {
+        const projectTrusted = isProjectTrusted(activation.ctx);
+        return run(
+          Effect.gen(function* () {
+            const store = yield* SubagentConfigStore;
+            const inspection = yield* store.inspect(
+              activation.cwd,
+              activation.agentDirectory,
+              projectTrusted,
+            );
+            const scope = projectTrusted ? "project" : "global";
+            const document =
+              scope === "project" ? inspection.projectDocument : inspection.globalDocument;
+            yield* store.patchSessionHost(activation.cwd, activation.agentDirectory, {
+              scope,
+              expectedExists: document !== undefined,
+              expectedDocument: document,
+              projectTrusted,
+              sessionHost: mode,
+            });
+            // Later launches follow the choice at once; running subagents stay where they are.
+            host.rexHost.setEnabled(mode === "rex");
           }),
         );
       }),

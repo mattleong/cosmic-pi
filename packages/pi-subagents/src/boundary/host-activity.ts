@@ -1,4 +1,9 @@
-import { registerRevisionedActivityProvider, type ActivityEvents } from "pi-cosmic-ui/activity";
+import {
+  registerRevisionedActivityProvider,
+  type ActivityEvents,
+  type ActivityItem,
+} from "pi-cosmic-ui/activity";
+import type { RexPaneState } from "./rex-session-host.ts";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
@@ -23,6 +28,27 @@ import {
   subagentActivityItems,
 } from "../ui/run-activity.ts";
 import { findOrUndefined } from "pi-cosmic-core/array";
+
+/** A hosted run's Rex pane, as Activity offers it: shown beside the root's, or hidden again. */
+export interface SubagentPanes {
+  readonly state: (runId: string) => RexPaneState | undefined;
+  readonly toggle: (runId: string) => boolean;
+  readonly subscribe: (listener: () => void) => () => void;
+}
+
+// One action for both directions: the user also hides panes in Rex itself, so what the pane is
+// now is Rex's to say when the key is pressed, not this row's to promise.
+const PANE_ACTION = Object.freeze({ id: "pane", label: "Pane", handoff: true });
+
+/** `item` with its pane's action; the revision says the action is there. */
+const withPaneAction = (item: ActivityItem, pane: RexPaneState | undefined): ActivityItem =>
+  pane === undefined
+    ? item
+    : Object.freeze({
+        ...item,
+        actions: Object.freeze([...(item.actions ?? []), PANE_ACTION]),
+        revision: `${item.revision}:pane`,
+      });
 
 const SubagentActivityInputSchema = Schema.Literals(["resume", "message", "reply", "rename"]);
 type SubagentActivityInput = typeof SubagentActivityInputSchema.Type;
@@ -127,6 +153,8 @@ export function registerSubagentActivity(options: {
   ) => Promise<void>;
   /** Shows the run's session until the user leaves it; absent where there is no screen for it. */
   readonly open?: (id: string, signal: AbortSignal) => Promise<void>;
+  /** The Rex panes of hosted runs; absent where no run is hosted. */
+  readonly panes?: SubagentPanes | undefined;
 }): () => void {
   let disposed = false;
   const dispose = registerRevisionedActivityProvider(options.events, {
@@ -134,7 +162,10 @@ export function registerSubagentActivity(options: {
     providerId: SUBAGENT_ACTIVITY_PROVIDER,
     isCurrent: options.isCurrent,
     items: () =>
-      subagentActivityItems(options.bridge.get(), options.bridge.getActivityPresentation()),
+      Arr.map(
+        subagentActivityItems(options.bridge.get(), options.bridge.getActivityPresentation()),
+        (item) => withPaneAction(item, options.panes?.state(item.id)),
+      ),
     starting: () =>
       Arr.reduce(
         options.bridge.getActivityPresentation().starts,
@@ -148,6 +179,11 @@ export function registerSubagentActivity(options: {
       const expected = captureSubagentControlExpectation(before);
       if (action === "stop" || action === "interrupt")
         return options.act(item.id, { action }, signal, expected);
+      if (action === PANE_ACTION.id) {
+        // Rex answers at once, and the pane it opens or hides is its own evidence.
+        if (!options.panes?.toggle(item.id)) throw new Error("Rex couldn't change that pane");
+        return Promise.resolve();
+      }
       if (action === "open") {
         if (!options.open || !offers(before, item.title, action))
           throw new Error("Subagent action is unavailable");
@@ -176,7 +212,11 @@ export function registerSubagentActivity(options: {
         return options.act(item.id, { action, input: value }, signal, expected);
       });
     },
-    subscriptions: [options.bridge.subscribe, options.bridge.subscribeActivityPresentation],
+    subscriptions: [
+      options.bridge.subscribe,
+      options.bridge.subscribeActivityPresentation,
+      ...(options.panes ? [options.panes.subscribe] : []),
+    ],
     onAvailability: (available, current) =>
       options.bridge.setActivityAvailable(current() && available),
   });

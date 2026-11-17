@@ -19,10 +19,12 @@ import {
 } from "../profiles/model.ts";
 import {
   DEFAULT_DELEGATION_MODE,
+  DEFAULT_SESSION_HOST,
   DEFAULT_SUBAGENT_NESTING_POLICY,
   DEFAULT_WRITER_WORKSPACE_MODE,
   mergeSubagentNesting,
   type DelegationMode,
+  type SessionHost,
   type WriterWorkspaceMode,
   type WorktreeHook,
   type WorktreeHookEvent,
@@ -57,6 +59,7 @@ export interface ResolvedSubagentConfig {
   readonly nesting: SubagentNestingPolicy;
   readonly writerWorkspaceMode: WriterWorkspaceMode;
   readonly delegation: DelegationMode;
+  readonly sessionHost: SessionHost;
   /** Untrusted project documents contribute none. */
   readonly hooks: ResolvedWorktreeHooks;
   readonly profiles: Readonly<Record<ProfileId, ProfileRoute>>;
@@ -200,7 +203,7 @@ const layeredPolicy = (
   global: DecodedSubagentConfig,
 ): Pick<
   ResolvedSubagentConfig,
-  "currentProfileSet" | "nesting" | "writerWorkspaceMode" | "delegation"
+  "currentProfileSet" | "nesting" | "writerWorkspaceMode" | "delegation" | "sessionHost"
 > => ({
   currentProfileSet: declaredSelection("project", project) ??
     declaredSelection("global", global) ?? { scope: "builtin" },
@@ -214,6 +217,7 @@ const layeredPolicy = (
     global.file.writerWorkspaceMode ??
     DEFAULT_WRITER_WORKSPACE_MODE,
   delegation: project?.file.delegation ?? global.file.delegation ?? DEFAULT_DELEGATION_MODE,
+  sessionHost: project?.file.sessionHost ?? global.file.sessionHost ?? DEFAULT_SESSION_HOST,
 });
 
 const agentLayer = (scope: NamedProfileSetScope, decoded: DecodedSubagentConfig) => ({

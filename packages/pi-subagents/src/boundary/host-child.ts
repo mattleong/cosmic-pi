@@ -1,3 +1,4 @@
+import { openRexChildSession } from "./host-child-rex.ts";
 import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -522,5 +523,10 @@ export function registerSubagentChildBridge(
 
 export default function subagentChildBridge(pi: ExtensionAPI): void {
   if (!isSubagentChildProcess()) return;
-  registerSubagentChildBridge(pi);
+  // A child Rex hosts is an interactive Pi: the same bridge, over its launcher's socket.
+  const rex = openRexChildSession(pi);
+  registerSubagentChildBridge(
+    pi,
+    rex ? { ...LIVE_CHILD_BRIDGE_BOUNDARIES, openIpc: () => rex.ipc } : undefined,
+  );
 }

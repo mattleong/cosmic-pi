@@ -6,6 +6,7 @@ import { SafeFile } from "pi-cosmic-core/platform/safe-file";
 import { localPiBackendDriver } from "./backend/local-pi.ts";
 import { SubagentBackendRegistry } from "./backend/service.ts";
 import { ChildProcess } from "./boundary/child-process.ts";
+import type { RexSessionHost } from "./boundary/rex-session-host.ts";
 import { sweepAbandonedPrivateState } from "./boundary/private-state.ts";
 import { pruneReportArchive, sessionReportArchive } from "./boundary/report-archive.ts";
 import { WriterLeaseService } from "./boundary/writer-lease.ts";
@@ -46,13 +47,17 @@ export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly agentMain?: SubagentServiceOptions["agentMain"];
   readonly proxyHandler: NonNullable<SubagentServiceOptions["proxyHandler"]>;
   readonly questionnaireHandler: NonNullable<SubagentServiceOptions["questionnaireHandler"]>;
+  /** Hosts runs as interactive Pi sessions in Rex blocks while its setting is on. */
+  readonly rexHost?: RexSessionHost | undefined;
 }
 
 export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
   const configStore = subagentConfigStoreLayer.pipe(Layer.provide(nodeFilePlatformLayer));
   const profiles = subagentProfileServiceLayer(options).pipe(Layer.provide(configStore));
   const directory = { agentDirectory: options.agentDirectory };
-  const backend = subagentBackendRegistryLayer.pipe(Layer.provide(ChildProcess.layer(directory)));
+  const backend = subagentBackendRegistryLayer.pipe(
+    Layer.provide(ChildProcess.layer({ ...directory, rexHost: options.rexHost })),
+  );
   const writerLeases = WriterLeaseService.layer(directory);
   const service = Layer.unwrap(
     Effect.gen(function* () {

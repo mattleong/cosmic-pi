@@ -11,6 +11,7 @@ import {
   type RunRecord,
   type StoredRunView,
 } from "./internal.ts";
+import { withUserGuidance } from "./model.ts";
 import type { RunNotificationDelivery } from "./notification-delivery.ts";
 import type { RunProxyExecution } from "./proxy-execution.ts";
 import type { RunSettlement } from "./settlement.ts";
@@ -256,6 +257,28 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
             ? { ...current, state: "running", question: undefined }
             : { ...current };
         });
+      // The user typed into the run's own session: its parent is told with the outcome, as for
+      // a message sent from the root.
+      case "user_input": {
+        const text = sanitizeDiagnosticContent(event.text, {
+          maximumLength: MAX_PARENT_MESSAGE_CHARS,
+        });
+        return mutateAt(record, event.assignmentEpoch, (current, now) =>
+          withUserGuidance(
+            {
+              ...current,
+              lastActivityAt: now,
+              sessionEvents: appendNoticeSessionEvent(
+                current.sessionEvents,
+                "parent",
+                `Guidance: ${text}`,
+                now,
+              ),
+            },
+            text,
+          ),
+        );
+      }
       case "warning": {
         const message = sanitizeDiagnosticText(event.message, MAX_ERROR_CHARS);
         return mutateAt(record, undefined, (current, now) => ({

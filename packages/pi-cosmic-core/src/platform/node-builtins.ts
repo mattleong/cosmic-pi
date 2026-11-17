@@ -1,5 +1,7 @@
 import * as NodeChildProcessModule from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as NodeFs from "node:fs";
+import * as NodeNet from "node:net";
 import * as NodeOs from "node:os";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
@@ -31,6 +33,11 @@ export const nodeLockFs = {
 export const nodeIsProxy = NodeUtil.types.isProxy;
 export const nodeDisplayHomeDirectory = () => NodeOs.homedir();
 export const nodeTemporaryRoot = () => NodeOs.tmpdir();
+
+/** Unix-socket ends for a boundary that speaks from Pi's synchronous callbacks, outside Effect. */
+export const nodeCreateConnection = NodeNet.createConnection;
+export const nodeCreateServer = NodeNet.createServer;
+export const NodeEventEmitter = EventEmitter;
 
 export const nodeSpawn = NodeChildProcessModule.spawn;
 export const nodeSpawnSync = NodeChildProcessModule.spawnSync;

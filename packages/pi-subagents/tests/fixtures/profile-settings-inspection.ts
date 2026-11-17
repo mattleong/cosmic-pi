@@ -66,6 +66,8 @@ export const subagentCommandActionsFixture = (
 ): SubagentCommandActions => {
   return {
     isAvailable: () => true,
+    sessionHost: () => "headless",
+    setSessionHost: unexpectedAction,
     captureAuthority: () => overrides.captureModelRefresh?.().isCurrent ?? (() => true),
     captureModelRefresh: () => ({
       isCurrent: () => true,

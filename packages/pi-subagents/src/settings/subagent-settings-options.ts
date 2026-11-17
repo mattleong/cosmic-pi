@@ -10,6 +10,7 @@ import {
   MIN_ACTIVE_RUNS,
   MAX_ACTIVE_RUNS,
   MIN_SUBAGENT_DEPTH,
+  SESSION_HOSTS,
   WRITER_WORKSPACE_MODES,
   type SubagentNestingOverrides,
 } from "../config/schema.ts";
@@ -18,6 +19,8 @@ export type NestingField = keyof SubagentNestingOverrides;
 
 export const WORKSPACE = "writerWorkspace";
 export const WORKSPACE_LABEL = "Writer workspace";
+export const SESSION_HOST = "sessionHost";
+export const SESSION_HOST_LABEL = "Subagent sessions";
 export const DELEGATION = "delegation";
 export const DELEGATION_LABEL = "Delegation";
 export const INHERIT = "inherit";
@@ -69,11 +72,14 @@ export const SCOPES = [
 
 /** Each setting's value in effect, as status's "In effect" section and help show it. */
 export type SubagentSettingValues = Readonly<
-  Record<typeof WORKSPACE | typeof DELEGATION | NestingField, string>
+  Record<typeof WORKSPACE | typeof SESSION_HOST | typeof DELEGATION | NestingField, string>
 >;
 
 export const WORKSPACE_DESCRIPTION =
   "Default for writers that don't set isolation. Saved for new sessions.";
+
+export const SESSION_HOST_DESCRIPTION =
+  "Where a subagent's Pi runs: headless, or as an interactive session in a hidden Rex pane you can open from Activity. Rex hosting needs Pi to run inside Rex. Saved for new sessions.";
 
 export const SUBAGENT_SETTING_DESCRIPTORS = [
   {
@@ -82,6 +88,13 @@ export const SUBAGENT_SETTING_DESCRIPTORS = [
     description: WORKSPACE_DESCRIPTION,
     values: [...WRITER_WORKSPACE_MODES],
     currentValue: (values: SubagentSettingValues) => values[WORKSPACE],
+  },
+  {
+    id: SESSION_HOST,
+    label: SESSION_HOST_LABEL,
+    description: SESSION_HOST_DESCRIPTION,
+    values: [...SESSION_HOSTS],
+    currentValue: (values: SubagentSettingValues) => values[SESSION_HOST],
   },
   {
     id: DELEGATION,

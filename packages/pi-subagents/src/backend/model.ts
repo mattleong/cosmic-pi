@@ -116,6 +116,8 @@ export type BackendEvent =
       readonly assignmentEpoch: number;
       readonly requestId: string;
     }
+  /** The user typed into the child's own session, which only a Rex-hosted child shows. */
+  | { readonly type: "user_input"; readonly assignmentEpoch: number; readonly text: string }
   | {
       readonly type: "warning";
       readonly message: string;

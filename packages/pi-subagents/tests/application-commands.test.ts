@@ -54,6 +54,28 @@ describe("application settings commands", () => {
     },
   );
 
+  effectTest("a session host change is saved and shown as the value in effect", function* () {
+    const { agentDirectory, notify, emit, command } = yield* commandFixture(() => false);
+    yield* emit("session_start");
+    yield* command("settings sessionHost rex");
+    const saved: unknown = JSON.parse(
+      yield* step(() =>
+        nodeFsPromises.readFile(nodePath.join(agentDirectory, "pi-subagents.json"), "utf8"),
+      ),
+    );
+    expect(saved).toMatchObject({ sessionHost: "rex" });
+    notify.mockClear();
+    yield* command("settings status");
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringMatching(/\(sessionHost\): rex/u),
+      expect.anything(),
+    );
+    notify.mockClear();
+    yield* command("settings sessionHost tmux");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("sessionHost"), "warning");
+    yield* emit("session_shutdown");
+  });
+
   effectTest("a writer workspace change made mid-session survives /tree", function* () {
     const { notify, emit, command } = yield* commandFixture(() => false);
     yield* emit("session_start");

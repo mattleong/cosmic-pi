@@ -10,6 +10,9 @@ import {
   SUBAGENT_SETTING_DESCRIPTORS,
   SUBAGENT_SETTINGS_COMMAND,
   WORKSPACE,
+  SESSION_HOST,
+  SESSION_HOST_DESCRIPTION,
+  SESSION_HOST_LABEL,
   WORKSPACE_DESCRIPTION,
   WORKSPACE_LABEL,
   type NestingField,
@@ -45,6 +48,9 @@ import {
 import {
   DELEGATION_MODES,
   isDelegationMode,
+  isSessionHost,
+  SESSION_HOSTS,
+  type SessionHost,
   DEFAULT_DELEGATION_MODE,
   DEFAULT_MAX_ACTIVE_RUNS,
   DEFAULT_SUBAGENT_NESTING_POLICY,
@@ -251,10 +257,12 @@ const shownWorkspace = (value: string): string => {
 const inEffectValues = (
   workspace: WriterWorkspaceInspection,
   inspection: ProfileSettingsInspection,
+  sessionHost: SessionHost,
 ): SubagentSettingValues => {
   const effective = inspection.session.effectiveConfig;
   return {
     [WORKSPACE]: WRITER_WORKSPACE_LABELS[workspace.mode],
+    [SESSION_HOST]: sessionHost,
     [DELEGATION]: effective.delegation,
     maxDirectChildren: String(effective.nesting.maxDirectChildren),
     maxDepth: String(effective.nesting.maxDepth),
@@ -338,6 +346,18 @@ function subagentSettingsCommand(
         }),
     );
 
+  const applySessionHost = (value: string): Promise<SettingsResult> =>
+    current((stillCurrent) => {
+      if (!isSessionHost(value))
+        return Promise.resolve(
+          failed(`${SESSION_HOST} must be ${Arr.join(SESSION_HOSTS, " or ")}`),
+        );
+      if (actions.sessionHost() === value || !stillCurrent()) return Promise.resolve(succeeded);
+      return actions
+        .setSessionHost(value)
+        .then(() => succeeded, saveFailure("change where subagent sessions run"));
+    });
+
   const applyNesting = (
     ctx: ExtensionCommandContext,
     field: NestingField,
@@ -387,7 +407,7 @@ function subagentSettingsCommand(
     return Promise.all([actions.inspectWriterWorkspace(), actions.inspectProfiles(trusted)]).then(
       ([workspace, inspection]) => {
         const effective = inspection.session.effectiveConfig;
-        const inEffect = inEffectValues(workspace, inspection);
+        const inEffect = inEffectValues(workspace, inspection, actions.sessionHost());
         const row = (id: typeof DELEGATION | NestingField, value: string) => ({
           id,
           label: SCOPED_SETTING_LABELS[id],
@@ -401,6 +421,7 @@ function subagentSettingsCommand(
               title: "In effect",
               rows: [
                 { id: WORKSPACE, label: WORKSPACE_LABEL, value: inEffect[WORKSPACE] },
+                { id: SESSION_HOST, label: SESSION_HOST_LABEL, value: inEffect[SESSION_HOST] },
                 ...Arr.map(SCOPED_SETTING_IDS, (id) => row(id, inEffect[id])),
               ],
             },
@@ -429,7 +450,7 @@ function subagentSettingsCommand(
   const committed = new Map<string, string>();
   let opened: ProfileSettingsInspection | undefined;
   const rowId = (id: string, scope: string | undefined) =>
-    id === WORKSPACE ? id : `${settingScope(scope)}:${id}`;
+    id === WORKSPACE || id === SESSION_HOST ? id : `${settingScope(scope)}:${id}`;
 
   /** The value a scope inherits now: the project follows global's value as last saved. */
   const liveInherited = (
@@ -462,7 +483,7 @@ function subagentSettingsCommand(
     );
 
   const shownRowValue = (id: string, scope: string | undefined): string | undefined => {
-    if (id === WORKSPACE) return committed.get(WORKSPACE);
+    if (id === WORKSPACE || id === SESSION_HOST) return committed.get(id);
     if (opened === undefined || (id !== DELEGATION && !isNestingField(id))) return undefined;
     const from = settingScope(scope);
     const value = chosenValue(opened, from, id);
@@ -479,6 +500,7 @@ function subagentSettingsCommand(
         opened = inspection;
         committed.clear();
         committed.set(WORKSPACE, WRITER_WORKSPACE_LABELS[workspace.mode]);
+        committed.set(SESSION_HOST, actions.sessionHost());
         for (const scope of scopes)
           for (const id of SCOPED_SETTING_IDS)
             committed.set(rowId(id, scope), ownValue(inspection, scope, id));
@@ -491,6 +513,13 @@ function subagentSettingsCommand(
             values: Arr.map(WRITER_WORKSPACE_MODES, (mode) => WRITER_WORKSPACE_LABELS[mode]),
           },
         ];
+        const sessionHost: SettingItem = {
+          id: SESSION_HOST,
+          label: SESSION_HOST_LABEL,
+          description: SESSION_HOST_DESCRIPTION,
+          currentValue: actions.sessionHost(),
+          values: [...SESSION_HOSTS],
+        };
         // Each scope is one group row, so the list reads by scope instead of repeating it. Its
         // rows and summary derive on demand, so a global save shows in the project's inherited
         // values at once.
@@ -517,7 +546,7 @@ function subagentSettingsCommand(
             summary,
           };
         });
-        return session.picker([...items, ...groups]);
+        return session.picker([...items, ...groups, sessionHost]);
       },
     );
   };
@@ -530,6 +559,7 @@ function subagentSettingsCommand(
   ): Promise<SettingsResult> => {
     const value = inheritChoice(chosen);
     if (id === WORKSPACE) return applyWorkspace(value);
+    if (id === SESSION_HOST) return applySessionHost(value);
     if (id === DELEGATION) return applyDelegation(ctx, value, scope);
     if (!isNestingField(id)) return Promise.resolve(failed(`Unknown setting: ${id}`));
     return applyNesting(ctx, id, value, scope);
@@ -545,7 +575,7 @@ function subagentSettingsCommand(
           actions.inspectProfiles(isProjectTrusted(ctx)),
         ]).then(
           ([workspace, inspection]) => {
-            helpValues = inEffectValues(workspace, inspection);
+            helpValues = inEffectValues(workspace, inspection, actions.sessionHost());
             return undefined;
           },
           () => undefined,
@@ -569,6 +599,7 @@ function subagentSettingsCommand(
     notes: () => [
       `Delegation and nesting limits apply to the named scope, session by default. Session changes apply now; global and project changes after /reload, and project wins. ${INHERIT} clears a scope's own value.`,
       "The writer workspace default applies to later launches and new sessions and ignores the scope; running writers and existing workspaces keep their mode.",
+      "Subagent sessions apply to later launches and new sessions and ignore the scope; running subagents stay where they started.",
     ],
     scopes: SCOPES,
     scopeBlocked: (ctx, scope) =>
