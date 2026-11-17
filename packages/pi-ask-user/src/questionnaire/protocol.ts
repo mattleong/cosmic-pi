@@ -22,7 +22,6 @@ import {
 
 export type { AskUserRequest } from "./schema.ts";
 export const QUESTIONNAIRE_CAPABILITY_QUERY = "pi-ask-user:capability-query:v1";
-export const QUESTIONNAIRE_RELAY_QUERY = "pi-ask-user:relay-query:v1";
 export const QUESTIONNAIRE_ASKERS_QUERY = "pi-ask-user:askers-query:v1";
 export type QuestionnaireEvents = Pick<ExtensionAPI["events"], "on" | "emit">;
 const text = (max: number) => Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(max));
@@ -66,16 +65,6 @@ export interface QuestionnaireAskers {
   readonly sessionId: string;
   /** `askedBy` is the agent's ID or name, as the caller wrote it. */
   readonly find: (askedBy: string) => QuestionnaireAsker | undefined;
-}
-export interface QuestionnaireRelay {
-  readonly version: 1;
-  readonly sessionId: string;
-  /** Call `shown` once the root reports that the questionnaire opened on screen. */
-  readonly ask: (
-    request: AskUserRequest,
-    signal: AbortSignal,
-    shown?: () => void,
-  ) => Promise<AskUserOutcome>;
 }
 
 const questionFields = {
@@ -242,11 +231,6 @@ export const decodeQuestionnaireOutcome = Fn.flow(decodeUnknownOrUndefined(RawOu
 
 // Candidates come from other extensions: their callbacks are admitted only as callable, so
 // consumers invoke them through Effect.tryPromise and decode what they return.
-const DiscoveredRelaySchema = Schema.Struct({
-  version: Schema.Literal(1),
-  sessionId: Schema.String,
-  ask: ForeignCallable<[request: AskUserRequest, signal: AbortSignal, shown?: () => void]>(),
-});
 const DiscoveredCapabilitySchema = Schema.Struct({
   version: Schema.Literal(1),
   sessionId: Schema.String,
@@ -268,18 +252,9 @@ const DiscoveredAskerSchema = Schema.Struct({
 const isDiscoveredAskers = Schema.is(DiscoveredAskersSchema);
 /** What an askers capability found: admitted only as a name and a callable. */
 export const decodeQuestionnaireAsker = decodeUnknownOrUndefined(DiscoveredAskerSchema);
-type DiscoveredQuestionnaireRelay = typeof DiscoveredRelaySchema.Type;
 type DiscoveredQuestionnaireCapability = typeof DiscoveredCapabilitySchema.Type;
-const isDiscoveredRelay = Schema.is(DiscoveredRelaySchema);
 const isDiscoveredCapability = Schema.is(DiscoveredCapabilitySchema);
 
-export const queryQuestionnaireRelay = (events: QuestionnaireEvents, sessionId: string) =>
-  querySessionCapability<unknown, DiscoveredQuestionnaireRelay>(
-    events,
-    QUESTIONNAIRE_RELAY_QUERY,
-    { version: 1, sessionId },
-    (value) => (isDiscoveredRelay(value) && value.sessionId === sessionId ? value : undefined),
-  ).candidates.at(-1);
 export const queryQuestionnaireCapability = (events: QuestionnaireEvents, sessionId: string) =>
   querySessionCapability<unknown, DiscoveredQuestionnaireCapability>(
     events,

@@ -58,7 +58,7 @@ export function createQuestionnaireActivity(options: {
       if (current()) operation();
     }).pipe(Effect.ignore);
   const observer: QuestionnaireActivity = {
-    admitted: (id, request, cancel, owner) =>
+    admitted: (id, request, cancel) =>
       transition(() => {
         const { questions } = request;
         set(id, {
@@ -78,7 +78,6 @@ export function createQuestionnaireActivity(options: {
               "\n\n",
             ),
             actions: [cancelAction],
-            ...(owner && { parent: { providerId: "pi-subagents", itemId: owner.runId } }),
           },
         });
       }),

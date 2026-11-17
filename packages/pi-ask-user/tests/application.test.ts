@@ -6,7 +6,7 @@ import { layer } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import { makeSessionCapabilityProtocol, nodeFilePlatformLayer } from "pi-cosmic-core";
+import { nodeFilePlatformLayer } from "pi-cosmic-core";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import {
@@ -20,11 +20,7 @@ import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import type { AskUserRequest } from "../src/questionnaire/schema.ts";
 import { AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 import { ASYNC_MESSAGE_TYPE, ASYNC_RECEIPT_TYPE } from "../src/boundary/host-delivery.ts";
-import {
-  queryQuestionnaireCapability,
-  QUESTIONNAIRE_RELAY_QUERY,
-  type QuestionnaireRelay,
-} from "../src/protocol.ts";
+import { queryQuestionnaireCapability } from "../src/protocol.ts";
 
 withoutRelayMarker();
 afterEach(() => {
@@ -189,43 +185,24 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
       }),
   );
 
-  it.effect("admits a marked print child only through its current root relay", () =>
-    Effect.gen(function* () {
-      vi.stubEnv("PI_SUBAGENT_CHILD", "1");
-      vi.stubEnv("PI_SUBAGENT_RUN_ID", "child-run");
-      const custom = vi.fn();
-      const h = yield* harness(() => Promise.resolve(), {
-        mode: "print",
-        hasUI: false,
-        sessionManager: { getSessionId: () => "child" },
-        ui: { custom },
-      });
-      const queries = makeSessionCapabilityProtocol({ version: 1 });
-      const ask = vi.fn<QuestionnaireRelay["ask"]>(() =>
-        Promise.resolve({ outcome: "cancelled", answers: [] }),
-      );
-      const off = h.pi.events.on(QUESTIONNAIRE_RELAY_QUERY, (data) => {
-        queries.normalizeQuery(data)?.respond({ version: 1, sessionId: "child", ask });
-      });
-      yield* Effect.promise(() => h.emit("session_start"));
-      // A child without a screen has nowhere to show a questionnaire of its root's.
-      expect(queryQuestionnaireCapability(h.pi.events, "child")).toBeUndefined();
-      const tool = h.tools.get("ask_user")!;
-      const result = yield* Effect.promise(() =>
-        tool.execute("call", request, undefined, undefined, h.ctx),
-      );
-      expect(result.details).toMatchObject({ outcome: "cancelled" });
-      expect(ask).toHaveBeenCalled();
-      expect(h.tools.has("ask_user_async")).toBe(false);
-      off();
-      yield* Effect.promise(() =>
-        expect(tool.execute("revoked", request, undefined, undefined, h.ctx)).rejects.toMatchObject(
-          { operation: "relay" },
-        ),
-      );
-      expect(custom).not.toHaveBeenCalled();
-      yield* Effect.promise(() => h.emit("session_shutdown"));
-    }),
+  it.effect(
+    "gives a subagent's session no questionnaire tools, and no runtime without a screen",
+    () =>
+      Effect.gen(function* () {
+        vi.stubEnv("PI_SUBAGENT_CHILD", "1");
+        // A subagent asks its parent; only the main agent puts a questionnaire to the user.
+        for (const mode of ["print", "rpc"] as const) {
+          const h = yield* harness(() => Promise.resolve(), {
+            mode,
+            sessionManager: { getSessionId: () => "child" },
+          });
+          yield* Effect.promise(() => h.emit("session_start"));
+          expect(h.tools.size).toBe(0);
+          // Without a screen it has nowhere to show a questionnaire of its root's either.
+          expect(queryQuestionnaireCapability(h.pi.events, "child")).toBeUndefined();
+          yield* Effect.promise(() => h.emit("session_shutdown"));
+        }
+      }),
   );
 
   it.effect("says so when bare /ask-user finds nothing hidden to resume", () =>
@@ -287,27 +264,21 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
   );
 
   it.effect(
-    "marked TUI children expose only blocking relay, never a child-local async dialog",
+    "a subagent's session with a screen shows its root's questionnaires and asks none of its own",
     () =>
       Effect.gen(function* () {
         vi.stubEnv("PI_SUBAGENT_CHILD", "1");
-        vi.stubEnv("PI_SUBAGENT_RUN_ID", "child-run");
         const h = yield* harness(() => Promise.resolve(), {
           mode: "tui",
           sessionManager: { getSessionId: () => "pane" },
         });
+        // The main agent's own session shows its questionnaires itself, so it publishes nothing.
+        expect(queryQuestionnaireCapability(h.pi.events, "pane")).toBeUndefined();
         yield* Effect.promise(() => h.emit("session_start"));
-        expect(h.tools.has("ask_user")).toBe(true);
-        expect(h.tools.has("ask_user_async")).toBe(false);
-        expect(h.tools.has("ask_user_async_control")).toBe(false);
-        // Its own screen can show the questionnaires its root sends it.
+        expect(h.tools.size).toBe(0);
         expect(queryQuestionnaireCapability(h.pi.events, "pane")).toBeDefined();
-        yield* Effect.promise(() =>
-          expect(
-            h.tools.get("ask_user")!.execute("call", request, undefined, undefined, h.ctx),
-          ).rejects.toMatchObject({ operation: "relay" }),
-        );
         yield* Effect.promise(() => h.emit("session_shutdown"));
+        expect(queryQuestionnaireCapability(h.pi.events, "pane")).toBeUndefined();
       }),
   );
 

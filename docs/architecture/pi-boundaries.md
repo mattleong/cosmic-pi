@@ -40,7 +40,7 @@ Cross-extension events carry bounded plain data and explicitly checked function 
 
 Cosmic UI providers use session identity, host activation, and registration ownership to reject stale updates and actions. Widget availability is acknowledged only after installation, and producers keep fallback UI until acknowledgement. Deferred actions recheck revision and generation, receive cancellation, and return bounded redacted content. The host owns presentation; feature packages remain authoritative for agents, processes, and questionnaires. See the [activity protocol](../../packages/pi-cosmic-ui/docs/activity.md).
 
-Explicitly routed Pi-child questionnaires use authenticated assignment ownership and exact-owner cancellation acknowledgement. Subagent cleanup joins questionnaire/editor finalizers; it does not make waiting for an answer uninterruptible. Parent coordination questions remain a separate protocol.
+A Pi child has no questionnaire tools; the main agent decides what the user is asked and asks on a subagent's behalf. A questionnaire the root shows in a Rex-hosted child's own session uses exact-owner cancellation acknowledgement, and returns to the root's session when the child's can't answer it. Parent coordination questions remain a separate protocol.
 
 ## Model-visible extension messages
 

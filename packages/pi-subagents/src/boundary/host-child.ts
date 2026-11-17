@@ -60,7 +60,7 @@ import {
   type ProxyWaitBackstop,
 } from "../tools/execute-await.ts";
 import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
-import { askSessionQuestionnaire, publishChildQuestionnaireRelay } from "./host-ask-user.ts";
+import { askSessionQuestionnaire } from "./host-ask-user.ts";
 import {
   CONTACT_PARENT_LABEL,
   contactParentCompactSummary,
@@ -130,23 +130,17 @@ const LIVE_CHILD_BRIDGE_BOUNDARIES: SubagentChildBridgeBoundaries = {
   loadSettings: loadCodePreviewSettings,
   openIpc: openLocalPiChildIpc,
 };
-const ignoreShown = (): void => undefined;
 const encodeQuestionnaireOutcome = Schema.encodeSync(QuestionnaireOutcomeSchema);
 
 interface ProxyCallOptions {
   readonly onInterruption?: (() => void) | undefined;
   readonly backstop?: ProxyWaitBackstop | undefined;
-  /** Runs once the root shows an `ask_user` call's questionnaire on screen. */
-  readonly shown?: (() => void) | undefined;
 }
 
 const parentContactUnavailable = () => new Error("Parent contact is unavailable for this session.");
 
 interface ChildSessionInput {
   readonly sessionId: string | undefined;
-  /** Pending `ask_user` proxy calls, each with its report that the root shows the questionnaire. */
-  readonly questionnaires: Map<string, () => void>;
-  detachRelay?: (() => void) | undefined;
   detachPaneAsks?: (() => void) | undefined;
   readonly cwd: string;
   readonly projectTrusted: boolean;
@@ -203,8 +197,6 @@ export function registerSubagentChildBridge(
     receipts.deactivate();
     if (input) {
       input.token = undefined;
-      input.detachRelay?.();
-      input.detachRelay = undefined;
       input.detachPaneAsks?.();
       input.detachPaneAsks = undefined;
     }
@@ -222,7 +214,6 @@ export function registerSubagentChildBridge(
   const onControl = (input: ChildSessionInput, message: LocalPiParentControl): void => {
     if (!isSessionCurrent(input)) return;
     if (message.type === "proxy_response") {
-      input.questionnaires.delete(message.requestId);
       const result = message.ok ? decodeSubagentProxyResult(message.payloadJson) : undefined;
       pendingProxy.settle(
         message.requestId,
@@ -230,14 +221,6 @@ export function registerSubagentChildBridge(
           ? Effect.succeed(result)
           : Effect.fail(message.ok ? proxyFailure("{}") : proxyFailure(message.payloadJson)),
       );
-      return;
-    }
-    if (message.type === "proxy_questionnaire_shown") {
-      // Only a pending questionnaire reports, and only once; a late or repeated notice is moot.
-      const shown = input.questionnaires.get(message.requestId);
-      if (!shown) return;
-      input.questionnaires.set(message.requestId, ignoreShown);
-      invokeBestEffort(shown);
       return;
     }
     if (message.type === "proxy_notification") {
@@ -290,16 +273,14 @@ export function registerSubagentChildBridge(
     signal: AbortSignal | undefined,
     options: ProxyCallOptions = {},
   ): Promise<AgentToolResult<unknown>> => {
-    const { onInterruption, backstop, shown = ignoreShown } = options;
+    const { onInterruption, backstop } = options;
     if (!isActivationCurrent(input, token))
       return Promise.reject(new Error("Subagent proxy is unavailable for this session."));
     const requestId = `proxy-${process.pid}-${nextRequest++}`;
     // Only management calls carry this session's native facts; the root binds every caller itself.
-    const request =
-      encoded.tool === "ask_user" || isAgentToolName(encoded.tool)
-        ? encoded
-        : withSubagentProxyParent(encoded, input.captureParentContext());
-    if (encoded.tool === "ask_user") input.questionnaires.set(requestId, shown);
+    const request = isAgentToolName(encoded.tool)
+      ? encoded
+      : withSubagentProxyParent(encoded, input.captureParentContext());
     return slot
       .run(
         observeAwaitInterruption(
@@ -315,11 +296,7 @@ export function registerSubagentChildBridge(
               }),
               () => {
                 if (isActivationCurrent(input, token))
-                  slot.fork(
-                    sendCancel("proxy_cancel", requestId).pipe(
-                      Effect.ensuring(Effect.sync(() => input.questionnaires.delete(requestId))),
-                    ),
-                  );
+                  slot.fork(sendCancel("proxy_cancel", requestId));
               },
             ),
             backstop,
@@ -426,19 +403,10 @@ export function registerSubagentChildBridge(
               }),
             ),
             (detach) =>
-              Effect.forEach(
-                [...input.questionnaires.keys()],
-                (requestId) => sendCancel("proxy_cancel", requestId),
-                { discard: true },
-              ).pipe(
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    input.questionnaires.clear();
-                    detach();
-                    rejectPending();
-                  }),
-                ),
-              ),
+              Effect.sync(() => {
+                detach();
+                rejectPending();
+              }),
           ),
         ).pipe(Layer.merge(CodePreviewSchedulerService.layer)),
       ),
@@ -478,19 +446,12 @@ export function registerSubagentChildBridge(
         return slot
           .run(askSessionQuestionnaire(pi.events, sessionId, questionnaire, asker, shown), signal)
           .then(
-            (result) => encodeQuestionnaireOutcome(result.details),
+            (outcome) => encodeQuestionnaireOutcome(outcome),
             () => undefined,
           );
       };
       try {
         input.detachPaneAsks = boundaries.paneAsks?.listen(presentInPane);
-        if (input.sessionId)
-          input.detachRelay = publishChildQuestionnaireRelay(
-            pi.events,
-            input.sessionId,
-            () => isActivationCurrent(input, token),
-            (request, signal, shown) => proxyCall(input, token, request, signal, { shown }),
-          );
         registerSubagentTools(
           pi,
           {
@@ -529,7 +490,6 @@ export function registerSubagentChildBridge(
     const sessionId = invokeHostCallback(() => ctx.sessionManager.getSessionId(), undefined);
     const input: ChildSessionInput = {
       sessionId,
-      questionnaires: new Map(),
       cwd: captured.cwd,
       projectTrusted: isProjectTrusted(ctx),
       isIdle: () => ctx.isIdle(),

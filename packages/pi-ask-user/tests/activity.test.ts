@@ -21,12 +21,7 @@ it.effect(
         Effect.sync(() => {
           cancelled++;
         }),
-        { runId: "run", assignmentEpoch: 1, requestId: "request" },
       );
-      expect(f.items()[0]?.parent).toEqual({
-        providerId: "pi-subagents",
-        itemId: "run",
-      });
       yield* f.activity.observer.presenting("owned");
       const token = f.bridge.activate(() => {
         resumed++;

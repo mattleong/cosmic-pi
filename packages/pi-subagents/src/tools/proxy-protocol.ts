@@ -2,11 +2,6 @@ import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import {
-  decodeQuestionnaireRequest,
-  QuestionnaireRequestSchema,
-  type AskUserRequest,
-} from "pi-ask-user/protocol";
 import { blankStringPath, checkToolArguments } from "pi-cosmic-core/tool-arguments";
 import type { BackendProxyResult } from "../backend/model.ts";
 import { SUBAGENT_EFFORTS } from "../domain/routing.ts";
@@ -102,23 +97,6 @@ export const decodeSubagentProxyParent = (
     ? invalid("Nested Pi parent context failed strict validation.")
     : Result.succeed({ request });
 };
-const decodeQuestionnaireJson = Schema.decodeUnknownOption(
-  Schema.fromJsonString(QuestionnaireRequestSchema),
-  { onExcessProperty: "error" },
-);
-
-export const decodeQuestionnaireProxyRequest = (
-  request: SubagentProxyRequest,
-): Result.Result<AskUserRequest, InvalidSubagentRequestError> => {
-  if (request.tool !== "ask_user" || request.argumentsJson.length > 131_072)
-    return invalid("Nested questionnaire arguments exceeded the structured request bound.");
-  const decoded = decodeQuestionnaireJson(request.argumentsJson);
-  const value = Option.isSome(decoded) ? decodeQuestionnaireRequest(decoded.value) : undefined;
-  return value
-    ? Result.succeed(value)
-    : invalid("Nested questionnaire arguments failed strict validation.");
-};
-
 type SubagentProxyPayload =
   | BackendProxyResult
   | { readonly code: string; readonly message: string };

@@ -1,5 +1,4 @@
 import {
-  queryQuestionnaireRelay,
   QuestionnaireRequestSchema,
   type AskUserOutcome,
   type AskUserRequest,
@@ -276,20 +275,6 @@ describe("local Pi child bridge", () => {
     expect(detached).toBeGreaterThan(0);
   });
 
-  effectTest("cancels an owned questionnaire on reload and revokes the old relay", function* () {
-    const harness = makeHarness();
-    yield* step(() => harness.start("/old"));
-    const relay = queryQuestionnaireRelay(harness.events, "/old")!;
-    const answer = rejection(
-      Promise.resolve<unknown>(relay.ask(pickQuestionnaire, new AbortController().signal)),
-    );
-    const request = yield* harness.awaitContact("proxy_request");
-    yield* step(() => harness.start("/new"));
-    expect(contactOfType(harness.contacts, "proxy_cancel")?.requestId).toBe(request.requestId);
-    expect(queryQuestionnaireRelay(harness.events, "/old")).toBeUndefined();
-    expect(yield* step(() => answer)).toBeInstanceOf(Error);
-    yield* step(harness.shutdown);
-  });
   effectTest("aborts superseded preview loading and ignores its late settlement", function* () {
     const first = deferredPromise();
     const second = deferredPromise();

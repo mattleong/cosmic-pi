@@ -1,6 +1,4 @@
-import type { AskUserRequest, QuestionnaireOwner } from "pi-ask-user/protocol";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
-import { questionnaireLifetimes } from "./questionnaire-lifetime.ts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -48,7 +46,7 @@ import type { RunContext, RunRecord, WithRunLock } from "./internal.ts";
 import { notificationDelivery } from "./notification-delivery.ts";
 import { notificationHandoff } from "./notification-handoff.ts";
 import { processControlOperations, processInitializer } from "./process-lifecycle.ts";
-import { recordCleanup, type RunRecordCleanup } from "./record-cleanup.ts";
+import { recordCleanup } from "./record-cleanup.ts";
 import { resumeOperations } from "./resume.ts";
 import { settlementOperations } from "./settlement.ts";
 import {
@@ -102,12 +100,6 @@ export interface SubagentServiceOptions {
   readonly archiveReport?: ReportArchive | undefined;
   /** Reaches the root session's main agent for `agent_*` messages; without it `main` is unavailable. */
   readonly agentMain?: AgentMainCapabilities | undefined;
-  /** `shown` reports, once, that the questionnaire opened on the user's screen. */
-  readonly questionnaireHandler?: (
-    request: AskUserRequest,
-    owner: QuestionnaireOwner,
-    shown: () => void,
-  ) => Effect.Effect<BackendProxyResult, SubagentError>;
   readonly proxyHandler?:
     | ((
         service: SubagentServiceContract,
@@ -288,7 +280,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   const projectionRef = yield* SubscriptionRef.make(frozenProjection(0));
   const runtimeNamespace = allocateRuntimeNamespace();
   let closed = false;
-  const questionnaires = questionnaireLifetimes(() => closed);
   const withLock: WithRunLock = lock.withPermits(1);
   const withCompletionGate = completionGate.withPermits(1);
   const { admitTurnInput, releaseTurnInput, claimTurnInputDrain } = turnInputGates(withLock);
@@ -306,7 +297,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
           record.view = { ...record.view, writerCleanupQuarantined: quarantined };
       }
     }).pipe(
-      Effect.andThen(questionnaires.invalidate),
       Effect.andThen(
         Effect.suspend(() =>
           closed
@@ -391,16 +381,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
   });
 
   const prepareWriterLeaseForSpawn = writerSpawnPreparation(runContext);
-  const ownedCleanup = recordCleanup(runContext);
-  const cleanup: RunRecordCleanup = {
-    ...ownedCleanup,
-    closeRecordScope: (record, scope) =>
-      questionnaires
-        .drain(record)
-        .pipe(Effect.andThen(ownedCleanup.closeRecordScope(record, scope))),
-    closeCandidateScope: (record) =>
-      questionnaires.drain(record).pipe(Effect.andThen(ownedCleanup.closeCandidateScope(record))),
-  };
+  const cleanup = recordCleanup(runContext);
   const { closeRecordScope } = cleanup;
 
   const settlement = settlementOperations({
@@ -435,7 +416,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const stop = subtreeStopper({ ...runContext, stopRun: controls.stop });
 
-  const { proxyHandler, questionnaireHandler } = options;
+  const { proxyHandler } = options;
   const handleProxyEvent = proxyExecutionHandler({
     ownerScope,
     executions: proxyRuns,
@@ -444,13 +425,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         proxyHandler(service, callerRunId, request).pipe(
           Effect.provideService(SubagentProfileService, profileService),
           Effect.provideService(SubagentBackendRegistry, driver),
-        ),
-    }),
-    ...(questionnaireHandler && {
-      executeQuestionnaire: (record, requestId, request, shown) =>
-        // The root names the run that asked, whatever the request says: the answers go to it.
-        questionnaires.own(record, requestId, (owner) =>
-          questionnaireHandler({ ...request, askedBy: record.launch.name }, owner, shown),
         ),
     }),
   });
@@ -578,7 +552,6 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
         closed = true;
       }),
     ).pipe(
-      Effect.andThen(questionnaires.invalidate),
       Effect.andThen(Scope.close(ownerScope, Exit.void)),
       Effect.andThen(closeRunsLeafFirst({ records, withLock, cleanup })),
       Effect.andThen(withLock(recordSessionUsage(true))),

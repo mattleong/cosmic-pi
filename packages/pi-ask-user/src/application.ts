@@ -15,6 +15,7 @@ import {
   type CodePreviewSettings,
 } from "pi-code-previews";
 import { registerExtensionCommand } from "pi-cosmic-core/host-command";
+import { isSubagentChildProcess } from "pi-cosmic-core/host-environment";
 import { bestEffortHostBootstrap } from "pi-cosmic-core/runtime/host-bootstrap";
 import {
   captureSessionHost,
@@ -35,9 +36,8 @@ import {
   createQuestionnaireActivity,
   type QuestionnaireActivityBridge,
 } from "./boundary/host-activity.ts";
-import { requiresQuestionnaireRelay } from "./boundary/host-environment.ts";
 import { registerQuestionnaireCapability } from "./boundary/host-owned-calls.ts";
-import { askAtQuestionnaireBoundary } from "./boundary/host-relay.ts";
+import { askInSession } from "./boundary/host-askers.ts";
 import {
   registerAsyncAskUserMessageRenderer,
   registerAsyncAskUserTools,
@@ -136,12 +136,13 @@ export function askUserWithDependencies(
       currentGeneration = input.generation;
       bridge.setContext(ctx);
       const sessionId = invokeHostCallback(() => ctx.sessionManager.getSessionId(), "");
-      const root = !requiresQuestionnaireRelay();
+      // A subagent asks its parent, never the user: its session gets no questionnaire tools. One
+      // with a screen of its own, which only a Rex-hosted one has, shows there the questionnaires
+      // its root sends it, through this capability.
+      const child = isSubagentChildProcess();
       if (sessionId)
         invokeHostCallback(() => input.activity?.activate(pi.events, sessionId), undefined);
-      // A child with a screen of its own, which only a Rex-hosted one has, shows there the
-      // questionnaires its root sends it, through the same capability.
-      if (sessionId && (root || ctx.mode === "tui")) {
+      if (sessionId && child) {
         input.revokeCapability = invokeHostCallback(
           () =>
             registerQuestionnaireCapability({
@@ -150,24 +151,25 @@ export function askUserWithDependencies(
               generation: input.generation,
               isCurrent: () => input.active && slot.isCurrent(token),
               run: (effect, signal) =>
-                runCurrent(effect, signal, "The root questionnaire session was replaced."),
+                runCurrent(effect, signal, "The questionnaire session was replaced."),
             }),
           undefined,
         );
       }
-      registerAskUserTool(
-        pi,
-        (request, signal, shown) =>
-          runCurrent(
-            askAtQuestionnaireBoundary(pi.events, sessionId, request, () =>
-              invokeHostCallback(shown, undefined),
+      if (!child)
+        registerAskUserTool(
+          pi,
+          (request, signal, shown) =>
+            runCurrent(
+              askInSession(pi.events, sessionId, request, () =>
+                invokeHostCallback(shown, undefined),
+              ),
+              signal,
             ),
-            signal,
-          ),
-        scheduleAnimation,
-        replay.shell,
-      );
-      if (ctx.mode === "tui" && root)
+          scheduleAnimation,
+          replay.shell,
+        );
+      if (ctx.mode === "tui" && !child)
         registerAsyncAskUserTools(
           pi,
           (request, signal) =>
@@ -219,7 +221,12 @@ export function askUserWithDependencies(
   const startSession = (ctx: ExtensionContext, publishesReplay: boolean) => {
     historicalDeliveries = captureHistoricalDeliveries(ctx);
     const captured = captureSessionHost(ctx);
-    if (!Predicate.isTagged(captured, "Captured") || (!ctx.hasUI && !requiresQuestionnaireRelay()))
+    // A subagent's session without a screen has nothing to show a questionnaire on.
+    if (
+      !Predicate.isTagged(captured, "Captured") ||
+      !ctx.hasUI ||
+      (isSubagentChildProcess() && ctx.mode !== "tui")
+    )
       return slot.shutdown();
     return slot
       .start({

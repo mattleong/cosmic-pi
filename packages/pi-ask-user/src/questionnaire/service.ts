@@ -9,7 +9,6 @@ import * as Layer from "effect/Layer";
 import { acquireQuestionnaireQueue } from "./queue.ts";
 import type { AskUserRequest } from "./schema.ts";
 import type { AskUserHostError, AskUserRuntimeClosedError } from "./errors.ts";
-import type { QuestionnaireOwner } from "./protocol.ts";
 import type { AskUserOutcome } from "./model.ts";
 import { normalizeAskUserRequest, validateAskUserRequest } from "./validation.ts";
 
@@ -29,7 +28,6 @@ export interface QuestionnaireActivity {
     id: string,
     request: AskUserRequest,
     cancel: Effect.Effect<void>,
-    owner?: QuestionnaireOwner,
   ) => Effect.Effect<void>;
   readonly presenting: (id: string) => Effect.Effect<void>;
   readonly settled: (
@@ -59,7 +57,6 @@ const makeService = Effect.fn("AskUserService.make")(function* (
   yield* Effect.addFinalizer(() => queue.close);
   const askRequest = Effect.fn("AskUserService.ask")(function* (
     request: AskUserRequest,
-    owner?: QuestionnaireOwner,
     shown: Effect.Effect<void> = Effect.void,
   ) {
     const normalized = normalizeAskUserRequest(request);
@@ -72,7 +69,7 @@ const makeService = Effect.fn("AskUserService.make")(function* (
         const cancel = yield* Deferred.make<void>();
         return yield* restore(
           activity
-            .admitted(id, normalized, Effect.asVoid(Deferred.succeed(cancel, undefined)), owner)
+            .admitted(id, normalized, Effect.asVoid(Deferred.succeed(cancel, undefined)))
             .pipe(
               Effect.andThen(
                 Effect.raceFirst(
@@ -106,10 +103,7 @@ const makeService = Effect.fn("AskUserService.make")(function* (
   });
   return {
     /** `shown` runs as the questionnaire opens, after any earlier ones in the queue close. */
-    ask: (request: AskUserRequest, shown?: Effect.Effect<void>) =>
-      askRequest(request, undefined, shown),
-    askOwned: (request: AskUserRequest, owner: QuestionnaireOwner, shown?: Effect.Effect<void>) =>
-      askRequest(request, owner, shown),
+    ask: askRequest,
     startAsync: async.start,
     controlAsync: async.control,
   };

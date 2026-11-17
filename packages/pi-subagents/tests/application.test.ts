@@ -36,7 +36,6 @@ import { mountingCustomUi, sessionContextFixture as sessionContext } from "./fix
 import { describeActivationLifecycle } from "./support/activation-lifecycle.ts";
 import { effectTest, settle, step } from "./support/effect-test.ts";
 import { nodePath } from "./support/node-builtins.ts";
-import { pickQuestionnaire } from "./support/questionnaire.ts";
 import { subagentServiceDouble } from "./tools/fixtures/subagent-service-double.ts";
 import { fallbackProfileService } from "./tools/fixtures/tool-harness.ts";
 import { inertDriver } from "./run/fixtures/run-context.ts";
@@ -257,14 +256,6 @@ describe("subagent Pi registration", () => {
       expect(activity.get()).toBe(before);
       expect(rejected?.actionAccepted).toBe(false);
       expect(sendMessage).not.toHaveBeenCalled();
-      const questionnaireFailure = yield* retired
-        .questionnaireHandler(
-          pickQuestionnaire,
-          { runId: "retired", assignmentEpoch: 1, requestId: "questionnaire" },
-          () => undefined,
-        )
-        .pipe(Effect.flip, Effect.orDie);
-      expect(questionnaireFailure).toMatchObject({ code: "proxy_caller_disconnected" });
       const pending = view({
         id: "child",
         parentRunId: "caller",

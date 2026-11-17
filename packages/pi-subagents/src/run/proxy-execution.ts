@@ -1,16 +1,11 @@
 import * as Arr from "effect/Array";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
 import type * as Scope from "effect/Scope";
-import type { AskUserRequest } from "pi-ask-user/protocol";
 import type { BackendEvent, BackendProxyRequest, BackendProxyResult } from "../backend/model.ts";
-import {
-  decodeQuestionnaireProxyRequest,
-  encodeSubagentProxyPayload,
-} from "../tools/proxy-protocol.ts";
+import { encodeSubagentProxyPayload } from "../tools/proxy-protocol.ts";
 import { subagentErrorCode, type SubagentError } from "./errors.ts";
 import type { RunRecord } from "./internal.ts";
 import { isActiveRunState } from "./model.ts";
@@ -22,17 +17,10 @@ interface RunProxyExecutionDependencies {
     callerRunId: string,
     request: BackendProxyRequest,
   ) => Effect.Effect<BackendProxyResult, SubagentError>;
-  /** `shown` reports, once, that the questionnaire opened on the user's screen. */
-  readonly executeQuestionnaire?: (
-    record: RunRecord,
-    requestId: string,
-    request: AskUserRequest,
-    shown: () => void,
-  ) => Effect.Effect<BackendProxyResult, SubagentError>;
 }
 
 export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencies) {
-  const { ownerScope, executions, executeProxy, executeQuestionnaire } = dependencies;
+  const { ownerScope, executions, executeProxy } = dependencies;
   // Admission reads the live execution map, so it runs when the returned effect does.
   return (
     record: RunRecord,
@@ -50,18 +38,7 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
           .respond(false, encodeSubagentProxyPayload({ code, message }) ?? "{}")
           .pipe(Effect.ignore);
       // The executor is bound here, so its decode and call still follow the checks below.
-      const dispatch =
-        event.tool === "ask_user"
-          ? executeQuestionnaire &&
-            (() =>
-              Effect.fromResult(decodeQuestionnaireProxyRequest(event)).pipe(
-                Effect.flatMap((questionnaire) =>
-                  askWithShownNotice(event, (shown) =>
-                    executeQuestionnaire(record, event.requestId, questionnaire, shown),
-                  ),
-                ),
-              ))
-          : executeProxy && (() => executeProxy(record.view.id, event));
+      const dispatch = executeProxy && (() => executeProxy(record.view.id, event));
       if (!dispatch || record.stoppedByParent || !isActiveRunState(record.view.state))
         return reject(
           "proxy_caller_disconnected",
@@ -104,25 +81,5 @@ export function proxyExecutionHandler(dependencies: RunProxyExecutionDependencie
       );
     });
 }
-
-/**
- * Runs `ask` while relaying its first `shown` report to the caller as a one-time notice. The
- * notice ends with the call, so it never follows the response.
- */
-const askWithShownNotice = <A, E>(
-  event: Extract<BackendEvent, { readonly type: "proxy_request" }>,
-  ask: (shown: () => void) => Effect.Effect<A, E>,
-): Effect.Effect<A, E> =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const shown = yield* Deferred.make<void>();
-      yield* Deferred.await(shown).pipe(
-        Effect.andThen(event.questionnaireShown()),
-        Effect.ignore,
-        Effect.forkScoped({ startImmediately: true }),
-      );
-      return yield* ask(() => void Deferred.doneUnsafe(shown, Effect.void));
-    }),
-  );
 
 export type RunProxyExecution = ReturnType<typeof proxyExecutionHandler>;

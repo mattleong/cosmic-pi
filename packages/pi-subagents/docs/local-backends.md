@@ -107,18 +107,6 @@ Whether a subagent's question is the user's to answer is the main agent's call: 
 - **In the pane.** The root hands the questions to the run's launcher over process IPC, the launcher passes them to the child half (`Q` frames) and focuses the pane, and `boundary/host-child.ts` shows them through that session's own Ask User, whose capability a child with a screen publishes. The outcome returns the same way to the parent's `ask_user` call, which sends it on with `agent_send`.
 - **Coming back.** A questionnaire the user can no longer answer in the pane returns to the root session and opens there: the pane hidden from Activity or from inside, the run's launcher gone, or the session unable to show it. Only Rex knows when the user hides a pane with Rex's own key, so the launcher checks every two seconds while a questionnaire is pending. The parent's call ending first takes the questionnaire back from the pane.
 
-### The relay for a child's own `ask_user`
-
-No Pi child is given `ask_user` any more, so nothing reaches this path; it is still in place.
-
-- Only explicit blocking `ask_user` requests from local Pi children are relayed, through the versioned `pi-ask-user/protocol` root capability. `pi-ask-user` remains the sole registrar and must be discoverable in the child; a missing relay or capability fails closed.
-- Asynchronous questionnaires, `agent_contact_parent` questions, and raw `extension_ui_request` forwarding are not supported.
-- The root derives owner run, assignment epoch, and request ID from coordinator state, and names the owner run as the request's `askedBy`, whatever the child wrote there, so the dialog shows the user whose questionnaire it is. A separate strict 128 KiB decoder keeps questionnaires out of tool input.
-- When the root opens a relayed questionnaire on screen, never while it is queued, it sends the pending proxy call one `proxy_questionnaire_shown` notice so the child's `ask_user` row reads as waiting on the user. The notice is only a display hint: the child honors it once, for a pending `ask_user` call of the current activation, and ignores it after the call settles.
-- `run/questionnaire-lifetime.ts` keeps at most 256 request-ID tombstones per assignment, so replayed answered or cancelled identities cannot reopen a dialog.
-- Pause, stop, settlement, and assignment replacement revoke queued, visible, or hidden waits; process cleanup joins their finalizers outside the service lock, and shutdown revokes before leaf-first release. A stalled owned cleanup keeps stop and shutdown waiting.
-- Deliberate cancellation remains a cancelled outcome, not an invitation to retry through another UI.
-
 ## Writer pools and cross-process safety
 
 The root `SubagentService` owns one writer pool per directory. Nested Pi writer requests enter the same admission path, so pools and leases are tree-wide. Pools are keyed by a SHA-256 digest of the directory's device and inode, so relative and symlink aliases collide and renaming does not change ownership. Read-only runs never join a pool.

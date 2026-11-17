@@ -46,7 +46,6 @@ export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly notify: SubagentNotifier;
   readonly agentMain?: SubagentServiceOptions["agentMain"];
   readonly proxyHandler: NonNullable<SubagentServiceOptions["proxyHandler"]>;
-  readonly questionnaireHandler: NonNullable<SubagentServiceOptions["questionnaireHandler"]>;
   /** Hosts runs as interactive Pi sessions in Rex blocks while its setting is on. */
   readonly rexHost?: RexSessionHost | undefined;
 }
@@ -79,7 +78,6 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
           archiveReport: sessionReportArchive(options.agentDirectory, options.sessionKey),
         }),
         agentMain: options.agentMain,
-        questionnaireHandler: options.questionnaireHandler,
         writerWorkspaceMode: baseConfig.writerWorkspaceMode,
         worktreeCreate:
           hooks.invalidWorktreeCreate.length > 0

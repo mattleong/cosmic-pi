@@ -1,4 +1,4 @@
-import type { AgentToolResult, ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -11,33 +11,27 @@ import {
   decodeQuestionnaireRequest,
   queryQuestionnaireCapability,
   QUESTIONNAIRE_ASKERS_QUERY,
-  QUESTIONNAIRE_RELAY_QUERY,
   QuestionnaireRequestSchema,
-  QuestionnaireOutcomeSchema,
   type AskUserOutcome,
   type AskUserRequest,
   type QuestionnaireAskers,
   type QuestionnaireOwner,
-  type QuestionnaireRelay,
 } from "pi-ask-user/protocol";
 import { invalidRequest } from "../run/errors.ts";
-import type { SubagentProxyRequest } from "../tools/proxy-protocol.ts";
 
-const relayQueries = makeSessionCapabilityProtocol({ version: 1 });
-const encodeOutcome = Schema.encodeSync(Schema.fromJsonString(QuestionnaireOutcomeSchema));
-const encodeRequest = Schema.encodeSync(Schema.fromJsonString(QuestionnaireRequestSchema));
+const askerQueries = makeSessionCapabilityProtocol({ version: 1 });
 const isShownCallback = Schema.is(ForeignCallable<[]>());
 
 const unavailable = () =>
   invalidRequest(
     "questionnaire_unavailable",
-    "The parent questionnaire is unavailable or its owning assignment ended.",
+    "This session's questionnaire is unavailable, or the ask that owned it ended.",
   );
 
 /**
- * Asks a session's questionnaire on an owner's behalf: the root's for an authenticated child, or
- * a Rex-hosted child's own for its root. `shown` runs at most once, when the questionnaire opens
- * on screen, and never once the ask has settled or lost its owner.
+ * Asks a session's own questionnaire on an owner's behalf, as a Rex-hosted child does for its
+ * root. `shown` runs at most once, when the questionnaire opens on screen, and never once the ask
+ * has settled or lost its owner. Leaving the ask cancels it and waits for its cleanup.
  */
 export const askSessionQuestionnaire = (
   events: ExtensionAPI["events"],
@@ -60,7 +54,7 @@ export const askSessionQuestionnaire = (
         try: (signal) => {
           if (signal.aborted) throw new Error("Questionnaire owner expired.");
           owned.admitted = true;
-          // The root may report late or twice; only the first report of an unsettled ask counts.
+          // The session may report late or twice; only the first report of an unsettled ask counts.
           let reported = false;
           const reportShown = () => {
             if (reported || signal.aborted) return;
@@ -80,10 +74,7 @@ export const askSessionQuestionnaire = (
                 throw new Error("Questionnaire owner expired.");
               const decoded = decodeQuestionnaireOutcome(outcome);
               if (!decoded) throw new Error("Invalid questionnaire result.");
-              return {
-                content: [{ type: "text" as const, text: encodeOutcome(decoded) }],
-                details: decoded,
-              };
+              return decoded;
             });
         },
         catch: unavailable,
@@ -107,53 +98,6 @@ export const askSessionQuestionnaire = (
       }),
     ),
   );
-
-/**
- * Publishes this child's questionnaire relay. `call` proxies the request to the root and runs its
- * `shown` argument when the root reports the questionnaire on screen.
- */
-export const publishChildQuestionnaireRelay = (
-  events: ExtensionAPI["events"],
-  sessionId: string,
-  isCurrent: () => boolean,
-  call: (
-    request: SubagentProxyRequest,
-    signal: AbortSignal,
-    shown: () => void,
-  ) => Promise<AgentToolResult<unknown>>,
-): (() => void) => {
-  const relay: QuestionnaireRelay = {
-    version: 1,
-    sessionId,
-    ask: (input, signal, shown) => {
-      const request = decodeQuestionnaireRequest(input);
-      if (!request || signal.aborted || !isCurrent())
-        throw new Error("Child questionnaire relay unavailable.");
-      // Reported once, and never after the call settles.
-      let done = false;
-      // The asker's callback: admitted only as callable, and a throw stays with the asker.
-      const reportShown = () => {
-        if (done || signal.aborted || !isCurrent() || !isShownCallback(shown)) return;
-        done = true;
-        invokeBestEffort(() => shown());
-      };
-      return call({ tool: "ask_user", argumentsJson: encodeRequest(request) }, signal, reportShown)
-        .finally(() => {
-          done = true;
-        })
-        .then((result) => {
-          if (signal.aborted || !isCurrent()) throw new Error("Child questionnaire relay expired.");
-          const outcome = decodeQuestionnaireOutcome(result.details);
-          if (!outcome) throw new Error("Parent questionnaire returned an invalid result.");
-          return outcome;
-        });
-    },
-  };
-  return events.on(QUESTIONNAIRE_RELAY_QUERY, (input) => {
-    const query = relayQueries.normalizeQuery(input);
-    if (query !== undefined && isCurrent() && query.sessionId === sessionId) query.respond(relay);
-  });
-};
 
 const encodeQuestions = Schema.encodeSync(QuestionnaireRequestSchema);
 
@@ -202,7 +146,7 @@ export const publishQuestionnaireAskers = (
   host: QuestionnaireAskersHost,
 ): (() => void) =>
   events.on(QUESTIONNAIRE_ASKERS_QUERY, (input) => {
-    const query = relayQueries.normalizeQuery(input);
+    const query = askerQueries.normalizeQuery(input);
     const sessionId = invokeHostCallback(host.sessionId, undefined);
     if (query === undefined || sessionId === undefined || query.sessionId !== sessionId) return;
     const askers: QuestionnaireAskers = {

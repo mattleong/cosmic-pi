@@ -145,9 +145,9 @@ A script holds one of Pi's process-wide codemode workers (two by default; `PI_CO
 
 This is an additive tool-result boundary: normal text, persisted details, rendering, mode gates and tool exposure are unchanged. Codemode does not enable questionnaire tools in modes where they are unavailable.
 
-## Activity view and child questions
+## Activity view and subagent questions
 
-In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Hidden questionnaires keep their drafts and release keyboard focus until resumed. Run cancellation or session replacement cancels a child's waiting or mounted requests. Only authenticated child requests appear beneath their owning subagent run; their answers return to that caller rather than automatically steering the root agent. pi-subagents no longer gives its children `ask_user`, so the main agent asks on their behalf with `askedBy`. The [lifecycle note](lifecycle.md#branch-and-child-authority) explains ownership and revocation.
+In the Cosmic UI Activity view, Resume closes the manager first so the questionnaire gets keyboard focus, while Cancel runs with the manager open. Hidden questionnaires keep their drafts and release keyboard focus until resumed. A subagent's session has no questionnaire tools: the main agent asks on a subagent's behalf with `askedBy`. A subagent's session with a screen of its own shows the questionnaires its root sends there, and their answers return to the root's caller, never into the subagent's conversation; the caller ending or the session being replaced cancels them. The [lifecycle note](lifecycle.md#branch-and-child-authority) explains ownership and revocation.
 
 ## TUI controls
 

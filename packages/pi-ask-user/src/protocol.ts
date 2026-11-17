@@ -4,10 +4,8 @@ export {
   decodeQuestionnaireRequest,
   queryQuestionnaireAskers,
   queryQuestionnaireCapability,
-  queryQuestionnaireRelay,
   QUESTIONNAIRE_ASKERS_QUERY,
   QUESTIONNAIRE_CAPABILITY_QUERY,
-  QUESTIONNAIRE_RELAY_QUERY,
   QuestionnaireOutcomeSchema,
   QuestionnaireOwnerSchema,
   QuestionnaireRequestSchema,
@@ -18,5 +16,4 @@ export {
   type QuestionnaireCapability,
   type QuestionnaireEvents,
   type QuestionnaireOwner,
-  type QuestionnaireRelay,
 } from "./questionnaire/protocol.ts";

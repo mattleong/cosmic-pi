@@ -20,12 +20,12 @@ const request = { questions: [defaultQuestion] } satisfies AskUserRequest;
 const outcome = submitted();
 
 it.effect(
-  "async, owned and ordinary requests share FIFO; cancelled callers never mount or steer answers",
+  "async and blocking requests share FIFO; cancelled callers never mount or steer answers",
   () =>
     Effect.gen(function* () {
       const firstAnswer = yield* Deferred.make<AskUserOutcome>();
       const calls: string[] = [];
-      const owners: string[] = [];
+      const admitted: string[] = [];
       let delivered = 0;
       const host: AskUserHost = (input, presence) =>
         Effect.gen(function* () {
@@ -42,40 +42,29 @@ it.effect(
         "test",
         {
           ...noQuestionnaireActivity,
-          admitted: (_id, _request, _cancel, owner) =>
+          admitted: (_id, asked) =>
             Effect.sync(() => {
-              if (owner) owners.push(owner.runId);
+              admitted.push(asked.questions[0]!.key);
             }),
         },
       );
       const receipt = yield* service.startAsync(asyncRequest);
-      const cancelled = yield* forkNow(
-        service.askOwned(request, {
-          runId: "cancelled",
-          assignmentEpoch: 1,
-          requestId: "first",
-        }),
-      );
-      const owned = yield* forkNow(
-        service.askOwned(keyed("owned"), {
-          runId: "live",
-          assignmentEpoch: 2,
-          requestId: "second",
-        }),
-      );
-      const ordinary = yield* forkNow(service.ask(keyed("ordinary")));
+      const cancelled = yield* forkNow(service.ask(keyed("cancelled")));
+      const second = yield* forkNow(service.ask(keyed("second")));
+      const third = yield* forkNow(service.ask(keyed("third")));
       yield* Fiber.interrupt(cancelled);
       expect(calls).toEqual(["async"]);
       yield* service.controlAsync({ action: "cancel", requestId: receipt.requestId });
-      expect(yield* Fiber.join(owned)).toEqual(outcome);
-      yield* Fiber.join(ordinary);
-      expect(calls).toEqual(["async", "owned", "ordinary"]);
-      expect(owners).toEqual(["cancelled", "live"]);
+      expect(yield* Fiber.join(second)).toEqual(outcome);
+      yield* Fiber.join(third);
+      expect(calls).toEqual(["async", "second", "third"]);
+      // Activity heard of every request in the order it was admitted, the cancelled one included.
+      expect(admitted).toEqual([asyncRequest.questions[0]!.key, "cancelled", "second", "third"]);
       expect(delivered).toBe(0);
     }),
 );
 
-it.effect("shares one bounded queue across blocking, owned and async requests", () =>
+it.effect("shares one bounded queue across blocking and async requests", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
     const host: AskUserHost = () =>
@@ -83,18 +72,11 @@ it.effect("shares one bounded queue across blocking, owned and async requests", 
     const service = yield* acquireService(host, () => Effect.void);
     const active = yield* forkNow(service.ask(request));
     yield* Deferred.await(entered);
-    const owned = yield* forkNow(
-      service.askOwned(request, { runId: "owner", assignmentEpoch: 0, requestId: "one" }),
-    );
+    const waiting = yield* forkNow(service.ask(request));
     for (let i = 0; i < MAX_PENDING_QUESTIONNAIRES - 2; i++)
       yield* service.startAsync(asyncRequest);
     expect(yield* Effect.flip(service.ask(request))).toMatchObject({ reason: "busy" });
-    expect(
-      yield* Effect.flip(
-        service.askOwned(request, { runId: "other", assignmentEpoch: 0, requestId: "two" }),
-      ),
-    ).toMatchObject({ reason: "busy" });
-    yield* Fiber.interrupt(owned);
+    yield* Fiber.interrupt(waiting);
     expect(yield* Effect.flip(service.startAsync(asyncRequest))).toMatchObject({
       reason: "busy",
     });

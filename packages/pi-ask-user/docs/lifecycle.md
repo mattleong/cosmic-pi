@@ -85,9 +85,9 @@ metadata itself would let a stale queued answer become valid after navigation or
 branch evidence cannot be read, old-generation messages are excluded from model context. Receipts
 neither restore pending work nor prove model consumption.
 
-[Owned-call capabilities](../src/boundary/host-owned-calls.ts) bind child requests to exact owner
-tuples and a root generation. Launch markers require relay but do not authenticate ownership.
+[Owned-call capabilities](../src/boundary/host-owned-calls.ts) bind the requests a root shows in
+its subagent's session to exact owner tuples and the session's generation.
 Revocation aborts calls before disposal; cancellation acknowledges only after the captured call's
 runtime Promise and finalizers settle. Old cancellation handles can join only their own generation.
-[Delivery tests](../tests/async-delivery.test.ts) and [proxy tests](../tests/proxy.test.ts) protect
+[Delivery tests](../tests/async-delivery.test.ts) and [capability tests](../tests/session-capabilities.test.ts) protect
 these authority boundaries.

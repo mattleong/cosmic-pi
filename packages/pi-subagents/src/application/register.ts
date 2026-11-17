@@ -32,7 +32,7 @@ import {
   registerSubagentActivity,
   runSubagentActivityAction,
 } from "../boundary/host-activity.ts";
-import { askSessionQuestionnaire, publishQuestionnaireAskers } from "../boundary/host-ask-user.ts";
+import { publishQuestionnaireAskers } from "../boundary/host-ask-user.ts";
 import { registerActiveRunsPrompt } from "../boundary/host-active-runs-prompt.ts";
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
 import { hostNotifier } from "../boundary/host-notifier.ts";
@@ -349,18 +349,6 @@ export function registerSubagentApplication(
             wake,
             session: () => (isLive() ? activation.ctx : undefined),
           }),
-          questionnaireHandler: (request, questionnaireOwner, shown) =>
-            Effect.suspend(() =>
-              isLive()
-                ? askSessionQuestionnaire(
-                    pi.events,
-                    activation.ctx.sessionManager.getSessionId(),
-                    request,
-                    questionnaireOwner,
-                    shown,
-                  )
-                : Effect.fail(sessionReplaced()),
-            ),
           proxyHandler: Effect.fn("SubagentsExtension.proxyHandler")(
             function* (service, callerRunId, request) {
               if (!isLive()) return yield* sessionReplaced();

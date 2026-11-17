@@ -6,7 +6,7 @@ import {
   routeRequest as request,
   submitted,
 } from "./support/questionnaire.ts";
-import { afterEach, expect, vi } from "vitest";
+import { expect } from "vitest";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -17,26 +17,24 @@ import { deferredPromise } from "pi-cosmic-core/testing";
 import { createEventBus } from "@earendil-works/pi-coding-agent";
 import { registerQuestionnaireCapability } from "../src/boundary/host-owned-calls.ts";
 import { MAX_PENDING_QUESTIONNAIRES } from "../src/questionnaire/queue.ts";
-import { askAtQuestionnaireBoundary } from "../src/boundary/host-relay.ts";
+import { askInSession } from "../src/boundary/host-askers.ts";
 import { AskUserService } from "../src/questionnaire/service.ts";
 import {
   decodeQuestionnaireRequest,
   decodeQuestionnaireOutcome,
   queryQuestionnaireCapability,
   QUESTIONNAIRE_ASKERS_QUERY,
-  QUESTIONNAIRE_RELAY_QUERY,
   type QuestionnaireEvents,
   type QuestionnaireOwner,
-  type QuestionnaireRelay,
   type AskUserOutcome,
   type AskUserRequest,
 } from "../src/protocol.ts";
-import { AskUserHostError, AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
+import { AskUserRuntimeClosedError } from "../src/questionnaire/errors.ts";
 
 const answer = submitted({ key: "route", kind: "choices", values: ["a"], labels: ["A"] });
 const owner = { runId: "run-1", assignmentEpoch: 0, requestId: "request-1" };
 // Discovered callbacks are foreign, so their results settle as untrusted values.
-const rootCapability = (bus: QuestionnaireEvents) => {
+const sessionCapability = (bus: QuestionnaireEvents) => {
   const capability = queryQuestionnaireCapability(bus, "root")!;
   return {
     ask: (input: AskUserRequest, askOwner: QuestionnaireOwner, signal: AbortSignal) =>
@@ -46,18 +44,13 @@ const rootCapability = (bus: QuestionnaireEvents) => {
   };
 };
 const askFails = (
-  capability: ReturnType<typeof rootCapability>,
+  capability: ReturnType<typeof sessionCapability>,
   askOwner: QuestionnaireOwner,
 ): Effect.Effect<boolean> =>
   Effect.exit(Effect.tryPromise((signal) => capability.ask(request, askOwner, signal))).pipe(
     Effect.map(Exit.isFailure),
   );
-const relayQueries = makeSessionCapabilityProtocol({ version: 1 });
-const attachRelay = (bus: QuestionnaireEvents, relay: QuestionnaireRelay) =>
-  bus.on(QUESTIONNAIRE_RELAY_QUERY, (data) => {
-    relayQueries.normalizeQuery(data)?.respond(relay);
-  });
-afterEach(() => vi.unstubAllEnvs());
+const queries = makeSessionCapabilityProtocol({ version: 1 });
 it("decodes bounded structured transport data and rejects hostile or semantically invalid requests", () => {
   expect(decodeQuestionnaireRequest(request)).toEqual(request);
   // The asker's name crosses the relay with its questions; anything but text does not.
@@ -80,7 +73,7 @@ it("decodes bounded structured transport data and rejects hostile or semanticall
 });
 
 it.effect(
-  "root capabilities are session-bound, refuse aborted or stale calls and revoke captured handles",
+  "a session's capability is bound to it, refuses aborted or stale calls and revokes captured handles",
   () =>
     Effect.gen(function* () {
       const bus = createEventBus();
@@ -103,7 +96,7 @@ it.effect(
         run: (effect, signal) => Effect.runPromise(effect.pipe(Effect.provide(layer)), { signal }),
       });
       expect(queryQuestionnaireCapability(bus, "other")).toBeUndefined();
-      const capability = rootCapability(bus);
+      const capability = sessionCapability(bus);
       expect(yield* Effect.tryPromise((signal) => capability.ask(request, owner, signal))).toEqual(
         answer,
       );
@@ -129,41 +122,6 @@ it.effect(
 );
 
 it.effect(
-  "marked Pi children fail closed without a relay and route answers without opening child dialogs",
-  () =>
-    Effect.gen(function* () {
-      vi.stubEnv("PI_SUBAGENT_CHILD", "1");
-      vi.stubEnv("PI_SUBAGENT_RUN_ID", "not-authentication");
-      const bus = createEventBus();
-      let local = 0;
-      let forwarded = 0;
-      const layer = AskUserService.layer(() =>
-        Effect.sync(() => {
-          local++;
-          return answer;
-        }),
-      );
-      const ask = askAtQuestionnaireBoundary(bus, "child", request).pipe(Effect.provide(layer));
-      expect(Exit.isFailure(yield* Effect.exit(ask))).toBe(true);
-      const off = attachRelay(bus, {
-        version: 1,
-        sessionId: "child",
-        ask: (input, signal) => {
-          expect(input).toEqual(request);
-          expect(signal.aborted).toBe(false);
-          forwarded++;
-          return Promise.resolve(answer);
-        },
-      });
-      expect(yield* ask).toEqual(answer);
-      off();
-      expect(Exit.isFailure(yield* Effect.exit(ask))).toBe(true);
-      expect(local).toBe(0);
-      expect(forwarded).toBe(1);
-    }),
-);
-
-it.effect(
   "a questionnaire asked for another agent opens where that agent is on screen, or here under its name",
   () =>
     Effect.gen(function* () {
@@ -179,27 +137,26 @@ it.effect(
       const paneAnswer = submitted({ key: "route", kind: "choices", values: ["b"], labels: ["B"] });
       // What the agent's own session does with the questionnaire, as each case sets it.
       type Presented = Promise<AskUserOutcome | { readonly outcome: string } | undefined>;
-      let present: (asked: AskUserRequest) => Presented = () => Promise.resolve(paneAnswer);
+      let present: (asked: AskUserRequest, signal: AbortSignal) => Presented = () =>
+        Promise.resolve(paneAnswer);
       const off = bus.on(QUESTIONNAIRE_ASKERS_QUERY, (data) => {
-        relayQueries.normalizeQuery(data)?.respond({
+        queries.normalizeQuery(data)?.respond({
           version: 1,
           sessionId: "root",
           find: (askedBy: string) =>
             askedBy === "agent-1"
               ? {
                   name: "Banner colour",
-                  present: (asked: AskUserRequest) => {
+                  present: (asked: AskUserRequest, signal: AbortSignal) => {
                     elsewhere.push(asked);
-                    return present(asked);
+                    return present(asked, signal);
                   },
                 }
               : undefined,
         });
       });
       const ask = (askedBy: string) =>
-        askAtQuestionnaireBoundary(bus, "root", { ...request, askedBy }).pipe(
-          Effect.provide(layer),
-        );
+        askInSession(bus, "root", { ...request, askedBy }).pipe(Effect.provide(layer));
 
       // On screen there: answered there, by its name, and never opened here.
       expect(yield* ask("agent-1")).toEqual(paneAnswer);
@@ -225,89 +182,70 @@ it.effect(
       local.length = 0;
       expect(yield* ask("somebody")).toEqual(answer);
       expect(local).toEqual([{ ...request, askedBy: "somebody" }]);
+
+      // The caller giving up reaches the session that is showing the questionnaire.
+      const showing = deferredPromise<AbortSignal>();
+      present = (_asked, signal) => {
+        showing.resolve(signal);
+        return Effect.runPromise(Effect.never, { signal });
+      };
+      const pending = yield* forkNow(ask("agent-1"));
+      const signal = yield* Effect.promise(() => showing.promise);
+      yield* Fiber.interrupt(pending);
+      expect(signal.aborted).toBe(true);
       off();
     }),
 );
 
-it.effect("a relay that throws or returns an invalid outcome fails as a typed relay error", () =>
+it.effect("cancel synchronously aborts its owner and acknowledges only after owned cleanup", () =>
   Effect.gen(function* () {
     const bus = createEventBus();
-    const ask = askAtQuestionnaireBoundary(bus, "child", request).pipe(
-      Effect.provide(AskUserService.layer(() => Effect.succeed(answer))),
-    );
-    for (const relayAsk of [
-      () => {
-        throw new Error("hostile relay");
-      },
-      () => Promise.resolve({ outcome: "maybe" }),
-      () => "submitted",
-    ]) {
-      const off = bus.on(QUESTIONNAIRE_RELAY_QUERY, (data) => {
-        relayQueries
-          .normalizeQuery(data)
-          ?.respond({ version: 1, sessionId: "child", ask: relayAsk });
-      });
-      const failure = yield* Effect.flip(ask);
-      expect(failure).toBeInstanceOf(AskUserHostError);
-      expect(failure).toMatchObject({ operation: "relay" });
-      off();
-    }
-  }),
-);
-
-it.effect(
-  "root cancel synchronously aborts its owner and acknowledges only after owned cleanup",
-  () =>
-    Effect.gen(function* () {
-      const bus = createEventBus();
-      const entered = yield* Deferred.make<void>();
-      const cleanupEntered = yield* Deferred.make<void>();
-      const cleanup = yield* Deferred.make<void>();
-      const service = yield* acquireService(() =>
-        Deferred.succeed(entered, undefined).pipe(
-          Effect.andThen(Effect.never),
-          Effect.ensuring(
-            Deferred.succeed(cleanupEntered, undefined).pipe(
-              Effect.andThen(Deferred.await(cleanup)),
-            ),
-          ),
+    const entered = yield* Deferred.make<void>();
+    const cleanupEntered = yield* Deferred.make<void>();
+    const cleanup = yield* Deferred.make<void>();
+    const service = yield* acquireService(() =>
+      Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.ensuring(
+          Deferred.succeed(cleanupEntered, undefined).pipe(Effect.andThen(Deferred.await(cleanup))),
         ),
-      );
-      let signal: AbortSignal | undefined;
-      const dispose = registerQuestionnaireCapability({
-        events: bus,
-        sessionId: "root",
-        generation: "one",
-        isCurrent: () => true,
-        run: (effect, ownerSignal) => {
-          signal = ownerSignal;
-          return Effect.runPromise(effect.pipe(Effect.provideService(AskUserService, service)), {
-            signal: ownerSignal,
-          });
-        },
-      });
-      const capability = rootCapability(bus);
-      const asking = capability.ask(request, owner, yield* Effect.abortSignal).then(
-        () => undefined,
-        () => undefined,
-      );
-      yield* Deferred.await(entered);
-      let acknowledged = false;
-      const cancelling = capability.cancel(owner).then(() => {
-        acknowledged = true;
-        return undefined;
-      });
-      expect(signal?.aborted).toBe(true);
-      yield* Deferred.await(cleanupEntered);
-      expect(acknowledged).toBe(false);
-      expect(yield* askFails(capability, owner)).toBe(true);
-      yield* Deferred.succeed(cleanup, undefined);
-      yield* Effect.tryPromise(() => cancelling);
-      yield* Effect.tryPromise(() => asking);
-      expect(acknowledged).toBe(true);
-      yield* Effect.tryPromise(() => capability.cancel(owner));
-      dispose();
-    }),
+      ),
+    );
+    let signal: AbortSignal | undefined;
+    const dispose = registerQuestionnaireCapability({
+      events: bus,
+      sessionId: "root",
+      generation: "one",
+      isCurrent: () => true,
+      run: (effect, ownerSignal) => {
+        signal = ownerSignal;
+        return Effect.runPromise(effect.pipe(Effect.provideService(AskUserService, service)), {
+          signal: ownerSignal,
+        });
+      },
+    });
+    const capability = sessionCapability(bus);
+    const asking = capability.ask(request, owner, yield* Effect.abortSignal).then(
+      () => undefined,
+      () => undefined,
+    );
+    yield* Deferred.await(entered);
+    let acknowledged = false;
+    const cancelling = capability.cancel(owner).then(() => {
+      acknowledged = true;
+      return undefined;
+    });
+    expect(signal?.aborted).toBe(true);
+    yield* Deferred.await(cleanupEntered);
+    expect(acknowledged).toBe(false);
+    expect(yield* askFails(capability, owner)).toBe(true);
+    yield* Deferred.succeed(cleanup, undefined);
+    yield* Effect.tryPromise(() => cancelling);
+    yield* Effect.tryPromise(() => asking);
+    expect(acknowledged).toBe(true);
+    yield* Effect.tryPromise(() => capability.cancel(owner));
+    dispose();
+  }),
 );
 
 const registerPendingRuns = () => {
@@ -327,61 +265,36 @@ const registerPendingRuns = () => {
       return completion.promise;
     },
   });
-  return { runs, dispose, capability: rootCapability(bus) };
+  return { runs, dispose, capability: sessionCapability(bus) };
 };
 
-it.effect("root capabilities bound live owners and refuse a duplicate live owner unrun", () =>
-  Effect.gen(function* () {
-    const { runs, dispose, capability } = registerPendingRuns();
-    const signal = yield* Effect.abortSignal;
-    const ownerAt = (index: number) => ({ ...owner, requestId: `request-${index}` });
-    const refused = (index: number) => {
-      const before = runs.length;
-      const asking = capability.ask(request, ownerAt(index), signal);
-      expect(runs).toHaveLength(before);
-      return Effect.promise(() => expect(asking).rejects.toBeInstanceOf(AskUserRuntimeClosedError));
-    };
-    const pending = [capability.ask(request, ownerAt(0), signal)];
-    yield* refused(0);
-    for (let index = 1; index < MAX_PENDING_QUESTIONNAIRES; index++)
-      pending.push(capability.ask(request, ownerAt(index), signal));
-    yield* refused(MAX_PENDING_QUESTIONNAIRES);
-    expect(runs).toHaveLength(MAX_PENDING_QUESTIONNAIRES);
-    for (const run of runs) run.completion.resolve(answer);
-    expect(yield* Effect.promise(() => Promise.all(pending))).toHaveLength(
-      MAX_PENDING_QUESTIONNAIRES,
-    );
-    dispose();
-  }),
-);
-
-it.effect("caller cancellation reaches a relayed questionnaire", () =>
-  Effect.gen(function* () {
-    const bus = createEventBus();
-    const ready = yield* Deferred.make<void>();
-    const cancelled = yield* Deferred.make<void>();
-    const off = attachRelay(bus, {
-      version: 1,
-      sessionId: "child",
-      ask: (_input, signal) =>
-        Effect.runPromise(
-          Deferred.succeed(ready, undefined).pipe(
-            Effect.andThen(Effect.never),
-            Effect.ensuring(Deferred.succeed(cancelled, undefined)),
-          ),
-          { signal },
-        ),
-    });
-    const pending = yield* Effect.forkChild(
-      askAtQuestionnaireBoundary(bus, "child", request).pipe(
-        Effect.provide(AskUserService.layer(() => Effect.succeed(answer))),
-      ),
-    );
-    yield* Deferred.await(ready);
-    yield* Fiber.interrupt(pending);
-    yield* Deferred.await(cancelled);
-    off();
-  }),
+it.effect(
+  "a session's capability bounds live owners and refuses a duplicate live owner unrun",
+  () =>
+    Effect.gen(function* () {
+      const { runs, dispose, capability } = registerPendingRuns();
+      const signal = yield* Effect.abortSignal;
+      const ownerAt = (index: number) => ({ ...owner, requestId: `request-${index}` });
+      const refused = (index: number) => {
+        const before = runs.length;
+        const asking = capability.ask(request, ownerAt(index), signal);
+        expect(runs).toHaveLength(before);
+        return Effect.promise(() =>
+          expect(asking).rejects.toBeInstanceOf(AskUserRuntimeClosedError),
+        );
+      };
+      const pending = [capability.ask(request, ownerAt(0), signal)];
+      yield* refused(0);
+      for (let index = 1; index < MAX_PENDING_QUESTIONNAIRES; index++)
+        pending.push(capability.ask(request, ownerAt(index), signal));
+      yield* refused(MAX_PENDING_QUESTIONNAIRES);
+      expect(runs).toHaveLength(MAX_PENDING_QUESTIONNAIRES);
+      for (const run of runs) run.completion.resolve(answer);
+      expect(yield* Effect.promise(() => Promise.all(pending))).toHaveLength(
+        MAX_PENDING_QUESTIONNAIRES,
+      );
+      dispose();
+    }),
 );
 
 it.effect("an owned questionnaire reports shown once it opens, not while it is queued", () =>
@@ -423,36 +336,5 @@ it.effect("an owned questionnaire reports shown once it opens, not while it is q
     expect(yield* Effect.promise(() => Promise.all([first, second]))).toEqual([answer, answer]);
     expect(shown).toEqual(["first", "second"]);
     dispose();
-  }),
-);
-
-it.effect("a relayed questionnaire reports shown once, when the root says it opened", () =>
-  Effect.gen(function* () {
-    const bus = createEventBus();
-    const reply = deferredPromise<AskUserOutcome>();
-    let report: (() => void) | undefined;
-    const off = attachRelay(bus, {
-      version: 1,
-      sessionId: "child",
-      ask: (_input, _signal, shown) => {
-        report = shown;
-        return reply.promise;
-      },
-    });
-    let shown = 0;
-    const asking = yield* forkNow(
-      askAtQuestionnaireBoundary(bus, "child", request, () => {
-        shown++;
-      }).pipe(Effect.provide(AskUserService.layer(() => Effect.succeed(answer)))),
-    );
-    expect(shown).toBe(0);
-    report?.();
-    report?.();
-    expect(shown).toBe(1);
-    reply.resolve(answer);
-    expect(yield* Fiber.join(asking)).toEqual(answer);
-    report?.();
-    expect(shown).toBe(1);
-    off();
   }),
 );

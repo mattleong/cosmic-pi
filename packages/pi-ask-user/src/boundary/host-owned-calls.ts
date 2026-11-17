@@ -37,8 +37,7 @@ interface QuestionnaireCapabilityOptions {
   ) => Promise<AskUserOutcome>;
 }
 const queries = makeSessionCapabilityProtocol({ version: 1 });
-const UNAVAILABLE =
-  "The root questionnaire capability is unavailable or its owner is already active.";
+const UNAVAILABLE = "The questionnaire capability is unavailable or its owner is already active.";
 const INVALID_OWNER = "Invalid questionnaire owner.";
 const decodeOwner = decodeUnknownOrUndefined(QuestionnaireOwnerSchema);
 const isShownCallback = Schema.is(ForeignCallable<[]>());
@@ -98,7 +97,7 @@ export function registerQuestionnaireCapability(
             : Effect.void,
         );
         running = options.run(
-          AskUserService.use((service) => service.askOwned(request, owner, reportShown)),
+          AskUserService.use((service) => service.ask(request, reportShown)),
           linked,
         );
         return running.finally(finish);

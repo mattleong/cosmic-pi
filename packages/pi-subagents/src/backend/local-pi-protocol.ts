@@ -135,10 +135,6 @@ const ProxyNotificationSchema = piSubagentsMessage("proxy_notification", {
   /** The notice's display receipt, which the child's renderer decodes. */
   details: Schema.optionalKey(Schema.Json),
 });
-/** The root opened the questionnaire a pending `ask_user` proxy call asked; a display hint only. */
-const ProxyQuestionnaireShownSchema = piSubagentsMessage("proxy_questionnaire_shown", {
-  requestId: ProtocolIdSchema,
-});
 const TurnInputBarrierSchema = piSubagentsMessage("turn_input_barrier", {
   requestId: ProtocolIdSchema,
 });
@@ -161,7 +157,6 @@ const LocalPiParentControlSchema = Schema.Union([
   PeerNoticeSchema,
   ProxyResponseSchema,
   ProxyNotificationSchema,
-  ProxyQuestionnaireShownSchema,
   TurnInputBarrierSchema,
 ]);
 export type LocalPiContact = typeof LocalPiContactSchema.Type;

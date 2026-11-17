@@ -1,16 +1,17 @@
 # Architecture
 
-`pi-ask-user` collects structured user decisions through blocking questionnaires, asynchronous
-questionnaires, and authenticated child requests. A session owns pending work; submitted answers
-are ordinary session content, not durable questionnaire state.
+`pi-ask-user` collects structured user decisions through blocking and asynchronous
+questionnaires, and shows in a subagent's own session the questionnaires its root sends there. A
+session owns pending work; submitted answers are ordinary session content, not durable
+questionnaire state.
 
 ## Ownership and boundaries
 
 - [Application](src/application.ts) owns the session-runtime slot, activation, tool registration,
   preview replay, and context filtering. [Layer composition](src/layer.ts) supplies the current
   host callbacks and the session's preview scheduler.
-- [Questionnaire service](src/questionnaire/service.ts) validates and runs blocking and owned
-  calls. It shares a bounded [FIFO queue](src/questionnaire/queue.ts) with the
+- [Questionnaire service](src/questionnaire/service.ts) validates and runs blocking calls. It
+  shares a bounded [FIFO queue](src/questionnaire/queue.ts) with the
   [async controller](src/questionnaire/async-service.ts), which owns retained results, waiter
   claims, cancellation, presenters, and automatic delivery.
 - [Questionnaire model](src/questionnaire/model.ts), [reducer](src/questionnaire/reducer.ts), and
@@ -30,16 +31,21 @@ are ordinary session content, not durable questionnaire state.
 ## Session lifecycle and history
 
 Factory loading registers lifecycle hooks, the resume command, and service-free history/message
-renderers. Service, relay, and capability modules load eagerly; session start captures historical
-receipts in every mode, then admits UI sessions and marked children before constructing the
-session service Layer. Trusted preview settings settle before tools register from the current
-activation; interrupted startup cannot activate a retired session. TUI supports blocking and async
-tools; RPC supports blocking interaction. Marked Pi children use the authenticated root relay.
-Other headless modes create no questionnaire runtime and receive no questionnaire tools, but
-retain receipt-based context filtering and historical rendering.
+renderers. Service and capability modules load eagerly; session start captures historical
+receipts in every mode, then admits UI sessions before constructing the session service Layer.
+Trusted preview settings settle before tools register from the current activation; interrupted
+startup cannot activate a retired session. TUI supports blocking and async tools; RPC supports
+blocking interaction. Other headless modes create no questionnaire runtime and receive no
+questionnaire tools, but retain receipt-based context filtering and historical rendering.
+
+A subagent's session, which pi-subagents marks in its environment, gets no questionnaire tools:
+whether a question is the user's to answer is the main agent's decision. Such a session with a
+screen of its own, as a Rex-hosted one has, publishes the
+[owned-call capability](src/boundary/host-owned-calls.ts), through which its root shows a
+questionnaire there; one without a screen creates no runtime.
 
 The local TUI/external-editor adapter loads only when an admitted local questionnaire needs it,
-not during runtime startup, RPC dialogs, or child relay. Dialog acquisition and prompt admission
+not during runtime startup or RPC dialogs. Dialog acquisition and prompt admission
 remain inside the questionnaire scope, including the post-import admission check.
 
 Replacement, shutdown, and successful tree navigation revoke admission, delivery, and child
@@ -58,18 +64,17 @@ a cancelled or failed result is labeled automated.
 
 ## Critical invariants
 
-- Blocking, child, and async requests share dialog admission. Cancellation cannot let a queued
+- Blocking, owned, and async requests share dialog admission. Cancellation cannot let a queued
   successor bypass an earlier presenter or its cleanup.
 - Async admission, mounting, answering, and delivery are separate outcomes. Interrupting an
   await does not cancel its presenter. A returned send call is not model acknowledgement;
   answers remain recoverable and delivery IDs support deduplication.
-- Child ownership is authenticated by the coordinator's capabilities, not launch markers alone.
-  Owned answers return to their caller instead of automatically steering the root agent.
+- An owned call is bound to its exact owner and the capability's generation. Its answer returns
+  to the caller that asked, never into the session that showed it.
 - A questionnaire asked for another agent (`askedBy`) is still the caller's: the
-  [session boundary](src/boundary/host-relay.ts) asks whoever runs that agent for its name and
-  for a screen it is on, shows the questions there, and opens them in the caller's session
-  whenever that screen can't answer. A child with a screen publishes the same capability the root
-  does, so its root can show a questionnaire there.
+  [asker boundary](src/boundary/host-askers.ts) asks whoever runs that agent for its name and for
+  a screen it is on, shows the questions there, and opens them in the caller's session whenever
+  that screen can't answer.
 - Dialog settlement revokes callbacks and joins admitted editor cleanup before another dialog
   or session takes over the TUI. Hidden dialogs retain drafts while the host owns hide/resume.
 - Decision strings remain lossless in native results. Display sanitization is separate, and
@@ -78,5 +83,5 @@ a cancelled or failed result is labeled automated.
 
 The focused [lifecycle rationale](docs/lifecycle.md) explains queue/delivery races, editor cleanup,
 and branch evidence. [Service tests](tests/async-service.test.ts), [host ownership tests](tests/tui-ownership.test.ts),
-[application tests](tests/application.test.ts), and [proxy tests](tests/proxy.test.ts) protect those
+[application tests](tests/application.test.ts), and [capability tests](tests/session-capabilities.test.ts) protect those
 invariants. Tool contracts, controls, and rendering behavior are in the [reference](docs/reference.md).

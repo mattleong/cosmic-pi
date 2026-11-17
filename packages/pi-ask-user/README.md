@@ -62,6 +62,6 @@ Pi's external-editor binding (`Ctrl+G` by default) edits long answers and notes 
 
 ## How it works
 
-Every questionnaire, async request, and child question shares one FIFO queue, so only one dialog is shown at a time. Async answers reach the agent as a steering message, or go straight to a caller that is already awaiting them. RPC sessions fall back to Pi's native `select` and `input` dialogs; JSON and print modes don't register the tools. The extension makes no model calls and stores answers only in Pi's session history.
+Every questionnaire and async request shares one FIFO queue, so only one dialog is shown at a time. Async answers reach the agent as a steering message, or go straight to a caller that is already awaiting them. RPC sessions fall back to Pi's native `select` and `input` dialogs; JSON and print modes don't register the tools. The extension makes no model calls and stores answers only in Pi's session history.
 
 See [docs/reference.md](docs/reference.md) for the full tool contract, limits, and delivery semantics, and [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.
