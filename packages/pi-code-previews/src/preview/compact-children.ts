@@ -77,10 +77,14 @@ export function renderCompactChildren(
 ): string[] {
   if (!children || width <= 0) return [];
   const flat = options.layout === "flat";
-  const { entries, omitted, hiddenFailed } = selectCompactChildren(
-    children,
-    options.all ? Infinity : MAX_CHILDREN,
-  );
+  const { entries, omitted, hiddenFailed } =
+    options.all || children.showAll
+      ? {
+          entries: children.entries,
+          omitted: Math.max(0, children.total - children.entries.length),
+          hiddenFailed: 0,
+        }
+      : selectCompactChildren(children);
   const rows =
     flat && omitted > 0
       ? wrapHanging(`… ${countLabel(omitted, "call")} not listed`, width, "", "", 0, {

@@ -76,7 +76,8 @@ export function compactExpandLabel(
 ): string | undefined {
   const label = declared(summary);
   if (Predicate.isString(label)) return label;
-  if (phase === "settled" && (summary.children?.total ?? 0) > 0) return "calls";
+  if (phase === "settled" && !summary.children?.showAll && (summary.children?.total ?? 0) > 0)
+    return "calls";
   if (label === false) return undefined;
   if (showsContent(result)) return contentLabel(summary);
   const pendingInput = phase !== "settled" && input !== undefined && Rec.keys(input).length > 0;

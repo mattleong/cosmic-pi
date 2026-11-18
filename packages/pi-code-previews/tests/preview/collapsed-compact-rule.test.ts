@@ -174,15 +174,16 @@ describe("a settled codemode row", () => {
     { type: "text", text: "SCRIPT_OUTPUT" },
   );
 
-  it("is one row with its failed call lifted, counted in its heading, and offers its calls", () => {
+  it("keeps successful and failed calls visible without expanding script output", () => {
     const harness = createToolPresentationHarness(codemodeRenderers());
     harness.call(args, { executionStarted: true });
     harness.result(result);
     const rows = plain(harness.render(120));
-    expect(rows).toHaveLength(2);
     expect(rows[0]).toContain("1 failed");
-    expect(rows[1]).toContain("SECOND_FAILED");
-    expect(Arr.join(rows, "\n")).not.toContain("FIRST_CALL");
+    const collapsed = Arr.join(rows, "\n");
+    for (const marker of ["FIRST_CALL", "SECOND_CALL", "SECOND_FAILED"])
+      expect(collapsed).toContain(marker);
+    expect(collapsed).not.toContain("SCRIPT_OUTPUT");
     expect(expansionTag(harness.render(120)[0] ?? "")).toBeTruthy();
 
     harness.call(args, { executionStarted: true, expanded: true });

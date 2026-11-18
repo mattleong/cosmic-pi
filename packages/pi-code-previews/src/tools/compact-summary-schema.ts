@@ -39,6 +39,7 @@ const Summary = Schema.Struct({
     Schema.Struct({
       total: Schema.Natural,
       noun: Schema.optionalKey(Schema.String),
+      showAll: Schema.optionalKey(Schema.Literal(true)),
       entries: Schema.Array(
         Schema.Struct({
           ...Fields,

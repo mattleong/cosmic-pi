@@ -102,7 +102,7 @@ export interface CompactSummary {
    * its problem lines, so the label names whatever expansion shows beyond those. Without it the
    * shell infers `output`, `error`, or `details` from what the collapsed row leaves out; `false`
    * omits the affordance because expansion only repeats what the collapsed row shows. A settled
-   * compact row with `children` always offers them, as `calls` unless the label is set.
+   * compact row with hidden `children` always offers them, as `calls` unless the label is set.
    */
   expandLabel?: string | false;
   /**
@@ -115,10 +115,11 @@ export interface CompactSummary {
    * Nested calls, such as a program's tool calls. While the call is pending or running, a collapsed
    * compact row shows them as a live tree beneath it; once it settles they show only expanded, and
    * the collapsed row lifts each hidden call's errors, warnings, and questions into its own problem
-   * lines, naming the call. Count them in `counters` too (`· 6 calls · 1 failed`).
+   * lines, naming the call. Set `showAll` to keep every child visible in both phases, as codemode
+   * does for its tool calls. Count them in `counters` too (`· 6 calls · 1 failed`).
    */
   /** `noun` names one child in the row counting those left out (`… 3 more agents`); `call` by default. */
-  children?: { entries: readonly CompactChild[]; total: number; noun?: string };
+  children?: { entries: readonly CompactChild[]; total: number; noun?: string; showAll?: true };
 }
 
 export type CompactSummaryProvider<

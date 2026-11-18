@@ -23,7 +23,6 @@ import {
 import type { CompactIssue } from "./compact-issues";
 import { argumentFailureIssue } from "./argument-failure";
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
-import { selectCompactChildren } from "../preview/compact-children";
 import {
   nativeArgumentPreview,
   safeNativeArgumentText,
@@ -176,6 +175,7 @@ export function nativeCodemodeChildren(
   const children = {
     entries: Arr.map(calls, (call) => child(call, phase, cwd)),
     total: calls.length,
+    showAll: true as const,
   };
   projected.set(key, children);
   return children;
@@ -213,7 +213,7 @@ function evidenceIssues(
 
 /**
  * How many calls the program made, with how many failed, as one combined counter whose shorter
- * alternative keeps the failures: a settled row hides its call tree, so the heading counts it.
+ * alternative keeps the failures.
  */
 function callCounters(
   evidence: NativeCallEvidence,
@@ -233,11 +233,9 @@ function callCounters(
 }
 
 /**
- * What expanding a settled program reveals beyond its row: its calls, else its output (its error
- * when it failed), else its program.
+ * Expansion reveals the output (or error) and the program behind the visible call tree.
  */
 function settledExpandLabel(summary: CompactSummary, result: AgentToolResult<unknown>): string {
-  if ((summary.children?.total ?? 0) > 0) return "calls";
   const output = Arr.some(
     result.content.slice(1),
     (part) => part.type === "image" || Str.isNonEmpty(Str.trim(part.text)),
@@ -274,7 +272,7 @@ function scriptFailure(
     };
   const failure = issue("native-script-error", text || "The script failed");
   const explained = Arr.some(
-    selectCompactChildren(summary.children).entries,
+    summary.children.entries,
     (entry) =>
       entry.status === "error" &&
       Arr.some(

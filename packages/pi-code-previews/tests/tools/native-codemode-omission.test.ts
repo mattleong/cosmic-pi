@@ -23,7 +23,7 @@ beforeEach(() =>
 );
 
 for (const style of ["compact", "preview"] as const)
-  test(`native ${style} exposes omitted failures while preserving active selection and expansion`, () => {
+  test(`native ${style} keeps failed and active calls visible without expansion`, () => {
     applyPresentationSettings({ toolCallCollapsedStyle: style });
     const h = createToolPresentationHarness(codemodeRenderers());
     const args = { code: "// PROGRAM_RETAINED" };
@@ -61,10 +61,11 @@ for (const style of ["compact", "preview"] as const)
     for (const width of [16, 24, 40, 80]) {
       const rows = h.render(width);
       assert.ok(Arr.every(rows, (row) => visibleWidth(row) <= width));
-      assert.ok(
-        Fn.pipe(stripAnsi(Arr.join(rows, "")), Str.replace(/\s/gu, ""), Str.includes("1failed")),
-      );
     }
+    const collapsed = stripAnsi(Arr.join(h.render(160), "\n"));
+    assert.ok(Fn.pipe(collapsed, Str.includes("FAILURE_RETAINED")));
+    for (let index = 0; index < 5; index++)
+      assert.ok(Fn.pipe(collapsed, Str.includes(`active-${index}.ts`)));
     h.call(args, { expanded: true, isPartial: true });
     h.result(result, { expanded: true, isPartial: true });
     const expanded = stripAnsi(Arr.join(h.render(160), "\n"));

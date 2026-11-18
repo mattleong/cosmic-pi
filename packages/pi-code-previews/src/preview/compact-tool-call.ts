@@ -79,8 +79,8 @@ function childProblemIssues(summary: CompactSummary): CompactIssue[] {
 /**
  * A collapsed compact call: its one heading row, then one line per problem or pending question.
  * Everything else waits for expansion. While the call is pending or running its live call tree
- * (`children`) shows beneath the row; once it settles the tree hides, and the problems of its
- * calls are lifted beneath the row instead. The row ends in its tag, `▸ label` or a bare `▸`, when
+ * (`children`) shows beneath the row; unless it requests `showAll`, the settled tree hides and its
+ * problems are lifted beneath the row instead. The row ends in its tag, `▸ label` or a bare `▸`, when
  * expansion reveals more (`expandLabel`), unless the tag would reveal only a subject the row shows
  * whole (`expandsSubjectOnly`) and nothing else is hidden.
  */
@@ -91,8 +91,8 @@ export function renderCompactToolCall(
 ): string[] {
   if (width <= 0) return [];
   const { summary } = input;
-  const live = input.phase !== "settled";
-  const hiddenTree = !live && (summary.children?.total ?? 0) > 0;
+  const showTree = input.phase !== "settled" || summary.children?.showAll;
+  const hiddenTree = !showTree && (summary.children?.total ?? 0) > 0;
   // A hidden call tree is more than the subject, so the tag stays.
   const row = hiddenTree
     ? { ...input, summary: Struct.omit(summary, ["expandsSubjectOnly"]) }
@@ -101,7 +101,7 @@ export function renderCompactToolCall(
   return [
     layout.row,
     ...renderCompactIssues(summary.issues, theme, width),
-    ...(live
+    ...(showTree
       ? renderCompactChildren(summary.children, theme, width, {
           animationFrame: input.animationFrame,
           timingEnabled: input.timingEnabled,
