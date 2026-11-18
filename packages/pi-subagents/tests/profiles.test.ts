@@ -146,6 +146,48 @@ describe("subagent v6 profile configuration and resolution", () => {
     ]);
   });
 
+  it("checks a parent's resolved model for ultrafast without changing the fallback's tier", () => {
+    const config = resolveTestConfig(
+      document({
+        profiles: {
+          scout: [candidate({ openaiFastMode: "ultrafast" }), candidate({ openaiFastMode: true })],
+        },
+      }),
+    );
+    expect(resolveProfilePlan("scout", config, environment)).toMatchObject({
+      kind: "resolved",
+      attempts: [{ candidateIndex: 1, openaiFastMode: true }],
+      skippedCandidates: [{ candidateIndex: 0, code: "fast_mode_unsupported" }],
+    });
+    expect(
+      resolveProfilePlan("scout", config, {
+        ...environment,
+        availablePiModels: [{ provider: "openai-codex", id: "gpt-6.2-sol" }],
+        parentModel: { model: "openai-codex/gpt-6.2-sol", effort: "high" },
+      }),
+    ).toMatchObject({
+      attempts: [
+        { candidateIndex: 0, openaiFastMode: "ultrafast" },
+        { candidateIndex: 1, openaiFastMode: true },
+      ],
+      skippedCandidates: [],
+    });
+  });
+
+  it("fails an explicit unsupported ultrafast route closed rather than silently downgrading", () => {
+    const decoded = subagentConfigDecoder("global")(
+      document({
+        profiles: {
+          scout: candidate({ model: "openai/gpt-6.2-sol", openaiFastMode: "ultrafast" }),
+          worker: candidate({ model: "openai-codex/gpt-5.6-sol", openaiFastMode: "ultrafast" }),
+          planner: candidate({ model: "openai-codex/gpt-6.2-sol", openaiFastMode: "ultrafast" }),
+        },
+      }),
+    );
+    expect(invalidRoutes(decoded)).toEqual(expect.arrayContaining(["scout", "worker"]));
+    expect(invalidRoutes(decoded)).not.toContain("planner");
+  });
+
   it("bounds and redacts named profile sets and fails invalid defaults closed", () => {
     const secretName = "bad/secret-name";
     const names = Rec.fromEntries(

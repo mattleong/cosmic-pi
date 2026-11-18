@@ -43,6 +43,7 @@ const encodeConfigDocument = (overrides: JsonObject): string =>
 
 export const extensionHarness = (
   options: {
+    readonly child?: boolean;
     readonly dependencies?: BetterOpenAIExtensionDependencies;
     readonly config?: JsonObject;
     readonly toolSource?: SourceInfo;
@@ -58,7 +59,10 @@ export const extensionHarness = (
       path.join(cwd, ".pi", "extensions", "pi-better-openai.json"),
       encodeConfigDocument(options.config ?? {}),
     );
-    yield* Effect.sync(() => vi.stubEnv("PI_CODING_AGENT_DIR", agentDir));
+    yield* Effect.sync(() => {
+      vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+      vi.stubEnv("PI_SUBAGENT_CHILD", options.child ? "1" : undefined);
+    });
     const notify = vi.fn<ExtensionUIContext["notify"]>();
     const setStatus = vi.fn<ExtensionUIContext["setStatus"]>();
     const setFooter = vi.fn<ExtensionUIContext["setFooter"]>();

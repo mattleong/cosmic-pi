@@ -1,3 +1,4 @@
+import type { OpenAIFastMode } from "pi-better-openai/fast-models";
 import type {
   ProfileCandidate,
   ProfileId,
@@ -27,7 +28,7 @@ export interface SubagentStartResolvedRoute {
   readonly agent?: string | undefined;
   readonly model: string;
   readonly effort: SubagentEffort;
-  readonly openaiFastMode: boolean;
+  readonly openaiFastMode: OpenAIFastMode;
   readonly candidateIndex?: number | undefined;
   readonly warning?: string | undefined;
   readonly modelOverride?: SubagentModelOverride | undefined;

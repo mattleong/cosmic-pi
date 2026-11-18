@@ -59,7 +59,7 @@ export const workspaceHarness = (
       provider: "test",
       id: selector,
       selector,
-      fastModeAvailable: false,
+      fastModes: [],
     })),
   }));
   const component = new ProfileWorkspaceComponent({
@@ -74,7 +74,7 @@ export const workspaceHarness = (
     saveSession,
     saveDraft,
     loadModelPicker,
-    supportedPiEfforts: () => ["low", "high"],
+    availableModel: () => ({ supportedEfforts: ["low", "high"], fastModes: [] }),
     ...overrides,
   });
   return {
@@ -122,7 +122,7 @@ export const dashboardHarness = (options: {
       close,
       saveDraft,
       loadModelPicker: () => ({ choices: [] }),
-      supportedPiEfforts: () => undefined,
+      availableModel: () => undefined,
       ...options.workspace,
     },
   });

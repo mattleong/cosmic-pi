@@ -53,6 +53,7 @@ const makePicker = (
     theme: plainTheme,
     inspection: options.value ?? inspection(),
     projectTrusted: options.projectTrusted ?? true,
+    availableModel: () => undefined,
     getHeight: () => options.height ?? 30,
     requestRender: vi.fn(),
     close,

@@ -15,6 +15,7 @@ import {
 import type { CandidateModelPickerData } from "./profile-model-catalog.ts";
 import { sessionChangedProfiles } from "../profiles/session-overrides.ts";
 import {
+  type ProfileEditorModels,
   type ProfileWorkspacePane,
   type ProfileWorkspaceField,
 } from "./ui/profile-workspace-model.ts";
@@ -45,7 +46,7 @@ export type ProfileWorkspaceSaveResult =
     }
   | { readonly refreshError: string };
 
-export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
+export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions, ProfileEditorModels {
   readonly theme: Theme;
   /** The whole surface's height, which with the width decides how panes are arranged. */
   readonly getFrameHeight?: (() => number) | undefined;
@@ -57,7 +58,6 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
   readonly initialFocus?: ProfileWorkspacePane | undefined;
   readonly initialAdvancedExpanded?: boolean | undefined;
   readonly initialSelections?: ReadonlyMap<ProfileId, ProfileWorkspaceSelectionMemory> | undefined;
-  readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
   readonly close: () => void;
   readonly saveSession?: (() => void) | undefined;
@@ -68,9 +68,6 @@ export interface ProfileWorkspaceOptions extends SearchableSelectHostOptions {
     restore?: ProfileEditRestore,
   ) => Promise<ProfileWorkspaceSaveResult>;
   readonly loadModelPicker: (candidate: ProfileCandidate) => CandidateModelPickerData;
-  readonly supportedPiEfforts: (
-    candidate: ProfileCandidate,
-  ) => ReadonlyArray<SubagentEffort> | undefined;
   readonly editVisit?: ProfileEditVisit | undefined;
   readonly onInspection?: ((inspection: ProfileSettingsInspection) => void) | undefined;
 }
@@ -148,8 +145,7 @@ export class ProfileWorkspaceComponent
     field: Exclude<ProfileWorkspaceField, "advanced">,
   ): void {
     if (field === "model") this.openModelPicker(candidate);
-    else if (field === "openaiFastMode") this.openFastModePicker(candidate);
-    else this.showFieldPicker(candidate, field, this.options.supportedPiEfforts(candidate));
+    else this.showFieldPicker(candidate, field);
   }
 
   protected back(): void {
@@ -315,6 +311,7 @@ export class ProfileWorkspaceComponent
         target: this.options.target,
         parentEffort: this.options.parentEffort,
         parentModel: this.options.parentModel,
+        availableModel: this.options.availableModel,
         shell: this.shell,
         candidateIndex: this.candidateIndex,
         fieldIndex: this.fieldIndex,

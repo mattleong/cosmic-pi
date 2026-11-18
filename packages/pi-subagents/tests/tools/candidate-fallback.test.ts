@@ -56,7 +56,9 @@ const LUNA = "openai-codex/gpt-6-luna";
 const NOVA = "openai-codex/gpt-6-nova";
 const TERRA = "openai-codex/gpt-6-terra";
 
-const registryModels = Arr.map([REPORTED, LUNA, NOVA, TERRA], (selector) => {
+const SOL = "openai-codex/gpt-6.2-sol";
+
+const registryModels = Arr.map([REPORTED, LUNA, NOVA, TERRA, SOL], (selector) => {
   const [provider, id = ""] = Str.split(selector, "/");
   return modelFixture({ provider, id, name: id, reasoning: true });
 });
@@ -476,14 +478,24 @@ describe("readiness probes between candidates", () => {
     });
     const { layer } = driverServiceFixture(fixture.driver, { notify: acknowledgeCompletions });
     return withService(layer, function* (service) {
-      const result = yield* start(service, routeProfiles([LUNA, NOVA, REPORTED]), [
-        { task: "Map the auth flow" },
-      ]);
+      const result = yield* start(
+        service,
+        mixedProfiles([
+          declaredCandidate(LUNA, { openaiFastMode: true }),
+          declaredCandidate(NOVA),
+          declaredCandidate(SOL, { openaiFastMode: "ultrafast" }),
+        ]),
+        [{ task: "Map the auth flow" }],
+      );
       expect(result.structuredContent).toMatchObject({ outcome: "started" });
-      expect(fixture.spawns).toEqual([LUNA, REPORTED]);
+      expect(fixture.spawns).toEqual([LUNA, SOL]);
+      expect(decodeStartDetails(result.details).startEntries[0]).toMatchObject({
+        model: SOL,
+        openaiFastMode: "ultrafast",
+      });
       const [run] = yield* runViews(service);
       assert(run !== undefined);
-      expect(run).toMatchObject({ state: "running", model: REPORTED });
+      expect(run).toMatchObject({ state: "running", model: SOL, openaiFastMode: "ultrafast" });
       expect(
         Arr.map(run.selection.skippedCandidates, ({ candidate, code }) => [candidate.model, code]),
       ).toContainEqual([NOVA, "node_executable_missing"]);

@@ -1,4 +1,4 @@
-import { supportsFastModel } from "pi-better-openai/fast-models";
+import { supportsFastModel, type OpenAIFastMode } from "pi-better-openai/fast-models";
 import * as Arr from "effect/Array";
 import * as Equivalence from "effect/Equivalence";
 import * as Fn from "effect/Function";
@@ -79,12 +79,14 @@ export const isProfileModelSelector = (selector: string): boolean => {
   );
 };
 
+export const OpenAIFastModeSchema = Schema.Literals([false, true, "ultrafast"]);
+
 export interface ProfileCandidate {
   readonly model: string;
   readonly effort: ProfileCandidateEffort;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  readonly openaiFastMode?: boolean | undefined;
+  readonly openaiFastMode?: OpenAIFastMode | undefined;
 }
 
 export interface ProfileRoute {
@@ -120,10 +122,10 @@ export const normalizeDeclaredProfileRoute = (route: DeclaredProfileRoute): Prof
   return { candidates: cloneProfileCandidates(Arr.ensure(route)) };
 };
 
-export const supportsSubagentFastMode = (model: string): boolean => {
+export const supportsSubagentFastMode = (model: string, mode: OpenAIFastMode = true): boolean => {
   if (model === "parent") return true;
   const selected = splitPiModelSelector(model);
-  return selected ? supportsFastModel(selected.provider, selected.model) : false;
+  return selected ? supportsFastModel(selected.provider, selected.model, mode) : false;
 };
 
 export type ProfileCandidateValidationIssueCode =
@@ -138,7 +140,10 @@ export const profileCandidateValidationIssues = (
 ): ReadonlyArray<ProfileCandidateValidationIssue> => {
   const issues: ProfileCandidateValidationIssue[] = [];
   if (!isProfileModelSelector(candidate.model)) issues.push({ code: "model_selector_invalid" });
-  if (candidate.openaiFastMode === true && !supportsSubagentFastMode(candidate.model))
+  if (
+    candidate.openaiFastMode &&
+    !supportsSubagentFastMode(candidate.model, candidate.openaiFastMode)
+  )
     issues.push({ code: "fast_mode_unsupported" });
   return issues;
 };

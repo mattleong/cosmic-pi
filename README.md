@@ -5,7 +5,7 @@ A pnpm workspace for Pi extensions.
 ## Packages
 
 - [`pi-ask-user`](packages/pi-ask-user) — structured, responsive questionnaires for decisions the agent should not guess.
-- [`pi-better-openai`](packages/pi-better-openai) — fast mode, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
+- [`pi-better-openai`](packages/pi-better-openai) — fast mode, Sol 6.2 ultrafast, usage visibility, reusable OpenAI UI primitives, footer polish, and OpenAI image generation.
 - [`pi-background-task`](packages/pi-background-task) — session-scoped background tasks with an agent tool; `/tasks` opens them in the shared Activity view.
 - [`pi-code-previews`](packages/pi-code-previews) — syntax-highlighted builtin previews, native codemode/MCP presentation, and a reusable tool shell.
 - [`pi-cosmic-core`](packages/pi-cosmic-core) — shared Effect-first runtime foundations for the extension packages.

@@ -1,3 +1,4 @@
+import { fastModeMark } from "pi-better-openai/fast-models";
 import * as Str from "effect/String";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
@@ -5,11 +6,8 @@ import * as Match from "effect/Match";
 import * as Predicate from "effect/Predicate";
 import { managerNoticeGlyph } from "pi-cosmic-ui/manager";
 import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
-import {
-  supportsSubagentFastMode,
-  type ProfileCandidate,
-  type ProfileId,
-} from "../../profiles/model.ts";
+import type { ProfileCandidate, ProfileId } from "../../profiles/model.ts";
+import type { ProjectedPiModel } from "../profile-model-catalog.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
   candidateEfforts,
@@ -17,6 +15,7 @@ import {
   profileWorkspaceScope,
   updateCandidateControls,
   type CandidateUpdate,
+  type ProfileFastModes,
   type ProfileRouteDraft,
   type ProfileSettingsInspection,
   type ProfileSettingsScope,
@@ -42,9 +41,17 @@ interface ProfileWorkspaceFieldRow {
   readonly fixedReason?: string | undefined;
 }
 
+/** Model capabilities from the current catalog, resolving inherited and unavailable models. */
+export interface ProfileEditorModels {
+  readonly parentModel?: string | undefined;
+  readonly availableModel: (
+    selector: string,
+  ) => Pick<ProjectedPiModel, "fastModes" | "supportedEfforts"> | undefined;
+}
+
 interface CandidateFieldChangeOptions {
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
-  readonly fastModeAvailable?: boolean | undefined;
+  readonly fastModes?: ProfileFastModes | undefined;
   readonly profile?: ProfileId | undefined;
   readonly parentEffort?: SubagentEffort | undefined;
 }
@@ -114,19 +121,15 @@ export const candidateModelLabel = (
   return `inherit (${model})`;
 };
 
-export const candidateFastModeAvailable = (
+export const candidateFastMark = (
   candidate: ProfileCandidate,
-  parentModel: string | undefined,
-): boolean => {
-  const model = candidate.model === "parent" ? parentModel : candidate.model;
-  return model !== undefined && supportsSubagentFastMode(model);
+  models: ProfileEditorModels,
+): string => {
+  const mode = candidate.openaiFastMode;
+  return mode && models.availableModel(candidate.model)?.fastModes.includes(mode)
+    ? ` ${fastModeMark(mode)}`
+    : "";
 };
-
-export const candidateFastModeApplied = (
-  candidate: ProfileCandidate,
-  parentModel?: string,
-): boolean =>
-  candidate.openaiFastMode === true && candidateFastModeAvailable(candidate, parentModel);
 
 export const targetProfilePrimarySummary = (
   inspection: ProfileSettingsInspection,
@@ -143,22 +146,29 @@ export const targetProfilePrimarySummary = (
 
 const advancedSummaryValues = (
   candidate: ProfileCandidate,
-  parentModel: string | undefined,
+  fastModes: ProfileFastModes,
 ): ReadonlyArray<string> =>
   Arr.filter(
     [
       candidate.context === "fork" ? "forked context" : undefined,
-      candidateFastModeApplied(candidate, parentModel) ? "fast mode" : undefined,
+      candidate.openaiFastMode ? fastModeValue(candidate, fastModes) : undefined,
     ],
     Predicate.isNotUndefined,
   );
 
+const fastModeValue = (candidate: ProfileCandidate, fastModes: ProfileFastModes): string => {
+  const mode = candidate.openaiFastMode;
+  const value = mode === "ultrafast" ? "ultrafast" : mode ? "on, fast" : "off";
+  return (mode ? !fastModes.includes(mode) : fastModes.length === 0)
+    ? `${value}, unavailable`
+    : value;
+};
+
 const advancedCandidateRows = (
   candidate: ProfileCandidate,
-  parentModel: string | undefined,
+  fastModes: ProfileFastModes,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
-  const fastAvailable = candidateFastModeAvailable(candidate, parentModel);
-  const fastFixed = !fastAvailable && !candidate.openaiFastMode;
+  const fastFixed = fastModes.length === 0 && !candidate.openaiFastMode;
   return [
     {
       field: "context",
@@ -169,15 +179,9 @@ const advancedCandidateRows = (
     {
       field: "openaiFastMode",
       label: "  OpenAI fast mode",
-      value: fastAvailable
-        ? candidate.openaiFastMode
-          ? "on, priority"
-          : "off, standard"
-        : candidate.openaiFastMode
-          ? "on, but unavailable"
-          : "off, unavailable",
+      value: fastModeValue(candidate, fastModes),
       fixed: fastFixed,
-      ...(fastFixed && { fixedReason: "The selected model does not support OpenAI fast mode." }),
+      ...(fastFixed && { fixedReason: "OpenAI fast mode is unavailable on the selected model." }),
     },
   ];
 };
@@ -186,15 +190,16 @@ export const candidateFieldRows = (
   candidate: ProfileCandidate,
   profile: ProfileId,
   parentEffort: SubagentEffort,
-  parentModel?: string,
+  models: ProfileEditorModels,
   advancedExpanded = false,
 ): ReadonlyArray<ProfileWorkspaceFieldRow> => {
-  const advancedValues = advancedSummaryValues(candidate, parentModel);
+  const fastModes = models.availableModel(candidate.model)?.fastModes ?? [];
+  const advancedValues = advancedSummaryValues(candidate, fastModes);
   return [
     {
       field: "model",
       label: "Model",
-      value: candidateModelLabel(candidate, parentModel),
+      value: candidateModelLabel(candidate, models.parentModel),
       fixed: false,
     },
     {
@@ -214,7 +219,7 @@ export const candidateFieldRows = (
           : "all standard",
       fixed: false,
     },
-    ...(advancedExpanded ? advancedCandidateRows(candidate, parentModel) : []),
+    ...(advancedExpanded ? advancedCandidateRows(candidate, fastModes) : []),
   ];
 };
 
@@ -233,7 +238,7 @@ export const profileWorkspaceRows = (
   draft: ProfileRouteDraft,
   profile: ProfileId,
   parentEffort: SubagentEffort,
-  parentModel: string | undefined,
+  models: ProfileEditorModels,
   expanded: ReadonlySet<number>,
 ): ReadonlyArray<ProfileWorkspaceRow> =>
   draft.candidates.length === 0
@@ -256,7 +261,7 @@ export const profileWorkspaceRows = (
             candidate,
             profile,
             parentEffort,
-            parentModel,
+            models,
             expanded.has(candidateIndex),
           ),
           (row): ProfileWorkspaceRow => ({ ...row, scope: "candidate", candidateIndex }),
@@ -304,16 +309,20 @@ export const candidateFieldChoices = (
       },
     ];
   return [
-    { value: "false", label: "Off", description: "Do not request priority service" },
-    ...(options.fastModeAvailable === true
-      ? [
-          {
+    { value: "false", label: "Off", description: "Use standard service for this choice" },
+    ...Arr.map(options.fastModes ?? [], (mode) =>
+      mode === "ultrafast"
+        ? {
+            value: mode,
+            label: "Ultrafast",
+            description: "Request OpenAI ultrafast service for this choice",
+          }
+        : {
             value: "true",
             label: "On, fast",
             description: "Request OpenAI priority service for this choice",
           },
-        ]
-      : []),
+    ),
   ];
 };
 
@@ -355,8 +364,14 @@ export function selectCandidateField(
         ? updateCandidateControls(candidate, { writeIntent: value })
         : invalidSelection(field);
     case "openaiFastMode":
-      return value === "true" || value === "false"
-        ? { candidate: { ...candidate, openaiFastMode: value === "true" }, notices: [] }
+      return value === "true" || value === "false" || value === "ultrafast"
+        ? {
+            candidate: {
+              ...candidate,
+              openaiFastMode: value === "ultrafast" ? value : value === "true",
+            },
+            notices: [],
+          }
         : invalidSelection(field);
   }
   return Fn.absurd(field);

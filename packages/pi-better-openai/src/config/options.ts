@@ -23,15 +23,13 @@ const NonBlankStringSchema = Schema.String.check(
   }),
 );
 
-export const ON_OFF_VALUES = ["on", "off"] as const;
-export const ON_OFF_RULE = "must be on or off";
+const ON_OFF_VALUES = ["on", "off"] as const;
+const ON_OFF_RULE = "must be on or off";
 const DURATION_RULE = "must be a duration such as 30s or 2m";
 export const formatOnOff = (value: boolean): string => (value ? "on" : "off");
 
 /** `on`/`off`, also accepting `true`/`false` and any letter case. */
-export const OnOffSchema = Schema.String.check(
-  Schema.isPattern(/^\s*(?:on|off|true|false)\s*$/iu),
-).pipe(
+const OnOffSchema = Schema.String.check(Schema.isPattern(/^\s*(?:on|off|true|false)\s*$/iu)).pipe(
   Schema.decodeTo(
     Schema.Boolean,
     SchemaTransformation.transform({
@@ -40,6 +38,15 @@ export const OnOffSchema = Schema.String.check(
     }),
   ),
 );
+
+export const FAST_MODE_VALUES = [...ON_OFF_VALUES, "ultrafast"] as const;
+export const FastModeSettingSchema = Schema.Union([
+  OnOffSchema,
+  Schema.Trim.pipe(
+    Schema.decodeTo(Schema.String, SchemaTransformation.toLowerCase()),
+    Schema.decodeTo(Schema.Literal("ultrafast")),
+  ),
+]);
 
 const DURATION_UNITS = { ms: 1, s: 1_000, m: 60_000, h: 3_600_000 } as const;
 const DURATION_PATTERN = /^\s*(?:\d+(?:\.\d+)?\s*(?:ms|s|m|h)?\s*)+$/u;
@@ -76,7 +83,7 @@ export const FAST_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<Resolve
     label: "Remember fast mode",
     currentValue: (cfg) => formatOnOff(cfg.persistState),
     ...ON_OFF,
-    description: "Keep fast mode on or off in new sessions.",
+    description: "Keep the selected fast mode in new sessions.",
   },
 ];
 export const COMPACTION_SETTING_DESCRIPTORS: readonly SettingsOptionDescriptor<ResolvedConfig>[] = [

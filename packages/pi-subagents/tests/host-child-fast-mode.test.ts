@@ -1,48 +1,47 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { OpenAIFastMode } from "pi-better-openai/fast-models";
 import * as Effect from "effect/Effect";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "@effect/vitest";
+import { afterEach, vi } from "vitest";
+import { childProcessEnvironment } from "../src/boundary/child-process.ts";
 import { registerSubagentChildBridge } from "../src/boundary/host-child.ts";
+import { backendLaunch } from "./fixtures/backend-launch.ts";
 import {
   extensionContextFixture,
   modelFixture,
   recordingExtensionHost,
 } from "pi-cosmic-core/testing";
 
-type FastModeFlag = boolean | string | undefined;
-
-beforeEach(() => {
-  vi.stubEnv("PI_SUBAGENT_RUNTIME_API_KEY", undefined);
-  vi.stubEnv("PI_SUBAGENT_RUNTIME_API_PROVIDER", undefined);
-});
 afterEach(() => vi.unstubAllEnvs());
 
-const requestContext = () =>
-  extensionContextFixture({ model: modelFixture({ provider: "openai-codex", id: "gpt-5.6-sol" }) });
+const requestContext = (
+  id = "gpt-6.2-sol",
+  provider = "openai-codex",
+  baseUrl = "https://chatgpt.com/backend-api/codex",
+) =>
+  extensionContextFixture({
+    model: modelFixture({ provider, id, api: "openai-codex-responses", baseUrl }),
+  });
 
-const requestHarness = () => {
-  let fastMode: FastModeFlag = false;
+const requestHarness = (
+  openaiFastMode?: OpenAIFastMode,
+  legacyFlag: () => string | boolean | undefined = () => undefined,
+) => {
+  const child =
+    openaiFastMode === undefined
+      ? { PI_SUBAGENT_CHILD: "1", PI_SUBAGENT_OPENAI_FAST_MODE: undefined }
+      : childProcessEnvironment(
+          { PI_SUBAGENT_OPENAI_FAST_MODE: "ultrafast" },
+          backendLaunch({ openaiFastMode }),
+        );
+  vi.stubEnv("PI_SUBAGENT_CHILD", child.PI_SUBAGENT_CHILD);
+  vi.stubEnv("PI_SUBAGENT_OPENAI_FAST_MODE", child.PI_SUBAGENT_OPENAI_FAST_MODE);
+  vi.stubEnv("PI_SUBAGENT_RUNTIME_API_KEY", undefined);
+  vi.stubEnv("PI_SUBAGENT_RUNTIME_API_PROVIDER", undefined);
   const host = recordingExtensionHost(
     {},
-    {
-      registerFlag: vi.fn(),
-      getFlag: (name) => (name === "pi-subagents-fast-mode" ? fastMode : undefined),
-    },
+    { getFlag: (name) => (name === "pi-subagents-fast-mode" ? legacyFlag() : undefined) },
   );
-  return {
-    pi: host.pi,
-    setFastMode: (value: FastModeFlag) => {
-      fastMode = value;
-    },
-    request: (payload: { readonly input: string }) => {
-      const handler = host.handlers.get("before_provider_request")?.[0];
-      if (!handler) throw new Error("Missing request hook");
-      return handler({ type: "before_provider_request", payload }, requestContext());
-    },
-  };
-};
-
-const registerLocal = (pi: ExtensionAPI) =>
-  registerSubagentChildBridge(pi, {
+  registerSubagentChildBridge(host.pi, {
     loadSettings: () => Promise.resolve(),
     openIpc: () => ({
       sendContact: () => Effect.die("No IPC is expected during request-hook tests"),
@@ -51,22 +50,61 @@ const registerLocal = (pi: ExtensionAPI) =>
       },
     }),
   });
-describe("local child fast-mode flag", () => {
-  it("uses flags applied after registration and observes later disabling", () => {
-    const harness = requestHarness();
-    registerLocal(harness.pi);
-    const payload = Object.freeze({ input: "task" });
-    expect(harness.request(payload)).toBeUndefined();
+  return {
+    request: (payload: { readonly input: string }, ctx = requestContext()) =>
+      host.handlers.get("before_provider_request")[0]?.(
+        { type: "before_provider_request", payload },
+        ctx,
+      ),
+    headers: (ctx = requestContext()) => {
+      const headers = {};
+      return Effect.promise(() =>
+        host.emit("before_provider_headers", ctx, { type: "before_provider_headers", headers }),
+      ).pipe(Effect.as(headers));
+    },
+  };
+};
 
-    harness.setFastMode(true);
-    expect(harness.request(payload)).toEqual({ ...payload, service_tier: "priority" });
-    expect(payload).toEqual({ input: "task" });
+describe("child route's fast mode", () => {
+  it.effect("never inherits another agent's tier and keeps boolean true at priority", () =>
+    Effect.gen(function* () {
+      const payload = Object.freeze({ input: "task" });
+      const off = requestHarness(false, () => true);
+      expect(off.request(payload)).toBeUndefined();
+      expect(yield* off.headers()).toEqual({});
+      const priority = requestHarness(true);
+      expect(priority.request(payload)).toMatchObject({ service_tier: "priority" });
+      expect(payload).toEqual({ input: "task" });
+    }),
+  );
 
-    harness.setFastMode(false);
+  it("still observes the priority switch from an already-running older launcher", () => {
+    let flag: string | boolean | undefined;
+    const harness = requestHarness(undefined, () => flag);
+    const payload = { input: "task" };
     expect(harness.request(payload)).toBeUndefined();
-    harness.setFastMode("true");
-    expect(harness.request(payload)).toBeUndefined();
-    harness.setFastMode(undefined);
+    flag = true;
+    expect(harness.request(payload)).toMatchObject({ service_tier: "priority" });
+    flag = "true";
     expect(harness.request(payload)).toBeUndefined();
   });
+
+  it.effect("applies ultrafast only on eligible Sol and sends the routing hint only to Codex", () =>
+    Effect.gen(function* () {
+      const harness = requestHarness("ultrafast");
+      const payload = { input: "task" };
+      expect(harness.request(payload)).toMatchObject({ service_tier: "ultrafast" });
+      expect(yield* harness.headers()).not.toEqual({});
+      for (const ineligible of [
+        requestContext("gpt-other"),
+        requestContext("gpt-6.2-sol", "openai"),
+      ]) {
+        expect(harness.request(payload, ineligible)).toBeUndefined();
+        expect(yield* harness.headers(ineligible)).toEqual({});
+      }
+      const proxy = requestContext("gpt-6.2-sol", "openai-codex", "https://private.invalid");
+      expect(harness.request(payload, proxy)).toMatchObject({ service_tier: "ultrafast" });
+      expect(yield* harness.headers(proxy)).toEqual({});
+    }),
+  );
 });

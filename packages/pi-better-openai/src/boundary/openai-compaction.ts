@@ -1,5 +1,6 @@
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { FastServiceTier } from "../fast/models.ts";
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -30,7 +31,7 @@ const CompactRequestSchema = Schema.Struct({
   model: Schema.String,
   input: Schema.Array(JsonObjectSchema),
   instructions: Schema.optional(Schema.String),
-  service_tier: Schema.optional(Schema.Literal("priority")),
+  service_tier: Schema.optional(Schema.Literals(["priority", "ultrafast"])),
 });
 const MAX_COMPACTION_RESPONSE_BYTES = 20 * 1024 * 1024;
 const CompactedResponseSchema = Schema.Struct({
@@ -66,7 +67,7 @@ export interface OpenAICompactRequest {
   readonly model: Model<"openai-responses">;
   readonly input: readonly OpenAICompactionJsonObject[];
   readonly instructions?: string;
-  readonly serviceTier?: "priority";
+  readonly serviceTier?: FastServiceTier;
 }
 
 export interface OpenAICompactUsage {

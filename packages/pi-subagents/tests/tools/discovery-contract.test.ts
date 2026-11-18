@@ -104,7 +104,8 @@ describe("discovery contracts", () => {
           defaultWriteIntent: "read-only",
           candidates: [
             {
-              model: "claude-bridge/claude-sonnet-5-5",
+              model: "parent",
+              openaiFastMode: "ultrafast",
               effort: "high",
               context: "fresh",
               writeIntent: "read-only",
@@ -116,7 +117,9 @@ describe("discovery contracts", () => {
       ],
       "generalist",
     );
-    expect(decodeSubagentContract("agent_profiles")(contract)).toEqual(contract);
+    expect(
+      decodeSubagentContract("agent_profiles")(contract)?.profiles[0]?.candidates[0],
+    ).toMatchObject({ openaiFastMode: "ultrafast", status: "skipped" });
     expect(JSON.stringify(contract)).not.toContain("abcdefghijklmnopqrstuvwxyz");
   });
 });

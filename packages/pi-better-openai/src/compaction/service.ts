@@ -21,9 +21,8 @@ import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as Str from "effect/String";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
+import { activeFastTier, type FastSnapshot } from "../fast/controller.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
-import { FAST_SERVICE_TIER } from "../fast/models.ts";
 import { OpenAICompactionClient, type OpenAICompactUsage } from "../boundary/openai-compaction.ts";
 import {
   coveredInputCache,
@@ -143,7 +142,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
                 systemPrompt: restored
                   ? getCurrentSystemPrompt(restored.messages)
                   : ctx.getSystemPrompt(),
-                fastActive: isFastActive(ctx, MutableRef.get(options.fastProjection)),
+                serviceTier: activeFastTier(ctx, MutableRef.get(options.fastProjection)),
               };
               return [current, omittedEntryIds] as const;
             },
@@ -182,7 +181,7 @@ export class OpenAICompactionService extends Context.Service<OpenAICompactionSer
             projected.covered,
           ),
           ...(instructions && { instructions }),
-          ...(current.fastActive && { serviceTier: FAST_SERVICE_TIER }),
+          ...(current.serviceTier && { serviceTier: current.serviceTier }),
         });
         const usage = compactionUsage(model, result.usage);
         const now = yield* Clock.currentTimeMillis;

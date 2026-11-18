@@ -5,6 +5,7 @@ Improves Pi's OpenAI subscription workflow with fast mode, usage visibility, nat
 ## Features
 
 - **Fast mode** for every `openai` and `openai-codex` model, using OpenAI's `priority` service tier.
+- **Ultrafast** for `openai-codex/gpt-6.2-sol` only, using the `ultrafast` service tier.
 - **Subscription usage** in the footer and on demand with `/openai usage`.
 - **Native compaction** (opt-in) for OpenAI Responses models through OpenAI's compact endpoint, falling back to Pi's compaction on failure.
 - **Image generation and editing** with the `openai_image` tool and `/openai image`.
@@ -28,9 +29,12 @@ All commands live under `/openai`. Type `/openai ` to autocomplete them.
 | Command                  | Action                                       |
 | ------------------------ | -------------------------------------------- |
 | `/openai usage`          | Show current subscription usage              |
-| `/openai fast`           | Toggle fast mode                             |
+| `/openai fast`           | Toggle the priority tier                     |
+| `/openai ultrafast`      | Toggle the ultrafast tier                    |
 | `/openai image <prompt>` | Generate an image                            |
 | `/openai settings`       | Open settings; `help` and `status` also work |
+
+Use `pi --fast` or `pi --ultrafast` to start with that mode; `--ultrafast` wins if both are set. Either command switches directly from the other tier. Repeating the selected command turns it off. On an unsupported model, the selected mode pauses: it sends no tier until you switch to a supported model. Ultrafast never falls back to priority.
 
 Agents call `openai_image` with a `prompt` and optional parameters. Null or blank optional values, including blank `images` entries, count as absent:
 
@@ -98,10 +102,12 @@ Settings live in `~/.pi/agent/extensions/pi-better-openai.json`; a project's `.p
 }
 ```
 
-Footer visibility is set in `/cosmic-ui settings`. Hiding usage stops automatic requests; `/openai usage` still works. Hiding the fast indicator doesn't turn off fast mode.
+`/openai settings fast.enabled on|off|ultrafast` sets the mode explicitly. The existing `true` and `false` inputs still mean on (priority) and off. With `persistState` on, `desiredActive` remembers the choice as `true`, `false`, or `"ultrafast"`. With it off, a startup flag or command affects only that session.
+
+The footer shows ⚡ for active fast mode, ⚡⚡ for active ultrafast, and neither while paused. `/openai settings status` shows the effective tier and last fast request. Footer visibility is set in `/cosmic-ui settings`. Hiding usage stops automatic requests; `/openai usage` still works. Hiding the fast indicator doesn't turn off fast mode.
 
 ## How it works
 
-Each Pi session owns one scoped Effect runtime that runs usage polling and image streams and stops them on replacement or shutdown. Credentials come from Pi's model registry, which refreshes them. Fast mode assumes every `openai` and `openai-codex` model supports the `priority` tier and, for Codex subscription requests, also sends Codex's priority routing hint. Pi still decides when to compact; this extension replaces only how compaction runs for eligible models. Native compaction rebuilds Pi's request input with this package's own pi-ai copy, so it runs only when that copy matches Pi's pi-ai version; otherwise Pi compacts and a warning names both versions. After upgrading Pi, update this checkout and rerun `pnpm install` to realign them. Usage and fast-mode state reach the footer as plain data over the Cosmic UI protocol, so the extension never replaces the footer itself.
+Each Pi session owns one scoped Effect runtime that runs usage polling and image streams and stops them on replacement or shutdown. Credentials come from Pi's model registry, which refreshes them. Active modes set `service_tier` in the request body. On canonical ChatGPT Codex endpoints, Better OpenAI also sends a matching routing hint; custom endpoints never receive this hint. In subagents, the selected profile controls the tier, independently of the parent’s flags and saved intent. Pi still decides when to compact; this extension replaces only how compaction runs for eligible models. Native compaction rebuilds Pi's request input with this package's own pi-ai copy, so it runs only when that copy matches Pi's pi-ai version; otherwise Pi compacts and a warning names both versions. After upgrading Pi, update this checkout and rerun `pnpm install` to realign them. Usage and fast-mode state reach the footer as plain data over the Cosmic UI protocol, so the extension never replaces the footer itself.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

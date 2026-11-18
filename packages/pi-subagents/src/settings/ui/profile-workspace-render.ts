@@ -47,7 +47,8 @@ import {
 import {
   candidateEffortLabel,
   candidateEffortLevel,
-  candidateFastModeApplied,
+  candidateFastMark,
+  type ProfileEditorModels,
   candidateModelLabel,
   profileWorkspaceRows,
   type ProfileWorkspaceRow,
@@ -67,11 +68,10 @@ export interface ProfileWorkspaceConfirmation {
   /** The verb Enter performs, such as `Remove`. */
   readonly verb: string;
 }
-interface ProfileWorkspaceRenderState {
+interface ProfileWorkspaceRenderState extends ProfileEditorModels {
   readonly inspection: ProfileSettingsInspection;
   readonly target: ProfileWorkspaceTarget;
   readonly parentEffort: SubagentEffort;
-  readonly parentModel?: string | undefined;
   /** Pane focus, the profile selection, and the arrangement. */
   readonly shell: ListDetailShell;
   readonly candidateIndex: number;
@@ -102,13 +102,7 @@ interface ProfileWorkspaceRenderOptions {
 const selectedProfile = (state: ProfileWorkspaceRenderState): ProfileId =>
   PROFILE_IDS[state.shell.state.selected] ?? PROFILE_IDS[0];
 const editorRows = (state: ProfileWorkspaceRenderState, profile: ProfileId) =>
-  profileWorkspaceRows(
-    state.draft,
-    profile,
-    state.parentEffort,
-    state.parentModel,
-    state.expandedCandidates,
-  );
+  profileWorkspaceRows(state.draft, profile, state.parentEffort, state, state.expandedCandidates);
 const focusedPane = (state: ProfileWorkspaceRenderState): ListDetailPane =>
   state.choices ? "detail" : state.shell.state.pane;
 
@@ -117,15 +111,15 @@ const workspaceCandidateSummary = (
   profile: ProfileId,
   parentEffort: SubagentEffort,
   width: number,
-  parentModel: string | undefined,
+  models: ProfileEditorModels,
   theme: Theme,
 ): string => {
   const effort = candidateEffortLabel(profile, candidate, parentEffort);
-  const fast = candidateFastModeApplied(candidate, parentModel) ? " ⚡" : "";
+  const fast = candidateFastMark(candidate, models);
   const metadata = `${theme.fg("muted", effort)}${theme.fg("warning", fast)}`;
   const modelWidth = Math.max(0, width - visibleWidth(metadata) - 3);
   return modelWidth > 0
-    ? `${theme.fg(managerTone.value, clipToWidth(fittedModelLabel(candidate, parentModel, modelWidth), modelWidth))} · ${metadata}`
+    ? `${theme.fg(managerTone.value, clipToWidth(fittedModelLabel(candidate, models.parentModel, modelWidth), modelWidth))} · ${metadata}`
     : clipToWidth(metadata, width);
 };
 
@@ -165,8 +159,7 @@ const profileTableRows = (
       ? state.draft
       : loadProfileRouteDraft(state.inspection, state.target, profile);
     const first = draft.kind === "invalid" ? undefined : draft.candidates[0];
-    const fast =
-      first && candidateFastModeApplied(first, state.parentModel) ? theme.fg("warning", " ⚡") : "";
+    const fast = first ? theme.fg("warning", candidateFastMark(first, state)) : "";
     const effortTone = first?.effort === "default" ? INHERITED_TONE : "text";
     return {
       profile,
@@ -524,7 +517,7 @@ const compactLines = (
         profile,
         state.parentEffort,
         Math.max(0, width - visibleWidth(prefix)),
-        state.parentModel,
+        state,
         theme,
       )
     : theme.fg(state.draft.kind === "invalid" ? "error" : "muted", state.draft.kind);

@@ -1,3 +1,4 @@
+import { fastModeMark } from "pi-better-openai/fast-models";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
@@ -49,19 +50,20 @@ const candidateRoute = (
   candidate: SubagentProfileCandidateCard,
   inherited: InheritedRoute,
 ): string => {
-  const pinned = candidate.effort === "default" ? undefined : candidate.effort;
-  if (candidate.model === "parent") {
-    const model =
-      inherited.model === undefined
-        ? "inherit"
-        : `inherit (${sanitizeTerminalLine(inherited.model)})`;
-    return pinned === undefined ? model : `${model}:${sanitizeTerminalLine(pinned)}`;
-  }
-  const effort = pinned ?? inherited.effort;
-  const openaiFastMode = candidate.openaiFastMode && candidate.status === "eligible";
+  const openaiFastMode = candidate.status === "eligible" && candidate.openaiFastMode;
+  const parent = candidate.model === "parent";
+  const model = parent
+    ? inherited.model === undefined
+      ? "inherit"
+      : `inherit (${sanitizeTerminalLine(inherited.model)})`
+    : sanitizeTerminalLine(candidate.model);
+  const effort =
+    candidate.effort === "default" ? (parent ? undefined : inherited.effort) : candidate.effort;
   return effort === undefined
-    ? `${sanitizeTerminalLine(candidate.model)}${openaiFastMode ? " ⚡" : ""}`
-    : formatRunRoute({ ...candidate, effort, openaiFastMode });
+    ? openaiFastMode
+      ? `${model} ${fastModeMark(openaiFastMode)}`
+      : model
+    : formatRunRoute({ model, effort, openaiFastMode });
 };
 
 /** An effort a route doesn't pin reads as the one it inherits, `effort inherit (high)`. */

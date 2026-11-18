@@ -51,14 +51,14 @@ import { OpenAIConfigService, type OpenAIConfigError } from "./config/store.ts";
 import type { ResolvedConfig } from "./config/schema.ts";
 import {
   fastStateText,
-  inactiveForModelMessage,
+  activeFastTier,
   initialFastSnapshot,
   injectProviderPayload,
   isFastActive,
   statusSegment,
   type FastSnapshot,
 } from "./fast/controller.ts";
-import { applyFastRoutingHeaders } from "./fast/routing.ts";
+import { applyCodexRoutingHint, childOpenAIFastMode } from "./fast/models.ts";
 import { FastModeService, type FastInjectionIngress } from "./fast/service.ts";
 import {
   openAIApplicationLayer,
@@ -83,7 +83,7 @@ import { OpenAIUsageService, sessionNotStarted } from "./usage/controller.ts";
 import { diagnosticLines } from "./settings/diagnostics.ts";
 import { usageProjectionRef, resetProjection } from "./usage/projection.ts";
 
-const FAST_ID = "fast";
+const FAST_COMMANDS = ["fast", "ultrafast"] as const;
 const COMMAND = "openai";
 
 const ignoreFastInjection: FastInjectionIngress = () => undefined;
@@ -120,6 +120,9 @@ export function betterOpenAIWithDependencies(
   pi: ExtensionAPI,
   dependencies: BetterOpenAIExtensionDependencies = {},
 ): void {
+  // In child Pi processes the subagent profile alone selects the request tier.
+  const profileMode = childOpenAIFastMode(process.env);
+  const ownsFastMode = profileMode === undefined;
   const projection = usageProjectionRef();
   const configProjection = MutableRef.make<ResolvedConfig | undefined>(undefined);
   const fastProjection = MutableRef.make(initialFastSnapshot());
@@ -226,7 +229,11 @@ export function betterOpenAIWithDependencies(
       );
       const fast = yield* FastModeService;
       const configService = yield* OpenAIConfigService;
-      yield* fast.initialize(ctx, yield* configService.get, pi.getFlag(FAST_ID) === true);
+      if (profileMode !== undefined) yield* fast.followProfile(ctx, profileMode);
+      else {
+        const flag = pi.getFlag("ultrafast") === true ? "ultrafast" : pi.getFlag("fast") === true;
+        yield* fast.initialize(ctx, yield* configService.get, flag);
+      }
       return {
         injectionIngress: fast.recordInjection,
         scheduler: yield* CodePreviewSchedulerService,
@@ -277,11 +284,6 @@ export function betterOpenAIWithDependencies(
       admit() ? slot.run(effect, signal) : Promise.reject(sessionNotStarted());
   const run = runWhen(() => slot.isActive());
 
-  pi.registerFlag(FAST_ID, {
-    description: "Start with OpenAI fast mode enabled (service_tier=priority)",
-    type: "boolean",
-    default: false,
-  });
   const COMMAND_VERBS = { "fast mode": "change fast mode", usage: "check OpenAI usage" } as const;
   const runHostCommand = <A>(
     effect: Effect.Effect<A, { readonly message: string }, OpenAIApplication>,
@@ -321,39 +323,50 @@ export function betterOpenAIWithDependencies(
       return runHostCommand(refresh, "usage", ctx, signal);
     },
   });
-  command.add({
-    name: "fast",
-    description: "Toggle fast mode",
-    handler: (args, ctx) => {
-      updateContext(ctx);
-      if (Str.trim(args)) {
-        notifyAtHostBoundary(
-          ctx,
-          "/openai fast takes no arguments; it toggles fast mode",
-          "warning",
+  for (const name of ownsFastMode ? FAST_COMMANDS : []) {
+    const mode = name === "ultrafast" ? name : true;
+    pi.registerFlag(name, {
+      description:
+        name === "ultrafast"
+          ? "Request the ultrafast service tier for openai-codex/gpt-6.2-sol"
+          : "Start with OpenAI fast mode enabled (service_tier=priority)",
+      type: "boolean",
+      default: false,
+    });
+    command.add({
+      name,
+      description: `Toggle ${name} mode`,
+      handler: (args, ctx) => {
+        updateContext(ctx);
+        if (Str.trim(args)) {
+          notifyAtHostBoundary(
+            ctx,
+            `/openai ${name} takes no arguments; it toggles ${name} mode`,
+            "warning",
+          );
+          return Promise.resolve();
+        }
+        const isCurrent = slot.captureAuthority();
+        const signal = capturedHostSignal(ctx);
+        const update = FastModeService.use((service) => service.toggle(ctx, mode)).pipe(
+          Effect.tap(() =>
+            Effect.sync(() => {
+              if (isCurrent()) providerTransport.request(ctx);
+              if (isCurrent()) invokeBestEffort(() => updateFooter(ctx));
+              if (isCurrent()) notifyFastState(ctx, MutableRef.get(fastProjection));
+            }),
+          ),
         );
-        return Promise.resolve();
-      }
-      const desired = !MutableRef.get(fastProjection).desiredActive;
-      const isCurrent = slot.captureAuthority();
-      const signal = capturedHostSignal(ctx);
-      const update = FastModeService.use((service) => service.setDesired(ctx, desired)).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            if (isCurrent()) providerTransport.request(ctx);
-            if (isCurrent()) invokeBestEffort(() => updateFooter(ctx));
-            if (isCurrent()) notifyFastState(ctx, MutableRef.get(fastProjection));
-          }),
-        ),
-      );
-      return runHostCommand(update, "fast mode", ctx, signal);
-    },
-  });
+        return runHostCommand(update, "fast mode", ctx, signal);
+      },
+    });
+  }
   const diagnostics = (ctx: ExtensionContext) =>
     diagnosticLines({
       ctx,
       configPath: config().configPath,
       fast: MutableRef.get(fastProjection),
+      ownsFastMode,
       usage: MutableRef.get(projection),
       footerUsageVisible: cosmicUi.isVisible("openai.usage"),
       compactionUnavailable: projectionMismatch,
@@ -363,6 +376,7 @@ export function betterOpenAIWithDependencies(
     updateContext,
     updateFooter,
     diagnosticLines: diagnostics,
+    ownsFastMode,
     fastProjection,
     resetFastRoutingTransport: providerTransport.request,
     captureAuthority: slot.captureAuthority,
@@ -468,12 +482,7 @@ export function betterOpenAIWithDependencies(
     renderFooter(ctx);
     const fast = MutableRef.get(fastProjection);
     const active = isFastActive(ctx, fast);
-    if (active !== before && event.source !== "restore")
-      notifyAtHostBoundary(
-        ctx,
-        active ? fastStateText(ctx, fast) : inactiveForModelMessage(ctx),
-        "info",
-      );
+    if (active !== before && event.source !== "restore") notifyFastState(ctx, fast);
     slot.fork(
       FastModeService.use((service) => service.modelChanged(ctx)),
       signal,
@@ -504,16 +513,18 @@ export function betterOpenAIWithDependencies(
   pi.on("before_provider_headers", (event, ctx) => {
     updateContext(ctx);
     providerTransport.beforeProviderRequest(ctx);
-    applyFastRoutingHeaders(event.headers, ctx, MutableRef.get(fastProjection));
+    if (ownsFastMode)
+      applyCodexRoutingHint(
+        event.headers,
+        ctx.model,
+        activeFastTier(ctx, MutableRef.get(fastProjection)),
+      );
   });
   pi.on("before_provider_request", (event, ctx) => {
     updateContext(ctx);
-    const fastPayload = injectProviderPayload(
-      event,
-      ctx,
-      MutableRef.get(fastProjection),
-      recordFastInjection,
-    );
+    const fastPayload = ownsFastMode
+      ? injectProviderPayload(event, ctx, MutableRef.get(fastProjection), recordFastInjection)
+      : undefined;
     if (!currentContext) return fastPayload;
     const signal = capturedHostSignal(ctx);
     const sessionCurrent = slot.captureAuthority();

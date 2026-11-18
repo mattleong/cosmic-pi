@@ -115,11 +115,12 @@ describe("saved sets", () => {
 
 describe("fields pane", () => {
   it("lists only settings, and an empty profile offers one actionable row", () => {
+    const models = { availableModel: () => undefined };
     const rows = profileWorkspaceRows(
       { kind: "explicit", candidates: [profileCandidate("test/a"), profileCandidate("test/b")] },
       "scout",
       "high",
-      undefined,
+      models,
       new Set(),
     );
     expect(Arr.every(rows, (row) => row.scope === "candidate")).toBe(true);
@@ -127,7 +128,7 @@ describe("fields pane", () => {
       { kind: "disabled", candidates: [] },
       "scout",
       "high",
-      undefined,
+      models,
       new Set(),
     );
     expect(empty).toHaveLength(1);

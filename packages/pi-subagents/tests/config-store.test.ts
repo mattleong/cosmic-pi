@@ -269,9 +269,9 @@ describe("SubagentConfigStore profile writes", () => {
       ];
       const initial = v6({ scout: declaredCandidate("parent", { effort: "default" }), reviewer });
       const { memory, store } = yield* setup({ [GLOBAL]: initial });
-      const scout = profileCandidate("openai-codex/gpt-5.6-sol", {
+      const scout = profileCandidate("openai-codex/gpt-6.2-sol", {
         effort: "low",
-        openaiFastMode: true,
+        openaiFastMode: "ultrafast",
       });
       yield* store.patchProfile(CWD, AGENT, {
         ...at("global", initial),
@@ -284,7 +284,7 @@ describe("SubagentConfigStore profile writes", () => {
         profileSets: { default: { profiles: { scout, reviewer } } },
       });
       const refreshed = yield* store.inspect(CWD, AGENT, true);
-      expect(refreshed.config.profiles.scout.candidates[0]?.openaiFastMode).toBe(true);
+      expect(refreshed.config.profiles.scout.candidates[0]?.openaiFastMode).toBe("ultrafast");
     }),
   );
 

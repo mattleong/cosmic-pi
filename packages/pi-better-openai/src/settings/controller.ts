@@ -12,16 +12,14 @@ import {
 import { OwnedSurfaceOutcome } from "pi-cosmic-ui/boundary/host-surface";
 import * as Schema from "effect/Schema";
 import { capturedHostSignal } from "pi-cosmic-core/host-session";
-import { InvalidSettingError } from "pi-cosmic-core/settings-completion";
+import { InvalidSettingError, oneOfRule } from "pi-cosmic-core/settings-completion";
 import {
-  formatOnOff,
-  ON_OFF_RULE,
-  ON_OFF_VALUES,
-  OnOffSchema,
+  FAST_MODE_VALUES,
+  FastModeSettingSchema,
   SETTINGS_OPTION_DESCRIPTORS,
 } from "../config/options.ts";
 import type { ResolvedConfig } from "../config/schema.ts";
-import type { FastSnapshot } from "../fast/controller.ts";
+import { fastModeValue, type FastSnapshot } from "../fast/controller.ts";
 import { FastModeService } from "../fast/service.ts";
 import { OpenAIConfigService } from "../config/store.ts";
 import { saveFailureMessage } from "./save-failure.ts";
@@ -32,6 +30,7 @@ export interface SettingsControllerOptions {
   readonly updateFooter: (ctx: ExtensionContext) => void;
   /** Facts the setting rows don't show, after them in `status` and in Diagnostics' Debug info. */
   readonly diagnosticLines: (ctx: ExtensionContext) => ReadonlyArray<string>;
+  readonly ownsFastMode: boolean;
   readonly fastProjection: MutableRef.MutableRef<FastSnapshot>;
   readonly resetFastRoutingTransport: (ctx: ExtensionContext) => void;
   readonly captureAuthority: () => () => boolean;
@@ -58,13 +57,17 @@ export function registerSettingsController(
   const fastEnabledDescriptor = {
     id: "fast.enabled",
     label: "Fast mode",
-    values: ON_OFF_VALUES,
-    description: "Request OpenAI fast mode for any openai or openai-codex model.",
+    values: FAST_MODE_VALUES,
+    description:
+      "On requests priority for OpenAI models. Ultrafast requires openai-codex/gpt-6.2-sol.",
     currentValue: (_cfg: ResolvedConfig) =>
-      formatOnOff(MutableRef.get(fastProjection).desiredActive),
+      fastModeValue(MutableRef.get(fastProjection).desiredActive),
   };
   // Each decoder judges typed values, so `true`, `1m 30s`, or `45000` work beside the listed ones.
-  const descriptors = Arr.map([fastEnabledDescriptor, ...SETTINGS_OPTION_DESCRIPTORS], (entry) => ({
+  const settings = options.ownsFastMode
+    ? [fastEnabledDescriptor, ...SETTINGS_OPTION_DESCRIPTORS]
+    : Arr.filter(SETTINGS_OPTION_DESCRIPTORS, (entry) => entry.id !== "persistState");
+  const descriptors = Arr.map(settings, (entry) => ({
     ...entry,
     openValues: true,
   }));
@@ -81,7 +84,9 @@ export function registerSettingsController(
       title: "Better OpenAI",
       isCurrent,
       descriptors,
-      examples: ["fast.enabled on", "usage.refreshIntervalMs 30s"],
+      examples: options.ownsFastMode
+        ? ["fast.enabled ultrafast", "usage.refreshIntervalMs 30s"]
+        : ["usage.refreshIntervalMs 30s"],
       config,
       status: (ctx) => {
         const cfg = config();
@@ -107,9 +112,9 @@ export function registerSettingsController(
           Effect.gen(function* () {
             if (id !== "fast.enabled")
               return yield* OpenAIConfigService.use((service) => service.updateSetting(id, value));
-            const desired = yield* Schema.decodeEffect(OnOffSchema)(value).pipe(
+            const desired = yield* Schema.decodeEffect(FastModeSettingSchema)(value).pipe(
               Effect.mapError(() =>
-                InvalidSettingError.make({ id, message: `${id} ${ON_OFF_RULE}` }),
+                InvalidSettingError.make({ id, message: `${id} ${oneOfRule(FAST_MODE_VALUES)}` }),
               ),
             );
             yield* FastModeService.use((service) => service.setDesired(ctx, desired));

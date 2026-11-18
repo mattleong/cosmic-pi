@@ -1,3 +1,4 @@
+import type { OpenAIFastMode } from "../fast/models.ts";
 import * as Schema from "effect/Schema";
 import type { ScopedConfigMetadata } from "pi-cosmic-core";
 
@@ -19,7 +20,7 @@ export interface UsageConfig {
 
 export interface ResolvedConfig extends ScopedConfigMetadata {
   persistState: boolean;
-  desiredActive: boolean;
+  desiredActive: OpenAIFastMode;
   usage: UsageConfig;
   compaction: { enabled: boolean };
   image: {

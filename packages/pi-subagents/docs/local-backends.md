@@ -36,7 +36,7 @@ Pi repeats whole messages and tool results (including images up to 4.5 MiB) in a
 
 - Pi children inherit the parent environment except Node loader settings, Pi session identity, and Git's repository-local variables (`git rev-parse --local-env-vars` and `GIT_CONFIG_KEY_*`/`GIT_CONFIG_VALUE_*`), so a parent started from a Git hook cannot redirect a child's Git.
 - Runtime API keys cross through an ephemeral environment bootstrap, never argv. `boundary/host-child-pi.ts` consumes and scrubs them once during child extension registration.
-- The OpenAI priority-tier hook reads `pi-subagents-fast-mode` on each provider request (Pi applies CLI flags after loading extensions). Only boolean `true` enables it, and each request still checks the active provider, model, and payload.
+- Both backends set `PI_SUBAGENT_OPENAI_FAST_MODE` to the candidate's tier (`off`, `priority` or `ultrafast`). The private bridge checks the active model on each request; Better OpenAI can read the same route for compaction without restoring the parent's settings. Ultrafast sets the body tier for `openai-codex/gpt-6.2-sol` and adds a matching routing hint only for the canonical Codex endpoint. The child never inherits the parent's fast-mode setting.
 
 ### Forks
 

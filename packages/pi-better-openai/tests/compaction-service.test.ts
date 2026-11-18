@@ -259,6 +259,22 @@ const appendRoundTail = (manager: SessionManager, round: number) => {
 };
 
 describe("OpenAICompactionService", () => {
+  it.effect("uses the effective model tier, not paused intent, for native compaction", () => {
+    const manager = SessionManager.inMemory("/virtual/compaction-test");
+    manager.appendMessage({ role: "user", content: "compact me", timestamp: 1 });
+    const target = fixture({ enabled: true, manager });
+    const { requests, client } = recordingClient("checkpoint");
+    return Effect.gen(function* () {
+      const service = yield* OpenAICompactionService;
+      // A model switch can reach this hook before the eligible-state projection catches up.
+      MutableRef.set(target.fastProjection, { desiredActive: "ultrafast", active: true });
+      yield* service.compact(compactEvent());
+      MutableRef.set(target.fastProjection, { desiredActive: true, active: false });
+      yield* service.compact(compactEvent());
+      expect(Arr.map(requests, (request) => request.serviceTier)).toEqual([undefined, "priority"]);
+    }).pipe(provideBuiltLayer(serviceLayer(target, client)));
+  });
+
   it.effect(
     "preserves native context across repeated compactions with mid-conversation system messages",
     () => {

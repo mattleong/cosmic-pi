@@ -10,6 +10,7 @@ import {
 import {
   MAX_PROFILE_CANDIDATES,
   MAX_PROFILE_MODEL_SELECTOR_CHARS,
+  OpenAIFastModeSchema,
   PROFILE_IDS,
   PROFILE_ROUTE_SOURCES,
 } from "../profiles/model.ts";
@@ -33,7 +34,7 @@ const CandidatesSchema = Schema.Array(
     effort: CandidateEffortSchema,
     context: ContextSchema,
     writeIntent: WriteIntentSchema,
-    openaiFastMode: Schema.Boolean,
+    openaiFastMode: OpenAIFastModeSchema,
     status: Schema.Literals(["eligible", "skipped"]),
     reason: NonEmptyText(MAX_DISCOVERY_TEXT_CHARS),
   }),

@@ -1,12 +1,7 @@
-import { findOrUndefined } from "pi-cosmic-core/array";
 import { PROFILE_IDS, type ProfileCandidate } from "../profiles/model.ts";
-import type { SubagentEffort } from "../domain/routing.ts";
 import { updateCandidateModel } from "./profile-route-editor.ts";
 import { profileModelPickerPage } from "./ui/model-picker.ts";
-import {
-  candidateFastModeAvailable,
-  type SelectableCandidateField,
-} from "./ui/profile-workspace-model.ts";
+import type { SelectableCandidateField } from "./ui/profile-workspace-model.ts";
 import {
   candidateFieldSelector,
   profileSearchSelector,
@@ -28,13 +23,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
     this.renderSoon();
   }
 
-  protected showFieldPicker(
-    candidate: ProfileCandidate,
-    field: SelectableCandidateField,
-    supportedEfforts?: ReadonlyArray<SubagentEffort>,
-    fastModeAvailable?: boolean,
-    notice?: string,
-  ): void {
+  protected showFieldPicker(candidate: ProfileCandidate, field: SelectableCandidateField): void {
     const candidateIndex = this.candidateIndex;
     this.showSelectPage(
       candidateFieldSelector({
@@ -46,9 +35,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         target: this.options.target,
         parentModel: this.options.parentModel,
         parentEffort: this.options.parentEffort,
-        supportedEfforts,
-        fastModeAvailable,
-        notice,
+        availableModel: this.options.availableModel,
         select: (update) => {
           this.selectPage = undefined;
           this.candidateIndex = candidateIndex;
@@ -56,22 +43,6 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
         },
         cancel: () => this.closeSelectPage(),
       }),
-    );
-  }
-
-  protected openFastModePicker(candidate: ProfileCandidate): void {
-    const picker = this.options.loadModelPicker(candidate);
-    const current = findOrUndefined(
-      picker.choices,
-      (option) => option.selector === candidate.model,
-    );
-    this.message = undefined;
-    this.showFieldPicker(
-      candidate,
-      "openaiFastMode",
-      undefined,
-      current?.fastModeAvailable ?? candidateFastModeAvailable(candidate, this.options.parentModel),
-      picker.warning,
     );
   }
 
@@ -101,7 +72,7 @@ export abstract class ProfileWorkspacePickers extends ProfileWorkspaceSave {
           candidate,
           option.selector,
           option.supportedEfforts,
-          option.fastModeAvailable,
+          option.fastModes,
         );
         this.applyCandidateUpdate(update);
       },

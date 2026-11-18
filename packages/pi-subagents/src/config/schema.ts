@@ -18,6 +18,7 @@ import {
 } from "../profiles/agents.ts";
 import {
   cloneProfileCandidates,
+  OpenAIFastModeSchema,
   MAX_PROFILE_CANDIDATES,
   PROFILE_CANDIDATE_CONTEXTS,
   PROFILE_CANDIDATE_EFFORTS,
@@ -227,7 +228,7 @@ const ProfileCandidateSchema = Schema.Struct({
   effort: Schema.Literals(PROFILE_CANDIDATE_EFFORTS),
   context: Schema.Literals(PROFILE_CANDIDATE_CONTEXTS),
   writeIntent: Schema.Literals(PROFILE_CANDIDATE_WRITE_INTENTS),
-  openaiFastMode: Schema.optional(Schema.Boolean),
+  openaiFastMode: Schema.optional(OpenAIFastModeSchema),
 }).check(hasValidCandidatePolicy);
 export const ProfileRouteSchema = Schema.Struct({
   candidates: Schema.Array(ProfileCandidateSchema).check(

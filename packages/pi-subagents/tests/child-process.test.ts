@@ -63,6 +63,7 @@ const spawnAndRelease = (request: ChildLaunchRequest, insideRex = true) =>
     const scripted = scriptedChildProcess();
     let args: ReadonlyArray<string> = [];
     let packageDir: string | undefined;
+    let childTier: string | undefined;
     const detachedGroups = vi.fn<ProcessTransportRuntime["detachedGroups"]>(() =>
       Effect.succeed([]),
     );
@@ -70,6 +71,7 @@ const spawnAndRelease = (request: ChildLaunchRequest, insideRex = true) =>
       spawn: (_executable, commandArgs, options) => {
         args = commandArgs ?? [];
         packageDir = options?.env?.PI_PACKAGE_DIR;
+        childTier = options?.env?.PI_SUBAGENT_OPENAI_FAST_MODE;
         queueMicrotask(() => scripted.child.emit("spawn"));
         return scripted.child;
       },
@@ -92,6 +94,7 @@ const spawnAndRelease = (request: ChildLaunchRequest, insideRex = true) =>
     return {
       args,
       packageDir,
+      childTier,
       hosted: Arr.some(args, (arg) => Fn.pipe(arg, Str.endsWith("rex-relay.mjs"))),
       lookedForDetachedCommands: detachedGroups.mock.calls.length > 0,
     };
@@ -247,7 +250,14 @@ describe("subagent child process boundary", () => {
 
   it.effect("keeps every writer headless while Rex hosts read-only runs", () =>
     Effect.gen(function* () {
-      const reader = yield* spawnAndRelease(backendLaunch({ writeIntent: "read-only" }));
+      const reader = yield* spawnAndRelease(
+        backendLaunch({
+          writeIntent: "read-only",
+          model: "openai-codex/gpt-6.2-sol",
+          openaiFastMode: "ultrafast",
+        }),
+      );
+      expect(reader.childTier).toBe("ultrafast");
       expect(reader.hosted).toBe(true);
       expect(reader.args).not.toContain("--mode");
       expect(reader.packageDir).toBe(getPackageDir());
@@ -262,7 +272,15 @@ describe("subagent child process boundary", () => {
       );
 
       // With the same setting outside Rex, the CLI still owns the child and its environment.
-      const outside = yield* spawnAndRelease(backendLaunch({ writeIntent: "read-only" }), false);
+      const outside = yield* spawnAndRelease(
+        backendLaunch({
+          writeIntent: "read-only",
+          model: "openai-codex/gpt-6.2-sol",
+          openaiFastMode: "ultrafast",
+        }),
+        false,
+      );
+      expect(outside.childTier).toBe("ultrafast");
       expect(outside.hosted).toBe(false);
       expect(outside.args).toEqual(expect.arrayContaining(["--mode", "rpc"]));
       expect(outside.packageDir).toBe(process.env.PI_PACKAGE_DIR);

@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
+import * as Rec from "effect/Record";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
@@ -12,18 +13,20 @@ import {
   retainUnavailableCurrent,
   type ProfileModelOption,
 } from "./ui/model-picker.ts";
-import { findOrUndefined } from "pi-cosmic-core/array";
+import { profileFastModes, type ProfileFastModes } from "./profile-route-editor.ts";
 
 export interface ProjectedPiModel {
   readonly provider: string;
   readonly id: string;
   readonly name?: string | undefined;
   readonly reasoning: boolean;
+  readonly fastModes: ProfileFastModes;
   readonly supportedEfforts: ReadonlyArray<SubagentEffort>;
 }
 
 interface ProfileModelCatalogSnapshot {
   readonly piModels: ReadonlyArray<ProjectedPiModel>;
+  readonly bySelector: Readonly<Record<string, ProjectedPiModel>>;
   readonly scopedPiModels: ReadonlyArray<ProjectedPiModel>;
 }
 
@@ -46,7 +49,11 @@ const freezeCatalogSnapshot = (
   models: ReadonlyArray<ProjectedPiModel>,
   scopedModels: ReadonlyArray<ProjectedPiModel> = models,
 ): ProfileModelCatalogSnapshot =>
-  freezeSnapshot({ piModels: models, scopedPiModels: scopedModels });
+  freezeSnapshot({
+    piModels: models,
+    scopedPiModels: scopedModels,
+    bySelector: Rec.fromIterableBy(models, modelSelector),
+  });
 
 const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
   const efforts = Arr.flatMap(getSupportedThinkingLevels(model), (effort) => {
@@ -58,6 +65,7 @@ const projectPiModel = (model: Model<Api>): ProjectedPiModel => {
     id: model.id,
     name: model.name,
     reasoning: model.reasoning,
+    fastModes: profileFastModes(modelSelector(model)),
     supportedEfforts: efforts,
   };
 };
@@ -124,17 +132,17 @@ const piModelOptions = (
 ) =>
   createPiModelOptions({
     models,
-    parentModel: findOrUndefined(
-      piCatalog.piModels,
-      (model) => modelSelector(model) === parentSelector,
-    ),
+    parentModel: parentSelector ? piCatalog.bySelector[parentSelector] : undefined,
   });
 
-export const supportedPiEfforts = (
-  input: CandidateModelPickerInput,
-): ReadonlyArray<SubagentEffort> | undefined =>
-  findOrUndefined(piModelOptions(input), (option) => option.selector === input.candidate.model)
-    ?.supportedEfforts;
+export const availableCandidateModel = (
+  selector: string,
+  catalog: ProfileModelCatalogSnapshot,
+  parentSelector?: string,
+) => {
+  const resolved = selector === "parent" ? parentSelector : selector;
+  return resolved ? catalog.bySelector[resolved] : undefined;
+};
 
 export function loadCandidateModelPicker(
   input: CandidateModelPickerInput,

@@ -171,6 +171,9 @@ export function childProcessEnvironment(
       ),
     ),
     PI_SUBAGENT_CHILD: "1",
+    // Always override inherited settings, including Off in a Rex block's environment.
+    PI_SUBAGENT_OPENAI_FAST_MODE:
+      request.openaiFastMode === true ? "priority" : request.openaiFastMode || "off",
     PI_SUBAGENT_PARENT_SESSION: request.parentSessionId,
     PI_SUBAGENT_RUN_ID: request.runId,
     ...(request.runtimeApiKey && {
@@ -329,7 +332,6 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
     request.model,
     "--thinking",
     request.effort,
-    ...(request.openaiFastMode ? ["--pi-subagents-fast-mode"] : []),
     "--tools",
     Arr.join(toolPolicy.enabled, ","),
     "--exclude-tools",

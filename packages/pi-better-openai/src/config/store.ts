@@ -18,6 +18,7 @@ import {
 import { decodeTolerantFields } from "pi-cosmic-core/config/tolerant-fields";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
 import { type JsonDocumentStore, type JsonObject } from "pi-cosmic-core/platform/json-document";
+import type { OpenAIFastMode } from "../fast/models.ts";
 import { prepareSettingUpdate } from "./options.ts";
 import {
   CONFIG_BASENAME,
@@ -44,7 +45,7 @@ const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);
 const decodeRoot = decodeTolerantFields(
   {
     persistState: Schema.Boolean,
-    desiredActive: Schema.Boolean,
+    desiredActive: Schema.Union([Schema.Boolean, Schema.Literal("ultrafast")]),
     usage: UnknownRecordSchema,
     compaction: UnknownRecordSchema,
     image: UnknownRecordSchema,
@@ -227,7 +228,7 @@ export class OpenAIConfigService extends Context.Service<OpenAIConfigService>()(
               ),
             ),
           ),
-        persistFast: (desiredActive: boolean, afterCommit: Effect.Effect<void>) =>
+        persistFast: (desiredActive: OpenAIFastMode, afterCommit: Effect.Effect<void>) =>
           provide(
             changes.withPermit(
               Effect.gen(function* () {

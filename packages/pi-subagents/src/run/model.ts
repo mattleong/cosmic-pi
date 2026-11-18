@@ -1,3 +1,4 @@
+import type { OpenAIFastMode } from "pi-better-openai/fast-models";
 import type * as Effect from "effect/Effect";
 import { clipText } from "pi-cosmic-core/display";
 import type * as Redacted from "effect/Redacted";
@@ -222,7 +223,7 @@ export interface SubagentRunView {
   readonly state: SubagentRunState;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  readonly openaiFastMode: boolean;
+  readonly openaiFastMode: OpenAIFastMode;
   readonly reportGeneration: number;
   readonly assignmentEpoch: number;
   readonly model: string;
@@ -368,7 +369,7 @@ export interface StartSubagentRequest {
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  readonly openaiFastMode: boolean;
+  readonly openaiFastMode: OpenAIFastMode;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;

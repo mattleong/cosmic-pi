@@ -1,6 +1,10 @@
 import * as Arr from "effect/Array";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { FAST_SERVICE_TIER, supportsFastModel } from "pi-better-openai/fast-models";
+import {
+  applyCodexRoutingHint,
+  childOpenAIFastMode,
+  serviceTierForFastMode,
+} from "pi-better-openai/fast-models";
 import { hasObjectRuntimeType } from "pi-cosmic-core/runtime-values";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import { decodeSubagentEffort } from "../domain/routing.ts";
@@ -46,17 +50,40 @@ export const consumeRuntimeApiCredentials = (
   return { apiKey, provider };
 };
 
-export const registerChildPiFastModeHook = (pi: ExtensionAPI, isEnabled: () => boolean): void => {
+export const registerChildPiFastModeHook = (
+  pi: ExtensionAPI,
+  environment: NodeJS.ProcessEnv,
+): void => {
+  // A running parent may predate the tier environment and still launch with this switch.
+  pi.registerFlag("pi-subagents-fast-mode", {
+    description: "Private OpenAI priority request for this subagent",
+    type: "boolean",
+    default: false,
+  });
+  const routedMode =
+    environment.PI_SUBAGENT_OPENAI_FAST_MODE === undefined
+      ? undefined
+      : childOpenAIFastMode(environment);
+  // Pi applies flags after registration, and a Rex child can switch models between requests.
+  const tierFor = (model: ExtensionContext["model"]) =>
+    serviceTierForFastMode(
+      model?.provider,
+      model?.id,
+      routedMode ?? pi.getFlag("pi-subagents-fast-mode") === true,
+    );
+  pi.on("before_provider_headers", (event, ctx) => {
+    const tier = tierFor(ctx.model);
+    if (tier === "ultrafast") applyCodexRoutingHint(event.headers, ctx.model, tier);
+  });
   pi.on("before_provider_request", (event, ctx) => {
+    const tier = tierFor(ctx.model);
     if (
-      !isEnabled() ||
-      !ctx.model ||
-      !supportsFastModel(ctx.model.provider, ctx.model.id) ||
+      !tier ||
       !event.payload ||
       !hasObjectRuntimeType(event.payload) ||
       Arr.isArray(event.payload)
     )
       return undefined;
-    return { ...event.payload, service_tier: FAST_SERVICE_TIER };
+    return { ...event.payload, service_tier: tier };
   });
 };

@@ -1,3 +1,4 @@
+import { fastModeMark } from "pi-better-openai/fast-models";
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import {
   Editor,
@@ -359,7 +360,7 @@ export class SubagentSessionView implements Component, Focusable {
           {
             model: { provider: sanitizeTerminalLine(provider), id: sanitizeTerminalLine(id) },
             thinking: run.effort,
-            thinkingMark: run.openaiFastMode ? "⚡" : undefined,
+            thinkingMark: fastModeMark(run.openaiFastMode) || undefined,
             cwd: run.cwd,
             totals: { ...run.usage, cost: run.usage.cost ?? 0 },
             contextPercent: run.usage.contextPercent,

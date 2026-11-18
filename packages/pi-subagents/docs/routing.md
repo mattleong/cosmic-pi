@@ -27,7 +27,7 @@ A route is exactly `"disabled"`, one candidate, or an ordered array of 1–32 ca
 - `effort`: `default`, `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`.
 - `context`: `fresh` or `fork`.
 - `writeIntent`: `read-only` or `writer`.
-- `openaiFastMode`: optional, default false. When true, eligible candidates request OpenAI's `priority` service tier.
+- `openaiFastMode`: optional, default `false` (off). `true` requests OpenAI's `priority` service tier; `"ultrafast"` requests the `ultrafast` tier, only for `openai-codex/gpt-6.2-sol`. The mode belongs to the candidate, not the parent session.
 
 Every candidate runs as a local Pi child. A candidate with any other key, such as a `runtime` from an older configuration, fails its route closed.
 
@@ -35,7 +35,7 @@ Selectors share one fail-closed 256-character grammar across configuration, sett
 
 Cross-field decoding rejects:
 
-- fast mode for an explicit selector outside the `openai` and `openai-codex` providers. `parent` is checked against the active model at launch;
+- priority for explicit selectors outside the `openai` and `openai-codex` providers, and ultrafast for any explicit selector other than `openai-codex/gpt-6.2-sol`. A `parent` candidate is checked against the resolved model and skipped if it cannot use the requested tier; later candidates keep their own modes;
 - unknown candidate keys and malformed selectors.
 
 ### Profiles

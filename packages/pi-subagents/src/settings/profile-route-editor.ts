@@ -1,3 +1,4 @@
+import type { OpenAIFastMode } from "pi-better-openai/fast-models";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Rec from "effect/Record";
@@ -56,6 +57,17 @@ export interface CandidateUpdate {
   readonly notices: ReadonlyArray<string>;
   readonly error?: string | undefined;
 }
+
+export type ProfileFastModes = ReadonlyArray<Exclude<OpenAIFastMode, false>>;
+
+/** Picker choices for one concrete, available model; an unresolved parent has none. */
+export const profileFastModes = (model: string | undefined): ProfileFastModes =>
+  model === undefined || model === "parent"
+    ? []
+    : Arr.filter([true, "ultrafast"] as const, (mode) => supportsSubagentFastMode(model, mode));
+
+export const fastModeName = (mode: OpenAIFastMode | undefined) =>
+  mode === "ultrafast" ? "Ultrafast" : "Fast mode";
 
 /** The model's reasoning levels when the catalog knows them, otherwise every level. */
 export const candidateEfforts = (
@@ -203,7 +215,7 @@ const candidateIssueMessage = (
     case "model_selector_invalid":
       return "Model is not a valid Pi model name.";
     case "fast_mode_unsupported":
-      return `Fast mode is not available with ${candidate.model}.`;
+      return `${fastModeName(candidate.openaiFastMode)} is not available with ${candidate.model}.`;
   }
   return Fn.absurd(code);
 };
@@ -224,7 +236,7 @@ export function updateCandidateControls(
   return issues.has("fast_mode_unsupported")
     ? {
         candidate: { ...next, openaiFastMode: false },
-        notices: ["The selected model does not support fast mode. Fast mode turned off."],
+        notices: [`${fastModeName(next.openaiFastMode)} turned off: unavailable on ${next.model}.`],
       }
     : { candidate: next, notices: [] };
 }
@@ -233,7 +245,7 @@ export function updateCandidateModel(
   candidate: ProfileCandidate,
   model: string,
   supportedEfforts?: ReadonlyArray<SubagentEffort>,
-  fastModeAvailable = supportsSubagentFastMode(model),
+  fastModes = profileFastModes(model),
 ): CandidateUpdate {
   let next = { ...candidate, model };
   const notices: string[] = [];
@@ -247,9 +259,10 @@ export function updateCandidateModel(
       `${model} does not support the ${candidate.effort} reasoning level. Reasoning changed to inherit.`,
     );
   }
-  if (next.openaiFastMode && !fastModeAvailable) {
+  if (next.openaiFastMode && !fastModes.includes(next.openaiFastMode)) {
+    const selected = model === "parent" ? "the inherited model" : model;
+    notices.push(`${fastModeName(next.openaiFastMode)} turned off: unavailable on ${selected}.`);
     next = { ...next, openaiFastMode: false };
-    notices.push(`${model} does not support fast mode. Fast mode turned off.`);
   }
   const error = candidateValidationError(next);
   return error ? { notices, error } : { candidate: next, notices };

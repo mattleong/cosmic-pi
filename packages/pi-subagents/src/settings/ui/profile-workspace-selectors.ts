@@ -5,6 +5,7 @@ import { PROFILE_DEFINITIONS } from "../../profiles/definitions.ts";
 import { PROFILE_IDS, type ProfileCandidate, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
+  fastModeName,
   profileRouteOptionLabel,
   type CandidateUpdate,
   type ProfileRouteDraft,
@@ -17,6 +18,7 @@ import {
   selectCandidateField,
   targetProfilePrimarySummary,
   type SelectableCandidateField,
+  type ProfileEditorModels,
 } from "./profile-workspace-model.ts";
 import {
   profileWorkspaceActionChoices,
@@ -68,42 +70,33 @@ export const shortTargetLabel = (target: ProfileWorkspaceTarget): string =>
 export const profileBreadcrumb = (...parts: ReadonlyArray<string>): string =>
   Arr.join(parts, " › ");
 
-interface CandidateFieldSelectorOptions extends SharedSelectorOptions {
+interface CandidateFieldSelectorOptions extends SharedSelectorOptions, ProfileEditorModels {
   readonly profile: ProfileId;
   readonly candidateIndex: number;
   readonly candidate: ProfileCandidate;
   readonly field: SelectableCandidateField;
   readonly target: ProfileWorkspaceTarget;
-  readonly parentModel?: string | undefined;
   readonly parentEffort: SubagentEffort;
-  readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
-  readonly fastModeAvailable?: boolean | undefined;
-  readonly notice?: string | undefined;
   readonly select: (update: CandidateUpdate) => void;
   readonly cancel: () => void;
 }
 
 const currentFieldValue = (candidate: ProfileCandidate, field: SelectableCandidateField): string =>
-  field === "openaiFastMode" ? String(candidate[field]) : candidate[field];
+  field === "openaiFastMode" ? String(candidate[field] ?? false) : candidate[field];
 
 export const candidateFieldSelector = (
   options: CandidateFieldSelectorOptions,
 ): SearchableSelectPage<string> => {
   const row = findOrUndefined(
-    candidateFieldRows(
-      options.candidate,
-      options.profile,
-      options.parentEffort,
-      options.parentModel,
-      true,
-    ),
+    candidateFieldRows(options.candidate, options.profile, options.parentEffort, options, true),
     (entry) => entry.field === options.field,
   );
   const label = row === undefined ? options.field : Str.trim(row.label);
   const current = currentFieldValue(options.candidate, options.field);
+  const model = options.availableModel(options.candidate.model);
   const changeOptions = {
-    supportedEfforts: options.supportedEfforts,
-    fastModeAvailable: options.fastModeAvailable,
+    supportedEfforts: model?.supportedEfforts,
+    fastModes: model?.fastModes ?? [],
     profile: options.profile,
     parentEffort: options.parentEffort,
   };
@@ -123,7 +116,12 @@ export const candidateFieldSelector = (
     ),
     current,
     markedValue: current,
-    notice: options.notice,
+    notice:
+      options.field === "openaiFastMode" &&
+      options.candidate.openaiFastMode &&
+      !changeOptions.fastModes.includes(options.candidate.openaiFastMode)
+        ? `${fastModeName(options.candidate.openaiFastMode)} is unavailable. Choose another mode or cancel to keep it.`
+        : undefined,
     emptyText: "No matching values",
     select: (value: string) =>
       options.select(selectCandidateField(options.candidate, options.field, value, changeOptions)),

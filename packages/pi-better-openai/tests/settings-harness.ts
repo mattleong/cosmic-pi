@@ -52,6 +52,8 @@ export function settingsHarnessWith(config: ResolvedConfig, options: SettingsHar
     Layer.succeed(FastModeService, {
       recordInjection: () => undefined,
       initialize: () => Effect.void,
+      followProfile: () => Effect.void,
+      toggle: () => Effect.void,
       setDesired: () => Effect.void,
       modelChanged: () => Effect.void,
     }),
@@ -64,6 +66,7 @@ export function settingsHarnessWith(config: ResolvedConfig, options: SettingsHar
       updateContext: vi.fn(),
       updateFooter: vi.fn(),
       diagnosticLines: options.diagnosticLines ?? (() => ["Current model: none"]),
+      ownsFastMode: true,
       fastProjection: MutableRef.make(initialFastSnapshot()),
       resetFastRoutingTransport: vi.fn(),
       run: (effect, signal) => Effect.runPromise(effect.pipe(Effect.provide(services)), { signal }),

@@ -137,7 +137,8 @@ export function openOpenAISettingsMenu(
           const fastGroup: MenuGroup = {
             id: "section.fast",
             label: "Fast mode",
-            description: "Request priority processing on OpenAI models, and remember the choice.",
+            description:
+              "Choose a service tier for supported OpenAI models, and remember the choice.",
             items: () =>
               settingsItemsFromDescriptors(
                 [fastEnabledDescriptor, ...FAST_SETTING_DESCRIPTORS],
@@ -191,7 +192,7 @@ export function openOpenAISettingsMenu(
           });
           // Compaction has one setting, so it is a row of its own rather than a group.
           const sections = (): SettingsSurfaceItem[] => [
-            groupItem(fastGroup),
+            ...(options.ownsFastMode ? [groupItem(fastGroup)] : []),
             ...settingsItemsFromDescriptors(COMPACTION_SETTING_DESCRIPTORS, cfg),
             ...Arr.map(laterGroups, groupItem),
           ];

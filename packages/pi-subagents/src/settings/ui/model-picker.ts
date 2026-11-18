@@ -8,21 +8,17 @@ import {
 } from "pi-cosmic-ui/manager/model-picker";
 import type { SearchableSelectHostOptions } from "pi-cosmic-ui/manager/searchable-select";
 import { sanitizeTerminalLine } from "pi-cosmic-core/security";
-import {
-  isSafeNativeModelSelector,
-  supportsSubagentFastMode,
-  type ProfileId,
-} from "../../profiles/model.ts";
+import { isSafeNativeModelSelector, type ProfileId } from "../../profiles/model.ts";
 import type { SubagentEffort } from "../../domain/routing.ts";
 import type { ProjectedPiModel } from "../profile-model-catalog.ts";
-import { profileRouteOptionLabel } from "../profile-route-editor.ts";
+import { profileRouteOptionLabel, type ProfileFastModes } from "../profile-route-editor.ts";
 import { candidateModelLabel } from "./profile-workspace-model.ts";
 import { profileBreadcrumb, selectHost } from "./profile-workspace-selectors.ts";
 
 export interface ProfileModelOption extends ModelPickerModel {
   readonly selector: string;
   readonly supportedEfforts?: ReadonlyArray<SubagentEffort> | undefined;
-  readonly fastModeAvailable: boolean;
+  readonly fastModes: ProfileFastModes;
 }
 
 // Pseudo models, such as inherit, are pinned above the provider groups.
@@ -39,9 +35,7 @@ export function createPiModelOptions(input: {
 }): ProfileModelOption[] {
   const models = Arr.flatMap(input.models, (model) => {
     const selector = modelSelector(model);
-    return isSafeNativeModelSelector(selector)
-      ? [{ ...model, selector, fastModeAvailable: supportsSubagentFastMode(selector) }]
-      : [];
+    return isSafeNativeModelSelector(selector) ? [{ ...model, selector }] : [];
   });
   const parent = input.parentModel;
   const canonical = parent ? modelSelector(parent) : undefined;
@@ -58,7 +52,7 @@ export function createPiModelOptions(input: {
         : "Inherit the current Pi model when this run starts",
       searchText: `inherit parent ${canonical ?? "active model"} ${parent?.name ?? ""}`,
       supportedEfforts: parent?.supportedEfforts,
-      fastModeAvailable: canonical ? supportsSubagentFastMode(canonical) : false,
+      fastModes: parent?.fastModes ?? [],
     },
     ...models,
   ];
@@ -78,7 +72,7 @@ export const retainUnavailableCurrent = (
           available: false,
           unavailableReason:
             "Configured model is unavailable; choose another model or cancel to keep it",
-          fastModeAvailable: false,
+          fastModes: [],
         },
         ...options,
       ];

@@ -22,7 +22,7 @@ export const candidateJson = (value: ProfileCandidate): JsonObject => ({
   effort: value.effort,
   context: value.context,
   writeIntent: value.writeIntent,
-  ...(value.openaiFastMode === true && { openaiFastMode: true }),
+  ...(value.openaiFastMode && { openaiFastMode: value.openaiFastMode }),
 });
 
 export const routeJson = (route: DeclaredProfileRoute): JsonObject[string] => {

@@ -27,6 +27,7 @@ import {
   type ProfileSetPickerEntry,
   type SelectableProfileSetEntry,
 } from "./ui/profile-set-picker-model.ts";
+import type { ProfileEditorModels } from "./ui/profile-workspace-model.ts";
 import type { DashboardPrompt } from "./ui/profile-dashboard-render.ts";
 import { PROFILE_SET_SHORTCUTS, renderProfileSetPicker } from "./ui/profile-set-picker-render.ts";
 import { selectChoice } from "./ui/profile-workspace-selectors.ts";
@@ -48,17 +49,19 @@ export type ProfileSetPickerAction =
   | { readonly action: "delete"; readonly target: PersistentProfileSetRef }
   | { readonly action: "save-session" };
 
-interface ProfileSetPickerOptions extends Pick<
-  SearchableSelectHostOptions,
-  "getHeight" | "requestRender" | "matchesKeybinding" | "keybindingLabel"
-> {
+interface ProfileSetPickerOptions
+  extends
+    Pick<
+      SearchableSelectHostOptions,
+      "getHeight" | "requestRender" | "matchesKeybinding" | "keybindingLabel"
+    >,
+    ProfileEditorModels {
   readonly theme: Theme;
   /** The whole surface's height, which with the width decides how panes are arranged. */
   readonly getFrameHeight?: (() => number) | undefined;
   readonly inspection: ProfileSettingsInspection;
   readonly projectTrusted: boolean;
   /** The parent's model and reasoning, which inherited candidates run with. */
-  readonly parentModel?: string | undefined;
   readonly parentEffort?: SubagentEffort | undefined;
   readonly close: (action: ProfileSetPickerAction | undefined) => void;
 }
@@ -416,6 +419,7 @@ export class ProfileSetPickerComponent implements Component, Focusable {
         query: this.query,
         hintsExpanded: this.hintsExpanded,
         parentModel: this.options.parentModel,
+        availableModel: this.options.availableModel,
         parentEffort: this.options.parentEffort,
         menu: this.menu,
         prompt,

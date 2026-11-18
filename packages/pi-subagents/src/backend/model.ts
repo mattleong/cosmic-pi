@@ -1,3 +1,4 @@
+import type { OpenAIFastMode } from "pi-better-openai/fast-models";
 import type * as Cause from "effect/Cause";
 import type * as Effect from "effect/Effect";
 import type * as Queue from "effect/Queue";
@@ -25,7 +26,7 @@ export interface BackendLaunchRequest {
   readonly cwd: string;
   readonly context: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  readonly openaiFastMode: boolean;
+  readonly openaiFastMode: OpenAIFastMode;
   readonly model: string;
   readonly effort: SubagentEffort;
   readonly runtimeApiKey?: RuntimeApiKey | undefined;

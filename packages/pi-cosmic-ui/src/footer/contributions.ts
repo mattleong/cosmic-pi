@@ -64,9 +64,10 @@ export function tone(
   contribution: CosmicFooterTextContribution,
   text: string,
 ): string {
-  if (contribution.id === "effort" && Fn.pipe(text, Str.startsWith("⚡"))) {
-    const effort = Fn.pipe(text, Str.slice(1));
-    return `${theme.fg("warning", "⚡")}${effort ? theme.fg(contributionColor(contribution), effort) : ""}`;
+  const speedMark = contribution.id === "effort" ? /^⚡+/u.exec(text)?.[0] : undefined;
+  if (speedMark) {
+    const effort = Fn.pipe(text, Str.slice(speedMark.length));
+    return `${theme.fg("warning", speedMark)}${effort ? theme.fg(contributionColor(contribution), effort) : ""}`;
   }
   if (contribution.id === "git.lines") {
     return Arr.join(

@@ -207,10 +207,10 @@ const resolveConcreteModel = Effect.fn("HostProfileResolution.resolveConcreteMod
     attempt.effortWasExplicit,
     modelRegistry,
   );
-  if (attempt.openaiFastMode && !supportsSubagentFastMode(resolved.model))
+  if (attempt.openaiFastMode && !supportsSubagentFastMode(resolved.model, attempt.openaiFastMode))
     return yield* invalidRequest(
       "fast_mode_unsupported",
-      `Fast mode is unavailable for ${resolved.model}.`,
+      `${attempt.openaiFastMode === "ultrafast" ? "Ultrafast" : "Fast mode"} is unavailable for ${resolved.model}.`,
     );
   yield* registry.preflight(resolved.model);
   return resolved;

@@ -44,13 +44,15 @@ import {
 import type { SubagentEffort } from "../../domain/routing.ts";
 import {
   candidateEffortLabel,
+  candidateFastMark,
+  type ProfileEditorModels,
   candidateEffortLevel,
   candidateModelLabel,
 } from "./profile-workspace-model.ts";
 import type { DashboardPrompt } from "./profile-dashboard-render.ts";
 import { renderTwoPaneFrame } from "./two-pane-frame.ts";
 
-interface ProfileSetPickerRenderState {
+interface ProfileSetPickerRenderState extends ProfileEditorModels {
   /** The entries the filter keeps, scope notes included, in display order. */
   readonly entries: ReadonlyArray<ProfileSetPickerEntry>;
   readonly selected: SelectableProfileSetEntry | undefined;
@@ -61,7 +63,6 @@ interface ProfileSetPickerRenderState {
   readonly searching: boolean;
   /** `?` expanded the hint bar to every key the picker takes. */
   readonly hintsExpanded?: boolean | undefined;
-  readonly parentModel?: string | undefined;
   readonly parentEffort?: SubagentEffort | undefined;
   /** The selected set's Actions menu, drawn in the preview pane. */
   readonly menu?: Pick<SearchableSelectPage<unknown>, "renderBody" | "keyHints"> | undefined;
@@ -370,7 +371,7 @@ const previewLines = (
         `${theme.fg(
           candidate.model === "parent" ? "dim" : managerTone.value,
           candidateModelLabel(candidate, state.parentModel, true),
-        )}${candidate.openaiFastMode ? theme.fg("warning", " ⚡") : ""}`,
+        )}${theme.fg("warning", candidateFastMark(candidate, state))}`,
         theme.fg(
           candidate.effort === "default" ? "dim" : "text",
           parentEffort === undefined

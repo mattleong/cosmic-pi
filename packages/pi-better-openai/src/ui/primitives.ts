@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as MutableRef from "effect/MutableRef";
 import type { CosmicFooterTextContribution as FooterTextPrimitive } from "pi-cosmic-ui/protocol";
 import type { ResolvedConfig } from "../config/schema.ts";
+import { fastModeMark } from "../fast/models.ts";
 import { isFastActive, type FastSnapshot } from "../fast/controller.ts";
 import { formatUsageStatus } from "../usage/format.ts";
 import { visibleStatusLine, type OpenAIProjection } from "../usage/projection.ts";
@@ -11,12 +12,13 @@ export function fastModeFooterPrimitive(
   snapshot: FastSnapshot,
 ): FooterTextPrimitive | undefined {
   if (!isFastActive(ctx, snapshot)) return undefined;
+  const mark = fastModeMark(snapshot.desiredActive);
   return {
     kind: "text",
     id: "openai.fast",
     region: "identity",
-    text: "⚡",
-    compactText: "⚡",
+    text: mark,
+    compactText: mark,
     tone: "normal",
     color: "warning",
     decorates: "effort",

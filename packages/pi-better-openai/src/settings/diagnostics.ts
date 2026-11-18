@@ -9,6 +9,7 @@ interface DiagnosticFacts {
   readonly ctx: ExtensionContext;
   readonly configPath: string;
   readonly fast: FastSnapshot;
+  readonly ownsFastMode: boolean;
   readonly usage: OpenAIProjection;
   readonly footerUsageVisible: boolean;
   /** Why OpenAI compaction can't run in this Pi, when it can't. */
@@ -25,7 +26,7 @@ const section = (title: string, lines: ReadonlyArray<string>): string[] =>
 export const diagnosticLines = (facts: DiagnosticFacts): ReadonlyArray<string> => [
   `Current model: ${currentModelKey(facts.ctx)}`,
   `Config: ${formatDisplayPath(facts.configPath, facts.ctx.cwd)}`,
-  ...section("Fast mode", fastDiagnosticLines(facts.ctx, facts.fast)),
+  ...section("Fast mode", fastDiagnosticLines(facts.ctx, facts.fast, facts.ownsFastMode)),
   ...section("Usage", [
     `Footer: ${facts.footerUsageVisible ? "auto" : "off"} (/cosmic-ui settings)`,
     ...usageDiagnosticLines(facts.usage, facts.ctx.cwd),

@@ -204,7 +204,7 @@ export abstract class ProfileWorkspaceState {
       this.draft(),
       this.profile(),
       this.options.parentEffort,
-      this.options.parentModel,
+      this.options,
       this.selection().expanded,
     );
   }

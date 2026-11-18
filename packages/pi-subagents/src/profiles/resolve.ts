@@ -1,3 +1,4 @@
+import type { OpenAIFastMode } from "pi-better-openai/fast-models";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Match from "effect/Match";
@@ -53,7 +54,7 @@ export interface ProfileCandidateAttempt {
   readonly model: string;
   readonly effectiveContext: SubagentContextMode;
   readonly writeIntent: SubagentWriteIntent;
-  readonly openaiFastMode: boolean;
+  readonly openaiFastMode: OpenAIFastMode;
   readonly effort: SubagentEffort;
   readonly effortWasExplicit: boolean;
   readonly reason: string;
@@ -190,10 +191,13 @@ const resolveCandidate = (
         "pi_effort_unsupported",
         unsupportedEffortReason(resolvedModel, hardEffort, supportedEfforts),
       );
-    if (candidate.openaiFastMode && !supportsSubagentFastMode(resolvedModel))
+    if (
+      candidate.openaiFastMode &&
+      !supportsSubagentFastMode(resolvedModel, candidate.openaiFastMode)
+    )
       return skipCandidate(
         "fast_mode_unsupported",
-        `Pi model ${resolvedModel} does not support fast mode.`,
+        `Pi model ${resolvedModel} does not support ${candidate.openaiFastMode === "ultrafast" ? "ultrafast" : "fast mode"}.`,
       );
     return accept(resolvedModel, supportedEfforts);
   };

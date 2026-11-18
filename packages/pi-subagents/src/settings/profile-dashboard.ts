@@ -19,9 +19,9 @@ import {
   type ProfileWorkspaceTarget,
 } from "./profile-route-editor.ts";
 import {
+  availableCandidateModel,
   loadCandidateModelPicker,
   ProfileModelCatalog,
-  supportedPiEfforts,
 } from "./profile-model-catalog.ts";
 import type { ProfileWorkspaceOptions, ProfileWorkspaceSaveResult } from "./profile-workspace.ts";
 import { profileSetPatchBase } from "./profile-write-context.ts";
@@ -194,12 +194,8 @@ export function openProfileDashboard(
                 piCatalog: modelCatalog.capture(),
                 parentSelector: parentModel,
               }),
-            supportedPiEfforts: (candidate) =>
-              supportedPiEfforts({
-                candidate,
-                piCatalog: modelCatalog.capture(),
-                parentSelector: parentModel,
-              }),
+            availableModel: (selector) =>
+              availableCandidateModel(selector, modelCatalog.capture(), parentModel),
             parentModel,
           };
           dashboard = new ProfileDashboardComponent({

@@ -208,7 +208,7 @@ layer(nodeFilePlatformLayer)("compaction session authority", (it) => {
   it.effect("retirement discards pending provider payload changes", () =>
     Effect.gen(function* () {
       const h = yield* extensionHarness();
-      h.getFlag.mockReturnValue(true);
+      h.getFlag.mockImplementation((name) => name === "fast");
       yield* h.emit("session_start");
       const pending = h.handlers.get("before_provider_request")[0]!(
         { type: "before_provider_request", payload: {} },

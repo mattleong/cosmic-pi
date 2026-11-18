@@ -1,3 +1,4 @@
+import { fastModeMark, type OpenAIFastMode } from "pi-better-openai/fast-models";
 import * as Arr from "effect/Array";
 import * as Fn from "effect/Function";
 import * as Str from "effect/String";
@@ -40,7 +41,7 @@ interface RunRoutePresentationInput {
   readonly profile?: string | undefined;
   readonly model: string;
   readonly effort: string;
-  readonly openaiFastMode?: boolean | undefined;
+  readonly openaiFastMode?: OpenAIFastMode | undefined;
   readonly modelOverride?: object | undefined;
 }
 
@@ -48,7 +49,7 @@ export const projectRunRoutePresentation = (run: RunRoutePresentationInput) => {
   const profile = sanitizeTerminalLine(run.profile ?? "generalist");
   const providerModel = sanitizeTerminalLine(run.model);
   const effort = sanitizeTerminalLine(run.effort);
-  const fast = run.openaiFastMode ? " ⚡" : "";
+  const fast = run.openaiFastMode ? ` ${fastModeMark(run.openaiFastMode)}` : "";
   const override = run.modelOverride ? " · override" : "";
   return { profile, model: `${providerModel}:${effort}${fast}${override}` };
 };
@@ -75,7 +76,7 @@ export const projectRunModel = (run: RunModelPresentationInput) => {
       Arr.filter(
         [
           effort,
-          run.openaiFastMode ? "⚡" : "",
+          fastModeMark(run.openaiFastMode),
           reasons.length > 0 ? `(${Arr.join(reasons, ", ")})` : "",
         ],
         Str.isNonEmpty,

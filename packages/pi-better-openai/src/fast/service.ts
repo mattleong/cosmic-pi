@@ -8,7 +8,8 @@ import * as Semaphore from "effect/Semaphore";
 import { freezeSnapshot } from "pi-cosmic-core/projection";
 import { makeSynchronousIngress } from "pi-cosmic-core/coordination/synchronous-ingress";
 import type { ResolvedConfig } from "../config/schema.ts";
-import { initialFastSnapshot, supportsFast, type FastSnapshot } from "./controller.ts";
+import { supportsFastModel, type OpenAIFastMode } from "./models.ts";
+import { initialFastSnapshot, type FastSnapshot } from "./controller.ts";
 import { OpenAIConfigService } from "../config/store.ts";
 
 interface FastInjectionEvent {
@@ -19,11 +20,11 @@ interface FastInjectionEvent {
 export type FastInjectionIngress = (event: FastInjectionEvent) => void;
 
 const desire =
-  (ctx: ExtensionContext, desiredActive: boolean) =>
+  (ctx: ExtensionContext, desiredActive: OpenAIFastMode) =>
   (current: FastSnapshot): FastSnapshot => ({
     ...current,
     desiredActive,
-    active: desiredActive && supportsFast(ctx),
+    active: supportsFastModel(ctx.model?.provider, ctx.model?.id, desiredActive),
   });
 
 interface FastModeServiceOptions {
@@ -73,16 +74,24 @@ export class FastModeService extends Context.Service<FastModeService>()(
         recordInjection: (event: FastInjectionEvent): void => {
           ingress.offer(event);
         },
+        followProfile: (ctx: ExtensionContext, mode: OpenAIFastMode) =>
+          commitInMemory(desire(ctx, mode)),
         initialize: (
           ctx: ExtensionContext,
           config: Pick<ResolvedConfig, "persistState" | "desiredActive">,
-          flagActive: boolean,
+          flagActive: OpenAIFastMode,
         ) => {
           const persisted = config.persistState && config.desiredActive;
           const update = desire(ctx, flagActive || persisted);
-          return flagActive && !persisted ? persistTransition(update) : commitInMemory(update);
+          return flagActive && flagActive !== persisted
+            ? persistTransition(update)
+            : commitInMemory(update);
         },
-        setDesired: (ctx: ExtensionContext, desiredActive: boolean) =>
+        toggle: (ctx: ExtensionContext, mode: Exclude<OpenAIFastMode, false>) =>
+          persistTransition((current) =>
+            desire(ctx, current.desiredActive === mode ? false : mode)(current),
+          ),
+        setDesired: (ctx: ExtensionContext, desiredActive: OpenAIFastMode) =>
           persistTransition(desire(ctx, desiredActive)),
         modelChanged: (ctx: ExtensionContext) =>
           commitInMemory((current) => desire(ctx, current.desiredActive)(current)),

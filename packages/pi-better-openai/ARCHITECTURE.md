@@ -77,12 +77,19 @@ Project configuration requires explicit trust, and writes preserve unknown JSON
 fields. A durable fast transition commits its document, private state, and
 synchronous projection together through the store's `afterCommit` region, without
 reacquiring the fast permit.
-Waiting and preparation remain interruptible. Startup writes only when `--fast`
+Waiting and preparation remain interruptible. Startup writes only when `--fast` or `--ultrafast`
 changes resolved intent; model switches stay in memory. Fast-only commits preserve
 in-flight usage results and do not wake polling. See
 [configuration decoding tests](tests/domain.test.ts),
 [config service tests](tests/config-service.test.ts), and
 [fast commit tests](tests/fast-service.test.ts).
+
+[Fast model policy](src/fast/models.ts) resolves the requested mode against the actual
+provider/model for every injection, including native compaction. Pausing does not
+write a different intent or downgrade to priority. Codex routing hints additionally
+require the canonical API and endpoint. The child bridge reuses this public policy;
+it owns child request hooks while Better OpenAI projects the selected child mode
+read-only for its footer and compaction, without touching the host's fast settings.
 
 Session start, fast toggles, and model switches close the session's pooled Codex
 sockets through Pi's session cleanup registry, never without a session id, so the
