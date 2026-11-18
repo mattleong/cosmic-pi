@@ -32,7 +32,9 @@ const fixture = (initial: Partial<SubagentRunView>) =>
     const subscribers = new Set<() => void>();
     const watches: Array<{ readonly listener: SubagentTranscriptListener; closed: boolean }> = [];
     const calls: string[] = [];
-    let sendFailure: { readonly message: string; readonly before: () => void } | undefined;
+    let sendFailure:
+      | { readonly message: string; readonly code: string; readonly before: () => void }
+      | undefined;
     const service = subagentServiceDouble({
       watchTranscript: (_id, listener) =>
         Effect.gen(function* () {
@@ -54,7 +56,7 @@ const fixture = (initial: Partial<SubagentRunView>) =>
             disposition: "guided" as const,
           });
         sendFailure.before();
-        return Effect.fail(invalidRequest("agent_unavailable", sendFailure.message));
+        return Effect.fail(invalidRequest(sendFailure.code, sendFailure.message));
       },
       resume: (_id, message) => {
         calls.push(`resume:${message ?? ""}`);
@@ -103,8 +105,12 @@ const fixture = (initial: Partial<SubagentRunView>) =>
         for (const listener of subscribers) listener();
       },
       /** Refuses sends from now on, after running `before`, such as the run finishing first. */
-      failSends: (message: string, before: () => void = () => undefined) => {
-        sendFailure = { message, before };
+      failSends: (
+        message: string,
+        before: () => void = () => undefined,
+        code = "agent_unavailable",
+      ) => {
+        sendFailure = { message, before, code };
       },
     };
   });
@@ -156,6 +162,22 @@ describe("a subagent's session view", () => {
         "resume:one more",
       ]);
     }),
+  );
+
+  it.effect(
+    "never resends a message whose acknowledgement was lost, even if the writer then finishes",
+    () =>
+      Effect.gen(function* () {
+        const h = yield* fixture({ state: "running", pid: 7, writeIntent: "writer" });
+        h.failSends(
+          "Delivery not confirmed",
+          () => h.publish({ state: "completed", sessionFile: "/tmp/s.jsonl" }),
+          "guidance_outcome_uncertain",
+        );
+        h.type("please verify\r");
+        yield* yieldUntil(() => Fn.pipe(h.text(), Str.includes("Delivery not confirmed")));
+        expect(h.calls).toEqual(["send:please verify"]);
+      }),
   );
 
   it.effect("says why a message wasn't delivered and gives the text back", () =>

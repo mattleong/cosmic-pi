@@ -7,6 +7,7 @@ import {
   type MessageEndEvent,
 } from "@earendil-works/pi-coding-agent";
 import * as Arr from "effect/Array";
+import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
@@ -18,11 +19,21 @@ import {
   notifyAtHostBoundary,
 } from "pi-cosmic-core/host-session";
 import { NodeEventEmitter, nodeCreateConnection } from "pi-cosmic-core/platform/node-builtins";
+import { safeTextPrefix } from "pi-cosmic-core/text";
+import { MAX_PARENT_MESSAGE_CHARS } from "../run/limits.ts";
+import { ForeignCallable } from "pi-cosmic-core/schema/foreign-callable";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
+import {
+  REX_PROMPT_EVENT,
+  type RexPrompt,
+  type RexPromptQuery,
+  type RexPromptDisposition,
+} from "./rex-prompt.mjs";
 import type { LocalPiContact } from "../backend/local-pi-protocol.ts";
 import { localPiChildIpcChannel, type LocalPiChildIpcChannel } from "./local-pi-ipc.ts";
 import {
   REX_FRAME,
+  REX_HANDOFF_TIMEOUT_MS,
   REX_SOCKET_ENV,
   REX_TOKEN_ENV,
   rexFrame,
@@ -56,6 +67,7 @@ const CommandSchema = Schema.Union([
   }),
 ]);
 type Command = typeof CommandSchema.Type;
+type PromptCommand = Extract<Command, { readonly type: "prompt" }>;
 const decodeCommand = decodeUnknownOrUndefined(CommandSchema);
 const decodeCommandHead = decodeUnknownOrUndefined(
   Schema.Struct({ type: Schema.String, id: CommandId }),
@@ -64,6 +76,7 @@ const decodeLink = decodeUnknownOrUndefined(
   Schema.Struct({ socket: Schema.String, token: Schema.String }),
 );
 
+const decodeAccepted = decodeUnknownOrUndefined(Schema.Struct({ ok: Schema.Literal(true) }));
 const decodeAsk = decodeUnknownOrUndefined(
   Schema.Union([
     Schema.Struct({ id: Schema.String, request: Schema.Json }),
@@ -99,6 +112,24 @@ interface Link {
   readonly parked: boolean;
 }
 
+interface Activation {
+  readonly ctx: ExtensionContext;
+  /** Only text the SDK actually queued may be returned to the editor after an abort. */
+  readonly queued: string[];
+}
+
+const decodePrompt = decodeUnknownOrUndefined(ForeignCallable<Parameters<RexPrompt>>());
+const decodeDisposition = decodeUnknownOrUndefined(
+  Schema.Literals(["started", "queued", "handled"]),
+);
+
+const queryPrompt = (pi: ExtensionAPI, sessionId: string) =>
+  invokeHostCallback(() => {
+    const query: RexPromptQuery = { sessionId, prompt: undefined };
+    pi.events.emit(REX_PROMPT_EVENT, query);
+    return decodePrompt(query.prompt);
+  }, undefined);
+
 /** A tool's arguments or result, which Pi types `any`: carried as it is, if it is a container. */
 const OpaqueSchema = Schema.declare(Predicate.isObjectOrArray);
 const opaque = Fn.flow(Schema.decodeUnknownOption(OpaqueSchema), Option.getOrUndefined);
@@ -122,7 +153,7 @@ type ResponseData =
       readonly cost: number;
       readonly contextUsage: { readonly percent: number | null };
     }
-  | { readonly disposition: "started" | "queued" }
+  | { readonly disposition: RexPromptDisposition }
   | { readonly entries: SessionEntries; readonly leafId: string | null };
 
 type CommandOutcome =
@@ -168,7 +199,7 @@ type OutgoingFrame =
   | LocalPiContact
   | ({ readonly type: "response"; readonly id?: string; readonly command: string } & CommandOutcome)
   | { readonly token: string; readonly pid: number; readonly parked: boolean }
-  | { readonly ok: true }
+  | { readonly ok: boolean }
   | { readonly text: string }
   | PaneAnswer;
 
@@ -218,42 +249,94 @@ export function openRexChildSession(
 
   const contactEvents = new NodeEventEmitter();
   let link: Link | undefined;
-  let context: ExtensionContext | undefined;
-  /** Commands that arrived before the session started, which need its context to answer. */
-  const waiting: Command[] = [];
-  /** Steering text this half queued for the parent, which an abort returns to the editor. */
-  const steered: string[] = [];
+  let activation: Activation | undefined;
+  /** Only the initial startup may hold commands for a session that hasn't started yet. */
+  let waiting: Array<{ readonly from: Link; readonly command: Command }> | undefined = [];
   let closing = false;
 
+  // Contact operations are lazy Effects. Capture their socket when requested, not when
+  // a fork later runs an acknowledgement or cancellation.
+  const contactChannel = (owner?: Link) =>
+    localPiChildIpcChannel({
+      events: contactEvents,
+      connected: () =>
+        owner !== undefined && link === owner && !owner.parked && !owner.socket.destroyed,
+      send: (message, callback) => {
+        callback(send(owner, REX_FRAME.contact, message) ? null : new Error("Rex link is closed."));
+      },
+    });
+  let contacts = contactChannel();
   const event = (frame: SessionEvent): void => {
     if (link && !link.parked) send(link, REX_FRAME.rpc, frame);
   };
-  const respond = (
+  const respondOn = (
+    target: Link | undefined,
     command: { readonly type: string; readonly id?: string | undefined },
     outcome: CommandOutcome,
   ) =>
-    send(link, REX_FRAME.rpc, {
+    send(target, REX_FRAME.rpc, {
       type: "response",
       ...(command.id !== undefined && { id: command.id }),
       command: command.type,
       ...outcome,
     });
+  const respond = (
+    command: { readonly type: string; readonly id?: string | undefined },
+    outcome: CommandOutcome,
+  ) => respondOn(link, command, outcome);
   const succeed = (command: Command, data?: ResponseData) =>
     respond(command, { success: true, ...(data && { data }) });
 
+  const admit = (active: Activation, from: Link, command: PromptCommand): void => {
+    const current = () =>
+      activation === active && link === from && !closing && !from.socket.destroyed;
+    const reply = (outcome: CommandOutcome) => {
+      if (current()) respondOn(from, command, outcome);
+    };
+
+    const submit = queryPrompt(pi, active.ctx.sessionManager.getSessionId());
+    if (!current()) return;
+    if (!submit) {
+      reply({ success: false, error: "The subagent's prompt capability is unavailable." });
+      return;
+    }
+    // Submit synchronously on this socket's turn. Only the SDK's preflight receipt is async.
+    // A broken contract after submission isn't a refusal: without a valid disposition the
+    // backend reports an uncertain outcome rather than inviting a duplicate prompt.
+    const uncertain = () => reply({ success: true });
+    Effect.runSync(
+      Effect.try(() => {
+        const result: unknown = submit(command.message, command.streamingBehavior === "steer");
+        if (!Predicate.isPromiseLike(result)) return uncertain();
+        void Promise.resolve(result).then(
+          (value) => {
+            if (!current()) return;
+            const disposition = decodeDisposition(value);
+            if (disposition === "queued") active.queued.push(command.message);
+            return reply({ success: true, ...(disposition && { data: { disposition } }) });
+          },
+          () => reply({ success: false, error: "The subagent could not take the prompt." }),
+        );
+      }).pipe(Effect.orElseSucceed(uncertain)),
+    );
+  };
+
   // The parent is this session's only reader. Without it nothing takes the report, so the turn
-  // stops and Pi exits; Pi defers the exit until the abort has settled.
+  // stops and Pi exits; Pi defers the exit until the abort has settled. A session that hasn't
+  // started answers nothing and exits as it starts.
   const leave = (): void => {
     if (closing) return;
     closing = true;
     contactEvents.emit("disconnect");
-    const ctx = context;
+    waiting = undefined;
+    const ctx = activation?.ctx;
     if (!ctx) return;
     invokeBestEffort(() => ctx.abort());
     invokeBestEffort(() => ctx.shutdown());
   };
 
-  const handle = (ctx: ExtensionContext, command: Command): void => {
+  const handle = (active: Activation, from: Link, command: Command): void => {
+    const { ctx } = active;
     switch (command.type) {
       case "get_state": {
         const { model } = ctx;
@@ -274,17 +357,9 @@ export function openRexChildSession(
           contextUsage: { percent: ctx.getContextUsage()?.percent ?? null },
         });
         return;
-      case "prompt": {
-        const idle = ctx.isIdle();
-        if (!idle && command.streamingBehavior === undefined) {
-          respond(command, { success: false, error: "The subagent is busy." });
-          return;
-        }
-        if (!idle) steered.push(command.message);
-        pi.sendUserMessage(command.message, idle ? undefined : { deliverAs: "steer" });
-        succeed(command, { disposition: idle ? "started" : "queued" });
+      case "prompt":
+        admit(active, from, command);
         return;
-      }
       // Pi returns queued messages to the editor when a turn is aborted, so there is no queue
       // to clear ahead of the abort; the settled turn below empties the editor of them.
       case "clear_queue":
@@ -311,111 +386,170 @@ export function openRexChildSession(
       }
     }
   };
-  const receiveCommand = (value: Schema.Json): void => {
+  const receiveCommand = (from: Link, value: Schema.Json): void => {
     const command = decodeCommand(value);
     if (!command) {
       const head = decodeCommandHead(value);
       if (head) respond(head, { success: false, error: "Unsupported command." });
       return;
     }
-    const ctx = context;
-    if (ctx) answer(ctx, command);
-    else waiting.push(command);
+    if (activation) answer(activation, from, command);
+    else waiting?.push({ from, command });
   };
-  const answer = (ctx: ExtensionContext, command: Command): void => {
+  const answer = (active: Activation, from: Link, command: Command): void => {
+    if (from !== link || closing || activation !== active) return;
     const handled = invokeHostCallback(() => {
-      handle(ctx, command);
+      handle(active, from, command);
       return true;
     }, false);
     if (!handled) respond(command, { success: false, error: "The command failed." });
   };
 
-  // Questionnaires the root shows the user here, by the root's ID for each.
+  // Withdrawal requests a terminal receipt, not a synthetic decline. The presenter may
+  // already have the user's decision and still be releasing the dialog/editor.
   let presenter: RexPanePresenter | undefined;
-  const paneAsks = new Map<string, AbortController>();
-  /** Hands every open questionnaire back: the user can no longer answer it in this session. */
-  const declineAsks = (): void => {
-    for (const [id, showing] of paneAsks) {
-      paneAsks.delete(id);
-      showing.abort();
-      send(link, REX_FRAME.ask, { id, declined: true });
-    }
-  };
+  const paneAsks = new Map<string, { readonly stop: () => Promise<void> }>();
+  let moving = false;
+  let hiding = false;
+  const stopAsks = () => Promise.all(Arr.map([...paneAsks.values()], (ask) => ask.stop()));
   const receiveAsk = (from: Link, value: Schema.Json): void => {
     const ask = decodeAsk(value);
     if (!ask) return;
+    const { id } = ask;
+    const existing = paneAsks.get(id);
     if (!Predicate.hasProperty(ask, "request")) {
-      paneAsks.get(ask.id)?.abort();
-      paneAsks.delete(ask.id);
+      existing?.stop().catch(() => from.socket.destroy());
       return;
     }
-    const { id } = ask;
+    if (existing) return;
     const present = presenter;
-    if (!present || from.parked) {
+    if (!present || from.parked || moving || hiding) {
       send(from, REX_FRAME.ask, { id, declined: true });
       return;
     }
-    const showing = new AbortController();
+    const controller = new AbortController();
+    let stopping: Promise<void> | undefined;
+    const done = Promise.resolve()
+      .then(() =>
+        present(ask.request, controller.signal, () => {
+          if (!controller.signal.aborted && paneAsks.get(id) === showing)
+            send(from, REX_FRAME.ask, { id, shown: true });
+        }),
+      )
+      .catch(() => undefined)
+      .then((outcome) => {
+        paneAsks.delete(id);
+        send(from, REX_FRAME.ask, outcome === undefined ? { id, declined: true } : { id, outcome });
+        return undefined;
+      });
+    const showing = {
+      stop: () => {
+        if (stopping) return stopping;
+        controller.abort();
+        // Never tell the root it is safe to open a second dialog if this one won't stop.
+        stopping = Effect.runPromise(
+          Effect.promise(() => done).pipe(
+            Effect.timeoutOrElse({
+              duration: REX_HANDOFF_TIMEOUT_MS,
+              orElse: () =>
+                Effect.sync(() => {
+                  from.socket.destroy();
+                }),
+            }),
+          ),
+        );
+        return stopping;
+      },
+    };
     paneAsks.set(id, showing);
-    // Only the questionnaire still open here may speak for its ID: a withdrawn one is the root's again.
-    const say = (word: PaneAnswer): void => {
-      if (paneAsks.get(id) === showing) send(link, REX_FRAME.ask, word);
-    };
-    const settle = (outcome: Schema.Json | undefined): void => {
-      say(outcome === undefined ? { id, declined: true } : { id, outcome });
-      if (paneAsks.get(id) === showing) paneAsks.delete(id);
-    };
-    invokeBestEffort(() => {
-      present(ask.request, showing.signal, () => say({ id, shown: true }))
-        .then(settle)
-        .catch(() => settle(undefined));
-    });
   };
 
-  const connect = (path: string, linkToken: string, parked: boolean, onLinked?: () => void) => {
-    const socket = nodeCreateConnection(path);
+  // Connecting isn't acceptance. Until the new owner authenticates the hello, the old
+  // socket remains the sole source of commands and destination of events and prompt receipts.
+  let candidate: Link | undefined;
+  const connect = (path: string, linkToken: string, parked: boolean, previous?: Link) => {
+    const transfer = parked ? REX_FRAME.park : REX_FRAME.adopt;
+    const refuse = () => {
+      moving = false;
+      if (previous && previous === link && !closing) send(previous, transfer, { ok: false });
+      else if (!previous) leave();
+    };
+    const socket = invokeHostCallback(() => nodeCreateConnection(path), undefined);
+    if (!socket) return refuse();
     const next: Link = { socket, parked };
+    candidate = next;
+    socket.setTimeout(REX_HANDOFF_TIMEOUT_MS, () => socket.destroy());
     let buffered = "";
     socket.setEncoding("utf8");
     socket.on("connect", () => {
-      const previous = link;
-      link = next;
       send(next, REX_FRAME.hello, { token: linkToken, pid: process.pid, parked });
-      onLinked?.();
-      previous?.socket.end();
     });
     socket.on("data", (chunk: string) => {
       const { frames, rest } = splitRexFrames(buffered + chunk);
       buffered = rest;
-      for (const frame of frames) receiveFrame(next, frame.kind, frame.body);
+      for (const frame of frames) {
+        if (next === candidate) {
+          if (
+            closing ||
+            previous !== link ||
+            frame.kind !== REX_FRAME.accept ||
+            !decodeAccepted(Option.getOrUndefined(decodeJson(frame.body)))
+          ) {
+            socket.destroy();
+            return;
+          }
+          socket.setTimeout(0);
+          candidate = undefined;
+          link = next;
+          contacts = contactChannel(next);
+          moving = false;
+          if (previous) {
+            if (parked) {
+              contactEvents.emit("disconnect");
+              const ctx = activation?.ctx;
+              if (ctx && !ctx.isIdle()) invokeBestEffort(() => ctx.abort());
+            }
+            send(previous, transfer, { ok: true });
+            previous.socket.end();
+          }
+        } else receiveFrame(next, frame.kind, frame.body);
+      }
     });
-    socket.on("error", () => undefined);
+    socket.on("error", Fn.constVoid);
     socket.on("close", () => {
-      if (link === next) leave();
+      if (candidate === next) {
+        candidate = undefined;
+        refuse();
+      } else if (link === next) {
+        leave();
+        candidate?.socket.destroy();
+        stopAsks().catch(Fn.constVoid);
+      }
     });
   };
   const receiveFrame = (from: Link, kind: string, body: string): void => {
-    if (from !== link) return;
+    if (from !== link || closing) return;
     const value = Option.getOrUndefined(decodeJson(body));
     if (value === undefined) return;
     if (kind === REX_FRAME.rpc) {
-      if (!from.parked) receiveCommand(value);
+      if (!from.parked) receiveCommand(from, value);
     } else if (kind === REX_FRAME.contact) contactEvents.emit("message", value);
-    // The run reported while its pane was open: the session stays for the user and waits, on
-    // the root's own socket, to be resumed. The launcher that owned this run exits.
     else if (kind === REX_FRAME.park || kind === REX_FRAME.adopt) {
       const target = decodeLink(value);
-      if (!target) return;
       const parking = kind === REX_FRAME.park;
-      // A parked session is inert, so a turn still running when its run ends stops with it.
-      const ctx = context;
-      if (parking && ctx && !ctx.isIdle()) invokeBestEffort(() => ctx.abort());
-      const acknowledge = () => send(from, REX_FRAME.park, { ok: true });
-      connect(target.socket, target.token, parking, acknowledge);
+      if (!target || moving || from.parked === parking) return;
+      moving = true;
+      stopAsks()
+        .then(() => {
+          if (link === from && !closing && !from.socket.destroyed)
+            connect(target.socket, target.token, parking, from);
+          return undefined;
+        })
+        .catch(() => from.socket.destroy());
     } else if (kind === REX_FRAME.ask) receiveAsk(from, value);
     else if (kind === REX_FRAME.notice) {
       const notice = decodeUnknownOrUndefined(Schema.Struct({ message: Schema.String }))(value);
-      const ctx = context;
+      const ctx = activation?.ctx;
       if (notice && ctx) notifyAtHostBoundary(ctx, notice.message, "warning");
     }
   };
@@ -424,8 +558,14 @@ export function openRexChildSession(
   // Quitting Pi here would end the run with it, so the session's own way out hides its pane:
   // the run goes on, and Activity shows the pane again.
   const hide = (): void => {
-    declineAsks();
-    send(link, REX_FRAME.hide, { ok: true });
+    const from = link;
+    hiding = true;
+    stopAsks()
+      .then(() => {
+        hiding = false;
+        return from === link && !closing && send(from, REX_FRAME.hide, { ok: true });
+      })
+      .catch(() => from?.socket.destroy());
   };
   pi.registerCommand("hide", {
     description: "Hide this subagent's pane; it keeps running",
@@ -435,7 +575,12 @@ export function openRexChildSession(
     },
   });
   pi.on("session_start", (_event, ctx) => {
-    context = ctx;
+    if (closing) {
+      invokeBestEffort(() => ctx.shutdown());
+      return;
+    }
+    const active: Activation = { ctx, queued: [] };
+    activation = active;
     // Pi's exit key on an empty editor is the same wish. An editor another extension installed
     // keeps its own keys.
     if (ctx.mode === "tui" && ctx.ui.getEditorComponent() === undefined)
@@ -446,20 +591,26 @@ export function openRexChildSession(
           return editor;
         }),
       );
-    for (const command of waiting.splice(0)) answer(ctx, command);
+    for (const { from, command } of waiting ?? []) answer(active, from, command);
+    waiting = undefined;
+  });
+  pi.on("session_shutdown", () => {
+    activation = undefined;
+    waiting = undefined;
   });
   pi.on("agent_start", () => event({ type: "agent_start" }));
   pi.on("agent_end", () => event({ type: "agent_end" }));
   pi.on("agent_settled", (settled, ctx) => {
     // An interrupted turn hands its queued messages back to the editor. The ones the parent
     // steered are the parent's to send again, not the user's draft.
-    if (settled.aborted && steered.length > 0) {
-      const returned = Arr.join(steered, "\n\n");
+    const queued = activation?.queued;
+    if (settled.aborted && queued?.length) {
+      const returned = Arr.join(queued, "\n\n");
       invokeBestEffort(() => {
         if (Str.trim(ctx.ui.getEditorText()) === Str.trim(returned)) ctx.ui.setEditorText("");
       });
     }
-    steered.length = 0;
+    if (queued) queued.length = 0;
     event({ type: "agent_settled" });
   });
   pi.on("message_start", ({ message }) => event({ type: "message_start", message }));
@@ -514,26 +665,27 @@ export function openRexChildSession(
     const contact: LocalPiContact = {
       channel: "pi-subagents",
       type: "user_input",
-      text: input.text,
+      text:
+        input.text.length <= MAX_PARENT_MESSAGE_CHARS
+          ? input.text
+          : `${safeTextPrefix(input.text, MAX_PARENT_MESSAGE_CHARS - 1)}…`,
     };
     send(link, REX_FRAME.contact, contact);
     return undefined;
   });
 
   return {
-    ipc: localPiChildIpcChannel({
-      events: contactEvents,
-      connected: () => link !== undefined && !link.parked && !link.socket.destroyed,
-      send: (message, callback) => {
-        callback(send(link, REX_FRAME.contact, message) ? null : new Error("Rex link is closed."));
-      },
-    }),
+    ipc: {
+      sendContact: (message) => contacts.sendContact(message),
+      listen: (handlers) => contacts.listen(handlers),
+    },
     paneAsks: {
       listen: (present) => {
         presenter = present;
         return () => {
-          if (presenter === present) presenter = undefined;
-          declineAsks();
+          if (presenter !== present) return;
+          presenter = undefined;
+          stopAsks().catch(Fn.constVoid);
         };
       },
     },

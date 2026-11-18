@@ -64,14 +64,15 @@ a cancelled or failed result is labeled automated.
 
 ## Critical invariants
 
-- Blocking, owned, and async requests share dialog admission. Cancellation cannot let a queued
-  successor bypass an earlier presenter or its cleanup.
+- All asks from one session share its FIFO. A blocking ask holds the same ticket from pane
+  presentation through any fallback to the caller; interruption waits for pane withdrawal.
+  Independent calls into a child's local surface still share the child's own FIFO.
 - Async admission, mounting, answering, and delivery are separate outcomes. Interrupting an
   await does not cancel its presenter. A returned send call is not model acknowledgement;
   answers remain recoverable and delivery IDs support deduplication.
 - An owned call is bound to its exact owner and the capability's generation. Its answer returns
   to the caller that asked, never into the session that showed it.
-- A questionnaire asked for another agent (`askedBy`) is still the caller's: the
+- A blocking questionnaire asked for another agent (`askedBy`) is still the caller's: the
   [asker boundary](src/boundary/host-askers.ts) asks whoever runs that agent for its name and for
   a screen it is on, shows the questions there, and opens them in the caller's session whenever
   that screen can't answer.

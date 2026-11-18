@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import { AskUserService } from "../questionnaire/service.ts";
-import { normalizeAskUserRequest, validateAskUserRequest } from "../questionnaire/validation.ts";
+import { normalizeAskUserRequest } from "../questionnaire/validation.ts";
 import {
   decodeQuestionnaireAsker,
   decodeQuestionnaireOutcome,
@@ -32,20 +32,36 @@ export const askInSession = Effect.fn("AskUserHost.askInSession")(function* (
   request: AskUserRequest,
   shown: () => void = () => undefined,
 ) {
-  const normalized = normalizeAskUserRequest(request);
-  const validationError = validateAskUserRequest(normalized);
-  if (validationError) return yield* validationError;
-  const asker = yield* findAsker(events, sessionId, normalized.askedBy);
-  if (!asker)
-    return yield* AskUserService.use((service) => service.ask(normalized, Effect.sync(shown)));
-  const named = { ...normalized, askedBy: asker.name };
-  const elsewhere = yield* Effect.tryPromise((signal) =>
-    Promise.resolve<unknown>(asker.present(named, signal, shown)),
-  ).pipe(
-    Effect.map(decodeQuestionnaireOutcome),
-    Effect.orElseSucceed(() => undefined),
-  );
-  return (
-    elsewhere ?? (yield* AskUserService.use((service) => service.ask(named, Effect.sync(shown))))
+  const service = yield* AskUserService;
+  let reported = false;
+  const reportShown = () => {
+    if (reported) return;
+    reported = true;
+    shown();
+  };
+  return yield* service.ask(request, Effect.sync(reportShown), (asked, presentHere) =>
+    Effect.gen(function* () {
+      const asker = yield* findAsker(events, sessionId, asked.askedBy);
+      if (!asker) return yield* presentHere(asked);
+      const named = { ...asked, askedBy: asker.name };
+      // Keep the caller's normalized fallback independent of the data passed to foreign code.
+      const fallback = normalizeAskUserRequest(named);
+      let join = Effect.void;
+      const elsewhere = yield* Effect.tryPromise((signal) => {
+        const pending = Promise.resolve<unknown>(
+          asker.present(named, signal, () => {
+            if (!signal.aborted) reportShown();
+          }),
+        );
+        // tryPromise signals withdrawal on interruption, but abort alone isn't acknowledgement.
+        join = Effect.tryPromise(() => pending).pipe(Effect.ignore);
+        return pending;
+      }).pipe(
+        Effect.onInterrupt(() => join),
+        Effect.map(decodeQuestionnaireOutcome),
+        Effect.orElseSucceed(() => undefined),
+      );
+      return elsewhere ?? (yield* presentHere(fallback));
+    }),
   );
 });

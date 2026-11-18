@@ -28,6 +28,7 @@ import {
   decodeRpcEnvelope,
   decodeRpcPromptData,
   decodeRpcStateData,
+  oversizedEntriesResponse,
   oversizedRpcEnvelope,
   rpcStateModelId,
   type RpcChildEnvelope,
@@ -50,6 +51,7 @@ import {
   type BackendTranscript,
   type BackendTranscriptEvent,
   type BackendTranscriptListener,
+  TRANSCRIPT_REPLY_OVERSIZED,
 } from "./model.ts";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
 
@@ -92,7 +94,14 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
 ) {
   const turnControl = yield* Semaphore.make(1);
   const withTurnControl = turnControl.withPermits(1);
-  const { rpc, ipcAck, resolveIpcAck, resolveResponse, cancel: cancelPending } = localPiRpc(child);
+  const {
+    rpc,
+    ipcAck,
+    resolveIpcAck,
+    resolveResponse,
+    rejectResponse,
+    cancel: cancelPending,
+  } = localPiRpc(child);
   let assignmentEpoch = 0;
   let latestTerminal: BackendAssistantTerminal | undefined;
   let transportFailure: SubagentError | undefined;
@@ -183,21 +192,20 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     Effect.forkScoped,
   );
 
+  const mismatchedResponse = (event: ChildWireEvent) =>
+    offer(
+      { type: "protocol_error", message: "Subagent returned a mismatched RPC response command." },
+      event,
+    );
+
   const consumeEnvelope = (
     envelope: RpcChildEnvelope,
     event: ChildWireEvent,
   ): Effect.Effect<void, Schema.SchemaError> => {
     if (envelope.type === "response") {
-      const resolution = resolveResponse(envelope);
-      if (resolution === "mismatched")
-        return offer(
-          {
-            type: "protocol_error",
-            message: "Subagent returned a mismatched RPC response command.",
-          },
-          event,
-        );
-      return release(event);
+      return resolveResponse(envelope) === "mismatched"
+        ? mismatchedResponse(event)
+        : release(event);
     }
     if (envelope.type === "extension_ui_request")
       return child
@@ -260,6 +268,20 @@ const makeLocalPiHandle = Effect.fn("LocalPiBackend.makeHandle")(function* (
     if (event.type === "protocol_error")
       return offer({ type: "protocol_error", message: event.message }, event);
     if (event.type === "oversized_line") {
+      // A snapshot too large to carry fails only the watch waiting for it; one that arrives after
+      // its watch ended answers nothing. Neither concerns the run.
+      const entriesResponse = oversizedEntriesResponse(event);
+      if (entriesResponse)
+        return rejectResponse(
+          entriesResponse,
+          processError(
+            "read the conversation of",
+            TRANSCRIPT_REPLY_OVERSIZED,
+            `Subagent's conversation reply (${event.bytes} bytes) was too large to carry.`,
+          ),
+        ) === "mismatched"
+          ? mismatchedResponse(event)
+          : release(event);
       publishTranscript({ type: "gap" });
       const envelope = oversizedRpcEnvelope(event);
       return envelope

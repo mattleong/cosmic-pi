@@ -157,11 +157,15 @@ export type BackendTranscriptEvent =
 
 export type BackendTranscriptListener = (event: BackendTranscriptEvent) => void;
 
+/** The `SubagentProcessError` code of a watch whose entries reply was too large to carry. */
+export const TRANSCRIPT_REPLY_OVERSIZED = "transcript_reply_oversized";
+
 export interface BackendTranscript {
   /**
    * Watches the child's conversation until the scope closes. The listener first receives the
    * entries after `since` (every entry without it), delivered where the child's reply is read, so
-   * no event falls between them and the events that follow.
+   * no event falls between them and the events that follow. A reply too large to carry fails the
+   * watch with `TRANSCRIPT_REPLY_OVERSIZED` and leaves the run alone.
    */
   readonly watch: (
     since: string | undefined,

@@ -79,7 +79,7 @@ export const WORKSPACE_DESCRIPTION =
   "Default for writers that don't set isolation. Saved for new sessions.";
 
 export const SESSION_HOST_DESCRIPTION =
-  "Where a subagent's Pi runs: headless, or as an interactive session in a hidden Rex pane you can open from Activity. Rex hosting needs Pi to run inside Rex. Saved for new sessions.";
+  "Enable Rex panes in Activity for interactive read-only sessions and live views of supervised writers. Headless disables panes for new runs. Rex panes require Pi to run inside Rex. Saved for new sessions.";
 
 export const SUBAGENT_SETTING_DESCRIPTORS = [
   {

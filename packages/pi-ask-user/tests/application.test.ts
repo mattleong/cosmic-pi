@@ -1,4 +1,4 @@
-import { asyncRequest, defaultQuestion } from "./support/questionnaire.ts";
+import { asyncRequest, defaultQuestion, offerPane } from "./support/questionnaire.ts";
 import { eventually, makeTuiHost, waitMounted } from "./support/host.ts";
 import { startExtension, withoutRelayMarker } from "./support/extension.ts";
 import type { CustomEntry, CustomMessageEntry } from "@earendil-works/pi-coding-agent";
@@ -317,6 +317,54 @@ layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {
         yield* Effect.promise(() => h.emit("session_shutdown"));
         yield* Effect.promise(() => h.emit("session_shutdown"));
         expect(ui.done).toHaveBeenCalledOnce();
+      }),
+  );
+
+  it.effect(
+    "tree replacement joins pane withdrawal without opening its root fallback or queued successor",
+    () =>
+      Effect.gen(function* () {
+        const { h, ui } = yield* tuiHarness({ sessionManager: { getSessionId: () => "root" } });
+        yield* Effect.promise(() => h.emit("session_start"));
+        const entered = deferredPromise<AbortSignal>();
+        const withdrawn = deferredPromise<undefined>();
+        offerPane(h.pi.events, (_request, signal) => {
+          entered.resolve(signal);
+          return withdrawn.promise;
+        });
+        const retired = h.tools
+          .get("ask_user")!
+          .execute(
+            "pane",
+            { questions: [defaultQuestion], askedBy: "agent" },
+            undefined,
+            undefined,
+            h.ctx,
+          )
+          .then(
+            () => "answered",
+            () => "interrupted",
+          );
+        const signal = yield* Effect.promise(() => entered.promise);
+        const queued = yield* Effect.promise(() =>
+          h.tools
+            .get("ask_user_async")!
+            .execute("queued", asyncRequest, undefined, undefined, h.ctx),
+        );
+        expect(queued.details).toMatchObject({ presentation: "queued" });
+        let replaced = false;
+        const replacing = h.emit("session_tree").then(() => {
+          replaced = true;
+          return undefined;
+        });
+        yield* eventually(() => expect(signal.aborted).toBe(true));
+        const replacedBeforeWithdrawal = replaced;
+        withdrawn.resolve(undefined);
+        expect(replacedBeforeWithdrawal).toBe(false);
+        expect(yield* Effect.promise(() => retired)).toBe("interrupted");
+        yield* Effect.promise(() => replacing);
+        expect(ui.customCalls).toBe(0);
+        yield* Effect.promise(() => h.emit("session_shutdown"));
       }),
   );
 

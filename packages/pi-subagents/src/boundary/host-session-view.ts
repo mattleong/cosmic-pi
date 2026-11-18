@@ -2,9 +2,13 @@ import type {
   ExtensionAPI,
   ExtensionContext,
   MessageRenderer,
+  KeybindingsManager,
+  Theme,
   ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
+import { TuiMainScreen, getKeybindings, type TUI, type Terminal } from "@earendil-works/pi-tui";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FiberHandle from "effect/FiberHandle";
 import * as Fn from "effect/Function";
@@ -34,6 +38,8 @@ export interface SubagentSessionViewOptions {
   readonly ctx: ExtensionContext;
   readonly events: ExtensionAPI["events"];
   readonly runId: string;
+  /** When present the view owns a second display, not a surface in the parent Pi. */
+  readonly terminal?: Terminal | undefined;
   readonly projection: () => SubagentProjection;
   readonly subscribeProjection: (listener: () => void) => () => void;
   readonly isCurrent: () => boolean;
@@ -52,7 +58,7 @@ export const openSubagentSessionView = Effect.fn("SubagentSessionView.open")(fun
   options: SubagentSessionViewOptions,
 ) {
   const { ctx, runId } = options;
-  if (!hasCustomSurface(ctx)) return;
+  if (!options.terminal && !hasCustomSurface(ctx)) return;
   const service = yield* SubagentService;
   const currentRun = () => findOrUndefined(options.projection().runs, (run) => run.id === runId);
   const rendererCache = new Map<string, ToolRenderers>();
@@ -128,7 +134,10 @@ export const openSubagentSessionView = Effect.fn("SubagentSessionView.open")(fun
             // A run that finished as the message left takes it as its next assignment instead.
             Effect.catch((error) => {
               const latest = currentRun();
-              return latest &&
+              // Only a definite refusal before delivery can become a new assignment.
+              return "code" in error &&
+                error.code === "agent_unavailable" &&
+                latest &&
                 sessionSubmitKind(run) !== "resume" &&
                 sessionSubmitKind(latest) === "resume"
                 ? deliver(latest, text)
@@ -173,34 +182,69 @@ export const openSubagentSessionView = Effect.fn("SubagentSessionView.open")(fun
         ),
       );
 
-      yield* openOwnedSurface<undefined>(ctx, {
-        placement: "screen",
-        closedValue: undefined,
-        isCurrent: options.isCurrent,
-        create: ({ tui, theme, keybindings, getHeight, finish }) => {
-          render = () => invokeHostCallback(() => tui.requestRender(), undefined);
-          transcript = new SessionTranscript({
-            tui,
-            cwd: currentRun()?.cwd ?? ctx.cwd,
-            toolRenderers,
-            messageRenderer: options.messageRenderer,
-          });
-          view = new SubagentSessionView({
-            tui,
-            theme,
-            keybindings,
-            getHeight,
-            getNow: () => now,
-            transcript,
-            getRun: currentRun,
-            onSubmit: (text) => offer({ type: "submit", text }),
-            onInterrupt: () => offer({ type: "interrupt" }),
-            onLeave: () => finish(undefined),
-          });
-          offer({ type: "watch" });
-          return view;
+      const mount = ({
+        tui,
+        theme,
+        keybindings,
+        getHeight,
+        finish,
+      }: {
+        readonly tui: TUI;
+        readonly theme: Theme;
+        readonly keybindings: Pick<KeybindingsManager, "matches" | "getKeys">;
+        readonly getHeight: () => number;
+        readonly finish: (value: undefined) => void;
+      }) => {
+        render = () => invokeHostCallback(() => tui.requestRender(), undefined);
+        transcript = new SessionTranscript({
+          tui,
+          cwd: currentRun()?.cwd ?? ctx.cwd,
+          toolRenderers,
+          messageRenderer: options.messageRenderer,
+        });
+        view = new SubagentSessionView({
+          tui,
+          theme,
+          keybindings,
+          getHeight,
+          getNow: () => now,
+          transcript,
+          getRun: currentRun,
+          onSubmit: (text) => offer({ type: "submit", text }),
+          onInterrupt: () => offer({ type: "interrupt" }),
+          onLeave: () => finish(undefined),
+        });
+        offer({ type: "watch" });
+        return view;
+      };
+      const terminal = options.terminal;
+      if (!terminal) {
+        yield* openOwnedSurface<undefined>(ctx, {
+          placement: "screen",
+          closedValue: undefined,
+          isCurrent: options.isCurrent,
+          create: mount,
+        }).pipe(Effect.ignore);
+        return;
+      }
+      // Both screens use the same editor, transcript and service. The pane owns only this
+      // TUI and its scoped watch; closing it must never interrupt the writer.
+      const left = yield* Deferred.make<void>();
+      const tui = new TuiMainScreen(terminal);
+      const screen = mount({
+        tui,
+        theme: ctx.ui.theme,
+        keybindings: getKeybindings(),
+        getHeight: () => terminal.rows,
+        finish: () => {
+          Deferred.doneUnsafe(left, Effect.void);
         },
-      }).pipe(Effect.ignore);
+      });
+      tui.addChild(screen);
+      tui.setFocus(screen);
+      yield* Effect.addFinalizer(() => Effect.sync(() => tui.stop()));
+      tui.start();
+      yield* Deferred.await(left);
     }),
   );
 });

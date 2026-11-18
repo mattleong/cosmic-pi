@@ -244,6 +244,24 @@ export const oversizedRpcEnvelope = (line: OversizedLine): RpcChildEnvelope | un
   return undefined;
 };
 
+const OversizedRpcResponseSchema = Schema.Struct({
+  type: Schema.Literal("response"),
+  id: Schema.optional(ProtocolIdSchema),
+  command: Schema.Literal("get_entries"),
+});
+const decodeOversizedRpcResponse = Schema.decodeUnknownOption(OversizedRpcResponseSchema);
+
+/**
+ * The request an oversized `get_entries` reply answers. A transcript snapshot can outgrow the
+ * transport, but only its watcher needs it; the run doesn't.
+ */
+export const oversizedEntriesResponse = (
+  line: OversizedLine,
+): typeof OversizedRpcResponseSchema.Type | undefined =>
+  Option.getOrUndefined(
+    decodeOversizedRpcResponse(Rec.fromEntries(jsonPrefixScalars(line.prefix))),
+  );
+
 const EffortSchema = Schema.Literals(SUBAGENT_EFFORTS);
 const RpcStateModelSchema = Schema.Struct({
   provider: ProtocolNameSchema,

@@ -51,7 +51,9 @@ export interface QuestionnaireAsker {
   /**
    * Shows the questionnaire where the agent's own session is on screen, and resolves with what
    * the user answered there. Resolves `undefined` when that session isn't on screen, or stops
-   * being before the user answers, so the caller asks in its own session instead.
+   * being before the user answers, so the caller asks in its own session instead. Aborting the
+   * signal requests withdrawal. Settlement (including rejection) acknowledges that the pane
+   * can no longer answer and its presentation cleanup has finished.
    */
   readonly present: (
     request: AskUserRequest,

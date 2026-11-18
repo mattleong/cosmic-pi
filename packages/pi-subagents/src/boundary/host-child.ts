@@ -444,7 +444,7 @@ export function registerSubagentChildBridge(
         // The root asks here on the main agent's behalf; each ask is its own owner.
         const asker = { runId: "root", assignmentEpoch: 0, requestId: synchronousRandomUuid() };
         return slot
-          .run(askSessionQuestionnaire(pi.events, sessionId, questionnaire, asker, shown), signal)
+          .run(askSessionQuestionnaire(pi.events, sessionId, questionnaire, asker, shown, signal))
           .then(
             (outcome) => encodeQuestionnaireOutcome(outcome),
             () => undefined,

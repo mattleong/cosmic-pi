@@ -39,6 +39,7 @@ export const askSessionQuestionnaire = (
   request: AskUserRequest,
   owner: QuestionnaireOwner,
   shown: () => void = () => undefined,
+  withdraw?: AbortSignal,
 ) =>
   Effect.acquireUseRelease(
     Effect.try({
@@ -52,16 +53,21 @@ export const askSessionQuestionnaire = (
     (owned) =>
       Effect.tryPromise({
         try: (signal) => {
-          if (signal.aborted) throw new Error("Questionnaire owner expired.");
+          // A handback stops the capability, not this waiter: if the capability already
+          // committed an answer we must still return it after its cleanup.
+          const showing = withdraw ? AbortSignal.any([signal, withdraw]) : signal;
+          if (showing.aborted) throw new Error("Questionnaire owner expired.");
           owned.admitted = true;
           // The session may report late or twice; only the first report of an unsettled ask counts.
           let reported = false;
           const reportShown = () => {
-            if (reported || signal.aborted) return;
+            if (reported || showing.aborted) return;
             reported = true;
             shown();
           };
-          return Promise.resolve<unknown>(owned.capability.ask(request, owner, signal, reportShown))
+          return Promise.resolve<unknown>(
+            owned.capability.ask(request, owner, showing, reportShown),
+          )
             .finally(() => {
               reported = true;
             })

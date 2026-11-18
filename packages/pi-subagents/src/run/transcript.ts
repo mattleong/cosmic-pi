@@ -1,8 +1,9 @@
 import * as Effect from "effect/Effect";
+import * as Predicate from "effect/Predicate";
 import type * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 import { invokeHostCallback } from "pi-cosmic-core/host-session";
-import type { BackendTranscriptEvent } from "../backend/model.ts";
+import { TRANSCRIPT_REPLY_OVERSIZED, type BackendTranscriptEvent } from "../backend/model.ts";
 import {
   readSessionEntries,
   sessionEntriesReply,
@@ -27,6 +28,12 @@ export type SubagentTranscriptEvent =
   | { readonly type: "gap" };
 
 export type SubagentTranscriptListener = (event: SubagentTranscriptEvent) => void;
+
+/** How many times one watch rereads the session file after the child's reply was too large. */
+const MAX_RESNAPSHOTS = 2;
+
+const isTranscriptReplyOversized = (error: SubagentError): boolean =>
+  Predicate.isTagged(error, "SubagentProcessError") && error.code === TRANSCRIPT_REPLY_OVERSIZED;
 
 export function transcriptOperations(dependencies: Pick<RunContext, "requireRecord" | "withLock">) {
   const { requireRecord, withLock } = dependencies;
@@ -65,16 +72,35 @@ export function transcriptOperations(dependencies: Pick<RunContext, "requireReco
           live: true,
         });
       };
-    const cursor = saved.at(-1)?.id;
-    // A cursor the child doesn't know, such as an entry of an abandoned file, fails the request;
-    // the child then sends everything.
-    yield* transcript
-      .watch(cursor, forward(saved))
-      .pipe(
-        Effect.catch((error) =>
-          cursor === undefined ? Effect.fail(error) : transcript.watch(undefined, forward([])),
-        ),
+    const watchAfter = (
+      history: typeof saved,
+      resnapshots: number,
+    ): Effect.Effect<void, SubagentError, Scope.Scope> => {
+      const cursor = history.at(-1)?.id;
+      return transcript.watch(cursor, forward(history)).pipe(
+        Effect.catch((error) => {
+          // Entries too large for one reply are what the file holds by now, and everything would
+          // be larger still, so the watch rereads the file and asks only past its new end.
+          if (isTranscriptReplyOversized(error))
+            return resnapshots >= MAX_RESNAPSHOTS || sessionFile === undefined
+              ? Effect.fail(error)
+              : readSessionEntries(sessionFile).pipe(
+                  Effect.flatMap((latest) => {
+                    const advanced = latest.at(-1)?.id;
+                    return advanced === undefined || advanced === cursor
+                      ? Effect.fail(error)
+                      : watchAfter(latest, resnapshots + 1);
+                  }),
+                );
+          // A cursor the child doesn't know, such as an entry of an abandoned file, fails the
+          // request; the child then sends everything, unless a reply has already been too large.
+          return cursor === undefined || resnapshots > 0
+            ? Effect.fail(error)
+            : transcript.watch(undefined, forward([]));
+        }),
       );
+    };
+    yield* watchAfter(saved, 0);
   });
   return { watchTranscript };
 }

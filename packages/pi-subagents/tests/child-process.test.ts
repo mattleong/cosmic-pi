@@ -1,3 +1,4 @@
+import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -5,11 +6,13 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Fn from "effect/Function";
 import * as Predicate from "effect/Predicate";
+import * as Scope from "effect/Scope";
 import * as TestClock from "effect/testing/TestClock";
 import { deferredPromise, step, temporaryDirectory } from "pi-cosmic-core/testing";
 import { vi } from "vitest";
 import {
   ChildProcess,
+  type ChildLaunchRequest,
   childProcessEnvironment,
   childToolPolicy,
   requestCooperativeAbort,
@@ -24,8 +27,12 @@ import {
   piRootActiveToolSnapshot,
 } from "../src/run/tool-policy.ts";
 import { sweepAbandonedPrivateState } from "../src/boundary/private-state.ts";
+import type { ProcessTransportRuntime } from "../src/boundary/process-transport.ts";
+import { rexSessionHost } from "../src/boundary/rex-session-host.ts";
 import { backendLaunch } from "./fixtures/backend-launch.ts";
+import { scriptedChildProcess } from "./fixtures/scripted-child-process.ts";
 import { nodeFsPromises, nodePath } from "./support/node-builtins.ts";
+import * as Arr from "effect/Array";
 import * as Str from "effect/String";
 
 const isMissing = (path: string) =>
@@ -35,6 +42,60 @@ const isMissing = (path: string) =>
       (cause: unknown) => Predicate.hasProperty(cause, "code") && cause.code === "ENOENT",
     ),
   );
+
+/** A Rex-enabled root whose Rex CLI always succeeds and shows no block in a window. */
+const enabledRexHost = (insideRex: boolean) => {
+  const host = rexSessionHost({
+    environment: insideRex ? { REX_SESSION: "session:1", REX_BLOCK: "block:root" } : {},
+    onResume: Fn.constVoid,
+    rex: (_executable, args) => (args[2] === "session.list_blocks" ? '{"blocks":[]}' : "{}"),
+  });
+  host.setEnabled(true);
+  return host;
+};
+
+/**
+ * Spawns one child through the real boundary over a scripted process, then releases it, and says
+ * what was started and whether its release looked for commands it detached.
+ */
+const spawnAndRelease = (request: ChildLaunchRequest, insideRex = true) =>
+  Effect.gen(function* () {
+    const scripted = scriptedChildProcess();
+    let args: ReadonlyArray<string> = [];
+    let packageDir: string | undefined;
+    const detachedGroups = vi.fn<ProcessTransportRuntime["detachedGroups"]>(() =>
+      Effect.succeed([]),
+    );
+    const transportRuntime: ProcessTransportRuntime = {
+      spawn: (_executable, commandArgs, options) => {
+        args = commandArgs ?? [];
+        packageDir = options?.env?.PI_PACKAGE_DIR;
+        queueMicrotask(() => scripted.child.emit("spawn"));
+        return scripted.child;
+      },
+      terminate: () => Effect.sync(scripted.finish),
+      confirmGroupExit: () => Effect.succeed(true),
+      detachedGroups,
+      guardGroup: () => Effect.succeed({ release: Effect.void }),
+    };
+    const rexHost = enabledRexHost(insideRex);
+    const agentDirectory = yield* temporaryDirectory("pi-subagents-child-host-");
+    const children = yield* Effect.service(ChildProcess).pipe(
+      Effect.provide(ChildProcess.layer({ agentDirectory, transportRuntime, rexHost })),
+    );
+    const scope = yield* Scope.make();
+    yield* children.spawn(request).pipe(Scope.provide(scope));
+    const closing = yield* Scope.close(scope, Exit.void).pipe(Effect.forkChild);
+    yield* TestClock.adjust("5 seconds");
+    yield* Fiber.join(closing);
+    rexHost.close();
+    return {
+      args,
+      packageDir,
+      hosted: Arr.some(args, (arg) => Fn.pipe(arg, Str.endsWith("rex-relay.mjs"))),
+      lookedForDetachedCommands: detachedGroups.mock.calls.length > 0,
+    };
+  });
 
 describe("subagent child process boundary", () => {
   it("keeps a child's Git on its own repository when the parent runs under Git variables", () => {
@@ -182,6 +243,52 @@ describe("subagent child process boundary", () => {
         });
       }
     }),
+  );
+
+  it.effect("keeps every writer headless while Rex hosts read-only runs", () =>
+    Effect.gen(function* () {
+      const reader = yield* spawnAndRelease(backendLaunch({ writeIntent: "read-only" }));
+      expect(reader.hosted).toBe(true);
+      expect(reader.args).not.toContain("--mode");
+      expect(reader.packageDir).toBe(getPackageDir());
+
+      const cliOnly = yield* spawnAndRelease({
+        ...backendLaunch({ writeIntent: "read-only" }),
+        model: "llama.cpp/local",
+      });
+      expect(cliOnly.hosted).toBe(false);
+      expect(cliOnly.args).toEqual(
+        expect.arrayContaining(["--mode", "rpc", "--model", "llama.cpp/local"]),
+      );
+
+      // With the same setting outside Rex, the CLI still owns the child and its environment.
+      const outside = yield* spawnAndRelease(backendLaunch({ writeIntent: "read-only" }), false);
+      expect(outside.hosted).toBe(false);
+      expect(outside.args).toEqual(expect.arrayContaining(["--mode", "rpc"]));
+      expect(outside.packageDir).toBe(process.env.PI_PACKAGE_DIR);
+
+      const writers = [
+        backendLaunch({ runId: "shared-writer", writeIntent: "writer" }),
+        backendLaunch({ runId: "worktree-writer", writeIntent: "writer", cwd: "/tmp/worktree" }),
+      ];
+      for (const request of writers) {
+        const writer = yield* spawnAndRelease(request);
+        expect(writer.hosted).toBe(false);
+        expect(writer.packageDir).toBe(process.env.PI_PACKAGE_DIR);
+        expect(writer.args).toEqual(expect.arrayContaining(["--mode", "rpc"]));
+        // Its release still proves no command it detached can keep changing files.
+        expect(writer.lookedForDetachedCommands).toBe(true);
+      }
+      const resumed = yield* spawnAndRelease({
+        ...backendLaunch({ runId: "resumed-writer", writeIntent: "writer" }),
+        resumeSessionFile: "/tmp/session.jsonl",
+      });
+      expect(resumed.hosted).toBe(false);
+      expect(resumed.args).toEqual(
+        expect.arrayContaining(["--mode", "rpc", "--session", "/tmp/session.jsonl"]),
+      );
+      expect(resumed.lookedForDetachedCommands).toBe(true);
+    }).pipe(Effect.scoped),
   );
 
   it.effect("bounds a cooperative abort when stdin never drains", () =>

@@ -1,6 +1,9 @@
 import type { Socket } from "node:net";
+import { writerViewConnection, type OpenWriterView } from "./rex-writer-view.ts";
 import { fileURLToPath } from "node:url";
 import * as Arr from "effect/Array";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
 import * as Fn from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -104,7 +107,11 @@ export interface RexSessionHost {
    * its window before the user answers: the caller then asks somewhere the user can see. The
    * returned function takes the questionnaire back.
    */
-  readonly ask: (runId: string, request: Schema.Json, handlers: RexPaneAskHandlers) => () => void;
+  readonly ask: (
+    runId: string,
+    request: Schema.Json,
+    handlers: RexPaneAskHandlers,
+  ) => () => Effect.Effect<void>;
   /** Where a run's session should wait instead of ending, when its pane is open. */
   readonly parkTarget: (
     runId: string,
@@ -114,6 +121,8 @@ export interface RexSessionHost {
   readonly pane: (runId: string) => RexPaneState | undefined;
   /** Shows a hidden session beside the root's pane, or hides an open one. False when Rex refused. */
   readonly togglePane: (runId: string) => boolean;
+  /** A display of a headless writer; never hosts or parks the writer itself. */
+  readonly toggleWriterView: (runId: string, name: string, open: OpenWriterView) => boolean;
   readonly subscribe: (listener: () => void) => () => void;
   /** Tells the user, in a parked session's own pane, why their words went nowhere. */
   readonly notify: (runId: string, message: string) => void;
@@ -142,7 +151,10 @@ const decodeNote = decodeUnknownOrUndefined(
   ]),
 );
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
-const decodeHello = decodeUnknownOrUndefined(Schema.Struct({ token: Schema.String }));
+const decodeHello = decodeUnknownOrUndefined(
+  Schema.Struct({ token: Schema.String, parked: Schema.Literal(true) }),
+);
+const decodeTransfer = decodeUnknownOrUndefined(Schema.Struct({ ok: Schema.Boolean }));
 const decodeResume = decodeUnknownOrUndefined(Schema.Struct({ text: Schema.String }));
 
 export interface RexSessionHostOptions {
@@ -165,6 +177,9 @@ const runRex = (executable: string, args: ReadonlyArray<string>): string | undef
     return result.status === 0 ? result.stdout : undefined;
   }, undefined);
 
+const decodeSplit = decodeUnknownOrUndefined(
+  Schema.fromJsonString(Schema.Struct({ block_ids: Schema.Array(Schema.String) })),
+);
 const decodeBlocks = decodeUnknownOrUndefined(
   Schema.fromJsonString(
     Schema.Struct({
@@ -214,6 +229,7 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
   const isOpen = (entry: RexEntry): boolean => refreshPlacement(entry, placedBlocks());
 
   const entries = new Map<string, RexEntry>();
+  const views = new Map<string, { readonly block: string; readonly close: () => void }>();
   const asks = new Map<string, PaneAsk>();
   const listeners = new Set<() => void>();
   let enabled = false;
@@ -247,13 +263,31 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
     if (kind === REX_FRAME.hello) {
       const hello = decodeHello(value);
       for (const [, entry] of entries)
-        if (hello && entry.parkToken === hello.token && !entry.parked) {
+        if (
+          !closed &&
+          parking &&
+          hello &&
+          entry.parkToken === hello.token &&
+          !entry.parked &&
+          isOpen(entry)
+        ) {
           entry.parked = socket;
           entry.parkToken = undefined;
+          socket.write(rexFrame(REX_FRAME.accept, { ok: true }));
           changed();
           return;
         }
       socket.destroy();
+      return;
+    }
+    if (kind === REX_FRAME.adopt) {
+      const receipt = decodeTransfer(value);
+      for (const entry of entries.values()) {
+        if (entry.parked !== socket || !entry.adopting || !receipt) continue;
+        entry.adopting = false;
+        // Only a successful receipt releases our parked link. A refused candidate can retry.
+        if (receipt.ok) entry.parked = undefined;
+      }
       return;
     }
     // Hidden from inside, a parked session has no reader left, as when Activity hides it.
@@ -285,9 +319,7 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
         for (const [runId, entry] of entries) {
           if (entry.parked !== socket) continue;
           entry.parked = undefined;
-          // A session a launcher took back lives on; one that simply went is gone.
-          if (entry.adopting) entry.adopting = false;
-          else forget(runId);
+          forget(runId);
         }
       });
     });
@@ -304,10 +336,16 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
   };
 
   const isAvailable = (): boolean => Boolean(session && anchor);
+  const closeViews = () => {
+    for (const view of views.values()) view.close();
+  };
 
   return {
     setEnabled: (value) => {
+      if (enabled === value) return;
       enabled = value;
+      if (!enabled) closeViews();
+      changed();
     },
     isEnabled: () => enabled,
     isAvailable,
@@ -356,7 +394,7 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
       }
       // The launcher of a resumed run takes its parked session back.
       const parked = entry.parked;
-      if (!parked) return;
+      if (!parked || entry.adopting) return;
       entry.adopting = true;
       invokeBestEffort(() =>
         parked.write(rexFrame(REX_FRAME.adopt, { socket: note.socket, token: note.token })),
@@ -369,26 +407,45 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
     ask: (runId, request, handlers) => {
       const entry = entries.get(runId);
       const send = entry?.send;
-      if (closed || !send || !entry?.blockId || entry.parked || !isOpen(entry)) {
+      if (closed || !send || !entry?.blockId || entry.parkToken || entry.parked || !isOpen(entry)) {
         invokeBestEffort(() => handlers.settled(undefined));
-        return Fn.constVoid;
+        return () => Effect.void;
       }
       const id = synchronousRandomHex(12);
-      const settle = (outcome: Schema.Json | undefined): void => {
-        if (asks.delete(id)) invokeBestEffort(() => handlers.settled(outcome));
+      let withdrawn = false;
+      const settled = Deferred.makeUnsafe<void>();
+      const settle = (outcome: Schema.Json | undefined) => {
+        if (!asks.delete(id)) return;
+        Deferred.doneUnsafe(settled, Effect.void);
+        invokeBestEffort(() => handlers.settled(outcome));
       };
-      const withdraw = (): void => {
-        if (!asks.has(id)) return;
-        send({ type: REX_ASK_MESSAGE, ask: { id, withdraw: true } });
-        settle(undefined);
+      const withdraw = () => {
+        if (asks.has(id) && !withdrawn) {
+          withdrawn = true;
+          send({ type: REX_ASK_MESSAGE, ask: { id, withdraw: true } });
+        }
       };
-      asks.set(id, { runId, shown: handlers.shown, settle, withdraw });
+      const shown = () => {
+        if (!withdrawn) handlers.shown();
+      };
+      asks.set(id, { runId, shown, settle, withdraw });
       send({ type: REX_ASK_MESSAGE, ask: { id, request } });
-      return withdraw;
+      return () => {
+        withdraw();
+        return Deferred.await(settled);
+      };
     },
     parkTarget: (runId) => {
       const entry = entries.get(runId);
-      if (closed || !parking || !entry?.blockId || !isOpen(entry)) return undefined;
+      if (
+        closed ||
+        !parking ||
+        !entry?.blockId ||
+        entry.parkToken ||
+        entry.parked ||
+        !isOpen(entry)
+      )
+        return undefined;
       return invokeHostCallback(() => {
         const token = synchronousRandomHex(24);
         const { socket } = parkServer();
@@ -403,13 +460,71 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
       entry.send = undefined;
       for (const ask of asks.values()) if (ask.runId === runId) ask.settle(undefined);
       // A parked session keeps its block until its pane closes or a launcher takes it back.
-      if (entry.parked || entry.parkToken) return;
+      if (entry.parked) return;
       forget(runId);
     },
     pane: (runId) => {
+      if (views.has(runId)) return "open";
       const entry = entries.get(runId);
       if (!entry?.blockId) return undefined;
       return entry.placed ? "open" : "hidden";
+    },
+    toggleWriterView: (runId, name, open) => {
+      if (!enabled || closed || !parking || !session || !anchor) return false;
+      const previous = views.get(runId);
+      if (previous) {
+        const placed = placedBlocks();
+        if (!placed) return false;
+        if (placed.has(previous.block)) {
+          previous.close();
+          return true;
+        }
+        // Rex may have detached it via a user keybinding; reveal the existing screen.
+        if (
+          !api("session.move_block", {
+            block_id: previous.block,
+            anchor_block_id: anchor,
+            direction: "horizontal",
+          })
+        ) {
+          previous.close();
+          return false;
+        }
+        rex(["block", "focus", "-s", session, previous.block]);
+        return true;
+      }
+      return invokeHostCallback(() => {
+        const connection = writerViewConnection(executable, open, () => {
+          views.delete(runId);
+          changed();
+        });
+        const result = decodeSplit(
+          rexOutput([
+            "split",
+            "-s",
+            session,
+            "-b",
+            anchor,
+            "--split=right",
+            "--shell=none",
+            "-c",
+            nodeTemporaryRoot(),
+            "--label",
+            Fn.pipe(`${REX_SUBAGENT_LABEL_PREFIX}${name}`, Str.slice(0, 128)),
+            "--json",
+            "--",
+            ...connection.command,
+          ]),
+        );
+        const block = result?.block_ids[0];
+        if (!block) {
+          connection.close();
+          return false;
+        }
+        views.set(runId, { block, close: connection.close });
+        changed();
+        return true;
+      }, false);
     },
     togglePane: (runId) => {
       const entry = entries.get(runId);
@@ -449,12 +564,18 @@ export function rexSessionHost(options: RexSessionHostOptions): RexSessionHost {
     },
     setParking: (allowed) => {
       parking = allowed;
+      if (!allowed) closeViews();
     },
     close: () => {
       if (closed) return;
       closed = true;
+      closeViews();
       for (const ask of asks.values()) ask.settle(undefined);
-      for (const entry of entries.values()) if (entry.parked) closeBlock(entry);
+      for (const entry of entries.values())
+        if (entry.parked) {
+          entry.parked.destroy();
+          closeBlock(entry);
+        }
       entries.clear();
       invokeBestEffort(() => park?.close());
       listeners.clear();

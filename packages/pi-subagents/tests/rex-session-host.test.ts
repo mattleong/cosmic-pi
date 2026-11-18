@@ -4,7 +4,7 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { nodeCreateConnection } from "pi-cosmic-core/platform/node-builtins";
-import { pollUntil } from "pi-cosmic-core/testing";
+import { deferredPromise, pollUntil } from "pi-cosmic-core/testing";
 import {
   REX_ANSWER_NOTE,
   REX_ASK_MESSAGE,
@@ -53,6 +53,10 @@ const fixture = (environment: NodeJS.ProcessEnv = REX) => {
         });
       calls.push(args);
       if (!rexWorks) return undefined;
+      if (args[0] === "split") {
+        shown = true;
+        return '{"block_ids":["block:child","block:root"]}';
+      }
       if (args[2] === "session.move_block") shown = true;
       if (args[2] === "session.detach_block" || args[1] === "close") shown = false;
       return "{}";
@@ -82,6 +86,58 @@ const fixture = (environment: NodeJS.ProcessEnv = REX) => {
 };
 
 describe("Rex session host", () => {
+  it.live("opens a writer display on demand and revokes only the display on hide or teardown", () =>
+    Effect.gen(function* () {
+      const h = fixture();
+      h.host.setEnabled(true);
+      yield* Effect.addFinalizer(() => Effect.sync(h.host.close));
+      const enter = (runId: string) =>
+        Effect.gen(function* () {
+          const closed = deferredPromise();
+          const keys: string[] = [];
+          const output: string[] = [];
+          let signal: AbortSignal | undefined;
+          expect(
+            h.host.toggleWriterView(runId, "writer", (terminal, owner) => {
+              signal = owner;
+              terminal.start(
+                (key) => keys.push(key),
+                () => undefined,
+              );
+              terminal.write("Writer transcript");
+              return closed.promise;
+            }),
+          ).toBe(true);
+          const socketPath = h.calls.at(-1)?.at(-2);
+          if (!socketPath) return yield* Effect.die("Missing viewer socket");
+          const peer = nodeCreateConnection(socketPath);
+          peer.setEncoding("utf8");
+          peer.on("data", (data: string) => output.push(data));
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              peer.destroy();
+              closed.resolve();
+            }),
+          );
+          peer.write('{"columns":80,"rows":24}\n');
+          expect(yield* pollUntil(() => output.length > 0)).toBe(true);
+          peer.write('{"key":"x"}\n');
+          expect(yield* pollUntil(() => keys.includes("x"))).toBe(true);
+          expect(signal?.aborted).toBe(false);
+          expect(h.host.parkTarget(runId)).toBeUndefined();
+          return { ended: () => signal?.aborted };
+        });
+      const first = yield* enter("writer");
+      h.host.released("writer"); // releasing a backend isn't releasing its display
+      expect(first.ended()).toBe(false);
+      expect(h.host.toggleWriterView("writer", "writer", () => Promise.resolve())).toBe(true);
+      expect(first.ended()).toBe(true);
+      const second = yield* enter("writer");
+      h.host.setParking(false);
+      expect(second.ended()).toBe(true);
+    }).pipe(Effect.scoped),
+  );
+
   it("hosts a run only while the setting is on and Pi runs inside Rex", () => {
     const inside = fixture();
     expect(inside.host.launch(run, ["node", "pi"])).toBeUndefined();
@@ -153,7 +209,7 @@ describe("Rex session host", () => {
     h.host.close();
   });
 
-  it("forgets a hidden run with its launcher, and keeps one that parked", () => {
+  it("forgets an ended launcher even if it asked to park but never connected", () => {
     const h = fixture();
     h.hosted();
     h.host.released(run.runId);
@@ -163,7 +219,7 @@ describe("Rex session host", () => {
     h.host.togglePane(run.runId);
     h.host.parkTarget(run.runId);
     h.host.released(run.runId);
-    expect(h.host.pane(run.runId)).toBe("open");
+    expect(h.host.pane(run.runId)).toBeUndefined();
     h.host.close();
   });
 
@@ -175,7 +231,6 @@ describe("Rex session host", () => {
         h.hosted();
         h.host.togglePane(run.runId);
         const target = h.host.parkTarget(run.runId)!;
-        h.host.released(run.runId);
 
         const received: Array<{ readonly kind: string; readonly body: string }> = [];
         const parked = nodeCreateConnection(target.socket);
@@ -183,6 +238,8 @@ describe("Rex session host", () => {
         parked.on("data", (chunk: string) => received.push(...splitRexFrames(chunk).frames));
         parked.on("error", () => undefined);
         parked.write(rexFrame(REX_FRAME.hello, { token: target.token, pid: 1, parked: true }));
+        expect(yield* pollUntil(() => received[0]?.kind === REX_FRAME.accept)).toBe(true);
+        h.host.released(run.runId);
         parked.write(rexFrame(REX_FRAME.resume, { text: "also check the tests" }));
         expect(yield* pollUntil(() => h.resumed.length === 1)).toBe(true);
         expect(h.resumed).toEqual([[run.runId, "also check the tests"]]);
@@ -194,13 +251,13 @@ describe("Rex session host", () => {
           socket: "/tmp/relay",
           token: "relay-token",
         });
-        expect(yield* pollUntil(() => received.length === 1)).toBe(true);
-        expect(received[0]).toEqual(
+        expect(yield* pollUntil(() => received.length === 2)).toBe(true);
+        expect(received[1]).toEqual(
           splitRexFrames(rexFrame(REX_FRAME.adopt, { socket: "/tmp/relay", token: "relay-token" }))
             .frames[0],
         );
         // The adopted session leaves the root's socket, and its pane stays open.
-        parked.destroy();
+        parked.end(rexFrame(REX_FRAME.adopt, { ok: true }));
         yield* Effect.sleep("50 millis");
         expect(h.host.pane(run.runId)).toBe("open");
 
@@ -223,11 +280,11 @@ describe("Rex session host", () => {
       h.hosted();
       h.host.togglePane(run.runId);
       const target = h.host.parkTarget(run.runId)!;
-      h.host.released(run.runId);
       const parked = nodeCreateConnection(target.socket);
       parked.on("error", () => undefined);
       parked.write(rexFrame(REX_FRAME.hello, { token: target.token, pid: 1, parked: true }));
       yield* Effect.sleep("50 millis");
+      h.host.released(run.runId);
 
       // Asked from inside the parked session, hiding ends it, as hiding it from Activity does.
       parked.write(rexFrame(REX_FRAME.hide, { ok: true }));
@@ -293,6 +350,27 @@ describe("a questionnaire for the user in a hosted run's pane", () => {
     expect(h.settled).toHaveLength(2);
   });
 
+  it("delivers a submitted answer even after Activity hides the pane", () => {
+    const h = asking();
+    h.host.togglePane(run.runId);
+    h.ask();
+    h.host.togglePane(run.runId);
+    expect(h.settled).toEqual([]);
+    h.answer({ outcome: { answers: ["red"] } });
+    h.answer({ declined: true });
+    expect(h.settled).toEqual([{ answers: ["red"] }]);
+  });
+
+  it("refuses new pane asks once a park was requested", () => {
+    const h = asking();
+    h.host.togglePane(run.runId);
+    expect(h.host.parkTarget(run.runId)).toBeDefined();
+    h.ask();
+    expect(h.sent).toEqual([]);
+    expect(h.settled).toEqual([undefined]);
+    h.host.close();
+  });
+
   it("comes back to the caller when the user can no longer answer it in the pane", () => {
     for (const leave of ["declined", "hidden", "released", "withdrawn"] as const) {
       const h = asking();
@@ -302,7 +380,11 @@ describe("a questionnaire for the user in a hosted run's pane", () => {
       if (leave === "declined") h.answer({ declined: true });
       if (leave === "hidden") h.host.togglePane(run.runId);
       if (leave === "released") h.host.released(run.runId);
-      if (leave === "withdrawn") withdraw();
+      if (leave === "withdrawn") void withdraw();
+      if (leave === "withdrawn" || leave === "hidden") {
+        expect(h.settled).toEqual([]);
+        h.answer({ declined: true });
+      }
       expect(h.settled).toEqual([undefined]);
       // The pane is told to stop showing what the root took back itself.
       expect(

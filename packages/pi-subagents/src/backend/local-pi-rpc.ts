@@ -54,6 +54,13 @@ const mapTransportUncertainty = (command: RpcCommand, error: SubagentError): Sub
       )
     : error;
 
+type RpcResponseResolution = "unmatched" | "mismatched" | "resolved";
+
+interface RpcResponseHeader {
+  readonly id?: string | undefined;
+  readonly command: string;
+}
+
 interface PendingRpcResponse {
   readonly command: string;
   readonly deferred: Deferred.Deferred<RpcResponse, SubagentError>;
@@ -158,20 +165,34 @@ export const localPiRpc = (child: Pick<ChildProcessHandle, "send" | "sendContact
     if (deferred) Deferred.doneUnsafe(deferred, outcome);
   };
 
-  const resolveResponse = (envelope: RpcResponse): "unmatched" | "mismatched" | "resolved" => {
-    const pending = envelope.id ? responses.get(envelope.id) : undefined;
+  const settleResponse = (
+    header: RpcResponseHeader,
+    settle: (pending: PendingRpcResponse) => void,
+  ): RpcResponseResolution => {
+    const pending = header.id ? responses.get(header.id) : undefined;
     if (!pending) return "unmatched";
-    if (pending.command !== envelope.command) {
+    if (pending.command !== header.command) {
       const error = protocolError(
         `Subagent RPC response command did not match ${pending.command}.`,
       );
       Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
       return "mismatched";
     }
-    pending.onResponse?.(envelope);
-    Deferred.doneUnsafe(pending.deferred, Effect.succeed(envelope));
+    settle(pending);
     return "resolved";
   };
 
-  return { rpc, ipcAck, resolveIpcAck, resolveResponse, cancel };
+  const resolveResponse = (envelope: RpcResponse): RpcResponseResolution =>
+    settleResponse(envelope, (pending) => {
+      pending.onResponse?.(envelope);
+      Deferred.doneUnsafe(pending.deferred, Effect.succeed(envelope));
+    });
+
+  /** Fails the request a reply answers when the reply itself can't be read, such as one too large to carry. */
+  const rejectResponse = (header: RpcResponseHeader, error: SubagentError): RpcResponseResolution =>
+    settleResponse(header, (pending) => {
+      Deferred.doneUnsafe(pending.deferred, Effect.fail(error));
+    });
+
+  return { rpc, ipcAck, resolveIpcAck, resolveResponse, rejectResponse, cancel };
 };

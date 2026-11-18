@@ -88,6 +88,34 @@ describe("a session's own questionnaire, asked on an owner's behalf", () => {
     });
   }
 
+  effectTest(
+    "handback joins the original capability rather than interrupting its answer",
+    function* () {
+      const events = bus();
+      const withdrawal = new AbortController();
+      const admitted = deferredPromise<AbortSignal>();
+      const result = deferredPromise<AskUserOutcome>();
+      const answer = { outcome: "cancelled", answers: [] } satisfies AskUserOutcome;
+      answerCapabilityQueries(events, () =>
+        capability({
+          ask: (_request, _owner, signal) => {
+            admitted.resolve(signal);
+            return result.promise;
+          },
+        }),
+      );
+      const asking = yield* Effect.forkChild(
+        askSessionQuestionnaire(events, "root", request, owner("q"), undefined, withdrawal.signal),
+      );
+      const signal = yield* step(() => admitted.promise);
+      withdrawal.abort();
+      expect(signal.aborted).toBe(true);
+      expect(asking.pollUnsafe()).toBeUndefined();
+      result.resolve(answer);
+      expect(yield* Fiber.join(asking).pipe(Effect.orDie)).toEqual(answer);
+    },
+  );
+
   effectTest("does not cancel a rejected capability before ask admission", function* () {
     const events = bus();
     let entered = false;

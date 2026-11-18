@@ -1,4 +1,10 @@
 import * as Context from "effect/Context";
+import { makeSessionCapabilityProtocol } from "pi-cosmic-core/session-capability";
+import {
+  QUESTIONNAIRE_ASKERS_QUERY,
+  type QuestionnaireAsker,
+  type QuestionnaireEvents,
+} from "../../src/protocol.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type { AskUserAnswer, AskUserOutcome } from "../../src/questionnaire/model.ts";
@@ -64,6 +70,19 @@ export const submitted = (...answers: AskUserAnswer[]): AskUserOutcome => ({
 });
 
 export const cancelled: AskUserOutcome = { outcome: "cancelled", answers: [] };
+
+export const offerPane = (events: QuestionnaireEvents, present: QuestionnaireAsker["present"]) => {
+  const queries = makeSessionCapabilityProtocol({ version: 1 });
+  return events.on(QUESTIONNAIRE_ASKERS_QUERY, (input) => {
+    const query = queries.normalizeQuery(input);
+    if (query?.sessionId === "root")
+      query.respond({
+        version: 1,
+        sessionId: "root",
+        find: (askedBy: string) => (askedBy === "agent" ? { name: "Agent", present } : undefined),
+      });
+  });
+};
 
 export const noExecution = () => {
   throw new Error("Rendering must not execute");

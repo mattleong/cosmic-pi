@@ -31,6 +31,7 @@ import {
   REX_ANSWER_NOTE,
   REX_ASK_MESSAGE,
   REX_FRAME,
+  REX_HANDOFF_TIMEOUT_MS,
   REX_SOCKET_ENV,
   REX_TOKEN_ENV,
   rexFrame,
@@ -39,8 +40,13 @@ import {
 
 const CONNECT_TIMEOUT_MS = 30_000;
 const EXIT_WAIT_MS = 5_000;
+/**
+ * The root's process transport kills this launcher's whole group 2 seconds after its SIGTERM, Rex
+ * CLI calls included, so a session that ending signals must be gone before then.
+ */
+const SIGNALED_EXIT_WAIT_MS = 1_500;
 const EXIT_POLL_MS = 50;
-const PARK_WAIT_MS = 5_000;
+
 const PANE_WATCH_MS = 2_000;
 const REX_TIMEOUT_MS = 10_000;
 const TERMINAL_FLAVOR = "com.superlogical.terminal.shell";
@@ -102,6 +108,8 @@ let child;
 /** @type {number | undefined} */
 let childPid;
 let block = config.adoptBlock;
+/** Rex's answer to the block's creation, while one may still come. @type {Promise<unknown> | undefined} */
+let creating;
 let ending = false;
 let parked = false;
 /** A park was asked for: the root's own termination must wait for the child's answer. */
@@ -110,19 +118,36 @@ let parking = false;
 const pending = [];
 /** The questionnaires the child is showing in its pane, by ID. @type {Set<string>} */
 const asking = new Set();
+/** Deadlines awaiting the child's terminal receipt. @type {Map<string, NodeJS.Timeout>} */
+const withdrawing = new Map();
 let watching = false;
 
 /**
  * @param {string[]} args
+ * @param {number} [timeout]
  * @returns {Promise<string>}
  */
-const rex = (args) =>
+const rex = (args, timeout = REX_TIMEOUT_MS) =>
   new Promise((resolve, reject) => {
-    execFile(config.rex, args, { timeout: REX_TIMEOUT_MS, encoding: "utf8" }, (error, stdout) => {
+    execFile(config.rex, args, { timeout, encoding: "utf8" }, (error, stdout) => {
       if (error) reject(new Error(error.message));
       else resolve(stdout);
     });
   });
+
+/**
+ * Settles with `promise`, or once `deadline` passes.
+ * @param {Promise<unknown>} promise
+ * @param {number} deadline
+ * @returns {Promise<unknown>}
+ */
+const until = (promise, deadline) =>
+  Promise.race([
+    promise.catch(() => undefined),
+    new Promise((resolve) => {
+      setTimeout(resolve, Math.max(0, deadline - Date.now()));
+    }),
+  ]);
 
 /** @param {object} value */
 const note = (value) => process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -156,27 +181,46 @@ const gone = (pid, deadline) => {
   }).then(() => gone(pid, deadline));
 };
 
-/** Closes the block and waits for its Pi to be gone, which is what this process's exit attests. */
-const endSession = () =>
-  (block
-    ? rex(["block", "close", "-s", config.session, block]).catch(() => undefined)
-    : Promise.resolve(undefined)
-  ).then(() => (childPid === undefined ? undefined : gone(childPid, Date.now() + EXIT_WAIT_MS)));
+/**
+ * Closes the block and waits for its Pi to be gone, which is what this process's exit attests. A
+ * block Rex is still creating is waited for, so that it can be closed too.
+ * @param {number} deadline
+ */
+const endSession = (deadline) =>
+  until(creating ?? Promise.resolve(), deadline)
+    .then(() => {
+      // Without a block to close, the session goes the way a lost launcher's does.
+      if (!block) {
+        child?.destroy();
+        return undefined;
+      }
+      return rex(
+        ["block", "close", "-s", config.session, block],
+        Math.max(1, Math.min(REX_TIMEOUT_MS, deadline - Date.now())),
+      ).catch(() => undefined);
+    })
+    .then(() => (childPid === undefined ? undefined : gone(childPid, deadline)));
 
 /**
  * @param {number} code
  * @param {string} [reason]
+ * @param {number} [wait] How long the session may take to end.
  */
-const finish = (code, reason) => {
+const finish = (code, reason, wait = EXIT_WAIT_MS) => {
   if (ending) return;
   ending = true;
+  const deadline = Date.now() + wait;
   if (reason) process.stderr.write(`${reason}\n`);
-  const leave = () => {
-    fs.rmSync(directory, { recursive: true, force: true });
-    process.exit(code);
-  };
-  if (parked) leave();
-  else endSession().then(leave).catch(leave);
+  // A block Rex starts from now on finds neither its environment nor this socket, so it closes
+  // itself without starting Pi.
+  server.close();
+  fs.rmSync(directory, { recursive: true, force: true });
+  const leave = () => process.exit(code);
+  if (parked)
+    process.stdout.end(leave); // flush preceding questionnaire receipts before exit
+  else if (config.adoptBlock && !child)
+    leave(); // never close a block we did not adopt
+  else endSession(deadline).then(leave).catch(leave);
 };
 
 /** A single-quoted POSIX shell word. @param {string} value */
@@ -197,8 +241,17 @@ const writeEnvironment = () => {
   return file;
 };
 
-// The environment reaches Pi through a private file the shell reads and removes, never through
-// the block's command line, which every process on the machine can read.
+/**
+ * What the block runs: `rex session environment pi...`. The environment reaches Pi through a
+ * private file a subshell reads and removes, never through the block's command line, which every
+ * process on the machine can read. Rex keeps a block whose program exits quickly, and may create
+ * this one after the launcher ended without hearing of it, its file gone and its Pi unable to
+ * connect. So the block's own shell, which no signal to the launcher's process group reaches,
+ * closes the block once Pi is gone or never started.
+ */
+const BLOCK_SCRIPT =
+  '(. "$3" && rm -f "$3" && shift 3 && exec "$@"); exec "$1" block close -s "$2" "$REX_BLOCK"';
+
 const startBlock = () =>
   rex([
     "api",
@@ -214,8 +267,10 @@ const startBlock = () =>
         command: [
           "/bin/sh",
           "-c",
-          '. "$1" && rm -f "$1" && shift && exec "$@"',
+          BLOCK_SCRIPT,
           "pi-subagent",
+          config.rex,
+          config.session,
           writeEnvironment(),
           ...config.command,
         ],
@@ -229,10 +284,18 @@ const startBlock = () =>
   });
 
 /** @param {string} id */
-const declineAsk = (id) => {
-  asking.delete(id);
+const withdrawAsk = (id) => {
+  // The user's answer may already be on its way. Only the child can acknowledge withdrawal.
+  if (!asking.has(id) || withdrawing.has(id)) return;
   child?.write(rexFrame(REX_FRAME.ask, { id, withdraw: true }));
-  note({ type: REX_ANSWER_NOTE, answer: { id, declined: true } });
+  // If the connected Pi no longer responds, end its session before anyone reopens the ask.
+  withdrawing.set(
+    id,
+    setTimeout(
+      () => finish(1, "The subagent's pane did not release its questionnaire."),
+      REX_HANDOFF_TIMEOUT_MS,
+    ).unref(),
+  );
 };
 
 /** Whether a window shows the block now; true when Rex couldn't say. */
@@ -259,10 +322,11 @@ const watchPane = () => {
   if (watching || asking.size === 0) return;
   watching = true;
   setTimeout(() => {
+    const checked = [...asking];
     paneOpen()
       .then((open) => {
         watching = false;
-        if (!open) for (const id of asking) declineAsk(id);
+        if (!open) for (const id of checked) withdrawAsk(id);
         return watchPane();
       })
       .catch(() => undefined);
@@ -274,11 +338,10 @@ const askFromRoot = (ask) => {
   const id = stringField(ask, "id");
   if (id === undefined) return;
   if (Predicate.hasProperty(ask, "withdraw")) {
-    asking.delete(id);
-    child?.write(rexFrame(REX_FRAME.ask, { id, withdraw: true }));
+    withdrawAsk(id);
     return;
   }
-  if (!child || !block) {
+  if (parking || ending || !child || !block) {
     note({ type: REX_ANSWER_NOTE, answer: { id, declined: true } });
     return;
   }
@@ -303,7 +366,7 @@ const fromRoot = (line) => {
     setTimeout(() => {
       parking = false;
       finish(0);
-    }, PARK_WAIT_MS).unref();
+    }, REX_HANDOFF_TIMEOUT_MS).unref();
     return;
   }
   if (child) child.write(`${REX_FRAME.rpc}${line}\n`);
@@ -329,8 +392,12 @@ const fromChild = (socket, kind, body) => {
   else if (kind === REX_FRAME.ask) {
     const answer = parseJson(body);
     const id = stringField(answer, "id");
-    if (id === undefined) return;
-    if (!Predicate.hasProperty(answer, "shown")) asking.delete(id);
+    if (id === undefined || !asking.has(id)) return;
+    if (!Predicate.hasProperty(answer, "shown")) {
+      asking.delete(id);
+      clearTimeout(withdrawing.get(id));
+      withdrawing.delete(id);
+    }
     note({ type: REX_ANSWER_NOTE, answer });
   }
   // The user asked, inside the session, to hide its pane: the block leaves its window and runs on.
@@ -344,9 +411,10 @@ const fromChild = (socket, kind, body) => {
       ]).catch(() => undefined);
   }
   // The child now waits on the root's socket; its block stays, and this launcher's part is over.
-  else if (kind === REX_FRAME.park) {
-    parked = true;
-    finish(0);
+  else if (kind === REX_FRAME.park && parking && !ending) {
+    const receipt = parseJson(body);
+    parked = Predicate.hasProperty(receipt, "ok") && receipt.ok === true;
+    finish(parked ? 0 : 1, parked ? undefined : "The subagent's session could not park.");
   }
 };
 
@@ -358,7 +426,7 @@ const fromChild = (socket, kind, body) => {
  */
 const greeting = (kind, body) => {
   const hello = kind === REX_FRAME.hello ? parseJson(body) : undefined;
-  if (child || stringField(hello, "token") !== token) return undefined;
+  if (child || ending || stringField(hello, "token") !== token) return undefined;
   return Predicate.hasProperty(hello, "pid") && Predicate.isNumber(hello.pid)
     ? hello.pid
     : undefined;
@@ -384,6 +452,7 @@ const server = net.createServer((socket) => {
       greeted = true;
       child = socket;
       childPid = pid;
+      socket.write(rexFrame(REX_FRAME.accept, { ok: true }));
       for (const line of pending.splice(0)) socket.write(`${REX_FRAME.rpc}${line}\n`);
     }
   });
@@ -405,10 +474,13 @@ process.stdin.on("data", (chunk) => {
 const rootLeft = () => {
   if (!parking) finish(0);
 };
+const rootSignaled = () => {
+  if (!parking) finish(0, undefined, SIGNALED_EXIT_WAIT_MS);
+};
 process.stdin.on("end", rootLeft);
 process.on("disconnect", rootLeft);
-process.on("SIGTERM", rootLeft);
-process.on("SIGINT", rootLeft);
+process.on("SIGTERM", rootSignaled);
+process.on("SIGINT", rootSignaled);
 process.on("message", (message) => {
   if (stringField(message, "type") === REX_ASK_MESSAGE)
     askFromRoot(Predicate.hasProperty(message, "ask") ? message.ask : undefined);
@@ -420,8 +492,10 @@ server.listen(socketPath, () => {
   setTimeout(() => {
     if (!child) finish(1, "The subagent's Pi session did not start in its Rex block.");
   }, CONNECT_TIMEOUT_MS).unref();
-  (block ? Promise.resolve(block) : startBlock())
-    .then((blockId) => note({ type: NOTE.block, blockId }))
+  if (ending) return;
+  creating = block ? Promise.resolve(block) : startBlock();
+  creating
+    .then((blockId) => (ending ? undefined : note({ type: NOTE.block, blockId })))
     .catch((/** @type {unknown} */ error) =>
       finish(1, `Rex could not start the subagent's block: ${String(error)}`),
     );

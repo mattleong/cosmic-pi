@@ -1,3 +1,4 @@
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { decodeUnknownOrUndefined } from "pi-cosmic-core/schema/decode";
@@ -21,6 +22,12 @@ import {
   type QuestionnaireEvents,
   type QuestionnaireOwner,
 } from "../questionnaire/protocol.ts";
+
+// Only an explicit decision in this dialog (including Esc) is a receipt, never a forced close.
+export const RecordPaneDecision = Context.Reference<(decision: AskUserOutcome) => void>(
+  "pi-ask-user/RecordPaneDecision",
+  { defaultValue: () => () => undefined },
+);
 
 interface QuestionnaireCapabilityOptions {
   readonly events: QuestionnaireEvents;
@@ -96,10 +103,23 @@ export function registerQuestionnaireCapability(
             ? Effect.ignore(Effect.try(() => shown()))
             : Effect.void,
         );
-        running = options.run(
-          AskUserService.use((service) => service.ask(request, reportShown)),
-          linked,
+        let decision: AskUserOutcome | undefined;
+        const ownsCall = () => calls.get(key) === call && !controller.signal.aborted && current();
+        const ask = AskUserService.use((service) => service.ask(request, reportShown)).pipe(
+          Effect.provideService(RecordPaneDecision, (answer) => {
+            if (!linked.aborted && ownsCall()) decision ??= answer;
+          }),
         );
+        // A handback abort interrupts the surface, even if Pi's custom Promise has wedged.
+        // The runtime settles only after owned cleanup. Explicit cancel or generation loss
+        // revokes the receipt; otherwise the user's decision before handback wins.
+        const result = options.run(ask, linked);
+        running = result
+          .catch(() => (signal.aborted && decision ? decision : result))
+          .then((outcome) => {
+            if (!ownsCall()) throw unavailable();
+            return outcome;
+          });
         return running.finally(finish);
       } catch {
         abort();

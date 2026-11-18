@@ -32,6 +32,7 @@ import {
   type ChildWireEvent,
 } from "../../../src/boundary/child-process.ts";
 import type { OversizedLine } from "../../../src/boundary/bounded-line-parser.ts";
+import { exceedsProcessLine, oversizedLine } from "../../support/oversized-line.ts";
 import type { ProcessExit } from "../../../src/boundary/process-transport.ts";
 import { runNotFound, SubagentProcessError } from "../../../src/run/errors.ts";
 import {
@@ -229,6 +230,8 @@ export interface FakeChildControl {
   /** The next descendant notification is acknowledged with `ok: false`. */
   readonly refuseNextNotification: () => void;
   readonly gateNextSend: (type: FakeCommandType, gate: Deferred.Deferred<void>) => void;
+  /** The child receives the next command of `type` but never answers it. */
+  readonly dropNextResponse: (type: FakeCommandType) => void;
   readonly answerNextGuidance: (disposition: GuidanceDisposition) => void;
   readonly gateNextIpcType: (
     type: LocalPiParentControl["type"],
@@ -266,6 +269,8 @@ export function fakeChildLayer(
     readonly onRelease?: ((spawnIndex: number) => void) | undefined;
     readonly failReclaim?: boolean | undefined;
     readonly reclaimGate?: Deferred.Deferred<void> | undefined;
+    /** The session file every child reports; transcript tests write it. */
+    readonly sessionFile?: string | undefined;
     readonly initialFailures?: ReadonlyArray<{
       readonly spawnIndex: number;
       readonly type: FakeCommandType;
@@ -294,7 +299,10 @@ export function fakeChildLayer(
     messageCount: 0,
     pendingMessageCount: 0,
   };
-  const stateData = { ...sessionState, sessionFile: "/tmp/child-session.jsonl" };
+  const stateData = {
+    ...sessionState,
+    sessionFile: options.sessionFile ?? "/tmp/child-session.jsonl",
+  };
   const layer: Layer.Layer<ChildProcess> = Layer.succeed(ChildProcess, {
     reclaimRunState: ({ runId }) =>
       Effect.gen(function* () {
@@ -422,6 +430,9 @@ export function fakeChildLayer(
           };
           const offerOversizedLine = (line: OversizedLine) =>
             Queue.offerUnsafe(events, { type: "oversized_line", ...line });
+          // A reply reaches the parent as the transport carries it, summarized past the line limit.
+          const offerReply = (value: RpcWireValue) =>
+            exceedsProcessLine(value) ? offerOversizedLine(oversizedLine(value)) : offer(value);
           const exit: FakeChildControl["exit"] = (exitCode = 0, diagnostic = {}) => {
             Queue.endUnsafe(events);
             Deferred.doneUnsafe(exited, Effect.succeed({ exitCode, stderr: "", ...diagnostic }));
@@ -451,7 +462,7 @@ export function fakeChildLayer(
                 if (takeFirst(dropped, (type) => type === commandType(command)) !== undefined)
                   return undefined;
                 const failure = takeFirst(failures, forCommand);
-                offer(
+                offerReply(
                   failure
                     ? {
                         type: "response",
@@ -531,6 +542,7 @@ export function fakeChildLayer(
               refusedNotifications += 1;
             },
             gateNextSend: (type, gate) => void sendGates.push({ type, gate }),
+            dropNextResponse: (type) => void dropped.push(type),
             answerNextGuidance: (disposition) => void guidanceDispositions.push(disposition),
             gateNextIpcType: (type, gate) => void ipcGates.push({ type, gate }),
             gateRelease: (gate) => void (releaseGate = gate),

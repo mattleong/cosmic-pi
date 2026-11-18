@@ -109,7 +109,7 @@ const VIEWPORT_KEYS = [
 export interface SessionViewOptions {
   readonly tui: TUI;
   readonly theme: Theme;
-  readonly keybindings: KeybindingsManager;
+  readonly keybindings: Pick<KeybindingsManager, "matches" | "getKeys">;
   readonly getHeight: () => number;
   readonly getNow: () => number;
   readonly transcript: SessionTranscript;

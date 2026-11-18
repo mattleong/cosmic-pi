@@ -23,6 +23,12 @@ export type AskUserHost = (
   queued?: boolean,
 ) => Effect.Effect<AskUserOutcome, AskUserHostError>;
 
+type PresentHere = (request: AskUserRequest) => Effect.Effect<AskUserOutcome, AskUserHostError>;
+type BlockingPresentation = (
+  request: AskUserRequest,
+  presentHere: PresentHere,
+) => ReturnType<PresentHere>;
+
 export interface QuestionnaireActivity {
   readonly admitted: (
     id: string,
@@ -58,10 +64,14 @@ const makeService = Effect.fn("AskUserService.make")(function* (
   const askRequest = Effect.fn("AskUserService.ask")(function* (
     request: AskUserRequest,
     shown: Effect.Effect<void> = Effect.void,
+    present: BlockingPresentation = (asked, here) => here(asked),
   ) {
     const normalized = normalizeAskUserRequest(request);
     const validationError = validateAskUserRequest(normalized);
     if (validationError) return yield* validationError;
+    // Already inside this session's turn: a pane fallback must open here without requeueing.
+    const presentHere: PresentHere = (asked) =>
+      shown.pipe(Effect.andThen(() => host(asked, undefined, true)));
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const ticket = yield* queue.admit;
@@ -74,10 +84,9 @@ const makeService = Effect.fn("AskUserService.make")(function* (
               Effect.andThen(
                 Effect.raceFirst(
                   ticket.run(
-                    activity.presenting(id).pipe(
-                      Effect.andThen(shown),
-                      Effect.andThen(() => host(normalized, undefined, true)),
-                    ),
+                    activity
+                      .presenting(id)
+                      .pipe(Effect.andThen(() => present(normalized, presentHere))),
                   ),
                   Deferred.await(cancel).pipe(
                     Effect.as<AskUserOutcome>({ outcome: "cancelled", answers: [] }),

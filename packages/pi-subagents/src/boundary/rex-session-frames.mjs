@@ -10,9 +10,14 @@
 export const REX_SOCKET_ENV = "PI_SUBAGENT_REX_SOCKET";
 export const REX_TOKEN_ENV = "PI_SUBAGENT_REX_TOKEN";
 
+/** A silent candidate or stalled presenter cannot retain ambiguous ownership indefinitely. */
+export const REX_HANDOFF_TIMEOUT_MS = 5_000;
+
 export const REX_FRAME = Object.freeze({
   /** The child names itself to the end it connected to: `{ token, pid, parked }`. */
   hello: "H",
+  /** The receiver authenticated the hello: `{ ok: true }`. Only now may the child switch. */
+  accept: "K",
   /** A backend command, response, or event, as a headless child's RPC channel carries them. */
   rpc: "R",
   /** A parent-contact message, as a headless child's process IPC carries them. */
@@ -29,7 +34,7 @@ export const REX_FRAME = Object.freeze({
   hide: "D",
   /**
    * A questionnaire for the user, shown in the child's own session: `{ id, request }`, taken back
-   * with `{ id, withdraw }`. The child answers `{ id, shown }` once it is on screen, then
+   * with `{ id, withdraw }`, acknowledged only after presenter settlement. The child answers `{ id, shown }` once it is on screen, then
    * `{ id, outcome }`, or `{ id, declined }` when it could not show it or stopped showing it.
    */
   ask: "Q",

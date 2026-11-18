@@ -6,7 +6,11 @@ import {
   routeRequest as request,
   submitted,
 } from "./support/questionnaire.ts";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import { makeTuiHost, waitMounted } from "./support/host.ts";
+import { askUserHost } from "../src/boundary/host-dialogs.ts";
+import { createAskUserDialogBridge } from "../src/boundary/host-ui.ts";
+import * as externalEditor from "../src/boundary/host-external-editor.ts";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -247,6 +251,104 @@ it.effect("cancel synchronously aborts its owner and acknowledges only after own
     dispose();
   }),
 );
+
+for (const scenario of [
+  "submitted",
+  "dismissed",
+  "wedged",
+  "draft",
+  "revoked",
+  "cancelled",
+] as const) {
+  it.effect(
+    `handback during pane cleanup preserves the user's decision only for its current owner (${scenario})`,
+    () =>
+      Effect.gen(function* () {
+        const bus = createEventBus();
+        const h = makeTuiHost();
+        // Pi's custom Promise need not resolve even after its done callback ran.
+        const releaseHost = deferredPromise();
+        if (scenario === "wedged")
+          h.settleOnOpen((completed) => releaseHost.promise.then(() => completed));
+        const cleaning = deferredPromise();
+        const restore = deferredPromise();
+        let restored = false;
+        const edit = vi.spyOn(externalEditor, "editWithExternalEditor").mockImplementation(() =>
+          Effect.never.pipe(
+            Effect.onInterrupt(() =>
+              Effect.sync(() => cleaning.resolve()).pipe(
+                Effect.andThen(Effect.promise(() => restore.promise)),
+                Effect.andThen(
+                  Effect.sync(() => {
+                    restored = true;
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
+        const service = yield* acquireService(askUserHost(h.ctx, createAskUserDialogBridge()));
+        const dispose = registerQuestionnaireCapability({
+          events: bus,
+          sessionId: "root",
+          generation: "one",
+          isCurrent: () => true,
+          run: (effect, signal) =>
+            Effect.runPromise(effect.pipe(Effect.provideService(AskUserService, service)), {
+              signal,
+            }),
+        });
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            restore.resolve();
+            releaseHost.resolve();
+            dispose();
+            edit.mockRestore();
+          }),
+        );
+        const handback = new AbortController();
+        // A choice on a batch's first page is a real draft, not a submission.
+        const asked =
+          scenario === "draft"
+            ? { questions: [...request.questions, ...keyed("later").questions] }
+            : request;
+        let restoredAtSettlement: boolean | undefined;
+        const capability = sessionCapability(bus);
+        const result = capability
+          .ask(asked, owner, handback.signal)
+          .then(
+            (outcome) => outcome,
+            () => undefined,
+          )
+          .finally(() => {
+            restoredAtSettlement = restored;
+          });
+        yield* waitMounted(h);
+        if (scenario !== "wedged") h.mount!();
+        h.component!.handleInput?.("n");
+        h.component!.handleInput?.("external");
+        h.component!.handleInput?.("\u001b");
+        const decision = scenario === "dismissed" ? { outcome: "cancelled", answers: [] } : answer;
+        h.component!.handleInput?.(scenario === "dismissed" ? "\u001b" : "1");
+        if (scenario !== "draft") expect(h.done).toHaveBeenCalledWith(decision);
+        if (scenario !== "wedged" && scenario !== "draft")
+          yield* Effect.promise(() => cleaning.promise);
+        handback.abort();
+        yield* Effect.promise(() => cleaning.promise);
+        if (scenario === "revoked") dispose();
+        const cancelled = scenario === "cancelled" ? capability.cancel(owner) : undefined;
+        expect(restoredAtSettlement).toBeUndefined();
+        restore.resolve();
+        expect(yield* Effect.promise(() => result)).toEqual(
+          scenario === "submitted" || scenario === "wedged" || scenario === "dismissed"
+            ? decision
+            : undefined,
+        );
+        expect(restoredAtSettlement).toBe(true);
+        if (cancelled) yield* Effect.promise(() => cancelled);
+      }),
+  );
+}
 
 const registerPendingRuns = () => {
   const bus = createEventBus();

@@ -267,7 +267,8 @@
         "packages/pi-cosmic-core/src/runtime/runtime.ts",
         "packages/pi-cosmic-core/src/testing/**",
         "packages/pi-cosmic-ui/src/boundary/host-surface.ts",
-        "packages/pi-cosmic-ui/src/boundary/host-ui-ticker-pool.ts"
+        "packages/pi-cosmic-ui/src/boundary/host-ui-ticker-pool.ts",
+        "packages/pi-subagents/src/boundary/host-child-rex.ts"
       ],
       "rules": {
         "anti-slop-effect/no-effect-runner-imports": "off",

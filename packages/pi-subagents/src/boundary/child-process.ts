@@ -300,6 +300,7 @@ const createRunDirectory = (runDir: string) =>
   });
 
 const extensionPath = fileURLToPath(new URL("./host-child.ts", import.meta.url));
+const rexPiHostPath = fileURLToPath(new URL("./rex-pi-host.mjs", import.meta.url));
 
 const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
   runDir: string,
@@ -320,7 +321,8 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
       ? yield* createForkedSession(request, runDir)
       : undefined;
 
-  const cliEntry = nodePath.join(getPackageDir(), "dist", "bundle", "cli.js");
+  const packageDir = getPackageDir();
+  const cliEntry = nodePath.join(packageDir, "dist", "bundle", "cli.js");
   const toolPolicy = childToolPolicy(request.activeTools, request.writeIntent);
   const sessionArgs = [
     "--model",
@@ -345,9 +347,15 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         ? ["--session", sessionFile]
         : ["--session-dir", runDir]),
   ];
-  // A Rex-hosted run starts its launcher in Pi's place, which starts the same Pi interactively
-  // in a Rex block; a headless one is Pi itself, speaking RPC.
-  const hosted = rexHost?.launch(request, [process.execPath, cliEntry, ...sessionArgs]);
+  // A Rex block runs Pi's interactive SDK host; a headless child runs the bundled RPC CLI.
+  // Both receive exactly the same session arguments. Writers stay headless whatever the
+  // setting: commands a hosted Pi detaches run under Rex, outside the process tree whose exit
+  // proves a writer can no longer change files when its lease is released.
+  // Pi exposes its built-in llama.cpp provider only through the CLI, not its public SDK.
+  const hosted =
+    request.writeIntent === "writer" || Fn.pipe(request.model, Str.startsWith("llama.cpp/"))
+      ? undefined
+      : rexHost?.launch(request, [process.execPath, rexPiHostPath, ...sessionArgs]);
   const args = hosted ? [...hosted.args] : [cliEntry, "--mode", "rpc", ...sessionArgs];
   if (hosted && rexHost)
     yield* Effect.addFinalizer(() => Effect.sync(() => rexHost.released(request.runId)));
@@ -357,7 +365,11 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         spawn(process.execPath, args, {
           cwd: request.cwd,
           detached: true,
-          env: childProcessEnvironment(process.env, request),
+          env: {
+            ...childProcessEnvironment(process.env, request),
+            // Resolve the hosted session's SDK from the parent's Pi, not a project-local install.
+            ...(hosted && { PI_PACKAGE_DIR: packageDir }),
+          },
           stdio: ["pipe", "pipe", "pipe", "ipc"],
         }),
       label: "Subagent RPC",
@@ -366,9 +378,7 @@ const acquireChild = Effect.fn("ChildProcess.acquire")(function* (
         if (hosted) rexHost?.observe(request.runId, value);
         return { type: "rpc_message", value };
       },
-      // A hosted run's commands run under Rex, outside this process tree; its launcher's exit
-      // attests only that its Pi is gone.
-      confirmDetachedDescendants: !hosted && request.writeIntent === "writer",
+      confirmDetachedDescendants: request.writeIntent === "writer",
       requestAbort: (send) => {
         // A session whose pane is open outlives its run's backend, parked on the root's socket.
         const park = hosted ? rexHost?.parkTarget(request.runId) : undefined;

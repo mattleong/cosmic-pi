@@ -1,17 +1,39 @@
-import { describe, expect, it } from "@effect/vitest";
+import { afterAll, describe, expect, it } from "@effect/vitest";
+import * as os from "node:os";
 import * as Arr from "effect/Array";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
 import { yieldUntil } from "pi-cosmic-core/testing";
+import { findOrUndefined } from "pi-cosmic-core/array";
+import type { RpcCommand } from "../../src/backend/local-pi-protocol.ts";
+import { TRANSCRIPT_REPLY_OVERSIZED } from "../../src/backend/model.ts";
 import type { SubagentTranscriptEvent } from "../../src/run/transcript.ts";
+import { nodeFs, nodePath } from "../support/node-builtins.ts";
 import { oversizedLine, OVERSIZED_IMAGE_DATA } from "../support/oversized-line.ts";
 import {
   completeLocalRun,
+  fakeChildLayer,
   localServiceFixture,
   request,
+  runView,
   withService,
 } from "./fixtures/service-harness.ts";
+
+const sessionDirectory = nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), "pi-subagents-transcript-"));
+afterAll(() => nodeFs.rmSync(sessionDirectory, { recursive: true, force: true }));
+let nextSessionFile = 0;
+const sessionFile = () => nodePath.join(sessionDirectory, `session-${nextSessionFile++}.jsonl`);
+const appendEntries = (file: string, ...entries: ReadonlyArray<object>) =>
+  nodeFs.appendFileSync(
+    file,
+    Arr.join(
+      Arr.map(entries, (entry) => `${JSON.stringify(entry)}\n`),
+      "",
+    ),
+  );
 
 const messageEntry = (
   id: string,
@@ -115,6 +137,113 @@ describe("watching a run's conversation", () => {
       yield* yieldUntil(() => events.length === 2);
       expect(events[1]).toEqual({ type: "gap" });
       yield* Scope.close(scope, Exit.void);
+      yield* completeLocalRun(service, child, run.id);
+    });
+  });
+});
+
+const entriesSince = (commands: ReadonlyArray<RpcCommand>) =>
+  Arr.flatMap(commands, (command) => (command.type === "get_entries" ? [command.since] : []));
+
+describe("a conversation too large for one reply", () => {
+  const large = messageEntry("e3", "e2", "assistant", OVERSIZED_IMAGE_DATA);
+
+  it.effect("rereads the session file and asks the child only past its new end", () => {
+    const file = sessionFile();
+    appendEntries(
+      file,
+      messageEntry("e1", null, "user", "task"),
+      messageEntry("e2", "e1", "assistant", "on it"),
+    );
+    const { fake, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, { sessionFile: file }),
+    );
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request());
+      const child = fake.controls[0]!;
+      child.sessionEntries.push(
+        messageEntry("e1", null, "user", "task"),
+        messageEntry("e2", "e1", "assistant", "on it"),
+        large,
+      );
+      const answered = yield* Deferred.make<void>();
+      child.gateNextSend("get_entries", answered);
+      const events: SubagentTranscriptEvent[] = [];
+      const scope = yield* Scope.make();
+      const watching = yield* service
+        .watchTranscript(run.id, (event) => events.push(event))
+        .pipe(Scope.provide(scope), Effect.forkScoped({ startImmediately: true }));
+      yield* yieldUntil(() => child.sent("get_entries"));
+      // Pi writes the entry to its file before the reply that carries it.
+      appendEntries(file, large);
+      yield* Deferred.succeed(answered, undefined);
+      yield* Fiber.join(watching);
+
+      expect(entriesSince(child.commands)).toEqual(["e2", "e3"]);
+      expect(seen(events)).toEqual([
+        { type: "snapshot", live: true, roles: ["user", "assistant", "assistant"] },
+      ]);
+      yield* Scope.close(scope, Exit.void);
+      yield* completeLocalRun(service, child, run.id);
+    });
+  });
+
+  it.effect("fails only the watch when the file holds nothing newer", () => {
+    const file = sessionFile();
+    appendEntries(
+      file,
+      messageEntry("e1", null, "user", "task"),
+      messageEntry("e2", "e1", "assistant", "on it"),
+    );
+    const { fake, layer } = localServiceFixture(
+      {},
+      fakeChildLayer(Effect.void, { sessionFile: file }),
+    );
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request());
+      const child = fake.controls[0]!;
+      child.sessionEntries.push(
+        messageEntry("e1", null, "user", "task"),
+        messageEntry("e2", "e1", "assistant", "on it"),
+        large,
+      );
+      const events: SubagentTranscriptEvent[] = [];
+      const failure = yield* service
+        .watchTranscript(run.id, (event) => events.push(event))
+        .pipe(Effect.scoped, Effect.flip);
+
+      expect(failure).toMatchObject({ code: TRANSCRIPT_REPLY_OVERSIZED });
+      expect(events).toEqual([]);
+      expect(entriesSince(child.commands)).toEqual(["e2"]);
+      expect((yield* runView(service, run.id)).state).toBe("running");
+      yield* completeLocalRun(service, child, run.id);
+    });
+  });
+
+  it.effect("ignores a reply that arrives after its watch ended", () => {
+    const { fake, layer } = localServiceFixture();
+    return withService(layer, function* (service) {
+      const run = yield* service.start(request());
+      const child = fake.controls[0]!;
+      child.dropNextResponse("get_entries");
+      const watching = yield* service
+        .watchTranscript(run.id, () => {})
+        .pipe(Effect.scoped, Effect.forkScoped({ startImmediately: true }));
+      yield* yieldUntil(() => child.sent("get_entries"));
+      yield* Fiber.interrupt(watching);
+      const late = (id: string) =>
+        oversizedLine({
+          type: "response",
+          id,
+          command: "get_entries",
+          success: true,
+          data: { entries: [large], leafId: "e3" },
+        });
+      const canceled = findOrUndefined(child.commands, (command) => command.type === "get_entries");
+      child.offerOversizedLine(late(canceled?.id ?? "backend-rpc-missing"));
+      child.offerOversizedLine(late("backend-rpc-unknown"));
+
       yield* completeLocalRun(service, child, run.id);
     });
   });

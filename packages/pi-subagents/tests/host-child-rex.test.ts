@@ -1,6 +1,7 @@
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import {
   CustomEditor,
+  type AgentSession,
   type ExtensionAPI,
   type ExtensionContext,
   type InputEventResult,
@@ -8,9 +9,10 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
+import * as Fn from "effect/Function";
 import * as FileSystem from "effect/FileSystem";
-import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
+import * as Str from "effect/String";
 import { nodeCreateServer } from "pi-cosmic-core/platform/node-builtins";
 import {
   deferredPromise,
@@ -20,6 +22,9 @@ import {
   pollUntil,
   tuiFixture,
 } from "pi-cosmic-core/testing";
+import { fauxAssistantMessage, fauxPrintSession } from "pi-cosmic-core/testing/sdk";
+import { provideRexPrompt } from "../src/boundary/rex-pi-host.mjs";
+import { REX_PROMPT_EVENT, type RexPrompt } from "../src/boundary/rex-prompt.mjs";
 import { openRexChildSession } from "../src/boundary/host-child-rex.ts";
 import {
   REX_FRAME,
@@ -41,6 +46,7 @@ interface FixtureEvent {
   readonly isError?: boolean;
   readonly context?: Schema.Json;
 }
+
 type ExtensionEditorFactory = NonNullable<
   Parameters<ExtensionContext["ui"]["setEditorComponent"]>[0]
 >;
@@ -65,7 +71,7 @@ interface Frame {
 const decodeJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Json));
 
 /** One end the child connects to: the launcher's socket, or the root's for parked sessions. */
-const listen = (path: string) =>
+const listen = (path: string, accept = true) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const frames: Frame[] = [];
@@ -78,8 +84,11 @@ const listen = (path: string) =>
         socket.on("data", (chunk: string) => {
           const split = splitRexFrames(buffered + chunk);
           buffered = split.rest;
-          for (const frame of split.frames)
+          for (const frame of split.frames) {
             frames.push({ kind: frame.kind, value: decodeJson(frame.body) });
+            if (accept && frame.kind === REX_FRAME.hello)
+              socket.write(rexFrame(REX_FRAME.accept, { ok: true }));
+          }
         });
         socket.on("error", () => undefined);
         socket.on("close", () => {
@@ -87,14 +96,38 @@ const listen = (path: string) =>
         });
       });
       server.listen(path);
+      const responsesTo = (id: string) =>
+        Arr.filter(
+          Arr.map(frames, (frame) => frame.value),
+          Schema.is(Schema.Struct({ type: Schema.Literal("response"), id: Schema.Literal(id) })),
+        );
+      const issue = (
+        id: string,
+        value: { readonly type: string; readonly [key: string]: Schema.Json },
+      ) => connection?.write(rexFrame(REX_FRAME.rpc, { ...value, id }));
+      const command = (
+        id: string,
+        value: { readonly type: string; readonly [key: string]: Schema.Json },
+      ) =>
+        Effect.gen(function* () {
+          issue(id, value);
+          expect(yield* pollUntil(() => responsesTo(id).length > 0)).toBe(true);
+          return responsesTo(id)[0]!;
+        });
       return {
+        issue,
+        command,
+        responsesTo,
         frames,
         send: (kind: string, value: Schema.Json) => connection?.write(rexFrame(kind, value)),
         of: (kind: string) => Arr.filter(frames, (frame) => frame.kind === kind),
         isClosed: () => closed,
         /** Ends the connection from this side, as the launcher's exit does. */
         drop: () => connection?.destroy(),
-        close: () => server.close(),
+        close: () => {
+          connection?.destroy();
+          server.close();
+        },
       };
     }),
     (end) => Effect.sync(end.close),
@@ -131,18 +164,15 @@ const fixture = Effect.gen(function* () {
   const commands = new Map<string, () => Promise<void>>();
   let installedEditor: ReturnType<ExtensionEditorFactory> | undefined;
   const pi = extensionApiFixture({
-    registerCommand: (name, options) => {
-      commands.set(name, () => options.handler("", ctx));
+    registerCommand: (name, registered) => {
+      commands.set(name, () => registered.handler("", ctx));
     },
     on: ((name: string, handler: Handler) => {
       handlers.set(name, handler);
       return () => undefined;
     }) as ExtensionAPI["on"],
     getThinkingLevel: () => "high",
-    sendUserMessage: (content, options) => {
-      const text = Predicate.isString(content) ? content : "(parts)";
-      calls.push(`send:${text}:${options?.deliverAs ?? "now"}`);
-    },
+    sendUserMessage: () => void calls.push("sent-without-receipt"),
   });
   const model = { provider: "openai-codex", id: "gpt-6-luna" };
   const sessionManager = {
@@ -176,25 +206,6 @@ const fixture = Effect.gen(function* () {
   const session = openRexChildSession(pi, environment)!;
   const emit = (name: string, event: FixtureEvent = {}) =>
     handlers.get(name)?.({ type: name, ...event }, ctx);
-  const responses = () =>
-    Arr.filter(
-      Arr.map(launcher.of(REX_FRAME.rpc), (frame) => frame.value),
-      Schema.is(Schema.Struct({ type: Schema.Literal("response"), id: Schema.String })),
-    );
-  const command = (
-    id: string,
-    value: { readonly type: string; readonly [key: string]: Schema.Json },
-  ) =>
-    Effect.gen(function* () {
-      launcher.send(REX_FRAME.rpc, { ...value, id });
-      expect(yield* pollUntil(() => Arr.some(responses(), (response) => response.id === id))).toBe(
-        true,
-      );
-      return yield* Arr.findFirst(responses(), (response) => response.id === id).pipe(
-        Effect.fromOption,
-        Effect.orDie,
-      );
-    });
   expect(yield* pollUntil(() => launcher.of(REX_FRAME.hello).length === 1)).toBe(true);
   return {
     directory,
@@ -203,7 +214,11 @@ const fixture = Effect.gen(function* () {
     environment,
     calls,
     emit,
-    command,
+    offer: (candidate: string | ((text: string, steer: boolean) => Promise<string>)) =>
+      pi.events.on(REX_PROMPT_EVENT, (query) => {
+        if (Schema.is(Schema.Struct({ sessionId: Schema.Literal("session-1") }))(query))
+          Object.assign(query, { prompt: candidate });
+      }),
     runCommand: (name: string) => commands.get(name)?.(),
     // Pi calls the installed editor's exit handler for its exit key on an empty editor.
     pressExitKey: () =>
@@ -248,7 +263,7 @@ describe("a Rex-hosted child", () => {
         h.launcher.send(REX_FRAME.rpc, { type: "get_state", id: "early" });
         yield* Effect.sleep("30 millis");
         h.emit("session_start");
-        expect(yield* h.command("state", { type: "get_state" })).toMatchObject({
+        expect(yield* h.launcher.command("state", { type: "get_state" })).toMatchObject({
           command: "get_state",
           success: true,
           data: {
@@ -258,49 +273,196 @@ describe("a Rex-hosted child", () => {
             sessionFile: "/tmp/session.jsonl",
           },
         });
-        expect(yield* h.command("stats", { type: "get_session_stats" })).toMatchObject({
+        expect(yield* h.launcher.command("stats", { type: "get_session_stats" })).toMatchObject({
           data: {
             tokens: { input: 20, output: 4, cacheRead: 6, cacheWrite: 2, total: 32 },
             cost: 1,
             contextUsage: { percent: 10 },
           },
         });
-        expect(yield* h.command("tail", { type: "get_entries", since: "e1" })).toMatchObject({
+        expect(
+          yield* h.launcher.command("tail", { type: "get_entries", since: "e1" }),
+        ).toMatchObject({
           data: { entries: [{ id: "e2" }], leafId: "e2" },
         });
-        expect(yield* h.command("lost", { type: "get_entries", since: "gone" })).toMatchObject({
+        expect(
+          yield* h.launcher.command("lost", { type: "get_entries", since: "gone" }),
+        ).toMatchObject({
           success: false,
         });
-        expect(yield* h.command("odd", { type: "set_model" })).toMatchObject({ success: false });
+        expect(yield* h.launcher.command("odd", { type: "set_model" })).toMatchObject({
+          success: false,
+        });
       }),
     ),
   );
 
-  it.live("starts an idle session's turn, queues into a busy one, and interrupts", () =>
+  it.live(
+    "relays the installed SDK's prompt receipts through input interception and a busy turn",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pisa-sdk-" });
+          const socket = `${directory}/s`;
+          const launcher = yield* listen(socket);
+          const atHook = deferredPromise();
+          const releaseHook = deferredPromise();
+          const finishTurn = deferredPromise();
+          const { session, fake } = yield* fauxPrintSession("rex-session-", "rex-receipts", [
+            (pi) => provideRexPrompt(pi, (): AgentSession => session),
+            (pi) => {
+              openRexChildSession(pi, { [REX_SOCKET_ENV]: socket, [REX_TOKEN_ENV]: "token" });
+              pi.on("input", (input) => {
+                if (input.text === "swallowed") return { action: "handled" };
+                if (input.text !== "start") return { action: "continue" };
+                atHook.resolve();
+                return releaseHook.promise.then(() => ({ action: "continue" as const }));
+              });
+            },
+          ]);
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              releaseHook.resolve();
+              finishTurn.resolve();
+            }),
+          );
+          expect(yield* pollUntil(() => launcher.of(REX_FRAME.hello).length === 1)).toBe(true);
+          fake.setResponses([
+            () => finishTurn.promise.then(() => fauxAssistantMessage("done")),
+            fauxAssistantMessage("steer received"),
+          ]);
+
+          launcher.issue("task", { type: "prompt", message: "start" });
+          yield* Effect.promise(() => atHook.promise);
+          // This synchronous command round-trips while SDK prompt preflight is still waiting on input.
+          yield* launcher.command("barrier", { type: "get_state" });
+          expect(launcher.responsesTo("task")).toEqual([]);
+          releaseHook.resolve();
+          expect(
+            yield* pollUntil(
+              () => launcher.responsesTo("task").length === 1 && session.isStreaming,
+            ),
+          ).toBe(true);
+          expect(launcher.responsesTo("task")[0]).toMatchObject({
+            success: true,
+            data: { disposition: "started" },
+          });
+          expect(
+            yield* launcher.command("swallowed", {
+              type: "prompt",
+              message: "swallowed",
+              streamingBehavior: "steer",
+            }),
+          ).toMatchObject({
+            success: true,
+            data: { disposition: "handled" },
+          });
+          expect(
+            yield* launcher.command("busy", { type: "prompt", message: "no steering" }),
+          ).toMatchObject({ success: false });
+          expect(
+            yield* launcher.command("queued", {
+              type: "prompt",
+              message: "later",
+              streamingBehavior: "steer",
+            }),
+          ).toMatchObject({
+            success: true,
+            data: { disposition: "queued" },
+          });
+          expect(session.getSteeringMessages()).toEqual(["later"]);
+          expect(launcher.of(REX_FRAME.contact)).toEqual([]);
+          finishTurn.resolve();
+          expect(yield* pollUntil(() => !session.isStreaming)).toBe(true);
+        }),
+      ),
+    15_000,
+  );
+
+  it.live("never guesses admission or submits without a callable prompt capability", () =>
     live(
       Effect.gen(function* () {
         const h = yield* fixture;
         h.emit("session_start");
-        expect(yield* h.command("p1", { type: "prompt", message: "task" })).toMatchObject({
-          data: { disposition: "started" },
-        });
+        const steer = { type: "prompt", message: "a draft", streamingBehavior: "steer" };
         h.setIdle(false);
-        expect(yield* h.command("p2", { type: "prompt", message: "more" })).toMatchObject({
-          success: false,
-        });
-        expect(
-          yield* h.command("p3", { type: "prompt", message: "steer", streamingBehavior: "steer" }),
-        ).toMatchObject({ data: { disposition: "queued" } });
-        yield* h.command("q", { type: "clear_queue" });
-        yield* h.command("a", { type: "abort" });
-        expect(h.calls).toEqual(["send:task:now", "send:steer:steer", "abort"]);
+        const detach = h.offer("not callable");
+        expect(yield* h.launcher.command("unavailable", steer)).toMatchObject({ success: false });
+        expect(h.calls).toEqual([]);
+        detach();
 
-        // Pi hands an interrupted turn's queue back to the editor; the parent's steer isn't a draft.
-        h.setEditor("steer");
+        // A malformed result after submission is uncertain, not a safe refusal or a queue receipt.
+        h.offer(() => Promise.resolve("unknown"));
+        const invalid = yield* h.launcher.command("invalid", steer);
+        expect(invalid).toMatchObject({ success: true });
+        expect(invalid).not.toHaveProperty("data");
+        h.setEditor("a draft");
         h.emit("agent_settled", { aborted: true });
+        expect(h.editor()).toBe("a draft");
+      }),
+    ),
+  );
+
+  it.live("cleans parent text returned by an abort only for an acknowledged queue", () =>
+    live(
+      Effect.gen(function* () {
+        const h = yield* fixture;
+        h.emit("session_start");
+        h.offer(() => Promise.resolve("queued"));
+        expect(
+          yield* h.launcher.command("steer", {
+            type: "prompt",
+            message: "guidance",
+            streamingBehavior: "steer",
+          }),
+        ).toMatchObject({
+          data: { disposition: "queued" },
+        });
+        yield* h.launcher.command("clear", { type: "clear_queue" });
+        yield* h.launcher.command("abort", { type: "abort" });
+        h.setEditor("guidance");
+        h.emit("agent_settled", { aborted: true });
+        expect(h.calls).toEqual(["abort"]);
         expect(h.editor()).toBe("");
       }),
     ),
+  );
+
+  it.live(
+    "a released activation neither answers late receipts nor submits into its successor",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const h = yield* fixture;
+          h.emit("session_start");
+          const started = deferredPromise();
+          const receipt = deferredPromise<"queued">();
+          const submitted: string[] = [];
+          const submit: RexPrompt = (text) => {
+            submitted.push(text);
+            started.resolve();
+            return receipt.promise;
+          };
+          h.offer(submit);
+          h.launcher.issue("old", { type: "prompt", message: "previous" });
+          yield* Effect.promise(() => started.promise);
+          h.emit("session_shutdown");
+          h.launcher.issue("released", { type: "prompt", message: "should not run" });
+          // An unrecognized command doesn't need an activation. Its answer proves the preceding
+          // prompt arrived on the socket while the consumer was released.
+          yield* h.launcher.command("release-barrier", { type: "unsupported" });
+          h.emit("session_start");
+          receipt.resolve("queued");
+          yield* h.launcher.command("barrier", { type: "get_state" });
+          expect(h.launcher.responsesTo("old")).toEqual([]);
+          expect(h.launcher.responsesTo("released")).toEqual([]);
+          expect(submitted).toEqual(["previous"]);
+          h.setEditor("previous");
+          h.emit("agent_settled", { aborted: true });
+          expect(h.editor()).toBe("previous");
+        }),
+      ),
   );
 
   it.live("reports the run's events and what the user typed into its session", () =>
@@ -359,11 +521,44 @@ describe("a Rex-hosted child", () => {
     ),
   );
 
+  it.live("large native pastes leave Pi's input untouched and send a bounded Unicode notice", () =>
+    live(
+      Effect.gen(function* () {
+        const h = yield* fixture;
+        h.emit("session_start");
+        const head = Fn.pipe("a", Str.repeat(65_534));
+        const text = `${head}🍎more`;
+        const input = { source: "interactive", text };
+        expect(h.emit("input", input)).toBeUndefined();
+        expect(input.text).toBe(text);
+        expect(yield* pollUntil(() => h.launcher.of(REX_FRAME.contact).length === 1)).toBe(true);
+        expect(h.launcher.of(REX_FRAME.contact)[0]?.value).toEqual({
+          channel: "pi-subagents",
+          type: "user_input",
+          text: `${head}…`,
+        });
+      }),
+    ),
+  );
+
   it.live("parks on the root's socket, sends typed words there, and returns to a launcher", () =>
     live(
       Effect.gen(function* () {
         const h = yield* fixture;
         h.emit("session_start");
+        const submitted = deferredPromise();
+        const receipt = deferredPromise<"started">();
+        h.offer(() => {
+          submitted.resolve();
+          return receipt.promise;
+        });
+        h.launcher.issue("old-command", { type: "prompt", message: "old assignment" });
+        yield* Effect.promise(() => submitted.promise);
+        const lateAck = h.session.ipc.sendContact({
+          channel: "pi-subagents",
+          type: "turn_input_barrier_ack",
+          requestId: "old-turn",
+        });
         h.setIdle(false);
         const root = yield* listen(`${h.directory}/park`);
         h.launcher.send(REX_FRAME.park, { socket: `${h.directory}/park`, token: "park-token" });
@@ -377,12 +572,13 @@ describe("a Rex-hosted child", () => {
         expect(yield* pollUntil(h.launcher.isClosed)).toBe(true);
         expect(h.calls).toEqual(["abort"]);
 
-        // Parked, it starts no turn of its own: the words are the run's next assignment.
-        expect(h.emit("input", { source: "interactive", text: "continue" })).toEqual({
+        // Parked input is the actual assignment, not the bounded notice of active input.
+        const assignment = Fn.pipe("🍎", Str.repeat(36_000));
+        expect(h.emit("input", { source: "interactive", text: assignment })).toEqual({
           action: "handled",
         });
         expect(yield* pollUntil(() => root.of(REX_FRAME.resume).length === 1)).toBe(true);
-        expect(root.of(REX_FRAME.resume)[0]?.value).toEqual({ text: "continue" });
+        expect(root.of(REX_FRAME.resume)[0]?.value).toEqual({ text: assignment });
         root.send(REX_FRAME.notice, { message: "It can't be resumed" });
         expect(yield* pollUntil(() => h.calls.includes("notify:It can't be resumed"))).toBe(true);
 
@@ -393,10 +589,84 @@ describe("a Rex-hosted child", () => {
           token: "next-token",
           parked: false,
         });
+        expect(yield* pollUntil(root.isClosed)).toBe(true);
         expect(h.emit("input", { source: "interactive", text: "again" })).toBeUndefined();
+        receipt.resolve("started");
+        expect(yield* Effect.flip(lateAck)).toMatchObject({ code: "transport_not_sent" });
+        yield* next.command("barrier", { type: "get_state" });
+        expect(
+          Arr.flatMap([h.launcher, root, next], (end) => end.responsesTo("old-command")),
+        ).toEqual([]);
         expect(h.calls).not.toContain("shutdown");
       }),
     ),
+  );
+
+  it.live("a replacement that refuses the hello leaves the old controller authoritative", () =>
+    live(
+      Effect.gen(function* () {
+        const h = yield* fixture;
+        h.emit("session_start");
+        h.setIdle(false);
+        const reject = yield* listen(`${h.directory}/reject`, false);
+        h.launcher.send(REX_FRAME.park, { socket: `${h.directory}/reject`, token: "bad" });
+        expect(yield* pollUntil(() => reject.of(REX_FRAME.hello).length === 1)).toBe(true);
+        expect(yield* h.launcher.command("during", { type: "get_state" })).toMatchObject({
+          success: true,
+        });
+        reject.drop();
+        expect(yield* pollUntil(() => h.launcher.of(REX_FRAME.park).length > 0)).toBe(true);
+        expect(h.launcher.of(REX_FRAME.park)[0]?.value).toEqual({ ok: false });
+        expect(yield* h.launcher.command("after", { type: "get_state" })).toMatchObject({
+          success: true,
+        });
+        expect(h.calls).not.toContain("abort");
+        expect(h.calls).not.toContain("shutdown");
+        expect(reject.of(REX_FRAME.rpc)).toEqual([]);
+      }),
+    ),
+  );
+
+  it.live(
+    "joins a pane presenter and sends its committed answer before releasing the launcher",
+    () =>
+      live(
+        Effect.gen(function* () {
+          const h = yield* fixture;
+          h.emit("session_start");
+          const answer = deferredPromise<Schema.Json>();
+          let signal: AbortSignal | undefined;
+          h.session.paneAsks.listen((_request, owner, shown) => {
+            signal = owner;
+            shown();
+            return answer.promise;
+          });
+          const root = yield* listen(`${h.directory}/root`);
+          h.launcher.send(REX_FRAME.ask, { id: "one", request: {} });
+          expect(yield* pollUntil(() => h.launcher.of(REX_FRAME.ask).length > 0)).toBe(true);
+          h.launcher.send(REX_FRAME.park, { socket: `${h.directory}/root`, token: "root" });
+          expect(yield* pollUntil(() => signal?.aborted === true)).toBe(true);
+          expect(root.frames).toEqual([]);
+          expect(h.launcher.isClosed()).toBe(false);
+          answer.resolve({ answers: ["red"] });
+          expect(yield* pollUntil(h.launcher.isClosed)).toBe(true);
+          expect(h.launcher.frames.slice(-2)).toEqual([
+            { kind: REX_FRAME.ask, value: { id: "one", outcome: { answers: ["red"] } } },
+            { kind: REX_FRAME.park, value: { ok: true } },
+          ]);
+          expect(root.of(REX_FRAME.ask)).toEqual([]);
+
+          // If a resumed launch cannot attach, this parked session still routes input to the root.
+          root.send(REX_FRAME.adopt, { socket: `${h.directory}/missing`, token: "missing" });
+          expect(yield* pollUntil(() => root.of(REX_FRAME.adopt).length === 1)).toBe(true);
+          expect(root.of(REX_FRAME.adopt)[0]?.value).toEqual({ ok: false });
+          expect(h.emit("input", { source: "interactive", text: "retry" })).toEqual({
+            action: "handled",
+          });
+          expect(yield* pollUntil(() => root.of(REX_FRAME.resume).length === 1)).toBe(true);
+          expect(h.calls).not.toContain("shutdown");
+        }),
+      ),
   );
 
   it.live("hides its pane, instead of quitting, when the user asks from inside it", () =>
@@ -448,7 +718,7 @@ describe("a Rex-hosted child", () => {
             { id: "answered", outcome },
           ]);
 
-          // One the root takes back stops showing, and its late answer is no longer this session's.
+          // A return request joins cleanup. A committed terminal outcome still wins the race.
           h.launcher.send(REX_FRAME.ask, { id: "withdrawn", request });
           expect(yield* pollUntil(() => showing.length === 2)).toBe(true);
           h.launcher.send(REX_FRAME.ask, { id: "withdrawn", withdraw: true });
@@ -459,11 +729,17 @@ describe("a Rex-hosted child", () => {
           h.launcher.send(REX_FRAME.ask, { id: "hidden", request });
           expect(yield* pollUntil(() => showing.length === 3)).toBe(true);
           yield* Effect.promise(() => h.runCommand("hide") ?? Promise.resolve());
+          expect(showing[2]?.signal.aborted).toBe(true);
+          expect(asks()).not.toContainEqual({ id: "hidden", declined: true });
+          showing[2]?.answer(undefined);
+          expect(yield* pollUntil(() => h.launcher.of(REX_FRAME.hide).length === 1)).toBe(true);
           h.launcher.send(REX_FRAME.ask, { id: "ended", request });
           expect(yield* pollUntil(() => showing.length === 4)).toBe(true);
           detach();
-          expect(yield* pollUntil(() => asks().length === 5)).toBe(true);
+          showing[3]?.answer(undefined);
+          expect(yield* pollUntil(() => asks().length === 6)).toBe(true);
           expect(asks().slice(3)).toEqual([
+            { id: "withdrawn", outcome },
             { id: "hidden", declined: true },
             { id: "ended", declined: true },
           ]);
@@ -471,6 +747,40 @@ describe("a Rex-hosted child", () => {
           expect(showing[3]?.signal.aborted).toBe(true);
         }),
       ),
+  );
+
+  it.live("shuts down at session start if the launcher socket never existed", () =>
+    live(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "pisa-no-launcher-" });
+        const handlers = new Map<string, Handler>();
+        const pi = extensionApiFixture({
+          on: ((name: string, handler: Handler) => {
+            handlers.set(name, handler);
+            return () => undefined;
+          }) as ExtensionAPI["on"],
+        });
+        const session = openRexChildSession(pi, {
+          [REX_SOCKET_ENV]: `${directory}/absent`,
+          [REX_TOKEN_ENV]: "token",
+        })!;
+        const lost = deferredPromise();
+        const off = session.ipc.listen({ onControl: () => undefined, onDisconnect: lost.resolve });
+        yield* Effect.promise(() => lost.promise).pipe(Effect.timeout("5 seconds"));
+        let stopped = false;
+        handlers.get("session_start")?.(
+          { type: "session_start" },
+          extensionContextFixture({
+            shutdown: () => {
+              stopped = true;
+            },
+          }),
+        );
+        expect(stopped).toBe(true);
+        off();
+      }),
+    ),
   );
 
   it.live("stops and exits when its parent's end goes away", () =>

@@ -4,6 +4,7 @@ import {
   type ExtensionContext,
   type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
+import type { Terminal } from "@earendil-works/pi-tui";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
@@ -236,7 +237,7 @@ export function registerSubagentApplication(
             settled: (outcome) => resume(Effect.succeed(outcome)),
           });
           // The parent's call ended first: the pane stops showing what no one waits on.
-          return Effect.sync(withdraw);
+          return Effect.suspend(withdraw);
         }),
         signal,
       ),
@@ -503,6 +504,29 @@ export function registerSubagentApplication(
               return undefined;
             })
             .catch(() => undefined);
+        const openView = (runId: string, signal: AbortSignal, terminal?: Terminal) =>
+          slot.run(
+            openSubagentSessionView({
+              ctx: activation.ctx,
+              events: pi.events,
+              runId,
+              terminal,
+              projection: bridge.get,
+              subscribeProjection: bridge.subscribe,
+              isCurrent,
+              messageRenderer: subagentMessageRenderer,
+              childToolRenderers: (name) =>
+                name === CONTACT_PARENT_TOOL_NAME ? contactParentToolRenderers() : undefined,
+            }),
+            signal,
+          );
+        const writerView = (runId: string) =>
+          rexHost.isEnabled() && rexHost.isAvailable()
+            ? findOrUndefined(
+                bridge.get().runs,
+                (candidate) => candidate.id === runId && candidate.writeIntent === "writer",
+              )
+            : undefined;
         if (activation.sessionKey && slot.isCurrent(token))
           releaseActivity = registerSubagentActivity({
             events: pi.events,
@@ -519,34 +543,26 @@ export function registerSubagentApplication(
                 signal,
               ),
             panes: {
-              state: rexHost.pane,
-              toggle: rexHost.togglePane,
+              state: (id) => rexHost.pane(id) ?? (writerView(id) ? "hidden" : undefined),
+              toggle: (id) => {
+                const writer = writerView(id);
+                return writer
+                  ? rexHost.toggleWriterView(id, writer.name, (terminal, signal) =>
+                      openView(id, signal, terminal),
+                    )
+                  : rexHost.togglePane(id);
+              },
               subscribe: rexHost.subscribe,
             },
             open: (runId, signal) =>
-              slot
-                .run(
-                  openSubagentSessionView({
-                    ctx: activation.ctx,
-                    events: pi.events,
-                    runId,
-                    projection: bridge.get,
-                    subscribeProjection: bridge.subscribe,
-                    isCurrent,
-                    messageRenderer: subagentMessageRenderer,
-                    childToolRenderers: (name) =>
-                      name === CONTACT_PARENT_TOOL_NAME ? contactParentToolRenderers() : undefined,
-                  }),
-                  signal,
-                )
-                .then(() => {
-                  // Leaving a session returns to the list it was opened from.
-                  if (isCurrent() && !signal.aborted && activation.sessionKey)
-                    void discoverActivityView(pi.events, activation.sessionKey)
-                      ?.open("subagents")
-                      .catch(() => undefined);
-                  return undefined;
-                }),
+              openView(runId, signal).then(() => {
+                // Leaving a session returns to the list it was opened from.
+                if (isCurrent() && !signal.aborted && activation.sessionKey)
+                  void discoverActivityView(pi.events, activation.sessionKey)
+                    ?.open("subagents")
+                    .catch(() => undefined);
+                return undefined;
+              }),
           });
         if (!slot.isCurrent(token)) detachActivation(false);
       },

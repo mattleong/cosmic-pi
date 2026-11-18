@@ -12,6 +12,14 @@ let successors skip an active dialog and make cancellation churn bypass the queu
 Overlay and external-editor cleanup finish before a ticket advances; automatic delivery does
 not hold a dialog ticket.
 
+A blocking call chooses its screen only at the head of the caller's queue. A pane's answer,
+or a fallback in the caller's session, completes that same turn. On interruption the caller
+signals withdrawal and joins the pane's original presentation Promise: sending the signal
+alone does not establish that the old screen can no longer accept an answer. The child
+queues its own local surface normally; the caller's fallback opens directly under the
+existing ticket, never behind itself. [Routed queue tests](../tests/routed-queue.test.ts)
+cover pane loss, local and async successors, and interruption during withdrawal.
+
 [The async controller](../src/questionnaire/async-service.ts) commits ticket acquisition, registry
 insertion, and presenter ownership together. It does not hold admission while the user answers.
 An immediate opener waits for mounting; a queued opener reports admission before mounting.
@@ -88,6 +96,9 @@ neither restore pending work nor prove model consumption.
 [Owned-call capabilities](../src/boundary/host-owned-calls.ts) bind the requests a root shows in
 its subagent's session to exact owner tuples and the session's generation.
 Revocation aborts calls before disposal; cancellation acknowledges only after the captured call's
-runtime Promise and finalizers settle. Old cancellation handles can join only their own generation.
+runtime Promise and finalizers settle. If the user has already submitted or dismissed the dialog when a handback
+interrupts the pane's cleanup, the owning call returns that decision after cleanup rather
+than asking twice. Drafts never count, and explicit owner cancellation or generation loss
+revokes the receipt. Old cancellation handles can join only their own generation.
 [Delivery tests](../tests/async-delivery.test.ts) and [capability tests](../tests/session-capabilities.test.ts) protect
 these authority boundaries.

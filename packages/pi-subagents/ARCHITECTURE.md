@@ -12,7 +12,7 @@
 - `delegation/` owns each delegation mode's prompt guidance, applied to the root session through `boundary/host-delegation-prompt.ts`.
 - `application/messages.ts` owns message renderers and who writes each custom message type the model reads; the root (`extension.ts`) and each child (`boundary/host-child.ts`) register its [origin markers](docs/completion-delivery.md#framing-and-authority) once.
 - `tools/` owns public contracts, execution, and compact presentation. `settings/` owns commands and editors. `ui/` and settings rendering consume immutable projections, and Activity actions recheck activation, revision, and action availability before reaching services.
-- `boundary/rex-session-host.ts`, `rex-relay.mjs`, and `host-child-rex.ts` host a run's Pi as an interactive session in a Rex block when the [setting](docs/local-backends.md#rex-hosted-sessions) asks for it; the backend and everything above it are the same for both kinds of child.
+- A [Rex-hosted read-only run](docs/local-backends.md#rex-hosted-sessions) has one interactive SDK session, owned by `boundary/rex-pi-host.mjs`. Its bridge answers parent prompts from that session's own admission result, including busy steering. The root's Rex session host and relay manage the block; the backend above them is the same as for a headless child. A writer's Rex pane is a terminal for the root-owned Activity session view, not a second Pi. Writers always execute headless, so releasing a pane never releases the checkout or bypasses detached-process verification.
 - `boundary/host-ask-user.ts` tells Ask User which run a root questionnaire is asked for and shows it in that run's open pane; a subagent has no questionnaire tool of its own, so [what the user is asked](docs/local-backends.md#questions-for-the-user) is the main agent's decision.
 - `boundary/host-session-view.ts` opens a run's [session view](docs/completion-delivery.md#session-view) in the root's own Pi. `run/transcript.ts` shows it the conversation; `ui/session-transcript.ts` and `ui/session-view.ts` hold only rows, input, and scroll state.
 
@@ -53,7 +53,7 @@ Runs belong to one live root session, which owns their processes, authority, rep
 - **Watchdog reviewer.** Stall detection and the parent's own review supervise runs; a second reviewer would split the parent's authority.
 - **Agent memory.** Profiles and [custom agents](docs/routing.md#custom-agents) route to a model; the parent writes each assignment, and runs carry no memory between sessions.
 - **Lazy tool loader.** Tools register with the activation, and children receive the root's active tools at launch.
-- **Pane inspectors.** The root's Activity view shows every run's details and recent activity from one projection, and its session view shows one run's conversation; neither attaches a second process or terminal to a run. A Rex-hosted run's pane is that run's own Pi, shown or hidden, never a second view of it.
+- **Independent pane runners.** Activity and writer panes display runs owned by the root. A writer pane cannot start a second writer or take ownership of its processes. A native read-only pane shows the original Pi session.
 - **Cross-session messaging.** It belongs to [pi-intercom](../pi-intercom/ARCHITECTURE.md); pi-subagents never reaches another root.
 - **Workflow scripts.** Orchestration is the parent agent's job, optionally through native codemode scripts calling the ordinary tools.
 

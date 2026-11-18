@@ -12,6 +12,10 @@ export const OVERSIZED_IMAGE_DATA = Fn.pipe("A", Str.repeat(6 * 1024 * 1024));
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 
+/** Whether one child output event, as a line, is past the process transport's limit. */
+export const exceedsProcessLine = (event: Schema.Json): boolean =>
+  Buffer.byteLength(encodeJson(event)) > MAX_PROCESS_LINE_BYTES;
+
 /** Summarizes one child output event the way the process transport does past the line limit. */
 export const oversizedLine = (event: Schema.Json): OversizedLine => {
   const stream = new EventEmitter();

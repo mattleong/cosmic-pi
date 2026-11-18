@@ -11,12 +11,19 @@ const decodeAsk = Schema.decodeUnknownSync(
   Schema.fromJsonString(
     Schema.Struct({
       id: Schema.String,
-      request: Schema.optional(Schema.Struct({ answer: Schema.optional(Schema.String) })),
+      request: Schema.optional(
+        Schema.Struct({
+          answer: Schema.optional(Schema.String),
+          finishing: Schema.optional(Schema.String),
+        }),
+      ),
     }),
   ),
 );
 const encode = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 const frame = (kind: string, value: Schema.Json) => socket.write(`${kind}${encode(value)}\n`);
+// A submitted answer whose terminal receipt is still waiting for editor cleanup.
+const finishing = new Map<string, string>();
 let buffered = "";
 socket.setEncoding("utf8");
 socket.on("connect", () =>
@@ -29,8 +36,19 @@ socket.on("data", (chunk: string) => {
     // A questionnaire from the root is on screen at once, and answered only when it asks to be.
     if (line.startsWith("Q")) {
       const ask = decodeAsk(line.slice(1));
-      if (ask.request === undefined) continue;
+      if (ask.request === undefined) {
+        const submitted = finishing.get(ask.id);
+        finishing.delete(ask.id);
+        frame(
+          "Q",
+          submitted === undefined
+            ? { id: ask.id, declined: true }
+            : { id: ask.id, outcome: { answered: submitted } },
+        );
+        continue;
+      }
       frame("Q", { id: ask.id, shown: true });
+      if (ask.request.finishing !== undefined) finishing.set(ask.id, ask.request.finishing);
       if (ask.request.answer !== undefined)
         frame("Q", { id: ask.id, outcome: { answered: ask.request.answer } });
       continue;
@@ -44,6 +62,7 @@ socket.on("data", (chunk: string) => {
       success: true,
       data: {
         runId: process.env.PI_SUBAGENT_RUN_ID ?? "",
+        block: process.env.REX_BLOCK ?? "",
         argv: process.argv.slice(2),
         pid: process.pid,
       },

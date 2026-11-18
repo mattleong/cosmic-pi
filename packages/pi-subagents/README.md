@@ -14,7 +14,7 @@ Background subagents for Pi on macOS and Linux. The main agent delegates work to
 - **Safe parallel writes:** per writer, either share the checkout with other writers on disjoint task scopes, or work in an isolated worktree whose proposal the parent applies in one step, or reviews and tests before applying. Proposals can also be revised onto the parent's current files.
 - **Workflow templates:** `/parallel-review`, `/review-loop`, and `/gather-context` prompt templates for common delegation patterns.
 - **Live view:** a run tree above the editor and the shared Activity manager, where you can also rename runs.
-- **Subagents as real Pi sessions:** inside Rex, `/subagents settings sessionHost rex` runs each subagent as an interactive Pi in a hidden Rex pane. `p` in Activity opens it beside your session, focused, and hides it again; an open pane stays after its run reports, and typing into it resumes the run. Closing the pane in Rex ends the subagent unless Rex is told to hide it instead; see [Rex panes](#rex-panes).
+- **Subagents in Rex panes:** inside Rex, enable `/subagents settings sessionHost rex`, then press `p` on a writer in Activity to open its live conversation beside yours. Send guidance there; closing the pane leaves the writer running. Read-only Pi runs (except CLI-only `llama.cpp` models) have native interactive sessions: press `p` to show or hide them. Closing a native session rather than hiding it ends the subagent; see [Rex panes](#rex-panes).
 - **Open a subagent's session:** in Activity, `o` opens the selected run's conversation in place of yours, drawn as Pi draws its own, with its working status and footer. Type to message it, answer its question, or resume it once it has finished; `Esc` interrupts it while it works and otherwise returns to Activity, as `C-d` always does with an empty editor. Its parent is told what you said along with the run's next report.
 
 ## Install
@@ -62,7 +62,7 @@ Read-only subagents don't get Pi's `edit` and `write` tools and are told not to 
 
 ### Rex panes
 
-Rex's close ends whatever a pane runs, and a hosted subagent's pane runs the subagent. Each such pane is labelled `subagent: <name>`, so a Rex action can hide it where it would close any other pane. In `~/.config/rex/init.lua`:
+Closing a writer's pane ends only the view. For native read-only sessions, Rex's close ends the subagent itself. Each such pane is labelled `subagent: <name>`, so a Rex action can hide it where it would close any other pane. In `~/.config/rex/init.lua`:
 
 ```lua
 local SUBAGENT_LABEL = "subagent: "

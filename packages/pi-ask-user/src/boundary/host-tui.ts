@@ -9,6 +9,7 @@ import { AskUserHostError } from "../questionnaire/errors.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
 import { cancelQuestionnaire } from "../questionnaire/reducer.ts";
 import type { AskUserHost } from "../questionnaire/service.ts";
+import { RecordPaneDecision } from "./host-owned-calls.ts";
 import { editWithExternalEditor, readExternalEditorCommand } from "./host-external-editor.ts";
 import type { AskUserPromptGate } from "./host-prompt.ts";
 import type { AskUserDialogBridge } from "./host-ui.ts";
@@ -22,6 +23,7 @@ export const askUserTuiHost =
           // Closing this scope interrupts admitted editors and awaits their process termination,
           // file cleanup, and TUI restoration before the dialog permit passes to a successor.
           const runEditor = yield* FiberSet.makeRuntimePromise();
+          const recordDecision = yield* RecordPaneDecision;
           let live = true;
           let handle: OverlayHandle | undefined;
           let token: number | undefined;
@@ -61,7 +63,12 @@ export const askUserTuiHost =
                 keybindings,
                 request,
                 getHeight,
-                done: finish,
+                done: (outcome) => {
+                  if (!live) return;
+                  live = false;
+                  recordDecision(outcome);
+                  finish(outcome);
+                },
                 collapse: () => {
                   if (show("hidden") && token !== undefined) bridge.markCollapsed(token);
                 },
