@@ -2,6 +2,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Predicate from "effect/Predicate";
+import { invokeHostCallback } from "pi-cosmic-core/host-session";
 import {
   isTerminalRunState,
   type SubagentRunView,
@@ -52,6 +53,7 @@ interface RunControlDependencies extends Pick<
   readonly verifyCleanup: RunRecordCleanup["verifyCleanup"];
   readonly settle: RunSettlement["settle"];
   readonly handOnTakenByLocked: RunNotificationDelivery["handOnTakenByLocked"];
+  readonly recordQuestionAnswer?: ((questionId: string) => void) | undefined;
 }
 
 /** A message for a run, decided under the run lock as an answer or as guidance. */
@@ -281,6 +283,9 @@ export function controlOperations(dependencies: RunControlDependencies) {
             if (claimed.record.replyPendingRequestId === claimed.question.requestId)
               claimed.record.replyPendingRequestId = undefined;
             message.recordNoticeLocked(claimed.record, "answered", now);
+            const questionId = claimed.question.questionId;
+            if (questionId)
+              invokeHostCallback(() => dependencies.recordQuestionAnswer?.(questionId), undefined);
             yield* publish;
             return snapshotRun(claimed.record);
           }),

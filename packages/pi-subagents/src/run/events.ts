@@ -44,6 +44,7 @@ const retainedContactText = (message: string): string =>
 
 interface RunEventDependencies {
   readonly settlement: RunSettlement;
+  readonly allocateQuestionId: () => string;
   readonly queueQuestionLocked: RunNotificationDelivery["queueActionNotificationLocked"];
   readonly onProxyEvent: RunProxyExecution;
 }
@@ -54,7 +55,7 @@ type HandledBackendEvent = Exclude<
 >;
 
 export function backendEventHandler(dependencies: RunEventDependencies) {
-  const { settlement, queueQuestionLocked, onProxyEvent } = dependencies;
+  const { settlement, allocateQuestionId, queueQuestionLocked, onProxyEvent } = dependencies;
 
   const mutateAt = (
     record: RunRecord,
@@ -99,8 +100,10 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
       if (current.state !== "running") return undefined;
       if (record.replyPendingRequestId === envelope.requestId) return undefined;
       record.replyPendingRequestId = undefined;
+      const questionId = allocateQuestionId();
       queueQuestionLocked(record, {
         type: "question",
+        questionId,
         id: current.id,
         name: record.launch.name,
         requestId: envelope.requestId,
@@ -110,7 +113,7 @@ export function backendEventHandler(dependencies: RunEventDependencies) {
         ...current,
         state: "waiting_for_parent",
         lastActivityAt: now,
-        question: { requestId: envelope.requestId, message },
+        question: { questionId, requestId: envelope.requestId, message },
         sessionEvents: appendNoticeSessionEvent(current.sessionEvents, "question", message, now),
       };
     });

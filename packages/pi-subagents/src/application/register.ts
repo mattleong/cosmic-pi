@@ -36,6 +36,7 @@ import {
 import { publishQuestionnaireAskers } from "../boundary/host-ask-user.ts";
 import { registerActiveRunsPrompt } from "../boundary/host-active-runs-prompt.ts";
 import { registerDelegationPrompt } from "../boundary/host-delegation-prompt.ts";
+import { questionAnswerReceipts } from "../boundary/host-question-rows.ts";
 import { hostNotifier } from "../boundary/host-notifier.ts";
 import {
   notifyStoppedRuns,
@@ -184,14 +185,24 @@ export function registerSubagentApplication(
   pi: ExtensionAPI,
   boundaries: SubagentApplicationBoundaries = LIVE_APPLICATION_BOUNDARIES,
 ): void {
-  registerSubagentMessageRenderers(pi);
+  const bridge = subagentProjectionBridge(pi.events);
+  const answers = questionAnswerReceipts(pi);
+  registerSubagentMessageRenderers(pi, (questionId, runId) => {
+    if (!questionId) return "historical";
+    if (answers.has(questionId)) return "answered";
+    return Arr.some(
+      bridge.get().runs,
+      (run) => run.id === runId && run.question?.questionId === questionId,
+    )
+      ? "pending"
+      : "historical";
+  });
   const replay = registerCodePreviewReplay(pi, {
     command: "subagents",
     tools: [...ROOT_TOOL_NAME_SET],
   });
   const receipts = registerSubagentErrorReceipts(pi);
   const userInput = registerUserInputSignal(pi);
-  const bridge = subagentProjectionBridge(pi.events);
   // One per root Pi: hosted sessions and their panes outlive a runtime replaced by /tree.
   const rexHost = rexSessionHost({
     onResume: (runId, text) => {
@@ -346,6 +357,9 @@ export function registerSubagentApplication(
             isLive()
               ? notify(notification)
               : { deliveredCompletionKeys: [], actionAccepted: false },
+          recordQuestionAnswer: (questionId) => {
+            if (isLive()) answers.record(questionId);
+          },
           agentMain: agentMainCapabilities(pi, {
             wake,
             session: () => (isLive() ? activation.ctx : undefined),

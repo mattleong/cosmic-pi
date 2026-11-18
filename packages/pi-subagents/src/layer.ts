@@ -44,6 +44,7 @@ export interface SubagentLayerOptions extends SubagentProfileLayerOptions {
   readonly restoredSessionUsage?: SubagentServiceOptions["restoredSessionUsage"];
   readonly recordSessionUsage?: SubagentServiceOptions["recordSessionUsage"];
   readonly notify: SubagentNotifier;
+  readonly recordQuestionAnswer?: SubagentServiceOptions["recordQuestionAnswer"];
   readonly agentMain?: SubagentServiceOptions["agentMain"];
   readonly proxyHandler: NonNullable<SubagentServiceOptions["proxyHandler"]>;
   /** Hosts runs as interactive Pi sessions in Rex blocks while its setting is on. */
@@ -74,6 +75,7 @@ export const subagentApplicationLayer = (options: SubagentLayerOptions) => {
         restoredSessionUsage: options.restoredSessionUsage,
         recordSessionUsage: options.recordSessionUsage,
         notify: options.notify,
+        recordQuestionAnswer: options.recordQuestionAnswer,
         ...(options.sessionKey && {
           archiveReport: sessionReportArchive(options.agentDirectory, options.sessionKey),
         }),

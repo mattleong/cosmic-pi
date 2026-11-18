@@ -28,6 +28,7 @@ describe("report capture", () => {
       });
       const handleEvent = backendEventHandler({
         settlement,
+        allocateQuestionId: () => "question-test",
         queueQuestionLocked: () => undefined,
         onProxyEvent: () => Effect.void,
       });

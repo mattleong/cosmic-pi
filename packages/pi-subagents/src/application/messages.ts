@@ -1,4 +1,5 @@
 import * as Arr from "effect/Array";
+import * as Option from "effect/Option";
 import type { ExtensionAPI, MessageRenderer } from "@earendil-works/pi-coding-agent";
 import { withCodePreviewMessageShell } from "pi-code-previews";
 import * as Schema from "effect/Schema";
@@ -20,7 +21,7 @@ import { QUESTION_REMINDER_MESSAGE_TYPE, WAKE_MESSAGE_TYPE } from "../boundary/h
 import { STOPPED_RUNS_MESSAGE_TYPE } from "../boundary/host-stopped-runs.ts";
 import { presentAgentMessage } from "../ui/agent-message.ts";
 import { AgentIdSchema } from "../ui/notice-details.ts";
-import { presentSubagentNotification } from "../ui/notification.ts";
+import { presentSubagentNotification, type QuestionRowStatus } from "../ui/notification.ts";
 import type { WorkspaceSwept } from "../workspace/model.ts";
 import { homeDisplayPath } from "../ui/display-path.ts";
 
@@ -45,9 +46,50 @@ const SUBAGENT_MESSAGE_RENDERERS: ReadonlyMap<string, MessageRenderer> = new Map
   ),
 ]);
 
-export function registerSubagentMessageRenderers(pi: ExtensionAPI): void {
+type QuestionStatus = (questionId?: string, runId?: string) => QuestionRowStatus;
+
+const decodeQuestionIdentity = Schema.decodeUnknownOption(
+  Schema.Struct({
+    questionId: Schema.optionalKey(AgentIdSchema),
+    id: Schema.optionalKey(AgentIdSchema),
+  }),
+);
+
+const questionRenderer =
+  (lookup: QuestionStatus): MessageRenderer =>
+  (message, options, theme) => {
+    const ids = Option.getOrUndefined(decodeQuestionIdentity(message.details));
+    let status: QuestionRowStatus | undefined;
+    let row: ReturnType<typeof renderSubagentRow> | undefined;
+    return {
+      render(width) {
+        const next = lookup(ids?.questionId, ids?.id);
+        if (!row || next !== status) {
+          status = next;
+          row = renderSubagentRow(message, options, theme, next);
+        }
+        return row.render(width);
+      },
+      invalidate: () => row?.invalidate(),
+    };
+  };
+
+const renderSubagentRow = (
+  message: Parameters<MessageRenderer>[0],
+  options: Parameters<MessageRenderer>[1],
+  theme: Parameters<MessageRenderer>[2],
+  status: QuestionRowStatus,
+) =>
+  withCodePreviewMessageShell((input, view, rowTheme) =>
+    presentSubagentNotification(input, view, rowTheme, status),
+  )(message, options, theme);
+
+export function registerSubagentMessageRenderers(pi: ExtensionAPI, lookup?: QuestionStatus): void {
   for (const [type, renderer] of SUBAGENT_MESSAGE_RENDERERS)
-    pi.registerMessageRenderer(type, renderer);
+    pi.registerMessageRenderer(
+      type,
+      type === QUESTION_MESSAGE_TYPE && lookup ? questionRenderer(lookup) : renderer,
+    );
 }
 
 /** How this extension draws one of its own custom messages, in any conversation that holds one. */

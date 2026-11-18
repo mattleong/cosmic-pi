@@ -99,6 +99,8 @@ export type SubagentSessionEvent =
     };
 
 interface PendingParentQuestion {
+  /** Presentation identity allocated once per wait; a transport request ID can be reused. */
+  readonly questionId?: string | undefined;
   readonly requestId: string;
   readonly message: string;
 }

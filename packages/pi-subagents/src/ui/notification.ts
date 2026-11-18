@@ -38,6 +38,7 @@ interface NoticeHeading {
 
 type CompletedDetails = Extract<NoticeDetails, { readonly kind: "completed" }>;
 type QuestionDetails = Extract<NoticeDetails, { readonly kind: "question" }>;
+export type QuestionRowStatus = "pending" | "answered" | "historical";
 type StoppedDetails = Extract<NoticeDetails, { readonly kind: "stopped" }>;
 type PeerDetails = Extract<NoticeDetails, { readonly kind: "peers" }>;
 
@@ -145,8 +146,10 @@ const completedSummary = (details: CompletedDetails): CompactSummary => {
 };
 
 /** A question notice's heading: who asks, and the question quoted as its attention line. */
-const questionSummary = (details: QuestionDetails): CompactSummary => {
+const questionSummary = (details: QuestionDetails, status: QuestionRowStatus): CompactSummary => {
   const name = details.name ?? "a subagent";
+  if (status === "answered") return { subject: name, outcome: "success", counters: ["answered"] };
+  if (status === "historical") return { subject: name, outcome: "returned" };
   return {
     subject: name,
     outcome: "attention",
@@ -181,9 +184,16 @@ const stoppedSummary = (details: StoppedDetails): CompactSummary => {
   };
 };
 
-const notificationHeading = (details: NoticeDetails | undefined): NoticeHeading => {
+const notificationHeading = (
+  details: NoticeDetails | undefined,
+  status: QuestionRowStatus,
+): NoticeHeading => {
   if (details?.kind === "question")
-    return { name: "agent_question", label: "Agent question", summary: questionSummary(details) };
+    return {
+      name: "agent_question",
+      label: "Agent question",
+      summary: questionSummary(details, status),
+    };
   if (details?.kind === "stopped" && details.total > 0)
     return {
       name: "subagents_stopped",
@@ -373,8 +383,9 @@ const questionBody = (
   expanded: boolean,
   indent: number,
   compact: boolean,
+  status: QuestionRowStatus,
 ): NoticeBody => {
-  const cut = questionCut(details);
+  const cut = status !== "pending" || questionCut(details);
   return {
     rows: (width) => [
       ...(cut ? agentTextLines(question, width, theme, { expanded, indent }) : []),
@@ -396,21 +407,27 @@ const noticeBody = (
   expanded: boolean,
   indent: number,
   compact: boolean,
+  status: QuestionRowStatus,
 ): NoticeBody | undefined => {
   if (details?.kind === "completed" && details.runs.length > 0)
     return completedBody(details.runs, theme, expanded, indent, compact);
   if (details?.kind === "question" && details.question !== undefined)
-    return questionBody(details, details.question, theme, expanded, indent, compact);
+    return questionBody(details, details.question, theme, expanded, indent, compact, status);
   if (details?.kind === "stopped") return stoppedBody(details, theme, expanded, indent);
   if (details?.kind === "peers") return peersBody(details, theme, expanded, indent, compact);
   return undefined;
 };
 
 /** A subagent notice: what happened as its heading, then the words agents wrote. */
-export const presentSubagentNotification: CodePreviewMessagePresenter = (input, options, theme) => {
+export const presentSubagentNotification = (
+  input: Parameters<CodePreviewMessagePresenter>[0],
+  options: Parameters<CodePreviewMessagePresenter>[1],
+  theme: Theme,
+  status: QuestionRowStatus = "pending",
+): ReturnType<CodePreviewMessagePresenter> => {
   const envelope = Option.getOrUndefined(decodeMessageEnvelope(input));
   const details = Option.getOrUndefined(decodeDetails(envelope?.details));
-  const presentation = notificationHeading(details);
+  const presentation = notificationHeading(details, status);
   // Without a display copy, expansion keeps the notice as the agent received it.
   if (!hasDisplayCopy(details))
     return {
@@ -419,7 +436,7 @@ export const presentSubagentNotification: CodePreviewMessagePresenter = (input, 
       expanded: () => receivedMessageBody(theme, envelope?.content),
     };
   const compact = options.collapsedStyle === "compact";
-  const shape = noticeBody(details, theme, true, 0, compact);
+  const shape = noticeBody(details, theme, true, 0, compact, status);
   return {
     ...presentation,
     ...(shape?.expandLabel !== undefined && { expandLabel: shape.expandLabel }),
@@ -433,10 +450,11 @@ export const presentSubagentNotification: CodePreviewMessagePresenter = (input, 
             false,
             bodyIndent({ ...options, expanded: false }),
             compact,
+            status,
           )?.rows(width) ?? [],
       ),
     expanded: () => {
-      const body = noticeBody(details, theme, true, 0, compact);
+      const body = noticeBody(details, theme, true, 0, compact, status);
       return body
         ? expandedRowsBody(theme, body.rows, body.facts)
         : indentedBody(theme, new Text("", 0, 0));

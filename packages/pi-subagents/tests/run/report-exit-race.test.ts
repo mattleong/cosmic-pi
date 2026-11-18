@@ -51,6 +51,7 @@ const settlementFixture = (
     const settlement = testSettlement(context, { delivery, archiveReport });
     const handleEvent = backendEventHandler({
       settlement,
+      allocateQuestionId: () => "question-test",
       queueQuestionLocked: () => undefined,
       onProxyEvent: () => Effect.void,
     });

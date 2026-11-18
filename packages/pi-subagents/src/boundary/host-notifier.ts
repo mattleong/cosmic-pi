@@ -67,6 +67,7 @@ export type SubagentNotification =
       readonly id: string;
       readonly name: string;
       readonly requestId: string;
+      readonly questionId?: string | undefined;
       readonly message: string;
       readonly generation: number;
     };
@@ -223,6 +224,7 @@ export const questionNoticeDetails = (
     version: 1,
     kind: "question",
     id: notification.id,
+    ...(notification.questionId && { questionId: notification.questionId }),
     name: noticeName(notification.name),
     ...(question && { question: question.text }),
     ...(question?.cut && { questionCut: true }),

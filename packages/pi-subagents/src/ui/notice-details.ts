@@ -68,6 +68,7 @@ export const NoticeDetailsSchema = Schema.Union([
     version: Schema.Literal(1),
     kind: Schema.Literal("question"),
     id: Schema.optionalKey(AgentIdSchema),
+    questionId: Schema.optionalKey(AgentIdSchema),
     name: Schema.optionalKey(Name),
     question: Schema.optionalKey(Text),
     questionCut: Schema.optionalKey(Schema.Literal(true)),

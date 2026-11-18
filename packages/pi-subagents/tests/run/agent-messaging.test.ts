@@ -578,10 +578,15 @@ describe("the user's messages", () => {
   });
 
   it.effect("refuse another message while a reply is in flight", () => {
-    const { fake, projections, layer } = localServiceFixture();
+    const receipts: string[] = [];
+    const { fake, projections, layer } = localServiceFixture({
+      recordQuestionAnswer: (id) => void receipts.push(id),
+    });
     return withService(layer, function* (service) {
       const run = yield* service.start(request({ name: "reply-in-flight" }));
       yield* askParent(fake.controls[0]!, projections, "question-in-flight", undefined, run.id);
+      const first = latest(projections, run.id)?.question?.questionId;
+      assert(first);
       const replyGate = yield* Deferred.make<void>();
       fake.controls[0]?.gateNextIpcType("parent_reply", replyGate);
       const replying = yield* service
@@ -594,12 +599,22 @@ describe("the user's messages", () => {
       });
       expect(fake.controls[0]?.sent("steer")).toBe(false);
 
+      expect(receipts).toEqual([]);
       yield* Deferred.succeed(replyGate, undefined);
       expect(yield* Fiber.join(replying)).toMatchObject({ disposition: "answered" });
-      assert(fake.controls[0] !== undefined);
-      expect(
-        Arr.filter(fake.controls[0].ipc, (message) => message.type === "parent_reply"),
-      ).toHaveLength(1);
+      expect(receipts).toEqual([first]);
+
+      // Even the same child transport ID may name a later, separate wait.
+      yield* askParent(fake.controls[0]!, projections, "question-in-flight", undefined, run.id);
+      const second = latest(projections, run.id)?.question?.questionId;
+      assert(second);
+      expect(second).not.toBe(first);
+      fake.controls[0]?.failNextIpc("transport_not_sent");
+      yield* service.send(run.id, "Not delivered.").pipe(Effect.flip);
+      expect(latest(projections, run.id)?.question?.questionId).toBe(second);
+      expect(receipts).toEqual([first]);
+      yield* service.send(run.id, "Delivered.");
+      expect(receipts).toEqual([first, second]);
     });
   });
 

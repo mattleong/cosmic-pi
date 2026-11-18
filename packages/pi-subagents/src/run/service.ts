@@ -96,6 +96,8 @@ export interface SubagentServiceOptions {
   readonly notify?: (
     notification: SubagentNotification,
   ) => SubagentNotificationDelivery | undefined | void;
+  /** Records a confirmed reply in the owning Pi conversation, never its text. */
+  readonly recordQuestionAnswer?: ((questionId: string) => void) | undefined;
   /** Saves each completed report in full at settlement; the session's private report archive. */
   readonly archiveReport?: ReportArchive | undefined;
   /** Reaches the root session's main agent for `agent_*` messages; without it `main` is unavailable. */
@@ -288,6 +290,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     allocateAssignmentAttemptToken,
     allocateMessageId,
     allocateRunIdentity,
+    allocateQuestionId,
   } = identityAllocators(runtimeNamespace);
   const publish = Effect.uninterruptible(
     Effect.sync(() => {
@@ -412,6 +415,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
     verifyCleanup: cleanup.verifyCleanup,
     settle: settlement.settle,
     handOnTakenByLocked: delivery.handOnTakenByLocked,
+    recordQuestionAnswer: options.recordQuestionAnswer,
   });
 
   const stop = subtreeStopper({ ...runContext, stopRun: controls.stop });
@@ -431,6 +435,7 @@ const makeService = Effect.fn("SubagentService.make")(function* (options: Subage
 
   const handleWireEvent = backendEventHandler({
     settlement,
+    allocateQuestionId,
     queueQuestionLocked: delivery.queueActionNotificationLocked,
     onProxyEvent: handleProxyEvent,
   });
