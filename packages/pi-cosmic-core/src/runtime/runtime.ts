@@ -102,22 +102,25 @@ export function makePiRuntime<R, E>(
   );
 }
 
-export interface PiManagedRuntime<R, RuntimeError = unknown> {
+export interface ManagedEffectRuntime<R, RuntimeError = unknown> {
   readonly [PiManagedRuntimeRuntimeError]?: Types.Covariant<RuntimeError>;
-  readonly run: <A, E>(effect: Effect.Effect<A, E, PiApi | R>, signal?: AbortSignal) => Promise<A>;
+  readonly run: <A, E>(effect: Effect.Effect<A, E, R>, signal?: AbortSignal) => Promise<A>;
   readonly fork: <A, E>(
-    effect: Effect.Effect<A, E, PiApi | R>,
+    effect: Effect.Effect<A, E, R>,
     signal?: AbortSignal,
   ) => Fiber.Fiber<A, E | RuntimeError>;
   readonly dispose: () => Promise<void>;
 }
 
-export function makePiManagedRuntime<R, E>(
-  pi: ExtensionAPI,
-  applicationLayer: Layer.Layer<R, E, PiApi>,
-  log?: PiHostLogTarget,
-): PiManagedRuntime<R, E> {
-  const runtime = makePiRuntime(pi, applicationLayer, log);
+export type PiManagedRuntime<R, RuntimeError = unknown> = ManagedEffectRuntime<
+  PiApi | R,
+  RuntimeError
+>;
+
+/** Gives a host boundary an idempotent close and forwards its callers' cancellation. */
+export function manageEffectRuntime<R, E>(
+  runtime: ManagedRuntime.ManagedRuntime<R, E>,
+): ManagedEffectRuntime<R, E> {
   let disposal: Promise<void> | undefined;
   return {
     run: (effect, signal) => {
@@ -136,4 +139,12 @@ export function makePiManagedRuntime<R, E>(
       return disposal;
     },
   };
+}
+
+export function makePiManagedRuntime<R, E>(
+  pi: ExtensionAPI,
+  applicationLayer: Layer.Layer<R, E, PiApi>,
+  log?: PiHostLogTarget,
+): PiManagedRuntime<R, E> {
+  return manageEffectRuntime(makePiRuntime(pi, applicationLayer, log));
 }
