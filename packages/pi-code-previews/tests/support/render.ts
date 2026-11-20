@@ -149,7 +149,7 @@ export const drawMessage = (
   expanded: boolean,
   message: CustomMessage = customMessage(),
   width = 80,
-): string[] =>
+): readonly string[] =>
   render(message, { ...keybindingHintsFixture, expanded, outputPad: 1 }, plainTheme)?.render(
     width,
   ) ?? [];

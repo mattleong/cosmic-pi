@@ -161,16 +161,16 @@ class PreviewIssuesFrame extends Container {
     this.addChild(issues);
   }
 
-  override render(width: number): string[] {
+  override render(width: number): readonly string[] {
     if (!this.closing) return super.render(width);
     const { reserve, place } = this.closing(width);
     this.room.reserve = reserve;
     const placed = place(super.render(width));
-    if (placed.reserve === reserve) return [...placed.rows];
+    if (placed.reserve === reserve) return placed.rows;
     // The rows withdrew the tag, or called for one their result didn't: they wrap again with the
     // room it takes, so no columns stay reserved for a tag that isn't drawn.
     this.room.reserve = placed.reserve;
-    return [...place(super.render(width)).rows];
+    return place(super.render(width)).rows;
   }
 }
 
@@ -244,7 +244,7 @@ export interface CapturedPreviewCall {
    * `previewIssuesSlot`, or every row when it places none. Undefined when the body fails or the
    * heading is blank, so the caller can fall back to a heading built from the summary.
    */
-  readonly heading: (width: number) => string[] | undefined;
+  readonly heading: (width: number) => readonly string[] | undefined;
   /** Every row the collapsed body draws, apart from its issues. */
   readonly rows: (width: number) => readonly string[];
 }
@@ -266,13 +266,13 @@ export function capturePreviewCall<TArgs, TState extends object>(
   let drawn:
     | {
         readonly width: number;
-        readonly heading: string[] | undefined;
+        readonly heading: readonly string[] | undefined;
         readonly rows: readonly string[];
       }
     | undefined;
   const draw = (width: number) => {
     if (drawn?.width === width) return drawn;
-    let all: string[];
+    let all: readonly string[];
     try {
       all = body.render(width);
     } catch {

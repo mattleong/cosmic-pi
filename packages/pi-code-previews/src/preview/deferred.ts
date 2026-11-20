@@ -64,7 +64,7 @@ export class DeferredPreview implements Component {
     this.cancellation = undefined;
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     if (!this.cancelled && this.compute && captureCodePreviewSessionCapability() !== this.owner) {
       this.cancellation?.();
       this.cancellation = undefined;

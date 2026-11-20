@@ -15,7 +15,7 @@ import {
   type ManagerNoticeKind,
 } from "../manager/chrome.ts";
 
-export const composeToolComponent = (render: (width: number) => string[]): Component => ({
+export const composeToolComponent = (render: (width: number) => readonly string[]): Component => ({
   render,
   invalidate: () => undefined,
 });
@@ -24,8 +24,8 @@ export const composeToolComponent = (render: (width: number) => string[]): Compo
  * A component whose rows are drawn once per width and reused until it is invalidated. A width that
  * is not finite or below one column draws nothing.
  */
-export const cachedComponent = (draw: (width: number) => string[]): Component => {
-  let cached: { readonly width: number; readonly lines: string[] } | undefined;
+export const cachedComponent = (draw: (width: number) => readonly string[]): Component => {
+  let cached: { readonly width: number; readonly lines: readonly string[] } | undefined;
   return {
     render(width) {
       if (!Number.isFinite(width) || width < 1) return [];

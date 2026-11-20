@@ -55,9 +55,9 @@ class PreviewExpandedSlot implements Component {
     this.composed = composed;
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     let active = this.original;
-    let rows: string[] | undefined;
+    let rows: readonly string[] | undefined;
     // A content-only callback that fails to build or draw falls back to the preview body for good.
     if (!this.failed)
       try {
@@ -151,7 +151,7 @@ function headingRows(
   state: WeakKey,
   theme: Theme,
   width: number,
-): string[] {
+): readonly string[] {
   const ownRows = own?.heading(width);
   recordOwnCallHeading(state, ownRows !== undefined);
   const rows = ownRows ?? wrappedPreviewHeading(title, summary, theme, width);

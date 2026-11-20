@@ -27,12 +27,16 @@ function failed(tool: BuiltinCompactTool, text: string, overrides: Partial<typeo
   });
 }
 const firstShellIssueMessage = (text: string) => failed("bash", text)?.issues?.[0]?.message;
+// Pi's status when the shell exited but processes it left running wrote until the timeout.
+const DETACHED_TIMEOUT =
+  "Command timed out after 3 seconds. The shell exited with code 2 after 0.1 seconds, but background processes it started kept writing output until the timeout.";
 
 describe("builtin issue style", () => {
   it("writes every failure and argument warning in the shared style", () => {
     const summaries = [
       failed("bash", "output\nCommand exited with code 1"),
       failed("bash", "output\nCommand timed out after 30 seconds"),
+      failed("bash", `output\n${DETACHED_TIMEOUT}`),
       failed("read", "ENOENT: no such file or directory, open '/workspace/a.ts'"),
       failed("read", "EACCES: permission denied, open '/workspace/a.ts'"),
       failed("read", "Offset 401 is beyond end of file (20 lines total)"),
@@ -122,6 +126,12 @@ describe("builtin failure classification", () => {
     const timeout = failed("bash", "partial output\nCommand timed out after 30 seconds")?.issues;
     expect(timeout).toMatchObject([{ severity: "error", code: "shell-timeout" }]);
     expect(timeout?.[0]?.message).toContain("30 seconds");
+    // The shell's own exit is detail: the row still reads as the timeout it was.
+    const detached = failed("bash", `tick\ntick\n${DETACHED_TIMEOUT}`)?.issues;
+    expect(detached).toMatchObject([{ severity: "error", code: "shell-timeout" }]);
+    expect(detached?.[0]?.message).toContain("3 seconds");
+    expect(detached?.[0]?.message).not.toMatch(/tick|code 2/u);
+    expect(detached?.[0]?.detail).toContain("code 2");
     const unknown = failed("bash", "Command exited with code 7\nunknown tail");
     expect(unknown?.outcome).toBe("error");
     expect(

@@ -68,6 +68,15 @@ function summary(
   });
 }
 
+/** A read image result, naming the model that was sent a placeholder for it when one was. */
+const imageResult = (imageUnsupportedByModel?: string): AgentToolResult<unknown> => ({
+  content: [
+    { type: "text", text: "Read image file [image/png]" },
+    { type: "image", data: "", mimeType: "image/png" },
+  ],
+  details: imageUnsupportedByModel === undefined ? undefined : { imageUnsupportedByModel },
+});
+
 function codes(value: CompactSummary | undefined): string[] {
   expect(value).toBeDefined();
   return Arr.map(value?.issues ?? [], (issue) => issue.code);
@@ -157,6 +166,18 @@ describe("issues independent of hidden preview bodies", () => {
     const issue = issueFor(value, "output-truncated");
     expect(issue?.detail).toContain("/tmp/pi-bash-1.log");
     expect(issueMessageStyleProblems(issue?.message ?? "")).toEqual([]);
+  });
+
+  test("read warns when the model was sent a placeholder instead of the image", () => {
+    const seen = summary("read", { path: "shot.png" }, imageResult());
+    expect(seen?.outcome).toBe("success");
+    expect(seen?.issues).toEqual([]);
+    const unseen = summary("read", { path: "shot.png" }, imageResult("text-only\u001b[31m-model"));
+    expect(unseen?.outcome).toBe("warning");
+    expect(codes(unseen)).toEqual(["read-image-unseen"]);
+    const message = unseen?.issues?.[0]?.message ?? "";
+    expect(message).toContain("text-only-model");
+    expect(issueMessageStyleProblems(message, { severity: "warning" })).toEqual([]);
   });
 
   test("read does not hide partial lines or unrecognized byte-limit annotations", () => {

@@ -84,7 +84,7 @@ class SelfBackgroundRow<TArgs, TState> implements Component {
     return this[slot];
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     return this.box.render(width);
   }
 

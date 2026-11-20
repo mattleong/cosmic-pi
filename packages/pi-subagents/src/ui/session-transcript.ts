@@ -118,7 +118,7 @@ export class SessionTranscript {
     return this.expanded;
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     return this.rows.render(width);
   }
 

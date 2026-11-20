@@ -136,7 +136,7 @@ export class BorderedToolCall implements Component {
   private expandLabel: string | undefined;
   private expandFallback: BorderExpandFallback | undefined;
   private timingLabel: string | undefined;
-  private cache: { width: number; rows: string[] } | undefined;
+  private cache: { width: number; rows: readonly string[] } | undefined;
   private readonly theme: Theme;
 
   constructor(theme: Theme) {
@@ -167,7 +167,7 @@ export class BorderedToolCall implements Component {
     this.cache = undefined;
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     if (this.cache?.width !== width) this.cache = { width, rows: this.renderUncached(width) };
     return this.cache.rows;
   }
@@ -187,7 +187,7 @@ export class BorderedToolCall implements Component {
     this.body.invalidate();
   }
 
-  private renderUncached(width: number): string[] {
+  private renderUncached(width: number): readonly string[] {
     if (width < MIN_FRAMED_WIDTH) return this.body.render(Math.max(1, width));
     const innerWidth = width - 4;
     const border = (value: string) => this.theme.fg(this.borderColorKey, value);

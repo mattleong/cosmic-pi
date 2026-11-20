@@ -144,7 +144,10 @@ function capturedFooter(
   return makeFooter(h.setFooter.mock.calls.at(call)?.[0], data, requestRender);
 }
 
-const expectFooterShows = (footer: { render(width: number): string[] }, ...values: string[]) => {
+const expectFooterShows = (
+  footer: { render(width: number): readonly string[] },
+  ...values: string[]
+) => {
   const rendered = Arr.join(footer.render(100), "\n");
   for (const value of values) expect(rendered).toContain(value);
 };

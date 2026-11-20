@@ -96,6 +96,7 @@ export const tuiFixture = (overrides: Partial<HostTui> = {}): HostTui => {
       removeInputListener: ignore,
       onTerminalColorSchemeChange: () => ignore,
       setTerminalColorSchemeNotifications: ignore,
+      setSuspendSignalHandler: ignore,
       queryTerminalColors: () => Promise.resolve({}),
       render: (width) => Arr.flatMap(children, (child) => child.render(width)),
       invalidate: () => {

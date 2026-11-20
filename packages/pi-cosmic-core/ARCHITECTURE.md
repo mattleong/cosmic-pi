@@ -54,7 +54,7 @@ checked against the same JSON Schema while retaining the host’s parameter `Sta
 such a call is reported by its missing required fields rather than Pi's parse error. The
 [tool-argument tests](tests/tool-arguments.test.ts) anchor this behavior.
 
-Pi 1.5 still types extension declarations with TypeBox. Those declarations use native TypeBox
+Pi 1.6 still types extension declarations with TypeBox. Those declarations use native TypeBox
 builders, including `Type.Enum`; no validator imports TypeBox at runtime.
 
 [`ForeignCallable`](src/schema/foreign-callable.ts) is the only sanctioned way to admit a function

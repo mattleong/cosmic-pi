@@ -51,7 +51,7 @@ function section(
     | {
         readonly width: number;
         readonly label: string | undefined;
-        readonly parts: readonly string[][];
+        readonly parts: readonly (readonly string[])[];
         readonly rows: string[];
       }
     | undefined;

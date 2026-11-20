@@ -121,7 +121,7 @@ export function withCodePreviewMessageShell<T = unknown>(
 
 class MessageShell implements Component {
   private drawn: Component | undefined;
-  private cache: { readonly width: number; readonly rows: string[] } | undefined;
+  private cache: { readonly width: number; readonly rows: readonly string[] } | undefined;
   // The width the collapsed row would get, which an expanded compact heading's counter follows.
   private renderWidth: number | undefined;
   private readonly message: CodePreviewMessage;
@@ -146,10 +146,10 @@ class MessageShell implements Component {
     this.fallback = fallback;
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     if (this.cache?.width === width) return this.cache.rows;
     this.renderWidth = width;
-    let rows: string[];
+    let rows: readonly string[];
     try {
       this.drawn ??= this.compose();
       rows = this.drawn.render(width);

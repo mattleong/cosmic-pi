@@ -1,5 +1,6 @@
 import * as Predicate from "effect/Predicate";
 import * as Arr from "effect/Array";
+import { firstLineMessage } from "pi-cosmic-core/message-text";
 import { sanitizeDiagnosticContent } from "pi-cosmic-core/security";
 import { ownField, ownObject, type HostObject } from "../shared/untrusted-value";
 import { escapeControlChars } from "../shared/terminal-text";
@@ -105,11 +106,24 @@ function continuationIssue(notice: string): CompactIssue {
   };
 }
 
+/** Pi keeps a read image in the result, but a model without image input is sent a placeholder. */
+function unseenImageIssue(details: HostObject | undefined): CompactIssue | undefined {
+  const model = ownField(details, "imageUnsupportedByModel");
+  if (!Predicate.isString(model) || model === "") return undefined;
+  return {
+    severity: "warning",
+    code: "read-image-unseen",
+    message: `${firstLineMessage(model, "The model", 60)} doesn't support images, so it saw a placeholder`,
+  };
+}
+
 export function readIssues(
   details: HostObject | undefined,
   output: string,
   hasLimit: boolean,
 ): CompactIssue[] | undefined {
+  const unseenImage = unseenImageIssue(details);
+  if (unseenImage) return [unseenImage];
   const oversized = oversizedReadNotice(details, output);
   if (oversized !== undefined) return oversizedFirstLineIssues(oversized);
   const truncation = ownObject(details, "truncation");

@@ -1,14 +1,17 @@
 import * as Str from "effect/String";
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
-import * as Fn from "effect/Function";
 import type { CompactIssue } from "./compact-issues";
 import { exitIssueMessage, exitStatusMeaning, outputFailureLine } from "./process-failure";
 import { firstLineMessage } from "pi-cosmic-core/message-text";
+import { escapeControlChars } from "../shared/terminal-text";
 
 const EXITED = /^Command exited with code -?\d+$/u;
 const ABORTED = "Command aborted";
-const TIMED_OUT = /^Command timed out after \d+(?:\.\d+)? seconds$/u;
+// When the shell exited before the timeout and only its background processes kept the tool
+// waiting, Pi adds a sentence saying so, which the timeout issue keeps as its detail.
+const TIMED_OUT =
+  /^Command timed out after (\d+(?:\.\d+)? seconds)(?:\. (The shell exited with code -?\d+ after \d+(?:\.\d+)? seconds, but .+))?$/u;
 
 const beforeLast = (lines: string[]): string[] => {
   let end = lines.length - 1;
@@ -30,6 +33,7 @@ export function withoutShellStatus(lines: string[]): string[] {
 
 export function shellFailure(details: string, lines: string[], retained: boolean) {
   const last = lines.at(-1) ?? details;
+  const timeout = TIMED_OUT.exec(last);
   const issues: CompactIssue[] = [];
   let outcome: "error" | "cancelled" = "error";
   if (EXITED.test(last)) {
@@ -41,13 +45,15 @@ export function shellFailure(details: string, lines: string[], retained: boolean
       message: exitIssueMessage(exitCode, cause),
     });
   } else if (last === ABORTED) outcome = "cancelled";
-  else if (TIMED_OUT.test(last))
+  else if (timeout) {
+    const [, duration = "", shellExit] = timeout;
     issues.push({
       severity: "error",
       code: "shell-timeout",
-      message: Fn.pipe(last, Str.replace("Command timed", "Timed")),
+      message: `Timed out after ${duration}`,
+      ...(shellExit !== undefined && { detail: escapeControlChars(shellExit) }),
     });
-  else
+  } else
     issues.push({
       severity: "error",
       code: "failure",

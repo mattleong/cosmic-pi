@@ -2,10 +2,10 @@ packages:
   - packages/*
 
 catalog:
-  "@earendil-works/pi-ai": 1.5.0
-  "@earendil-works/pi-coding-agent": 1.5.0
-  "@earendil-works/pi-schema": 1.5.0
-  "@earendil-works/pi-tui": 1.5.0
+  "@earendil-works/pi-ai": 1.6.0
+  "@earendil-works/pi-coding-agent": 1.6.0
+  "@earendil-works/pi-schema": 1.6.0
+  "@earendil-works/pi-tui": 1.6.0
   "@effect/platform-node": 4.0.6
   "@effect/vitest": 4.0.6
   "@oxlint/plugins": 1.78.0

@@ -169,7 +169,7 @@ function childOptions(sdk, args) {
 }
 
 /**
- * Mirrors the Pi 1.5 CLI's createRuntime factory using only public SDK operations. Services
+ * Mirrors the Pi 1.6 CLI's createRuntime factory using only public SDK operations. Services
  * (including provider and extension registrations) belong to the effective session cwd.
  * @param {Sdk} sdk
  * @param {string[]} args Exactly child-process.ts's sessionArgs, without a CLI executable or mode.
@@ -194,6 +194,9 @@ export async function createRexPiRuntime(
 
   /** @type {{ runtime?: import('@earendil-works/pi-coding-agent').AgentSessionRuntime }} */
   const active = {};
+  // Package output is captured so git and npm can't draw over the child's TUI on /reload, /new,
+  // /resume or /fork. Until the first runtime exists there is no TUI, so installs are announced.
+  let starting = true;
   /** @type {import('@earendil-works/pi-coding-agent').CreateAgentSessionRuntimeFactory} */
   const factory = async (target) => {
     const settingsManager = sdk.SettingsManager.create(target.cwd, target.agentDir, {
@@ -206,6 +209,11 @@ export async function createRexPiRuntime(
       modelRuntimeSignal: AbortSignal.timeout(15_000),
       extensionFlagValues: policy.flags,
       resourceLoaderOptions: {
+        packageCommandOutput: "capture",
+        onPackageProgress: (event) => {
+          if (starting && event.type === "start" && event.message)
+            process.stderr.write(`${event.message}\n`);
+        },
         additionalExtensionPaths: [policy.extension],
         appendSystemPrompt: [policy.prompt],
         extensionFactories: [
@@ -291,6 +299,7 @@ export async function createRexPiRuntime(
     agentDir,
     sessionManager,
   });
+  starting = false;
   return active.runtime;
 }
 
@@ -303,7 +312,10 @@ export async function runRexPiHost(args) {
   configureRexPiProxy(globalSettings.httpProxy, process.env);
   const runtime = await createRexPiRuntime(sdk, args);
   sdk.initTheme(runtime.services.settingsManager.getTheme(), true);
-  const mode = new sdk.InteractiveMode(runtime, { startupDiagnostics: [...runtime.diagnostics] });
+  // Taking them marks them reported, so Pi doesn't show them again after a session replacement.
+  const mode = new sdk.InteractiveMode(runtime, {
+    startupDiagnostics: runtime.takeUnreportedDiagnostics(),
+  });
   try {
     await mode.run();
   } finally {

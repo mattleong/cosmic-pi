@@ -79,7 +79,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
   private display: Component | undefined;
   private planned: { settings: object; plan: CompactPlan } | undefined;
   private collapsed:
-    | { plan: CompactPlan; width: number; frame: number | undefined; rows: string[] }
+    | { plan: CompactPlan; width: number; frame: number | undefined; rows: readonly string[] }
     | undefined;
   private detailBounds: { height: number; width: number } | undefined;
   // The width the collapsed row would get, which the expanded heading's counter follows.
@@ -169,7 +169,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
     return { phase, ...planCompactPresentation({ ...input, summary: undefined, heading }) };
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     const result = this.currentResult();
     const plan = this.plan(result);
     if (!this.context.expanded) {
@@ -202,7 +202,7 @@ class CompactShell<TArgs, TDetails, TState extends object> implements Component 
     }
     this.renderWidth = width;
     this.display ??= this.renderDetails(result !== undefined, plan);
-    let rows: string[];
+    let rows: readonly string[];
     for (;;) {
       try {
         rows = this.display.render(width);

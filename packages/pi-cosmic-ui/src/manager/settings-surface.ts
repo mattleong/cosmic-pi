@@ -505,7 +505,7 @@ class SettingsGroupSubmenu extends Container {
     return settingsListHint(this.list, { level: "nested", expanded });
   }
 
-  override render(width: number): string[] {
+  override render(width: number): readonly string[] {
     refreshGroupSummaries(this.rows, (id, value) => this.list.updateValue(id, value));
     return super.render(width);
   }

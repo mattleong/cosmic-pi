@@ -160,20 +160,20 @@ const collapsedCallRows = new WeakMap<WeakKey, readonly string[]>();
  */
 class CollapsedResultBody implements Component {
   readonly body: Component;
-  private drawn: { readonly width: number; readonly rows: string[] } | undefined;
+  private drawn: { readonly width: number; readonly rows: readonly string[] } | undefined;
 
   constructor(body: Component) {
     this.body = body;
   }
 
   /** Draws the body for the call slot and keeps the rows for the result slot's next draw. */
-  peek(width: number): string[] {
+  peek(width: number): readonly string[] {
     const rows = this.body.render(width);
     this.drawn = { width, rows };
     return rows;
   }
 
-  render(width: number): string[] {
+  render(width: number): readonly string[] {
     const drawn = this.drawn;
     this.drawn = undefined;
     return drawn?.width === width ? drawn.rows : this.body.render(width);
