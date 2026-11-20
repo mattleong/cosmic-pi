@@ -20,9 +20,12 @@ import { synchronousRandomToken } from "pi-cosmic-core/platform/native-crypto";
 import { utf8ByteLength } from "pi-cosmic-core/text";
 import {
   LocalProcess,
+  type HostShellSettings,
   type LocalProcessError,
+  type LocalProcessRequest,
   type LocalProcessHandle,
 } from "../boundary/local-process.ts";
+import type { BackgroundTaskConfig } from "../config/schema.ts";
 import { BackgroundTaskConfigStore } from "../config/store.ts";
 import { normalizeStartRequest, validateWaitRequest } from "./admission.ts";
 import { BACKGROUND_LOG_BOUNDS, BACKGROUND_TASK_FIELD_BOUNDS } from "./bounds.ts";
@@ -126,6 +129,16 @@ export interface BackgroundTaskServiceOptions {
   readonly notify?: (notice: BackgroundTaskNotice) => void;
 }
 
+/** The caller can retire while a masked start is still waiting for the admission lock. */
+export const TaskCallerSignal = Context.Reference<AbortSignal | undefined>(
+  "pi-background-task/task/service/TaskCallerSignal",
+  { defaultValue: () => undefined },
+);
+
+const checkCaller = Effect.flatMap(TaskCallerSignal, (signal) =>
+  signal?.aborted ? Effect.interrupt : Effect.void,
+);
+
 const SHUTDOWN_WARNING_CHARS = 500;
 
 const leaderExited = (record: TaskRecord) =>
@@ -169,7 +182,8 @@ const freshTaskId = (tasks: TaskRegistry): string => {
 const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   options: BackgroundTaskServiceOptions,
 ) {
-  const config = yield* BackgroundTaskConfigStore;
+  let config = yield* BackgroundTaskConfigStore;
+  let hostShell: HostShellSettings | undefined;
   const processes = yield* LocalProcess;
   const path = yield* Path.Path;
   const ownerScope = yield* Effect.scope;
@@ -177,11 +191,6 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   const lock = yield* Semaphore.make(1);
   const tasks: TaskRegistry = new Map();
   let admissionsClosed = false;
-  // Output still in flight has its own per-task bound, outside the retained budgets.
-  const ingressBufferBytes = Math.max(
-    BACKGROUND_LOG_BOUNDS.minIngressBytes,
-    Math.min(config.logBufferBytesPerTask, BACKGROUND_LOG_BOUNDS.maxIngressBytes),
-  );
 
   // Every holder's critical section is synchronous apart from reading the clock: no holder
   // awaits another fiber, a process, or the host. Stop claims, start admission, and wait
@@ -198,6 +207,25 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   const { publish, publishOutput } = yield* startTaskPublication(lock, () =>
     invokeHostCallback(() => options.publish?.(registryProjection(tasks)), undefined),
   );
+  const configure = (next: BackgroundTaskConfig, shell: HostShellSettings) =>
+    withLock(
+      checkCaller.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            config = next;
+            hostShell = shell;
+            trimRetention(tasks, next.maxRetained);
+            for (const record of tasks.values()) {
+              if (!record.logs.evictOver(next.logBufferBytesPerTask)) continue;
+              record.snapshot = { ...record.snapshot, ...logFields(record.logs) };
+              wakeTaskRecord(record);
+            }
+            enforceRetainedLogBudget(tasks, next.totalLogBufferBytes);
+            publish();
+          }),
+        ),
+      ),
+    );
   // A notice waits for the reads in progress, which may report the finish to the agent instead.
   // Shutdown and replacement close admission first, so a retiring runtime sends none.
   const deliverDueNotice = (record: TaskRecord) => {
@@ -301,21 +329,27 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         const prepared = yield* withLock(
           Effect.gen(function* () {
             const record = yield* findRecord(id);
+            const exited = yield* leaderExited(record);
+            yield* checkCaller;
+            const stopGraceMs = record.stopGraceMs ?? config.stopGraceMs;
             if (!isActiveTaskState(record.snapshot.state)) {
               // The agent's stop result says the task had already finished.
               if (reportsFinish) claimFinishedNotice(record);
-              return { record, owner: false, joins: false, terminal: record.snapshot };
+              return { record, owner: false, joins: false, terminal: record.snapshot, stopGraceMs };
             }
             if (request === "agent") record.noticeClaimed = true;
             const owner = record.snapshot.state !== "stopping";
             const joins = !owner && !force && request === "internal" && record.graceWindowOpen;
-            if (owner && !force) record.graceWindowOpen = true;
+            if (owner) {
+              record.stopGraceMs = stopGraceMs;
+              record.graceWindowOpen = !force;
+            }
             // A request that lands after the command exited on its own keeps that exit's outcome.
-            if (!(yield* leaderExited(record))) record.terminalOutcome ??= outcome;
+            if (!exited) record.terminalOutcome ??= outcome;
             record.snapshot = { ...record.snapshot, state: "stopping" };
             wakeTaskRecord(record);
             publish();
-            return { record, owner, joins, terminal: undefined };
+            return { record, owner, joins, terminal: undefined, stopGraceMs };
           }),
         );
         if (prepared.terminal)
@@ -348,7 +382,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
           else {
             yield* terminate(handle, "graceful");
             const settled = yield* Deferred.await(prepared.record.completion).pipe(
-              Effect.timeoutOption(Duration.millis(config.stopGraceMs)),
+              Effect.timeoutOption(Duration.millis(prepared.stopGraceMs)),
             );
             if (Option.isNone(settled)) yield* terminate(handle, "force");
           }
@@ -373,7 +407,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
 
         const finalWait = yield* restore(
           Deferred.await(prepared.record.completion).pipe(
-            Effect.timeoutOption(Duration.millis(Math.max(5_000, config.stopGraceMs + 5_000))),
+            Effect.timeoutOption(Duration.millis(Math.max(5_000, prepared.stopGraceMs + 5_000))),
           ),
         );
         if (Option.isSome(finalWait))
@@ -394,13 +428,12 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   });
 
   const monitor = Effect.fn("BackgroundTaskService.monitor")(
-    function* (record: TaskRecord, request: StartBackgroundTask) {
-      const handle = yield* processes.spawn({
-        command: request.command,
-        cwd: request.cwd,
-        ingressBufferBytes,
-        ...(config.shellPath && { shellPath: config.shellPath }),
-      });
+    function* (
+      record: TaskRecord,
+      launch: LocalProcessRequest,
+      timeoutSeconds: number | undefined,
+    ) {
+      const handle = yield* processes.spawn(launch);
       const stopRequested = yield* withLock(
         Effect.sync(() => {
           const stopping = record.snapshot.state === "stopping";
@@ -427,8 +460,8 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         ),
         Effect.forkScoped({ startImmediately: true }),
       );
-      if (request.timeoutSeconds !== undefined) {
-        yield* Effect.sleep(Duration.seconds(request.timeoutSeconds)).pipe(
+      if (timeoutSeconds !== undefined) {
+        yield* Effect.sleep(Duration.seconds(timeoutSeconds)).pipe(
           Effect.andThen(requestStop(record.snapshot.id, false, "internal", "timed_out")),
           Effect.ignore,
           Effect.forkScoped({ startImmediately: true }),
@@ -485,11 +518,13 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   const start = Effect.fn("BackgroundTaskService.start")(function* (request: StartBackgroundTask) {
     const prepared = yield* normalizeStartRequest(request, path);
     const { command, cwd, name } = prepared;
+    const signal = yield* TaskCallerSignal;
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const record = yield* withLock(
+        const { record, launch } = yield* withLock(
           Effect.gen(function* () {
-            if (admissionsClosed) return yield* runtimeClosed();
+            const startedAt = yield* Clock.currentTimeMillis;
+            if (signal?.aborted || admissionsClosed) return yield* runtimeClosed();
             if (!config.enabled) {
               return yield* BackgroundTasksDisabledError.make({
                 message: "Background tasks are disabled.",
@@ -501,8 +536,7 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
                 message: `Background task capacity reached (${config.maxRunning}).`,
               });
             }
-            const id = yield* Effect.sync(() => freshTaskId(tasks));
-            const startedAt = yield* Clock.currentTimeMillis;
+            const id = freshTaskId(tasks);
             // The record keeps a display copy; the monitor runs the full prepared command.
             const created = taskRecord(
               {
@@ -519,10 +553,22 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
             );
             tasks.set(id, created);
             publish();
-            return created;
+            const launchSettings: LocalProcessRequest = {
+              command,
+              cwd,
+              // Output still in flight is bounded separately from the retained logs.
+              ingressBufferBytes: Math.max(
+                BACKGROUND_LOG_BOUNDS.minIngressBytes,
+                Math.min(config.logBufferBytesPerTask, BACKGROUND_LOG_BOUNDS.maxIngressBytes),
+              ),
+              ...(config.shellPath && { shellPath: config.shellPath }),
+              ...(hostShell && { hostShell }),
+            };
+            return { record: created, launch: launchSettings };
           }),
         );
-        yield* monitor(record, prepared).pipe(
+        yield* monitor(record, launch, prepared.timeoutSeconds).pipe(
+          Effect.provideService(TaskCallerSignal, undefined),
           Effect.forkIn(monitorScope, { startImmediately: true }),
         );
         return yield* restore(Deferred.await(record.handleReady)).pipe(
@@ -541,28 +587,38 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
 
   const list: BackgroundTaskServiceContract["list"] = (filter = "all") =>
     withLock(
-      Effect.sync(() =>
-        sortTasksByActivity(
-          Arr.flatMap([...tasks.values()], (record) => {
-            const { snapshot } = record;
-            if (filter !== "all" && isActiveTaskState(snapshot.state) !== (filter === "active"))
-              return [];
-            claimFinishedNotice(record);
-            return [snapshot];
-          }),
+      checkCaller.pipe(
+        Effect.andThen(
+          Effect.sync(() =>
+            sortTasksByActivity(
+              Arr.flatMap([...tasks.values()], (record) => {
+                const { snapshot } = record;
+                if (filter !== "all" && isActiveTaskState(snapshot.state) !== (filter === "active"))
+                  return [];
+                claimFinishedNotice(record);
+                return [snapshot];
+              }),
+            ),
+          ),
         ),
       ),
     );
 
   const status: BackgroundTaskServiceContract["status"] = (id) =>
     withLock(
-      Effect.map(findRecord(id), (record) => {
-        claimFinishedNotice(record);
-        return record.snapshot;
-      }),
+      findRecord(id).pipe(
+        Effect.tap(() => checkCaller),
+        Effect.map((record) => {
+          claimFinishedNotice(record);
+          return record.snapshot;
+        }),
+      ),
     );
 
-  const admitRecord = (id: string) => withLock(findRecord(id));
+  const admitRead = (id: string) =>
+    withLock(
+      Effect.map(findRecord(id), (record) => ({ record, maxWaitSeconds: config.maxWaitSeconds })),
+    );
 
   /**
    * Inspects the task under the lock until `inspect` returns a value, waiting for its change in
@@ -574,7 +630,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
   ) {
     while (true) {
       const expired = (yield* monotonicMillis) >= deadline;
-      const poll = yield* withLock(Effect.sync(() => inspect(expired)));
+      const poll = yield* withLock(
+        checkCaller.pipe(Effect.andThen(Effect.sync(() => inspect(expired)))),
+      );
       if (poll.done) return poll.value;
       const remainingMillis = Math.max(0, deadline - (yield* monotonicMillis));
       yield* poll.change.pipe(Effect.timeoutOption(Duration.millis(remainingMillis)));
@@ -583,12 +641,11 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
 
   const logs = Effect.fn("BackgroundTaskService.logs")(
     function* (request: ReadBackgroundLogs) {
-      const record = yield* admitRecord(request.id);
+      const { record, maxWaitSeconds } = yield* admitRead(request.id);
       yield* withLock(checkCursor(record, request.afterCursor));
       yield* trackReader(record, false);
       const waitSeconds = request.waitSeconds ?? 0;
-      const deadline =
-        (yield* monotonicMillis) + Math.min(waitSeconds, config.maxWaitSeconds) * 1_000;
+      const deadline = (yield* monotonicMillis) + Math.min(waitSeconds, maxWaitSeconds) * 1_000;
       const window =
         request.tailLines === undefined
           ? request
@@ -614,10 +671,9 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
 
   const wait = Effect.fn("BackgroundTaskService.wait")(
     function* (request: WaitForBackgroundTask) {
-      const waitSeconds = request.waitSeconds ?? config.maxWaitSeconds;
-      yield* validateWaitRequest(request, waitSeconds);
-
-      const record = yield* admitRecord(request.id);
+      yield* validateWaitRequest(request, request.waitSeconds ?? 0);
+      const { record, maxWaitSeconds } = yield* admitRead(request.id);
+      const appliedWaitSeconds = Math.min(request.waitSeconds ?? maxWaitSeconds, maxWaitSeconds);
       const alternatives = request.until === "output" ? (request.contains ?? []) : [];
       // Whether earlier output ended its line decides how a matched line's start is shown.
       const matcher = yield* withLock(
@@ -642,7 +698,6 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
         ),
       );
       yield* trackReader(record, true);
-      const appliedWaitSeconds = Math.min(waitSeconds, config.maxWaitSeconds);
       const deadline = (yield* monotonicMillis) + appliedWaitSeconds * 1_000;
 
       return yield* pollUntil(deadline, (expired): Poll<BackgroundTaskStatusWait> => {
@@ -726,11 +781,15 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     );
   });
   const clear = withLock(
-    Effect.sync(() => {
-      const removed = clearFinished(tasks);
-      if (removed > 0) publish();
-      return removed;
-    }),
+    checkCaller.pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          const removed = clearFinished(tasks);
+          if (removed > 0) publish();
+          return removed;
+        }),
+      ),
+    ),
   );
 
   const service: BackgroundTaskServiceContract = {
@@ -764,12 +823,19 @@ const makeService = Effect.fn("BackgroundTaskService.make")(function* (
     ),
   );
 
-  return service;
+  return { ...service, configure };
 });
+
+interface BackgroundTaskRuntimeService extends BackgroundTaskServiceContract {
+  readonly configure: (
+    config: BackgroundTaskConfig,
+    shell: HostShellSettings,
+  ) => Effect.Effect<void>;
+}
 
 export class BackgroundTaskService extends Context.Service<
   BackgroundTaskService,
-  BackgroundTaskServiceContract
+  BackgroundTaskRuntimeService
 >()("pi-background-task/task/service/BackgroundTaskService") {
   static readonly layer = (options: BackgroundTaskServiceOptions = {}) =>
     Layer.effect(this, makeService(options));

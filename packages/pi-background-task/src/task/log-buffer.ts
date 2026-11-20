@@ -259,8 +259,11 @@ export class LogBuffer {
     return this;
   }
 
-  private evictOver(maxBytes: number): void {
+  /** Applies a new retention limit without invalidating existing output cursors. */
+  evictOver(maxBytes: number): boolean {
+    const before = this.chargedBytes;
     while (this.chargedBytes > maxBytes && this.oldestEvent) this.dropOldest();
+    return this.chargedBytes !== before;
   }
 
   /** Counts output lost before reaching the buffer; the next stored event follows a gap. */

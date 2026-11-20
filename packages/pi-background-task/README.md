@@ -10,7 +10,8 @@ Session-scoped background tasks for Pi. The agent can start long-running command
 - **Activity view** from `pi-cosmic-ui`: browse tasks, read recent logs, follow output, stop or clear tasks.
 - **Footer status** while tasks are active and Activity isn't listing them, such as `2 background tasks running`; the count includes tasks still starting or stopping.
 - **Native codemode results:** scripts receive structured task data instead of text.
-- **Process-group cleanup** when the session reloads, switches, forks, navigates the tree, or shuts down, and when Pi exits abruptly. Processes that start their own session or process group, such as daemons, aren't tracked.
+- **Reload without restarting tasks.** `/reload` in the same Pi session keeps processes, task IDs, and retained output.
+- **Process-group cleanup** when the session switches, forks, navigates the tree, or shuts down, and when Pi exits abruptly. Processes that start their own session or process group, such as daemons, aren't tracked.
 
 ## Install
 
@@ -32,7 +33,7 @@ Ask the agent to run something in the background, such as a dev server, a long t
 
 ## Configuration
 
-Optional JSON in `~/.pi/agent/extensions/pi-background-task.json`, or `.pi/extensions/pi-background-task.json` in a trusted project. Changes apply when the session's task runtime restarts: after `/reload`, a session switch or fork, or `/tree` navigation.
+Optional JSON in `~/.pi/agent/extensions/pi-background-task.json`, or `.pi/extensions/pi-background-task.json` in a trusted project. Changes apply after `/reload`, a session switch or fork, or `/tree` navigation. Reload applies new admission and retention limits without restarting tasks.
 
 ```json
 {
@@ -51,6 +52,6 @@ Tasks run in Pi's shell, normally bash, with Pi's `shellPath` and `shellCommandP
 
 ## How it works
 
-Each Pi session owns its task registry, bounded log buffers, and wait barriers. Tasks are non-interactive: stdin stays open but is never written, so watchers keep running and a command that prompts or reads stdin waits until it is stopped; give such commands `</dev/null` or non-interactive flags. They run with your own permissions and have no default timeout. Output is sanitized as it arrives; `logs` shows it without credential redaction, while the Activity view redacts credentials it recognizes. A stop that can't confirm the process exited keeps the task in `stopping` rather than reporting it finished; stopping it again forces it. Cleanup reaches each task's own process group and nothing that detaches from it, and no cleanup runs if Pi itself is killed with `SIGKILL` or the machine goes down. Task IDs are random tokens that belong to one session runtime, so IDs from an earlier runtime must not be reused.
+Each Pi session owns its task registry, bounded log buffers, and wait barriers. Tasks are non-interactive: stdin stays open but is never written, so watchers keep running and a command that prompts or reads stdin waits until it is stopped; give such commands `</dev/null` or non-interactive flags. They run with your own permissions and have no default timeout. Output is sanitized as it arrives; `logs` shows it without credential redaction, while the Activity view redacts credentials it recognizes. A stop that can't confirm the process exited keeps the task in `stopping` rather than reporting it finished; stopping it again forces it. Cleanup reaches each task's own process group and nothing that detaches from it, and no cleanup runs if Pi itself is killed with `SIGKILL` or the machine goes down. Task IDs and log cursors survive `/reload` but not session replacement or restarting Pi. Reload updates the tool, UI, and settings; changes to the running task engine itself take effect when a new task registry starts.
 
 See [docs/reference.md](docs/reference.md) for the tool, Activity, and codemode result contracts, and [ARCHITECTURE.md](ARCHITECTURE.md) for ownership and lifecycle.

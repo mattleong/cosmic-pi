@@ -40,7 +40,10 @@ export const taskServiceDouble = (
 export const provideTaskService =
   (service: BackgroundTaskServiceContract) =>
   <A, E>(effect: Effect.Effect<A, E, BackgroundTaskService | Path.Path>) =>
-    effect.pipe(Effect.provideService(BackgroundTaskService, service), Effect.provide(Path.layer));
+    effect.pipe(
+      Effect.provideService(BackgroundTaskService, { ...service, configure: () => Effect.void }),
+      Effect.provide(Path.layer),
+    );
 
 /** Runs the shared command against a service double. */
 export const executeWith = (

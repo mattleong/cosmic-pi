@@ -36,6 +36,7 @@ export interface TaskRecord {
   terminalOutcome?: "stopped" | "timed_out";
   /** The first stop's grace window is still running; internal stops join it. */
   graceWindowOpen: boolean;
+  stopGraceMs?: number;
   ingressDroppedObserved: number;
   awaiters: number;
   /** Which finish notifies the agent; absent when the start asked for no notice. */

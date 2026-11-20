@@ -8,8 +8,9 @@ task's start opted in with `notify`; otherwise completion sends nothing.
 ## Ownership and boundaries
 
 - [Application](src/application.ts) owns the managed session-runtime slot and binds tools,
-  commands, preview replay, and UI publication to an activation. [Layer composition](src/layer.ts)
-  supplies configuration, process execution, task service, and preview scheduling.
+  commands, preview replay, and UI publication to an activation. The [task owner](src/boundary/task-owner.ts)
+  holds a separate Effect runtime for the task service, with no Pi API or UI in its context.
+  [Layer composition](src/layer.ts) separates these two lifetimes.
 - [Task service](src/task/service.ts) owns the registry, admission, stop/wait coordination, and
   scoped process monitors. Registry transitions and each task's mutable log buffer share a
   semaphore. [Registry policy](src/task/registry.ts), [admission](src/task/admission.ts), and
@@ -56,8 +57,8 @@ task's start opted in with `notify`; otherwise completion sends nothing.
 
 ## Lifecycle
 
-Session start and successful tree navigation capture cwd, trust, and session identity, then
-replace the runtime. Deactivation revokes publication and command capabilities before cleanup,
+Session start and successful tree navigation capture cwd, trust, and session identity. They replace
+host bindings; only a reload of the same session can keep the task owner. Deactivation revokes publication and command capabilities before cleanup,
 so settling old processes cannot repopulate replacement UI. Startup loads trusted preview
 settings before the current activation registers its wrapped tool. History replay is
 presentation-only and never starts tasks. Command metadata and completions register eagerly;
@@ -71,9 +72,13 @@ retain their activation token; `/tasks` captures authority for each invocation. 
 pickers and Activity actions cannot target a later registry, even if a task ID repeats.
 Shutdown closes admission and attempts to settle active processes before interrupting their monitors.
 If Pi exits without shutdown, core's host-exit guard kills every task group that has not settled.
-Exit notices belong to the activation that started their tasks: closed admission stops the service
-from sending any, and deactivation revokes the delivery callback before cleanup, so tasks stopped by
-shutdown or replacement never message the agent.
+On `/reload`, deactivation cancels and joins the old activation's tool calls without interrupting
+admitted monitors. A one-shot in-memory lease hands the owner to the same Pi session with the same
+cwd and trust. An unclaimed lease expires after 30 seconds and closes the owner. The new activation
+applies settings under the registry lock, seeds its task projection, and delivers opted-in notices
+queued while detached. Shutdown and replacement detach before stopping tasks, so those tasks never
+message the agent. Only the host integration reloads its code; the task engine stays loaded for the
+life of the retained registry.
 
 ## Critical invariants
 

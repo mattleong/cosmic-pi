@@ -174,7 +174,7 @@ export function registerBackgroundTaskTool(
       "Use logs only when output is needed for a decision, the task fails, or the user asks. For one bounded snapshot, omit afterCursor and set a small tailLines value. For incremental reads, set afterCursor to the previous nextCursor and optionally waitSeconds; don't combine tailLines with afterCursor.",
       "Stop background tasks when they are no longer needed; every task's process group is terminated when the Pi session is replaced or shut down. Run services in the foreground: daemonized or detached processes escape that cleanup.",
       "Native codemode receives version-1 structured results. Print successful task IDs immediately and check the contract envelope before using them. A task's finished flag means terminal state, not command success or cleanup confirmation.",
-      "Rejected or cancelled calls do not roll back admitted starts or stop signals. Hand uncertainty to the main agent for list/status recovery before replaying a command. Task IDs from before a reload or tree navigation name no current task; discard old workflow checkpoints.",
+      "Rejected or cancelled calls do not roll back admitted starts or stop signals. Hand uncertainty to the main agent for list/status recovery before replaying a command. Task IDs and log cursors survive /reload in the same Pi session, subject to normal retention. Discard old task checkpoints after session replacement or /tree navigation.",
     ],
     parameters: BackgroundTaskParameters,
     prepareArguments: prepareBackgroundTaskArguments,

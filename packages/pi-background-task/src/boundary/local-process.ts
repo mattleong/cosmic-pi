@@ -41,6 +41,7 @@ const BLOCKED_ENVIRONMENT_KEYS = new Set([
 export interface LocalProcessRequest {
   readonly command: string;
   readonly cwd: string;
+  readonly hostShell?: HostShellSettings;
   /** The package's own shell, which replaces Pi's shell and its command prefix. */
   readonly shellPath?: string;
   readonly ingressBufferBytes: number;
@@ -483,7 +484,10 @@ export class LocalProcess extends Context.Service<LocalProcess, LocalProcessCont
             verifyCwd(fs, request.cwd).pipe(
               Effect.andThen(
                 // Acquisition stays uninterruptible; see spawnGroupLeader.
-                Effect.acquireRelease(acquireProcess(request, host), (handle) => handle.release),
+                Effect.acquireRelease(
+                  acquireProcess(request, request.hostShell ?? host),
+                  (handle) => handle.release,
+                ),
               ),
               Effect.map(({ release: _release, ...handle }) => handle),
             ),
