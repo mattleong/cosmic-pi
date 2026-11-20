@@ -7,8 +7,10 @@ import {
 } from "pi-code-previews";
 import { defineTool, type ExtensionAPI, type Theme } from "@earendil-works/pi-coding-agent";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
+import { checkToolArguments } from "pi-cosmic-core/tool-arguments";
 import {
   AskUserAsyncParameters,
+  AskUserAsyncToolParameters,
   AskUserAsyncControlParameters,
   type AskUserAsyncRequest,
   type AskUserAsyncControl,
@@ -58,6 +60,7 @@ export function registerAsyncAskUserTools(
   scheduleAnimation?: CompactAnimationScheduler,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
+  const prepareArguments = questionnaireArgumentPreparer("ask_user_async", AskUserAsyncParameters);
   const presentation = {
     // Read when the shell is, so the summary names what that style's collapsed row hides.
     compactSummary: asyncAskUserCompactSummaryFor(
@@ -92,12 +95,15 @@ export function registerAsyncAskUserTools(
           return renderAsyncCall(args, theme, context);
         },
         renderResult: renderAsyncResult,
-        parameters: AskUserAsyncParameters,
-        prepareArguments: questionnaireArgumentPreparer("ask_user_async", AskUserAsyncParameters),
+        parameters: AskUserAsyncToolParameters,
+        prepareArguments,
         outputSchema: outputSchema(AskUserAsyncContractSchema),
         executionMode: "sequential",
         execute(_id, input, signal) {
-          return start(input, signal).then((snapshot) =>
+          const request = checkToolArguments(AskUserAsyncParameters, input)
+            ? input
+            : prepareArguments(input);
+          return start(request, signal).then((snapshot) =>
             questionnaireToolResult(
               formatAsyncSnapshot(snapshot),
               snapshot,

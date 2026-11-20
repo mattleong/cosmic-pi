@@ -24,8 +24,9 @@ questionnaire state.
 - [Dialog](src/ui/dialog.ts) owns local synchronous interaction state, including drafts, focus,
   editor buffers, and viewport state. Tool and message renderers consume validated projections
   without reading services or owning session resources.
-- [Tools](src/tools/) adapt the service to Pi. [Argument preparation](src/tools/arguments.ts) normalizes
-  each question for the shape its `mode` selects. [Structured-result projection](src/tools/contract.ts)
+- [Tools](src/tools/) adapt the service to Pi. Both questionnaire tools advertise a flat question
+  schema for provider compatibility. [Argument preparation](src/tools/arguments.ts) normalizes
+  and enforces the shape each question's `mode` selects. [Structured-result projection](src/tools/contract.ts)
   derives results from domain facts separately from display text and persisted presentation details.
 
 ## Session lifecycle and history

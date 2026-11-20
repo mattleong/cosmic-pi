@@ -31,11 +31,6 @@ import {
 import type { QuestionnaireArgs } from "./tool-body.ts";
 import type { PendingPresentation } from "../questionnaire/async-model.ts";
 import { RESUME_HINT } from "../boundary/host-ui.ts";
-import type {
-  AskUserAsyncControl,
-  AskUserAsyncRequest,
-  AskUserRequest,
-} from "../questionnaire/schema.ts";
 
 /**
  * Control calls name only a request id, so their questions' titles come from the result. Until
@@ -175,7 +170,7 @@ function settledSummary(
 
 /** The blocking tool's summary for rows drawn in `style`, which decides what expansion reveals. */
 export const askUserCompactSummaryFor =
-  (style: CollapsedStyle): CompactSummaryProvider<AskUserRequest> =>
+  (style: CollapsedStyle): CompactSummaryProvider<QuestionnaireArgs> =>
   ({ phase, args, result, context }) => {
     if (phase !== "settled")
       return context.isError ? undefined : liveSummary(args, decodePresentation(result?.details));
@@ -345,7 +340,7 @@ function rowsSummary(
 
 /** The async tools' summaries for rows drawn in `style`, which decides what expansion reveals. */
 export const asyncAskUserCompactSummaryFor =
-  (style: CollapsedStyle): CompactSummaryProvider<AskUserAsyncRequest | AskUserAsyncControl> =>
+  (style: CollapsedStyle): CompactSummaryProvider<QuestionnaireArgs> =>
   ({ phase, args, result, context }) => {
     if (phase !== "settled")
       return context.isError ? undefined : liveSummary(args, decodePresentation(result?.details));

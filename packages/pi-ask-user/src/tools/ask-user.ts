@@ -13,10 +13,15 @@ import {
   type CompactAnimationScheduler,
 } from "pi-code-previews";
 import { toPiToolOutputSchema } from "pi-cosmic-core/schema/tool-output";
+import { checkToolArguments } from "pi-cosmic-core/tool-arguments";
 import { toolRunningLine, toolStatusLine } from "pi-cosmic-ui/tool";
 import { formatAskUserOutcome } from "../questionnaire/format.ts";
 import type { AskUserOutcome } from "../questionnaire/model.ts";
-import { AskUserParameters, type AskUserRequest } from "../questionnaire/schema.ts";
+import {
+  AskUserParameters,
+  AskUserToolParameters,
+  type AskUserRequest,
+} from "../questionnaire/schema.ts";
 import { askUserCompactSummaryFor } from "../ui/compact-summary.ts";
 import {
   answerInCompactHeading,
@@ -60,6 +65,7 @@ export function registerAskUserTool(
   scheduleAnimation?: CompactAnimationScheduler,
   shell: typeof withCodePreviewShell = withCodePreviewShell,
 ): void {
+  const prepareArguments = questionnaireArgumentPreparer("ask_user", AskUserParameters);
   const tool = defineTool({
     name: "ask_user",
     label: "Ask user",
@@ -78,14 +84,18 @@ export function registerAskUserTool(
       "Never ask users to enter passwords, API keys, tokens, private keys, or other credentials through ask_user.",
       "Native codemode receives structured pi-ask-user/questionnaire version-1 results. Check contract, version, tool, and outcome before branching on answers. Rejected or cancelled scripts do not undo answers; do not blindly retry a questionnaire. Codemode scripts share a small pool of Pi workers, so call ask_user or await an async questionnaire directly rather than from codemode, where a long user wait blocks other scripts.",
     ],
-    parameters: AskUserParameters,
-    prepareArguments: questionnaireArgumentPreparer("ask_user", AskUserParameters),
+    parameters: AskUserToolParameters,
+    prepareArguments,
     outputSchema: outputSchema(AskUserContractSchema),
     executionMode: "sequential",
     execute(_toolCallId, input, signal, onUpdate) {
       // Progress tells the row the questions are on screen, so it waits on the user, not a spinner.
       const shown = () => onUpdate?.({ content: [], details: QUESTIONS_SHOWN });
-      return ask(input, signal, shown).then((outcome) =>
+      // Pi types execute against the advertised schema, not the narrower preparation result.
+      const request = checkToolArguments(AskUserParameters, input)
+        ? input
+        : prepareArguments(input);
+      return ask(request, signal, shown).then((outcome) =>
         questionnaireToolResult<AskUserToolDetails>(
           formatAskUserOutcome(outcome),
           outcome,

@@ -51,16 +51,19 @@ const questionFields = {
   }),
 };
 
+const choices = Type.Array(AskUserChoiceSchema, {
+  minItems: 2,
+  maxItems: MAX_CHOICES,
+  description:
+    "Required in single or multiple mode. Omit in text mode. A custom-answer action is appended automatically to the two to six choices.",
+});
+
 export const AskUserChoiceQuestionSchema = Type.Object({
   ...questionFields,
   mode: Type.Enum(["single", "multiple"] as const, {
     description: "Whether the user chooses one choice or any number of choices.",
   }),
-  choices: Type.Array(AskUserChoiceSchema, {
-    minItems: 2,
-    maxItems: MAX_CHOICES,
-    description: "Two to six concrete choices. A custom-answer action is appended automatically.",
-  }),
+  choices,
 });
 
 const AskUserTextQuestionSchema = Type.Object(
@@ -76,12 +79,14 @@ const AskUserTextQuestionSchema = Type.Object(
 
 const AskUserQuestionSchema = Type.Union([AskUserChoiceQuestionSchema, AskUserTextQuestionSchema]);
 
+const questionListOptions = {
+  minItems: 1,
+  maxItems: MAX_QUESTIONS,
+  description: "One to six questions presented as one questionnaire.",
+};
+
 export const AskUserParameters = Type.Object({
-  questions: Type.Array(AskUserQuestionSchema, {
-    minItems: 1,
-    maxItems: MAX_QUESTIONS,
-    description: "One to six questions presented as one questionnaire.",
-  }),
+  questions: Type.Array(AskUserQuestionSchema, questionListOptions),
   askedBy: Type.Optional(
     Type.String({
       maxLength: MAX_TITLE_LENGTH,
@@ -89,6 +94,21 @@ export const AskUserParameters = Type.Object({
         "The agent whose question this is, by its ID or name, when you ask on another agent's behalf, such as a subagent's. Its name is shown above the questions, which open in that agent's own pane when it is on screen; omit it for your own questions.",
     }),
   ),
+});
+
+// Some providers reject anyOf under array items. Advertise one shape and validate the
+// mode-specific requirements locally with the union above.
+const AskUserToolQuestionSchema = Type.Object({
+  ...questionFields,
+  mode: Type.Enum(["single", "multiple", "text"] as const, {
+    description: "Choose one option, choose any number of options, or give a free-text answer.",
+  }),
+  choices: Type.Optional(choices),
+});
+
+export const AskUserToolParameters = Type.Object({
+  ...AskUserParameters.properties,
+  questions: Type.Array(AskUserToolQuestionSchema, questionListOptions),
 });
 
 export const MAX_WORK_DESCRIPTION_LENGTH = 500;
@@ -106,6 +126,11 @@ export const AskUserAsyncParameters = Type.Object({
     ...WorkDescription,
     description: "Specific decisions or work that must wait for these answers.",
   }),
+});
+
+export const AskUserAsyncToolParameters = Type.Object({
+  ...AskUserAsyncParameters.properties,
+  ...AskUserToolParameters.properties,
 });
 
 export const ASYNC_CONTROL_ACTIONS = ["status", "await", "cancel"] as const;

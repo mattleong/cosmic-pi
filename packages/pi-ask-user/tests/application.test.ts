@@ -100,7 +100,7 @@ const answerMessage = (deliveryId: string, outcome: string) => ({
 });
 
 const request = {
-  questions: [{ ...defaultQuestion, choices: [defaultQuestion.choices[0]!] }],
+  questions: [defaultQuestion],
 } satisfies AskUserRequest;
 
 layer(nodeFilePlatformLayer)("ask-user session admission", (it) => {

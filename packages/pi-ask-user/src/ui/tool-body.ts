@@ -26,10 +26,11 @@ import {
   toolStatusLine,
   type ToolHeader,
 } from "pi-cosmic-ui/tool";
+import type { Static } from "typebox";
 import type {
   AskUserAsyncControl,
-  AskUserAsyncRequest,
-  AskUserRequest,
+  AskUserAsyncToolParameters,
+  AskUserToolParameters,
 } from "../questionnaire/schema.ts";
 import { appendWrapped, askerLabel, titleLabel } from "./layout.ts";
 import {
@@ -41,7 +42,11 @@ import {
 } from "./tool-render-projection.ts";
 
 export type RenderContext = Parameters<NonNullable<ToolDefinition["renderCall"]>>[2];
-export type QuestionnaireArgs = Partial<AskUserRequest | AskUserAsyncRequest | AskUserAsyncControl>;
+export type QuestionnaireArgs = Partial<
+  | Static<typeof AskUserToolParameters>
+  | Static<typeof AskUserAsyncToolParameters>
+  | AskUserAsyncControl
+>;
 
 export const emptyBody = (): Component => new Container();
 

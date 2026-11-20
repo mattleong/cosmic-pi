@@ -10,6 +10,7 @@ import * as Str from "effect/String";
 import { captureRegistrations, issueMessageStyleProblems } from "pi-code-previews/testing";
 import { findOrUndefined } from "pi-cosmic-core/array";
 import { extensionContextFixture, toolSchemaPortabilityProblems } from "pi-cosmic-core/testing";
+import { checkToolArguments } from "pi-cosmic-core/tool-arguments";
 import type { AsyncQuestionnaireSnapshot } from "../src/questionnaire/async-model.ts";
 import { formatAskUserOutcome, formatAsyncSnapshot } from "../src/questionnaire/format.ts";
 import type { AskUserOutcome } from "../src/questionnaire/model.ts";
@@ -116,6 +117,15 @@ describe("registered questionnaire parameters", () => {
     expect(tools.length).toBe(3);
     for (const tool of tools) expect(toolSchemaPortabilityProblems(tool.parameters)).toEqual([]);
   });
+
+  it.each(["ask_user", "ask_user_async"])(
+    "%s advertises a single question shape instead of a union inside array items",
+    (name) => {
+      const tool = Option.getOrThrow(Arr.findFirst(registered(), (entry) => entry.name === name));
+      expect(tool.parameters).toHaveProperty("properties.questions.items.type", "object");
+      expect(tool.parameters).not.toHaveProperty("properties.questions.items.anyOf");
+    },
+  );
 });
 
 const preparer = (name: string) => {
@@ -159,13 +169,43 @@ describe("registered questionnaire arguments", () => {
     });
   });
 
-  it("still rejects meaningful choices on a text question", () => {
-    const issues = issueLines("ask_user", {
-      questions: [{ ...textQuestion, choices: defaultQuestion.choices }],
-    });
-    expect(issues).toHaveLength(1);
-    expect(issues[0]).toMatch(/questions\[0\].*"choices"/u);
-  });
+  it.each(["ask_user", "ask_user_async"])(
+    "%s prepares mixed modes that pass Pi's validation of the advertised schema",
+    (name) => {
+      const tool = Option.getOrThrow(Arr.findFirst(registered(), (entry) => entry.name === name));
+      const questions = [
+        textQuestion,
+        defaultQuestion,
+        { ...defaultQuestion, key: "many", mode: "multiple" },
+      ];
+      const request = name === "ask_user" ? { questions } : { ...asyncRequest, questions };
+      const prepared = preparer(name)(request);
+      expect(prepared).toEqual(request);
+      expect(checkToolArguments(tool.parameters, prepared)).toBe(true);
+    },
+  );
+
+  it.each(["ask_user", "ask_user_async"])(
+    "%s rejects invalid choices for the selected mode before execution",
+    (name) => {
+      const withWork = name === "ask_user" ? {} : asyncRequest;
+      const textIssues = issueLines(name, {
+        ...withWork,
+        questions: [{ ...textQuestion, choices: defaultQuestion.choices }],
+      });
+      expect(textIssues).toHaveLength(1);
+      expect(textIssues[0]).toMatch(/questions\[0\].*"choices"/u);
+
+      for (const mode of ["single", "multiple"]) {
+        const choiceIssues = issueLines(name, {
+          ...withWork,
+          questions: [{ ...textQuestion, mode }],
+        });
+        expect(choiceIssues).toHaveLength(1);
+        expect(choiceIssues[0]).toMatch(/questions\[0\]\.choices/u);
+      }
+    },
+  );
 
   it("reports only the issues of the shape a question's mode selects", () => {
     const issues = issueLines("ask_user", {
